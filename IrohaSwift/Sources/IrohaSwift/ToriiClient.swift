@@ -9296,11 +9296,13 @@ public struct ToriiKagemushaAuthenticatedArtifactSet: Decodable, Sendable, Equat
 /// Asset-neutral offline protocol capability advertised by every app-api node.
 ///
 /// This is deliberately not a service-readiness or settlement projection. A
-/// conforming node always exposes the ABI-21 `cash_handoff_v1` application
-/// interface, independent of assets and dataspaces.
+/// conforming node always exposes the unchanged ABI-21 `cash_handoff_v1`
+/// payment capability and the distinct eligibility-bearing handoff envelope,
+/// independent of assets and dataspaces.
 public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
     public let mandatory: Bool
     public let cashHandoffCapability: String
+    public let eligibilityCashHandoffCapability: String
     public let requiredBridgeAbiVersion: UInt32
     public let maxHops: UInt32
     public let ready: Bool
@@ -9310,6 +9312,7 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case mandatory
         case cashHandoffCapability = "cash_handoff_capability"
+        case eligibilityCashHandoffCapability = "eligibility_cash_handoff_capability"
         case requiredBridgeAbiVersion = "required_bridge_abi_version"
         case maxHops = "max_hops"
         case ready
@@ -9328,6 +9331,10 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
         let decodedCapability = try container.decode(
             String.self,
             forKey: .cashHandoffCapability
+        )
+        let decodedEligibilityCapability = try container.decode(
+            String.self,
+            forKey: .eligibilityCashHandoffCapability
         )
         let decodedABI = try container.decode(
             UInt32.self,
@@ -9353,6 +9360,15 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
                 forKey: .cashHandoffCapability,
                 in: container,
                 debugDescription: "cash_handoff_capability must be cash_handoff_v1"
+            )
+        }
+        guard decodedEligibilityCapability
+                == KagemushaRecursiveSpend.cashHandoffEligibilityCapabilityV1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .eligibilityCashHandoffCapability,
+                in: container,
+                debugDescription:
+                    "eligibility_cash_handoff_capability must be cash_handoff_eligibility_v1"
             )
         }
         guard decodedABI == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion else {
@@ -9393,6 +9409,7 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
 
         mandatory = decodedMandatory
         cashHandoffCapability = decodedCapability
+        eligibilityCashHandoffCapability = decodedEligibilityCapability
         requiredBridgeAbiVersion = decodedABI
         maxHops = decodedMaxHops
         ready = decodedReady
@@ -9405,6 +9422,7 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
 /// artifacts. It is not returned by the universal discovery endpoint.
 public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
     public let cashHandoffCapability: String
+    public let eligibilityCashHandoffCapability: String
     public let requiredBridgeAbiVersion: UInt32
     public let maxHops: UInt32
     public let assetDefinitionId: String
@@ -9430,6 +9448,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case cashHandoffCapability = "cash_handoff_capability"
+        case eligibilityCashHandoffCapability = "eligibility_cash_handoff_capability"
         case requiredBridgeAbiVersion = "required_bridge_abi_version"
         case maxHops = "max_hops"
         case assetDefinitionId = "asset_definition_id"
@@ -9464,6 +9483,19 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
                 forKey: .cashHandoffCapability,
                 in: container,
                 debugDescription: "cash_handoff_capability must be cash_handoff_v1"
+            )
+        }
+        let decodedEligibilityCashHandoffCapability = try container.decode(
+            String.self,
+            forKey: .eligibilityCashHandoffCapability
+        )
+        guard decodedEligibilityCashHandoffCapability
+                == KagemushaRecursiveSpend.cashHandoffEligibilityCapabilityV1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .eligibilityCashHandoffCapability,
+                in: container,
+                debugDescription:
+                    "eligibility_cash_handoff_capability must be cash_handoff_eligibility_v1"
             )
         }
         let decodedBridgeABI = try container.decode(
@@ -9782,6 +9814,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             )
         }
         cashHandoffCapability = decodedCashHandoffCapability
+        eligibilityCashHandoffCapability = decodedEligibilityCashHandoffCapability
         requiredBridgeAbiVersion = decodedBridgeABI
         maxHops = decodedMaxHops
         assetScale = decodedAssetScale
@@ -21788,6 +21821,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private let currentTimeMilliseconds: @Sendable () -> UInt64
     private let currentMonotonicMilliseconds: @Sendable () -> UInt64
     private let serverClockCacheKey: String
+    private let privacyActionProvenanceOwnerV1 = PrivacyActionOperationProvenanceOwnerV1()
     private var statusState = ToriiStatusState()
     private var dataModelValidation = ToriiDataModelValidation.unknown
     private let dataModelQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.data-model")
@@ -22411,29 +22445,37 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func submitKagemushaTopUp(
         _ request: KagemushaTopUpRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
         completion: @escaping (Result<KagemushaOperationReference, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitKagemushaTopUp(request) }
+        runTask(completion) {
+            try await self.submitKagemushaTopUp(request, canonicalAuth: canonicalAuth)
+        }
     }
 
     @discardableResult
     public func submitKagemushaRedeem(
         _ request: KagemushaRedeemRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
         completion: @escaping (Result<KagemushaOperationReference, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitKagemushaRedeem(request) }
+        runTask(completion) {
+            try await self.submitKagemushaRedeem(request, canonicalAuth: canonicalAuth)
+        }
     }
 
     @discardableResult
     public func getKagemushaOperationStatus(
         operationId: String,
         chainDiscriminant: UInt16,
+        canonicalAuth: ToriiCanonicalRequestAuth,
         completion: @escaping (Result<KagemushaOperationStatus, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getKagemushaOperationStatus(
                 operationId: operationId,
-                chainDiscriminant: chainDiscriminant
+                chainDiscriminant: chainDiscriminant,
+                canonicalAuth: canonicalAuth
             )
         }
     }
@@ -25900,9 +25942,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeUTF8String(from: data, context: "health")
     }
 
-    public func getOfflineCapability() async throws -> ToriiOfflineStatus {
-        let request = try makeRequest(path: "/v1/offline/readiness",
-                                      headers: ["Accept": "application/json"])
+    public func getOfflineCapability(
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiOfflineStatus {
+        let request = try makeCanonicalAccountRequest(
+            path: "/v1/offline/readiness",
+            headers: ["Accept": "application/json"],
+            canonicalAuth: canonicalAuth
+        )
         let (data, response) = try await send(request)
         try ensureStatus(response, equals: 200, responseBody: data)
         try ensureResponseMediaType(response, equals: "application/json")
@@ -25917,6 +25964,198 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         return try decodeJSON(ToriiOfflineStatus.self, from: data)
+    }
+
+    /// Fetch and authenticate the exact finalized V2 device-attestation policy.
+    /// The response is not exposed as trusted unless the native bridge verifies
+    /// its canonical encoding, policy invariants, and embedded BridgeFinalityProof.
+    public func getOfflineDeviceAttestationPolicyViewV1(
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+        evaluationTimeMilliseconds: UInt64? = nil
+    ) async throws -> KagemushaDeviceAttestationPolicyViewV1 {
+        try await getOfflineDeviceAttestationFinalizedPolicyViewV1(
+            canonicalAuth: canonicalAuth,
+            trustAnchor: trustAnchor,
+            evaluationTimeMilliseconds: evaluationTimeMilliseconds
+        ).policyView
+    }
+
+    /// Fetch the finalized V2 device-attestation policy as canonical bytes and
+    /// native-authenticated epoch, freshness, and block-finality claims.
+    public func getOfflineDeviceAttestationFinalizedPolicyViewV1(
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+        evaluationTimeMilliseconds: UInt64? = nil
+    ) async throws -> OfflineDeviceFinalizedPolicyViewV1 {
+        guard localSigningContext?.networkId == trustAnchor.networkId else {
+            throw ToriiClientError.invalidPayload(
+                "Offline device policy trust must match ToriiLocalSigningContext.networkId."
+            )
+        }
+        let request = try makeCanonicalAccountRequest(
+            path: "/v1/offline/device-attestation-policy",
+            headers: ["Accept": "application/x-norito"],
+            canonicalAuth: canonicalAuth
+        )
+        let (responseData, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "Offline device-attestation policy",
+            maximumBytes:
+                KagemushaRecursiveSpend.maximumDeviceAttestationPolicyViewArchiveBytesV1
+        )
+        try ensureStatus(response, equals: 200, responseBody: responseData)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !responseData.isEmpty else { throw ToriiClientError.emptyBody }
+        let evaluationTime = evaluationTimeMilliseconds ?? currentEpochMs()
+        guard evaluationTime > 0 else {
+            throw ToriiClientError.invalidPayload(
+                "Offline device policy evaluation time must be positive."
+            )
+        }
+        do {
+            return try KagemushaRecursiveSpend.verifyFinalizedDeviceAttestationPolicyViewV1(
+                archive: responseData,
+                trustAnchor: trustAnchor,
+                evaluationTimeMilliseconds: evaluationTime
+            )
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "Offline device-attestation policy failed native canonical/finality verification."
+            )
+        }
+    }
+
+    /// Acquire and natively verify one bounded checkpoint-to-policy page.
+    ///
+    /// This is the pagination primitive: persist the returned
+    /// `evaluatedCheckpoint` atomically before calling it again with that
+    /// checkpoint and fresh canonical authentication. The client deliberately
+    /// does not invent a mobile persistence mechanism or reuse a one-shot nonce.
+    public func getOfflineDeviceAttestationPolicyProofPageV1(
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        checkpoint: OfflineDevicePolicyCheckpointV1,
+        evaluationTimeMilliseconds: UInt64? = nil
+    ) async throws -> OfflineDevicePolicyVerifiedPageV1 {
+        guard localSigningContext?.networkId == checkpoint.networkId else {
+            throw ToriiClientError.invalidPayload(
+                "Offline device policy checkpoint must match ToriiLocalSigningContext.networkId."
+            )
+        }
+        let body: Data
+        do {
+            body = try KagemushaRecursiveSpend.makeOfflineDevicePolicyProofRequestV1(
+                checkpoint: checkpoint
+            )
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "Offline device policy proof request failed native canonical encoding."
+            )
+        }
+        let request = try makeCanonicalAccountRequest(
+            path: "/v1/offline/device-attestation-policy/proof",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            ],
+            canonicalAuth: canonicalAuth
+        )
+        let (responseData, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "Offline device-policy finality proof",
+            maximumBytes: KagemushaRecursiveSpend.maximumDevicePolicyProofPageArchiveBytesV1
+        )
+        try ensureStatus(response, equals: 200, responseBody: responseData)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !responseData.isEmpty else { throw ToriiClientError.emptyBody }
+        let evaluationTime = evaluationTimeMilliseconds ?? currentEpochMs()
+        guard evaluationTime > 0 else {
+            throw ToriiClientError.invalidPayload(
+                "Offline device policy evaluation time must be positive."
+            )
+        }
+        do {
+            return try KagemushaRecursiveSpend.verifyOfflineDevicePolicyProofPageV1(
+                archive: responseData,
+                checkpoint: checkpoint,
+                evaluationTimeMilliseconds: evaluationTime
+            )
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "Offline device policy proof page failed native checkpoint/finality verification."
+            )
+        }
+    }
+
+    /// Evaluate one native-protected registration and issue a short-lived
+    /// offline-spend credential only when the finalized decision is eligible.
+    ///
+    /// Canonical account authentication remains authoritative; the request
+    /// body deliberately contains no account identity. Redirects, non-Norito
+    /// responses, oversized bodies, stale policy, wrong NetworkId, and every
+    /// decision/credential mismatch fail closed.
+    public func postOfflineDeviceEligibilityV1(
+        _ eligibilityRequest: OfflineDeviceEligibilityRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        expectedIssuer: KagemushaEligibilityIssuerPublicKeyV1,
+        trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+        evaluationTimeMilliseconds: UInt64? = nil
+    ) async throws -> OfflineDeviceEligibilityResponseV1 {
+        guard localSigningContext?.networkId == trustAnchor.networkId else {
+            throw ToriiClientError.invalidPayload(
+                "Offline device eligibility trust must match ToriiLocalSigningContext.networkId."
+            )
+        }
+        let body: Data
+        do {
+            body = try KagemushaRecursiveSpend.makeOfflineDeviceEligibilityRequestV1(
+                eligibilityRequest
+            )
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "Offline device eligibility request failed native canonical encoding."
+            )
+        }
+        let request = try makeCanonicalAccountRequest(
+            path: "/v1/offline/device-eligibility",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            ],
+            canonicalAuth: canonicalAuth
+        )
+        let (responseData, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "Offline device eligibility",
+            maximumBytes:
+                KagemushaRecursiveSpend.maximumDeviceEligibilityResponseArchiveBytesV1
+        )
+        try ensureStatus(response, equals: 200, responseBody: responseData)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !responseData.isEmpty else { throw ToriiClientError.emptyBody }
+        let evaluationTime = evaluationTimeMilliseconds ?? currentEpochMs()
+        guard evaluationTime > 0 else {
+            throw ToriiClientError.invalidPayload(
+                "Offline device eligibility evaluation time must be positive."
+            )
+        }
+        do {
+            return try KagemushaRecursiveSpend.verifyOfflineDeviceEligibilityResponseV1(
+                archive: responseData,
+                request: eligibilityRequest,
+                expectedIssuer: expectedIssuer,
+                trustAnchor: trustAnchor,
+                evaluationTimeMilliseconds: evaluationTime
+            )
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "Offline device eligibility response failed native request, policy, finality, credential, or provenance verification."
+            )
+        }
     }
 
     public func getKagemushaRecipientRegistrationLineage(
@@ -25943,35 +26182,41 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func submitKagemushaTopUp(
-        _ requestBody: KagemushaTopUpRequest
+        _ requestBody: KagemushaTopUpRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> KagemushaOperationReference {
         try await submitKagemushaOperation(
             path: KagemushaToriiAPI.Endpoint.topUp.path,
             operationId: requestBody.operationId,
             expectedKind: .topUp,
-            archive: requestBody.noritoArchive()
+            archive: requestBody.noritoArchive(),
+            canonicalAuth: canonicalAuth
         )
     }
 
     public func submitKagemushaRedeem(
-        _ requestBody: KagemushaRedeemRequest
+        _ requestBody: KagemushaRedeemRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> KagemushaOperationReference {
         try await submitKagemushaOperation(
             path: KagemushaToriiAPI.Endpoint.redeem.path,
             operationId: requestBody.operationId,
             expectedKind: .redeem,
-            archive: requestBody.noritoArchive()
+            archive: requestBody.noritoArchive(),
+            canonicalAuth: canonicalAuth
         )
     }
 
     public func getKagemushaOperationStatus(
         operationId: String,
-        chainDiscriminant: UInt16
+        chainDiscriminant: UInt16,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> KagemushaOperationStatus {
         let path = try KagemushaToriiAPI.operationPath(operationId)
-        let request = try makeRequest(
+        let request = try makeCanonicalAccountRequest(
             path: path,
-            headers: ["Accept": "application/x-norito"]
+            headers: ["Accept": "application/x-norito"],
+            canonicalAuth: canonicalAuth
         )
         let (responseData, response) = try await sendBoundedSccpResponse(
             request,
@@ -25999,9 +26244,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         path: String,
         operationId: String,
         expectedKind: KagemushaOperationKind,
-        archive: Data
+        archive: Data,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> KagemushaOperationReference {
-        let request = try makeRequest(
+        let request = try makeCanonicalAccountRequest(
             path: path,
             method: .post,
             body: archive,
@@ -26009,7 +26255,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 "Content-Type": "application/x-norito",
                 "Accept": "application/x-norito",
                 "Idempotency-Key": operationId,
-            ]
+            ],
+            canonicalAuth: canonicalAuth
         )
         let (data, response) = try await sendBoundedSccpResponse(
             request,
@@ -26715,7 +26962,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         // Fail before network I/O when the bridge is absent, stale, or missing
-        // any of the exact five privacy ABI22 symbols.
+        // any of the exact sixteen privacy ABI22 symbols.
         _ = try PrivacyNativeBridge.compiledProfileCatalogV1()
         var request = try makeRequest(
             path: "/v1/privacy/capabilities",
@@ -26760,6 +27007,1069 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
         guard !data.isEmpty else { throw ToriiClientError.emptyBody }
         return try PrivacyNativeBridge.validateExact12CapabilityManifestV1(data)
+    }
+
+    /// Resolve finalized provenance for one consumed ZK-ACE replay nullifier.
+    ///
+    /// The caller must be a registered account. Native code owns the exact ID97 query,
+    /// authority signature, canonical response decoding, and request/finality bindings.
+    public func getPrivacyZkAceReplayNullifierV1(
+        _ request: PrivacyZkAceReplayNullifierRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> PrivacyZkAceReplayNullifierProvenanceV1? {
+        guard let result = try await getPrivacyFinalizedStateV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            as: PrivacyZkAceReplayNullifierProvenanceV1.self,
+            context: "ZK-ACE replay-nullifier provenance"
+        ) else { return nil }
+        guard let localSigningContext,
+              result.networkId == localSigningContext.networkId,
+              result.policyId == request.policyId,
+              result.replayNullifier == request.replayNullifier else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated ZK-ACE replay provenance changed its request binding."
+            )
+        }
+        return result
+    }
+
+    /// Resolve finalized state for one FCMP++, private-IVM, or PQ-MASP pool.
+    public func getPrivacyProofManagedPoolStateV1(
+        _ request: PrivacyProofManagedPoolStateRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> PrivacyProofManagedPoolStateViewV1? {
+        guard let result = try await getPrivacyFinalizedStateV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            as: PrivacyProofManagedPoolStateViewV1.self,
+            context: "proof-managed privacy-pool state"
+        ) else { return nil }
+        guard let localSigningContext,
+              result.networkId == localSigningContext.networkId,
+              result.protocolId == request.protocolId,
+              result.poolId == request.poolId else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated proof-managed pool state changed its request binding."
+            )
+        }
+        return result
+    }
+
+    /// Resolve finalized public state for one governed Orchard pool.
+    public func getPrivacyOrchardPoolStateV1(
+        _ request: PrivacyOrchardPoolStateRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> PrivacyOrchardPoolStateViewV1? {
+        guard let result = try await getPrivacyFinalizedStateV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            as: PrivacyOrchardPoolStateViewV1.self,
+            context: "Orchard privacy-pool state"
+        ) else { return nil }
+        guard let localSigningContext,
+              result.networkId == localSigningContext.networkId,
+              result.poolId == request.poolId else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Orchard pool state changed its request binding."
+            )
+        }
+        return result
+    }
+
+    /// Resolve finalized provenance for one consumed Orchard nullifier.
+    public func getPrivacyOrchardNullifierV1(
+        _ request: PrivacyOrchardNullifierRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> PrivacyOrchardNullifierProvenanceV1? {
+        guard let result = try await getPrivacyFinalizedStateV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            as: PrivacyOrchardNullifierProvenanceV1.self,
+            context: "Orchard nullifier provenance"
+        ) else { return nil }
+        guard let localSigningContext,
+              result.networkId == localSigningContext.networkId,
+              result.poolId == request.poolId,
+              result.nullifier == request.nullifier else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Orchard nullifier provenance changed its request binding."
+            )
+        }
+        return result
+    }
+
+    /// Resolve finalized public state for one Anonymous PGC pool.
+    public func getPrivacyAnonymousPgcPoolStateV1(
+        _ request: PrivacyAnonymousPgcPoolStateRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> PrivacyAnonymousPgcPoolStateViewV1? {
+        guard let result = try await getPrivacyFinalizedStateV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            as: PrivacyAnonymousPgcPoolStateViewV1.self,
+            context: "Anonymous PGC privacy-pool state"
+        ) else { return nil }
+        guard let localSigningContext,
+              result.networkId == localSigningContext.networkId,
+              result.poolId == request.poolId else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Anonymous PGC pool state changed its request binding."
+            )
+        }
+        return result
+    }
+
+    /// Resolve finalized provenance for one admitted ZK-AMS PHC anchor.
+    public func getPrivacyZkAmsAdmissionV1(
+        _ request: PrivacyZkAmsAdmissionRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> PrivacyZkAmsAdmissionViewV1? {
+        guard let result = try await getPrivacyFinalizedStateV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            as: PrivacyZkAmsAdmissionViewV1.self,
+            context: "ZK-AMS admission provenance"
+        ) else { return nil }
+        guard let localSigningContext,
+              result.networkId == localSigningContext.networkId,
+              result.issuerId == request.issuerId,
+              result.registryId == request.registryId,
+              result.policyId == request.policyId,
+              result.phcHash == request.phcHash else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated ZK-AMS admission changed its request binding."
+            )
+        }
+        return result
+    }
+
+    /// Resolve finalized provenance for one anonymous ZK-AMS account provision.
+    public func getPrivacyZkAmsProvisionV1(
+        _ request: PrivacyZkAmsProvisionRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> PrivacyZkAmsProvisionViewV1? {
+        guard let result = try await getPrivacyFinalizedStateV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            as: PrivacyZkAmsProvisionViewV1.self,
+            context: "ZK-AMS provision provenance"
+        ) else { return nil }
+        guard let localSigningContext,
+              result.networkId == localSigningContext.networkId,
+              result.issuerId == request.issuerId,
+              result.registryId == request.registryId,
+              result.policyId == request.policyId,
+              result.keyImage == request.keyImage else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated ZK-AMS provision changed its request binding."
+            )
+        }
+        return result
+    }
+
+    /// Resolve finalized provenance for one consumed ZK-X509 certificate nullifier.
+    public func getPrivacyZkX509CertificateNullifierV1(
+        _ request: PrivacyZkX509CertificateNullifierRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> PrivacyZkX509CertificateNullifierProvenanceV1? {
+        guard let result = try await getPrivacyFinalizedStateV1(
+            request,
+            canonicalAuth: canonicalAuth,
+            as: PrivacyZkX509CertificateNullifierProvenanceV1.self,
+            context: "ZK-X509 certificate-nullifier provenance"
+        ) else { return nil }
+        guard let localSigningContext,
+              result.networkId == localSigningContext.networkId,
+              result.trustAnchorId == request.trustAnchorId,
+              result.policyId == request.policyId,
+              result.nullifier == request.nullifier else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated ZK-X509 nullifier provenance changed its request binding."
+            )
+        }
+        return result
+    }
+
+    private func getPrivacyFinalizedStateV1<
+        Request: PrivacyFinalizedStateRequestV1,
+        Projection: Decodable
+    >(
+        _ query: Request,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        as _: Projection.Type,
+        context: String
+    ) async throws -> Projection? {
+        guard baseURL.scheme?.lowercased() == "https" else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated finalized privacy-state queries require an HTTPS Torii base URL."
+            )
+        }
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated finalized privacy-state queries require ToriiLocalSigningContext."
+            )
+        }
+        let preparation = try PrivacyNativeBridge.prepareAuthenticatedPrivacyStateQueryV1(
+            networkId: localSigningContext.networkId,
+            authority: canonicalAuth.accountId,
+            queryId: Request.queryId.rawValue,
+            protocolIndex: query.protocolIndex,
+            requestBinding: query.requestBinding,
+            creationTimeMs: max(currentEpochMs(), 1),
+            nonce: Self.randomNonzeroPrivacyQueryNonceV1()
+        )
+        let signer = try SigningKey.ed25519(privateKey: canonicalAuth.privateKey)
+        let signature = try signer.sign(preparation.signingDigest)
+        let signedQuery = try PrivacyNativeBridge.finalizeAuthenticatedPrivacyStateQueryV1(
+            preparation,
+            signature: signature
+        )
+        let request = try makeCanonicalAccountRequest(
+            path: "/v1/query",
+            method: .post,
+            body: signedQuery,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            ],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "authenticated finalized \(context)",
+            maximumBytes: 256 * 1024
+        )
+        guard response.url?.absoluteString == request.url?.absoluteString else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated finalized privacy-state query changed URL."
+            )
+        }
+        if response.statusCode == 404 { return nil }
+        try ensureStatus(response, equals: 200, responseBody: data)
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard contentType == "application/x-norito" else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated finalized privacy-state response must use exact application/x-norito without parameters."
+            )
+        }
+        let contentEncoding = response.value(forHTTPHeaderField: "Content-Encoding")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard contentEncoding == nil || contentEncoding == "identity" else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated finalized privacy-state response must preserve the identity representation."
+            )
+        }
+        guard !data.isEmpty else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated finalized privacy-state response omitted its body."
+            )
+        }
+        let projection = try PrivacyNativeBridge.projectAuthenticatedPrivacyStateQueryResultV1(
+            preparation,
+            response: data
+        )
+        return try decodeJSON(Projection.self, from: projection)
+    }
+
+    /// Authenticate, fresh-gate, and submit one member of the closed Exact12 operation union.
+    ///
+    /// Native inspection completes before the capability query and verifies the exact signed
+    /// transaction without treating local proof inspection as acceptance. HTTP 202 is dispatch
+    /// admission only. A waiting call returns only after authenticated pipeline and committed
+    /// transaction-details state resolve the operation. Successful application additionally
+    /// requires the finalized typed execution receipt written atomically with the native effect.
+    public func submitSignedPrivacyActionV1(
+        _ action: PrivacyExact12ActionRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        wait: Bool = true,
+        pollOptions: PipelineStatusPollOptions = .default
+    ) async throws -> PrivacyActionOperationViewV1 {
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload(
+                "Exact12 action submission requires ToriiLocalSigningContext."
+            )
+        }
+        guard canonicalAuth.timestampMs == nil, canonicalAuth.nonce == nil else {
+            throw ToriiClientError.invalidPayload(
+                "Exact12 action submission performs multiple authenticated requests and requires generated freshness."
+            )
+        }
+        let inspection = try PrivacyNativeBridge.inspectSignedExact12ActionV1(
+            action,
+            networkId: localSigningContext.networkId,
+            authorityAccountId: canonicalAuth.accountId
+        )
+        let transactionHashHex = inspection.transactionHash.hexEncodedString()
+        let manifest = try await getPrivacyExact12CapabilityManifestV1(
+            canonicalAuth: canonicalAuth
+        )
+        if let expected = action.expectedManifestDigest,
+           !Self.constantTimeEqualPrivacyDigest(expected, manifest.manifestDigest) {
+            throw ToriiClientError.invalidPayload(
+                "fresh Exact12 capability manifest does not match expectedManifestDigest."
+            )
+        }
+        let admission = try PrivacyExact12CapabilityAdmissionV1
+            .requireExact12CapabilityTupleV1(
+                manifest,
+                protocolId: action.operation.protocolId
+            )
+        guard admission.operationSchemas
+                == manifest.row(for: action.operation.protocolId).operationSchemas,
+              admission.operationSchemas.contains(action.operation),
+              Self.constantTimeEqualPrivacyDigest(
+                admission.manifestDigest,
+                manifest.manifestDigest
+              ),
+              admission.committedHeight > 0 else {
+            throw ToriiClientError.invalidPayload(
+                "Exact12 capability admission does not bind the requested operation and fresh committed manifest."
+            )
+        }
+        let submitted = try PrivacyActionOperationViewV1(
+            protocolId: action.operation.protocolId,
+            operationSchema: action.operation,
+            transactionHash: inspection.transactionHash,
+            transactionIntentDigest: inspection.transactionIntentDigest,
+            statementDigest: inspection.statementDigest,
+            proofEnvelopeHash: inspection.proofEnvelopeHash,
+            localState: .submitted,
+            terminalChainState: nil,
+            committedHeight: nil,
+            rejectionReason: nil,
+            ledgerEffectKind: action.operation.ledgerEffectKind,
+            capabilityManifestDigest: manifest.manifestDigest,
+            capabilityCommittedHeight: admission.committedHeight,
+            executionCapabilityManifestDigest: nil,
+            executionCapabilityCommittedHeight: nil,
+            executionReceiptFinalizedHeight: nil,
+            executionReceiptFinalizedBlockHash: nil
+        ).bindingAuthenticatedSubmission(
+            owner: privacyActionProvenanceOwnerV1,
+            networkId: localSigningContext.networkId
+        )
+
+        var submitRequest = try makeCanonicalAccountRequest(
+            path: "/v1/pipeline/transactions",
+            method: .post,
+            body: action.signedTransactionVersioned,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            ],
+            canonicalAuth: canonicalAuth
+        )
+        submitRequest.setValue(nil, forHTTPHeaderField: "Idempotency-Key")
+        let (responseData, response) = try await sendBoundedSccpResponse(
+            submitRequest,
+            context: "Exact12 signed action dispatch",
+            maximumBytes: 64 * 1024
+        )
+        try ensureStatus(response, equals: 202, responseBody: responseData)
+        guard response.url?.absoluteString == submitRequest.url?.absoluteString else {
+            throw ToriiClientError.invalidPayload(
+                "Exact12 signed action dispatch did not originate from the exact signed URL."
+            )
+        }
+        guard wait else { return submitted }
+
+        var attempts = 0
+        let deadline = pollOptions.timeout > 0
+            ? Date().addingTimeInterval(pollOptions.timeout)
+            : nil
+        while true {
+            try Task.checkCancellation()
+            attempts += 1
+            let refreshed = try await getPrivacyActionStatusV1(
+                submitted,
+                canonicalAuth: canonicalAuth
+            )
+            if refreshed.localState == .terminal {
+                return refreshed
+            }
+            if let maximum = pollOptions.maxAttempts, attempts >= maximum {
+                throw PipelineStatusError.timeout(
+                    hash: transactionHashHex,
+                    attempts: attempts
+                )
+            }
+            if let deadline, Date() >= deadline {
+                throw PipelineStatusError.timeout(
+                    hash: transactionHashHex,
+                    attempts: attempts
+                )
+            }
+            let interval = max(pollOptions.pollInterval, 0)
+            if interval > 0 {
+                try await Task.sleep(
+                    nanoseconds: StrictJSONNumber.saturatingNanoseconds(from: interval)
+                )
+            } else {
+                await Task.yield()
+            }
+        }
+    }
+
+    /// Refresh one typed Exact12 action without weakening or regressing terminal state.
+    public func getPrivacyActionStatusV1(
+        _ operation: PrivacyActionOperationViewV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> PrivacyActionOperationViewV1 {
+        guard let localSigningContext,
+              operation.hasAuthenticatedProvenance(
+                  owner: privacyActionProvenanceOwnerV1,
+                  networkId: localSigningContext.networkId
+              ) else {
+            throw ToriiClientError.invalidPayload(
+                "Exact12 status requires a view returned by this client's authenticated submission."
+            )
+        }
+        let transactionHashHex = operation.transactionHash.hexEncodedString()
+        let status = try await getAuthenticatedPrivacyActionPublicStatusV1(
+            transactionHashHex: transactionHashHex,
+            canonicalAuth: canonicalAuth
+        )
+        return try await Self.resolvePrivacyActionStatusV1(
+            operation,
+            status: status,
+            loadDetails: {
+                try await getAuthenticatedCommittedTransactionResultIfAvailableV1(
+                    transactionHashHex: transactionHashHex,
+                    canonicalAuth: canonicalAuth
+                )
+            },
+            loadReceipt: {
+                try await getAuthenticatedPrivacyActionExecutionReceiptV1(
+                    operation,
+                    canonicalAuth: canonicalAuth
+                )
+            }
+        )
+    }
+
+    static func resolvePrivacyActionStatusV1(
+        _ operation: PrivacyActionOperationViewV1,
+        status: ToriiPipelineTransactionStatus?,
+        loadDetails: () async throws -> AuthenticatedCommittedTransactionResultV1?,
+        loadReceipt: () async throws -> AuthenticatedPrivacyActionExecutionReceiptV1?
+    ) async throws -> PrivacyActionOperationViewV1 {
+        guard let status else {
+            guard operation.localState != .terminal else {
+                throw ToriiClientError.invalidPayload(
+                    "terminal Exact12 action disappeared from pipeline status."
+                )
+            }
+            return operation
+        }
+        switch status.state {
+        case .queued, .approved, .committed:
+            guard operation.localState != .terminal else {
+                throw ToriiClientError.invalidPayload(
+                    "terminal Exact12 action status regressed."
+                )
+            }
+            // Pipeline Committed precedes durable state application. Only Applied plus the
+            // finalized typed execution receipt establishes successful Exact12 semantics.
+            return operation
+        case .expired:
+            if status.resolvedFrom == "cache" {
+                // Cache expiry is a local eviction outcome, not durable ledger evidence.
+                return operation
+            }
+            guard status.resolvedFrom == "state",
+                  status.status.blockHeight == nil else {
+                throw ToriiClientError.invalidPayload(
+                    "expired Exact12 action requires state-resolved evidence without a committed height."
+                )
+            }
+            let refreshed = try operation.replacingTerminalState(
+                .expired,
+                committedHeight: nil,
+                rejectionReason: nil
+            )
+            return try Self.requireStablePrivacyTerminalView(
+                operation,
+                refreshed: refreshed
+            )
+        case .applied, .rejected:
+            guard status.resolvedFrom == "state" || status.resolvedFrom == "cache" else {
+                throw ToriiClientError.invalidPayload(
+                    "terminal Exact12 action status must be resolved from state or cache."
+                )
+            }
+            let details = try await loadDetails()
+            let receipt = try await loadReceipt()
+            if let publicHeight = status.status.blockHeight,
+               let details,
+               publicHeight != details.committedBlockHeight {
+                throw ToriiClientError.invalidPayload(
+                    "Exact12 status height differs from authenticated committed height."
+                )
+            }
+            if let publicHeight = status.status.blockHeight,
+               let receipt,
+               publicHeight != receipt.admittedAtHeight {
+                throw ToriiClientError.invalidPayload(
+                    "Exact12 status height differs from finalized execution receipt."
+                )
+            }
+            switch status.state {
+            case .rejected:
+                guard receipt == nil else {
+                    throw ToriiClientError.invalidPayload(
+                        "rejected Exact12 action has a finalized native execution receipt."
+                    )
+                }
+                guard let details else { return operation }
+                guard !details.resultOk, let reason = details.rejectionMessage else {
+                    throw ToriiClientError.invalidPayload(
+                        "rejected Exact12 action omitted its authenticated committed reason."
+                    )
+                }
+                let refreshed = try operation.replacingTerminalState(
+                    .rejected,
+                    committedHeight: details.committedBlockHeight,
+                    rejectionReason: reason
+                )
+                return try Self.requireStablePrivacyTerminalView(
+                    operation,
+                    refreshed: refreshed
+                )
+            case .applied:
+                if let details, !details.resultOk {
+                    throw ToriiClientError.invalidPayload(
+                        "applied Exact12 action resolved to a rejection."
+                    )
+                }
+                guard let details, let receipt else {
+                    // Status propagation can precede both the local committed-details index and
+                    // the finalized ID105 state projection. Absence is retryable, never success.
+                    return operation
+                }
+                guard receipt.admittedAtHeight == details.committedBlockHeight else {
+                    throw ToriiClientError.invalidPayload(
+                        "Exact12 execution-receipt admission height differs from committed details."
+                    )
+                }
+                let refreshed = try operation.replacingTerminalState(
+                    .applied,
+                    committedHeight: details.committedBlockHeight,
+                    rejectionReason: nil,
+                    executionCapabilityManifestDigest: receipt.capabilityManifestDigest,
+                    executionCapabilityCommittedHeight: receipt.capabilityCommittedHeight,
+                    executionReceiptFinalizedHeight: receipt.finalizedHeight,
+                    executionReceiptFinalizedBlockHash: receipt.finalizedBlockHash
+                )
+                return try Self.requireStablePrivacyTerminalView(
+                    operation,
+                    refreshed: refreshed
+                )
+            default:
+                preconditionFailure("closed Exact12 terminal status switch drifted")
+            }
+        case .other(let kind):
+            throw ToriiClientError.invalidPayload(
+                "Exact12 action status has unsupported kind \(kind)."
+            )
+        }
+    }
+
+    /// Fetch the exact result-bearing `SignedBlockWire` committed at a positive mobile height.
+    public func getLedgerExecutedBlockWire(height: Int64) async throws -> Data {
+        guard height > 0 else {
+            throw ToriiClientError.invalidPayload("executed block height must be positive.")
+        }
+        return try await getExactFinalityNoritoEvidenceV1(
+            path: "/v1/ledger/block/\(height)",
+            context: "executed block wire",
+            maximumBytes: 32 * 1_024 * 1_024
+        )
+    }
+
+    /// Fetch one exact self-contained bridge finality proof for a positive mobile height.
+    public func getBridgeFinalityProofV1(height: Int64) async throws -> Data {
+        guard height > 0 else {
+            throw ToriiClientError.invalidPayload("bridge finality height must be positive.")
+        }
+        return try await getExactFinalityNoritoEvidenceV1(
+            path: "/v1/bridge/finality/\(height)",
+            context: "bridge finality proof",
+            maximumBytes: AuthenticatedFinalityProofPageV1.maximumProofBytes
+        )
+    }
+
+    /// Return the exact authority-split transaction-details carrier, or nil only for exact 404.
+    ///
+    /// The native result and height remain routing hints. Applied/rejected are authoritative only
+    /// after `PrivacyNativeBridge.projectFinalizedKagemushaOutcomeV1` verifies finality and the
+    /// exact executed block wire.
+    public func getAuthenticatedTransactionDetailsCarrierV2(
+        transactionHashHex: String,
+        expectedTransactionAuthority: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> AuthenticatedTransactionDetailsCarrierV2? {
+        guard baseURL.scheme?.lowercased() == "https" else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated transaction details require an HTTPS Torii base URL."
+            )
+        }
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated transaction details require ToriiLocalSigningContext."
+            )
+        }
+        let exactHash = try ToriiRequestValidation.exactLowercase32ByteHex(
+            transactionHashHex,
+            field: "transactionHashHex"
+        )
+        let preparation = try PrivacyNativeBridge.prepareAuthenticatedTransactionDetailsV2(
+            networkId: localSigningContext.networkId,
+            queryAuthority: canonicalAuth.accountId,
+            expectedTransactionAuthority: expectedTransactionAuthority,
+            transactionHashHex: exactHash,
+            creationTimeMs: max(currentEpochMs(), 1),
+            nonce: Self.randomNonzeroPrivacyQueryNonceV1()
+        )
+        let signer = try SigningKey.ed25519(privateKey: canonicalAuth.privateKey)
+        let signature = try signer.sign(preparation.signingDigest)
+        let signedQuery = try PrivacyNativeBridge.finalizeAuthenticatedTransactionDetailsV2(
+            preparation,
+            signature: signature
+        )
+        let request = try makeRequest(
+            path: "/v1/pipeline/transactions/details",
+            method: .post,
+            body: signedQuery,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            ]
+        )
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "authenticated transaction-details carrier V2",
+            maximumBytes: 64 * 1_024 * 1_024
+        )
+        guard let responseBody = try validatedExactNoritoResponseV1(
+            data: data,
+            response: response,
+            requestURL: request.url,
+            context: "authenticated transaction-details carrier V2",
+            maximumBytes: 64 * 1_024 * 1_024,
+            allowNotFound: true
+        ) else {
+            return nil
+        }
+        let carrier = try PrivacyNativeBridge.bindTransactionDetailsCarrierV2(
+            preparation: preparation,
+            response: responseBody
+        )
+        guard carrier.transactionHashHex == exactHash,
+              carrier.queryAuthority == canonicalAuth.accountId,
+              carrier.transactionAuthority == expectedTransactionAuthority else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated transaction-details carrier changed a native authority binding."
+            )
+        }
+        return carrier
+    }
+
+    /// Resolve an exact committed result with a native-built, authority-signed query.
+    public func getAuthenticatedCommittedTransactionResultV1(
+        transactionHashHex: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> AuthenticatedCommittedTransactionResultV1 {
+        guard let result = try await getAuthenticatedCommittedTransactionResultIfAvailableV1(
+            transactionHashHex: transactionHashHex,
+            canonicalAuth: canonicalAuth
+        ) else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated committed transaction result was not found."
+            )
+        }
+        return result
+    }
+
+    /// Resolve the committed result for exactly one offline-device registration instruction.
+    public func getAuthenticatedOfflineDeviceRegistrationResultV1(
+        transactionHashHex: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> AuthenticatedOfflineDeviceRegistrationResultV1 {
+        guard let authenticated = try await getAuthenticatedTransactionDetailsResponseV1(
+            transactionHashHex: transactionHashHex,
+            canonicalAuth: canonicalAuth,
+            context: "authenticated offline-device registration result"
+        ) else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated offline-device registration result was not found."
+            )
+        }
+        let result = try PrivacyNativeBridge
+            .projectAuthenticatedOfflineDeviceRegistrationResultV1(
+                authenticated.preparation,
+                response: authenticated.response
+            )
+        guard result.transactionHashHex == authenticated.exactHash,
+              result.transactionAuthority == canonicalAuth.accountId else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated offline-device registration result changed hash or authority."
+            )
+        }
+        return result
+    }
+
+    private func getAuthenticatedCommittedTransactionResultIfAvailableV1(
+        transactionHashHex: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> AuthenticatedCommittedTransactionResultV1? {
+        guard let authenticated = try await getAuthenticatedTransactionDetailsResponseV1(
+            transactionHashHex: transactionHashHex,
+            canonicalAuth: canonicalAuth,
+            context: "authenticated committed transaction result"
+        ) else {
+            return nil
+        }
+        let result = try PrivacyNativeBridge.projectAuthenticatedTransactionDetailsResultV1(
+            authenticated.preparation,
+            response: authenticated.response
+        )
+        guard result.transactionHashHex == authenticated.exactHash,
+              result.transactionAuthority == canonicalAuth.accountId else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated committed transaction result changed hash or authority."
+            )
+        }
+        return result
+    }
+
+    private func getAuthenticatedTransactionDetailsResponseV1(
+        transactionHashHex: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        context: String
+    ) async throws -> (
+        preparation: PrivacyAuthenticatedTransactionDetailsPreparationV1,
+        response: Data,
+        exactHash: String
+    )? {
+        guard baseURL.scheme?.lowercased() == "https" else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated transaction details require an HTTPS Torii base URL."
+            )
+        }
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated transaction details require ToriiLocalSigningContext."
+            )
+        }
+        let exactHash = try ToriiRequestValidation.exactLowercase32ByteHex(
+            transactionHashHex,
+            field: "transactionHashHex"
+        )
+        let nonce = Self.randomNonzeroPrivacyQueryNonceV1()
+        let preparation = try PrivacyNativeBridge.prepareAuthenticatedTransactionDetailsV1(
+            networkId: localSigningContext.networkId,
+            authority: canonicalAuth.accountId,
+            transactionHashHex: exactHash,
+            creationTimeMs: max(currentEpochMs(), 1),
+            nonce: nonce
+        )
+        let signer = try SigningKey.ed25519(privateKey: canonicalAuth.privateKey)
+        let signature = try signer.sign(preparation.signingDigest)
+        let signedQuery = try PrivacyNativeBridge.finalizeAuthenticatedTransactionDetailsV1(
+            preparation,
+            signature: signature
+        )
+        let request = try makeRequest(
+            path: "/v1/pipeline/transactions/details",
+            method: .post,
+            body: signedQuery,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            ]
+        )
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: context,
+            maximumBytes: 64 * 1024 * 1024
+        )
+        guard response.url?.absoluteString == request.url?.absoluteString else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) changed URL."
+            )
+        }
+        if response.statusCode == 404 { return nil }
+        try ensureStatus(response, equals: 200, responseBody: data)
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard contentType == "application/x-norito" else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated transaction-details response must use exact application/x-norito without parameters."
+            )
+        }
+        guard !data.isEmpty else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) omitted its body."
+            )
+        }
+        return (preparation, data, exactHash)
+    }
+
+    private func getExactFinalityNoritoEvidenceV1(
+        path: String,
+        context: String,
+        maximumBytes: Int
+    ) async throws -> Data {
+        guard baseURL.scheme?.lowercased() == "https" else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) requires an HTTPS Torii base URL."
+            )
+        }
+        let request = try makeRequest(
+            path: path,
+            method: .get,
+            headers: ["Accept": "application/x-norito"]
+        )
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: context,
+            maximumBytes: maximumBytes
+        )
+        guard let body = try validatedExactNoritoResponseV1(
+            data: data,
+            response: response,
+            requestURL: request.url,
+            context: context,
+            maximumBytes: maximumBytes,
+            allowNotFound: false
+        ) else {
+            throw ToriiClientError.invalidPayload("\(context) cannot be absent.")
+        }
+        return body
+    }
+
+    /// Shared exact-byte response gate kept internal for deterministic transport tests.
+    func validatedExactNoritoResponseV1(
+        data: Data,
+        response: HTTPURLResponse,
+        requestURL: URL?,
+        context: String,
+        maximumBytes: Int,
+        allowNotFound: Bool
+    ) throws -> Data? {
+        guard response.url?.absoluteString == requestURL?.absoluteString else {
+            throw ToriiClientError.invalidPayload("\(context) changed URL.")
+        }
+        if response.statusCode == 404, allowNotFound {
+            return nil
+        }
+        try ensureStatus(response, equals: 200, responseBody: data)
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard contentType == "application/x-norito" else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) must use exact application/x-norito without parameters."
+            )
+        }
+        let contentEncoding = response.value(forHTTPHeaderField: "Content-Encoding")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard contentEncoding == nil
+                || contentEncoding?.isEmpty == true
+                || contentEncoding == "identity" else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) must not transform the exact Norito representation."
+            )
+        }
+        guard !data.isEmpty, data.count <= maximumBytes else {
+            throw ToriiClientError.invalidPayload(
+                "\(context) is empty or exceeds its closed byte bound."
+            )
+        }
+        if let declaredLength = try Self.validatedSccpContentLength(
+            response,
+            context: context,
+            maximumBytes: maximumBytes
+        ), declaredLength != data.count {
+            throw ToriiClientError.invalidPayload(
+                "\(context) response length did not match its Content-Length header."
+            )
+        }
+        return Data(data)
+    }
+
+    private func getAuthenticatedPrivacyActionExecutionReceiptV1(
+        _ operation: PrivacyActionOperationViewV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> AuthenticatedPrivacyActionExecutionReceiptV1? {
+        guard baseURL.scheme?.lowercased() == "https" else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Exact12 execution receipts require an HTTPS Torii base URL."
+            )
+        }
+        guard let localSigningContext else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Exact12 execution receipts require ToriiLocalSigningContext."
+            )
+        }
+        let hash = operation.transactionHash.hexEncodedString()
+        let exactHash = try ToriiRequestValidation.exactLowercase32ByteHex(
+            hash,
+            field: "transactionHashHex"
+        )
+        var requestedActionBinding = Data()
+        requestedActionBinding.reserveCapacity(96)
+        requestedActionBinding.append(operation.transactionIntentDigest)
+        requestedActionBinding.append(operation.statementDigest)
+        requestedActionBinding.append(operation.proofEnvelopeHash)
+        let preparation = try PrivacyNativeBridge.prepareAuthenticatedActionReceiptV1(
+            networkId: localSigningContext.networkId,
+            authority: canonicalAuth.accountId,
+            operationIndex: operation.operationSchema.rawValue,
+            transactionHashHex: exactHash,
+            actionIndex: 0,
+            requestedActionBinding: requestedActionBinding,
+            creationTimeMs: max(currentEpochMs(), 1),
+            nonce: Self.randomNonzeroPrivacyQueryNonceV1()
+        )
+        let signer = try SigningKey.ed25519(privateKey: canonicalAuth.privateKey)
+        let signature = try signer.sign(preparation.signingDigest)
+        let signedQuery = try PrivacyNativeBridge.finalizeAuthenticatedActionReceiptV1(
+            preparation,
+            signature: signature
+        )
+        let request = try makeRequest(
+            path: "/v1/query",
+            method: .post,
+            body: signedQuery,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            ]
+        )
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "authenticated Exact12 execution receipt",
+            maximumBytes: 256 * 1024
+        )
+        guard response.url?.absoluteString == request.url?.absoluteString else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Exact12 execution receipt changed URL."
+            )
+        }
+        if response.statusCode == 404 { return nil }
+        try ensureStatus(response, equals: 200, responseBody: data)
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard contentType == "application/x-norito" else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Exact12 execution receipt must use exact application/x-norito without parameters."
+            )
+        }
+        guard !data.isEmpty else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Exact12 execution receipt omitted its body."
+            )
+        }
+        let receipt = try PrivacyNativeBridge.projectAuthenticatedActionReceiptResultV1(
+            preparation,
+            response: data
+        )
+        guard receipt.isBound(to: operation, networkId: localSigningContext.networkId) else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Exact12 execution receipt changed an action binding."
+            )
+        }
+        return receipt
+    }
+
+    private func getAuthenticatedPrivacyActionPublicStatusV1(
+        transactionHashHex: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiPipelineTransactionStatus? {
+        let exactHash = try ToriiRequestValidation.exactLowercase32ByteHex(
+            transactionHashHex,
+            field: "transactionHashHex"
+        )
+        let request = try makeCanonicalAccountRequest(
+            path: "/v1/pipeline/transactions/status",
+            queryItems: [
+                URLQueryItem(name: "hash", value: exactHash),
+                URLQueryItem(name: "scope", value: "global"),
+            ],
+            headers: ["Accept": "application/json"],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "authenticated Exact12 pipeline status",
+            maximumBytes: 64 * 1024
+        )
+        guard response.url?.absoluteString == request.url?.absoluteString else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Exact12 status did not originate from the exact signed URL."
+            )
+        }
+        if response.statusCode == 204 || response.statusCode == 404 {
+            return nil
+        }
+        if response.statusCode != 200, response.statusCode != 202 {
+            try ensureStatus(response, equals: 200, responseBody: data)
+        }
+        try ensureResponseMediaType(response, equals: "application/json")
+        guard !data.isEmpty else {
+            throw ToriiClientError.invalidPayload(
+                "authenticated Exact12 status omitted its body."
+            )
+        }
+        let status = try decodeJSON(ToriiPipelineTransactionStatus.self, from: data)
+        try validateAuthoritativePipelineStatus(status, expectedHash: exactHash)
+        return status
+    }
+
+    private static func randomNonzeroPrivacyQueryNonceV1() -> Data {
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<16 {
+            let bytes = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+            if bytes.contains(where: { $0 != 0 }) { return bytes }
+        }
+        preconditionFailure("system random generator repeatedly returned an all-zero query nonce")
+    }
+
+    private static func constantTimeEqualPrivacyDigest(_ lhs: Data, _ rhs: Data) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        var difference: UInt8 = 0
+        for (left, right) in zip(lhs, rhs) { difference |= left ^ right }
+        return difference == 0
+    }
+
+    private static func requireStablePrivacyTerminalView(
+        _ previous: PrivacyActionOperationViewV1,
+        refreshed: PrivacyActionOperationViewV1
+    ) throws -> PrivacyActionOperationViewV1 {
+        guard previous.localState == .terminal else { return refreshed }
+        guard previous.terminalChainState == refreshed.terminalChainState,
+              previous.committedHeight == refreshed.committedHeight,
+              previous.rejectionReason == refreshed.rejectionReason,
+              previous.executionCapabilityManifestDigest
+                == refreshed.executionCapabilityManifestDigest,
+              previous.executionCapabilityCommittedHeight
+                == refreshed.executionCapabilityCommittedHeight,
+              previous.executionReceiptFinalizedHeight.map({ previousHeight in
+                  refreshed.executionReceiptFinalizedHeight.map({ $0 >= previousHeight }) == true
+              }) ?? true,
+              previous.executionReceiptFinalizedHeight
+                != refreshed.executionReceiptFinalizedHeight
+                || previous.executionReceiptFinalizedBlockHash
+                    == refreshed.executionReceiptFinalizedBlockHash else {
+            throw ToriiClientError.invalidPayload(
+                "terminal Exact12 action status changed."
+            )
+        }
+        return previous
     }
 
     /// Fetch consensus-derived SCCP capabilities.

@@ -420,7 +420,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+    use iroha_crypto::confidential_spool::ConfidentialSpoolChunkV1;
     struct VecSinkV2 {
         bytes: Vec<u8>,
         expected: usize,

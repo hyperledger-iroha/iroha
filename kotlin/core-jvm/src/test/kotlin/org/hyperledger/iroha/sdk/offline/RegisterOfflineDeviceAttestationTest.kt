@@ -25,7 +25,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 
-/** Exact Rust/Kotlin parity and adversarial coverage for the sole ABI-21 registration path. */
+/** Exact Rust/Kotlin parity and adversarial coverage for ABI-22 registration V2. */
 class RegisterOfflineDeviceAttestationTest {
 
     @Test
@@ -139,6 +139,73 @@ class RegisterOfflineDeviceAttestationTest {
                 accountId,
                 signingCertificate = substitutedDigest,
                 challengeHash = canonical.challengeHash,
+            )
+        }
+    }
+
+    @Test
+    fun `managed pre Android 12 StrongBox profile is explicit and truthfully omits tag 405`() {
+        val accountId = AccountAddress
+            .fromAccount(TestEd25519Keys.publicKey(0x43), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val managed = registration(
+            accountId = accountId,
+            properties = androidProperties(osVersion = 110_000),
+            assertionScheme =
+                DeviceAttestationRegistration
+                    .ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME,
+            assertionUsageCountLimit = null,
+        )
+        assertEquals(
+            DeviceAttestationRegistration
+                .ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME,
+            managed.assertionScheme,
+        )
+        assertEquals(null, managed.assertionUsageCountLimit)
+        assertEquals(
+            managed,
+            DeviceAttestationRegistration.decodeCanonical(
+                managed.noritoEncoded(),
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            ),
+        )
+        assertFalse(
+            managed.challengeHash.contentEquals(registration(accountId).challengeHash),
+            "assertion-profile semantics must be challenge-bound",
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            registration(
+                accountId = accountId,
+                properties = androidProperties(osVersion = 110_000),
+                assertionScheme =
+                    DeviceAttestationRegistration
+                        .ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME,
+                assertionUsageCountLimit = 1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            registration(
+                accountId = accountId,
+                properties = androidProperties(
+                    osVersion = 110_000,
+                    securityLevel =
+                        OfflineAndroidDeviceSecurityLevelV2.TRUSTED_ENVIRONMENT,
+                ),
+                assertionScheme =
+                    DeviceAttestationRegistration
+                        .ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME,
+                assertionUsageCountLimit = null,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            registration(
+                accountId = accountId,
+                properties = androidProperties(osVersion = 120_000),
+                assertionScheme =
+                    DeviceAttestationRegistration
+                        .ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME,
+                assertionUsageCountLimit = null,
             )
         }
     }
@@ -296,20 +363,24 @@ class RegisterOfflineDeviceAttestationTest {
 
         private fun registration(
             accountId: String,
-            packageName: String = "org.hyperledger.iroha.abi20.fixture",
+            packageName: String = "org.hyperledger.iroha.abi22.v2.fixture",
             signingCertificate: ByteArray =
-                sha256(bytes("abi20-unit-test-signing-certificate")),
+                sha256(bytes("abi22-v2-unit-test-signing-certificate")),
             challengeHash: ByteArray? = null,
             reportHash: ByteArray? = null,
             evidenceHash: ByteArray? = null,
             evidence: ByteArray? = null,
+            properties: OfflineAndroidAttestedDevicePropertiesV2 = androidProperties(),
+            assertionScheme: String =
+                DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME,
+            assertionUsageCountLimit: Int? = 1,
         ): DeviceAttestationRegistration {
             val assertionPublicKey = hexToBytes(P256_GENERATOR)
             return DeviceAttestationRegistration(
-                version = 1,
+                version = DeviceAttestationRegistration.REGISTRATION_VERSION,
                 platform = DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM,
                 keyId = hexLower(sha256(assertionPublicKey)),
-                deviceId = "abi20-android-unit-test-device",
+                deviceId = "abi22-v2-android-unit-test-device",
                 accountId = accountId,
                 assetDefinitionId = null,
                 iosTeamId = null,
@@ -317,28 +388,51 @@ class RegisterOfflineDeviceAttestationTest {
                 iosEnvironment = null,
                 androidPackageName = packageName,
                 androidSigningCertificateSha256 = signingCertificate,
+                androidAttestedDeviceProperties = properties,
                 publicKey = KagemushaDevicePublicKeyV2(hexToBytes(P256_GENERATOR)),
-                assertionScheme =
-                    DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                assertionScheme = assertionScheme,
                 assertionKeyAlgorithm =
                     DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
                 assertionPublicKey = assertionPublicKey,
-                assertionUsageCountLimit = 1,
+                assertionUsageCountLimit = assertionUsageCountLimit,
                 oneUse = true,
                 challengeHash = challengeHash,
                 attestationReportHash = reportHash,
                 attestationReport =
-                    bytes("abi20-unit-test-not-physical-attestation-evidence"),
+                    bytes("abi22-v2-unit-test-not-physical-attestation-evidence"),
                 evidenceHash = evidenceHash,
                 evidence = evidence,
                 recentBlockHeight = 42,
-                recentBlockHash = IrohaHash.prehash(bytes("abi20-unit-test-block")),
+                recentBlockHash = IrohaHash.prehash(bytes("abi22-v2-unit-test-block")),
                 expiresAtMs = 2_000_000_000_000,
             )
         }
 
         private fun bytes(value: String): ByteArray =
             value.toByteArray(StandardCharsets.UTF_8)
+
+        private fun androidProperties(
+            osVersion: Long = 140_000,
+            securityLevel: OfflineAndroidDeviceSecurityLevelV2 =
+                OfflineAndroidDeviceSecurityLevelV2.STRONG_BOX,
+        ) =
+            OfflineAndroidAttestedDevicePropertiesV2(
+                version = OfflineAndroidAttestedDevicePropertiesV2.VERSION_V2,
+                attestationVersion = 300,
+                keymintVersion = 300,
+                securityLevel = securityLevel,
+                brand = "google",
+                device = "husky",
+                product = "husky",
+                manufacturer = "Google",
+                model = "Pixel 8 Pro",
+                osVersion = osVersion,
+                osPatchLevel = 202_608,
+                vendorPatchLevel = 20_260_805,
+                bootPatchLevel = 20_260_801,
+                verifiedBootKey = ByteArray(32) { 0x42 },
+                verifiedBootHash = ByteArray(32) { 0x24 },
+            )
 
         private fun sha256(value: ByteArray): ByteArray =
             MessageDigest.getInstance("SHA-256").digest(value)

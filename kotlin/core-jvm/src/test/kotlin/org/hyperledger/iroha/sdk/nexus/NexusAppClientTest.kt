@@ -104,25 +104,25 @@ class NexusAppClientTest {
             config = NexusAppConfig(
                 networkId = TEST_NETWORK_ID,
                 chainId = "test-chain",
-                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
-                authority = ACCOUNT_ID,
-                signingPublicKey = PUBLIC_KEY,
+                chainDiscriminant = FIXTURE_CHAIN_DISCRIMINANT,
+                authority = FIXTURE_ACCOUNT_ID,
+                signingPublicKey = FIXTURE_PUBLIC_KEY,
             ),
-            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
+            codecAdapter = NoritoJavaCodecAdapter(FIXTURE_CHAIN_DISCRIMINANT),
         )
 
-        val draft = client.buildTransferDraft(sampleInput())
+        val draft = client.buildTransferDraft(fixtureInput())
         val fixtureSignature = hexToBytes(string(expected, "wallet_signature_hex"))
         val signed = SignedTransaction.builder()
             .setEncodedPayload(draft.signable.payloadBytes)
             .setSignature(fixtureSignature)
-            .setPublicKey(PUBLIC_KEY)
-            .setSchemaName(NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).schemaName())
+            .setPublicKey(FIXTURE_PUBLIC_KEY)
+            .setSchemaName(NoritoJavaCodecAdapter(FIXTURE_CHAIN_DISCRIMINANT).schemaName())
             .build()
 
         assertEquals(string(expected, "payload_hash_hex"), draft.signable.payloadHashHex)
         assertContentEquals(hexToBytes(string(expected, "payload_bytes_hex")), draft.signable.payloadBytes)
-        assertContentEquals(signPayload(draft.signable.payloadBytes), fixtureSignature)
+        assertContentEquals(signFixturePayload(draft.signable.payloadBytes), fixtureSignature)
         assertEquals(string(expected, "signed_transaction_hash_hex"), SignedTransactionHasher.hashHex(signed))
         assertEquals(listOf("Submitted", "Applied"), expected["status_sequence"])
     }
@@ -640,6 +640,13 @@ class NexusAppClientTest {
         private val SIGNING_PRIVATE_KEY_SEED = ByteArray(32) { 0x11 }
         private val PUBLIC_KEY =
             Ed25519PrivateKeyParameters(SIGNING_PRIVATE_KEY_SEED, 0).generatePublicKey().encoded
+        private const val FIXTURE_CHAIN_DISCRIMINANT = 369
+        private const val FIXTURE_ASSET_DEFINITION_ID = "53SSUt68Qn5PdKMMrViDK57X6DG2"
+        private val FIXTURE_SIGNING_PRIVATE_KEY_SEED = ByteArray(32) { 0x51 }
+        private val FIXTURE_PUBLIC_KEY =
+            Ed25519PrivateKeyParameters(FIXTURE_SIGNING_PRIVATE_KEY_SEED, 0)
+                .generatePublicKey()
+                .encoded
         private val WALLET_SIGNATURE by lazy {
             val fixture = loadNexusFixture()
             hexToBytes(string(obj(fixture, "expected"), "wallet_signature_hex"))
@@ -648,6 +655,10 @@ class NexusAppClientTest {
             "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
         private const val DESTINATION_ACCOUNT_ID =
             "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L"
+        private const val FIXTURE_ACCOUNT_ID =
+            "testuﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U"
+        private const val FIXTURE_DESTINATION_ACCOUNT_ID =
+            "testuﾛ1Nﾛ5ﾃPefCWUﾆﾔaxCRﾈﾅｶubGPﾘｼX9hﾀ8vHGVﾗsﾒJｼF7HF5W"
         private val TEST_NETWORK_ID = NetworkId.parse(
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
         )
@@ -657,6 +668,17 @@ class NexusAppClientTest {
             sourceAssetId = "$ASSET_DEFINITION_ID#$ACCOUNT_ID",
             quantity = "12.34",
             destinationAccountId = DESTINATION_ACCOUNT_ID,
+            feePayment = TEST_FEE_PAYMENT,
+            creationTimeMs = 1_700_000_000_000L,
+            ttlMs = 30_000L,
+            nonce = 7,
+            metadata = mapOf("purpose" to "nexus-app-fixture"),
+        )
+
+        private fun fixtureInput(): NexusTransferInput = NexusTransferInput(
+            sourceAssetId = "$FIXTURE_ASSET_DEFINITION_ID#$FIXTURE_ACCOUNT_ID",
+            quantity = "12.34",
+            destinationAccountId = FIXTURE_DESTINATION_ACCOUNT_ID,
             feePayment = TEST_FEE_PAYMENT,
             creationTimeMs = 1_700_000_000_000L,
             ttlMs = 30_000L,
@@ -689,6 +711,14 @@ class NexusAppClientTest {
             val message = IrohaHash.prehash(payloadBytes)
             val signer = Ed25519Signer()
             signer.init(true, Ed25519PrivateKeyParameters(SIGNING_PRIVATE_KEY_SEED, 0))
+            signer.update(message, 0, message.size)
+            return signer.generateSignature()
+        }
+
+        private fun signFixturePayload(payloadBytes: ByteArray): ByteArray {
+            val message = IrohaHash.prehash(payloadBytes)
+            val signer = Ed25519Signer()
+            signer.init(true, Ed25519PrivateKeyParameters(FIXTURE_SIGNING_PRIVATE_KEY_SEED, 0))
             signer.update(message, 0, message.size)
             return signer.generateSignature()
         }

@@ -65,7 +65,8 @@ pub(crate) use self::prover::{fcmp_release_fixture_v1, fcmp_release_invalid_path
 pub use self::{
     balance::{verify_fcmp_commitment_balance_v1, verify_fcmp_transaction_v1},
     prover::{
-        FcmpInputRerandomizationV1, FcmpProvedBundleV1, FcmpProverInputV1, prove_fcmp_plus_plus_v1,
+        FcmpInputRerandomizationV1, FcmpProvedBundleV1, FcmpProverInputV1,
+        preflight_fcmp_plus_plus_wallet_request_v1, prove_fcmp_plus_plus_v1,
     },
     range::{
         FCMP_AMOUNT_BITS_V1, FCMP_BP_PLUS_GENERATOR_DIGEST_V1, FCMP_BP_PLUS_UPSTREAM_REVISION_V1,

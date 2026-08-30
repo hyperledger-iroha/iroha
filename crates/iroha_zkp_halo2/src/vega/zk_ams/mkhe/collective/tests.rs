@@ -1007,7 +1007,12 @@ fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
         .expect("fresh encryption source slice");
     assert!(!fresh_encryption.contains("plaintext.digest"));
     assert!(fresh_encryption.contains("CollectiveEncryptionInputTopologyV1::from_packed"));
-    assert!(!module_source.contains("verify_and_consume_phase23_native_bgv_opening_v1"));
+    assert_eq!(
+        module_source
+            .matches("verify_and_consume_phase23_native_bgv_opening_v1")
+            .count(),
+        1
+    );
     let transcript = module_source
         .split("fn collective_encryption_transcript_digest_v1")
         .nth(1)

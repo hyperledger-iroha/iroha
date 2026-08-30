@@ -810,6 +810,69 @@ fn public_artifact_rejects_order_context_and_digest_substitution() {
 }
 
 #[test]
+fn public_ciphertext_identity_manifest_binds_all_43_validated_records() {
+    let fixture = Fixture::new(27);
+    let manifest = bind_rns_native_public_ciphertext_identity_manifest_v1(
+        fixture.layout,
+        fixture.public_view(),
+    )
+    .expect("validated exact-43 identity manifest");
+    manifest
+        .validate_v1(&fixture.transcript, fixture.layout)
+        .expect("identity manifest matches transcript");
+    assert_eq!(
+        manifest.public_bundle_digest(),
+        fixture.public_bundle_digest
+    );
+    assert_ne!(manifest.manifest_digest(), [0; DIGEST_BYTES_V1]);
+    for (record_digest, record) in manifest.record_digests_v1().zip(&fixture.records) {
+        assert_eq!(record_digest, record.record_digest);
+    }
+
+    let mut reordered = bind_rns_native_public_ciphertext_identity_manifest_v1(
+        fixture.layout,
+        fixture.public_view(),
+    )
+    .expect("reorder baseline");
+    reordered.records.swap(0, 1);
+    reordered.manifest_digest = public_ciphertext_identity_manifest_digest_v1(&reordered);
+    assert_eq!(
+        reordered.validate_v1(&fixture.transcript, fixture.layout),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidSourceOrder)
+    );
+
+    let mut substituted = bind_rns_native_public_ciphertext_identity_manifest_v1(
+        fixture.layout,
+        fixture.public_view(),
+    )
+    .expect("substitution baseline");
+    substituted.records[17].record_digest[0] ^= 1;
+    substituted.manifest_digest = public_ciphertext_identity_manifest_digest_v1(&substituted);
+    assert_eq!(
+        substituted.validate_v1(&fixture.transcript, fixture.layout),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)
+    );
+
+    let mut wrong_key = bind_rns_native_public_ciphertext_identity_manifest_v1(
+        fixture.layout,
+        fixture.public_view(),
+    )
+    .expect("public-key baseline");
+    wrong_key.public_key_digest[0] ^= 1;
+    wrong_key.manifest_digest = public_ciphertext_identity_manifest_digest_v1(&wrong_key);
+    assert_eq!(
+        wrong_key.validate_v1(&fixture.transcript, fixture.layout),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)
+    );
+
+    let other = Fixture::new(28);
+    assert_eq!(
+        manifest.validate_v1(&other.transcript, other.layout),
+        Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)
+    );
+}
+
+#[test]
 fn component_decoders_reject_noncanonical_plaintext_and_bad_small_secrets() {
     let mut canonical = vec![0_u8; ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_PLAINTEXT_BYTES_V1 as usize];
     validate_canonical_plaintext_chunk_v1(&canonical).expect("zero canonical plaintext");

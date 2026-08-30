@@ -664,7 +664,61 @@ impl ZkAmsMkheCpkCeremonyV1 {
             backend,
         )
     }
+
+    /// Consume an owned CAS backend through the final CPK transition and keep
+    /// that exact backend beside the authority minted from its authenticated
+    /// publications.
+    ///
+    /// This narrow internal handoff exists for the RNS-native 38-to-40-limb
+    /// tail coordinator.  Unlike [`Self::finish_v1`], it cannot leave the
+    /// finalized authority detached from the backend that published and reread
+    /// its 76 legacy key limbs.
+    pub(in crate::vega::zk_ams::mkhe) fn finish_with_owned_publication_v1<P>(
+        self,
+        mut publisher: P,
+    ) -> Result<ZkAmsMkheFinalizedCpkPublicationOwnerV1<P>, ZkAmsMkheErrorV1>
+    where
+        P: ZkAmsMkheDirectObjectCasPublicationV1,
+    {
+        let finalized = self.finish_v1(&mut publisher)?;
+        Ok(ZkAmsMkheFinalizedCpkPublicationOwnerV1 {
+            finalized,
+            publisher,
+        })
+    }
 }
+
+/// Move-only CPK successor retaining the exact CAS backend through authority
+/// minting.
+///
+/// It deliberately has no provider getter, clone, codec, or public tuple
+/// decomposition.  The only consuming split is restricted to the MKHE module
+/// and named for the RNS-native tail transition that must immediately consume
+/// both values.
+#[must_use = "dropping this owner closes the authenticated key-publication handoff"]
+pub(in crate::vega::zk_ams::mkhe) struct ZkAmsMkheFinalizedCpkPublicationOwnerV1<P>
+where
+    P: ZkAmsMkheDirectObjectCasPublicationV1,
+{
+    finalized: ZkAmsMkheFinalizedCpkCeremonyV1,
+    publisher: P,
+}
+
+impl<P> ZkAmsMkheFinalizedCpkPublicationOwnerV1<P>
+where
+    P: ZkAmsMkheDirectObjectCasPublicationV1,
+{
+    pub(in crate::vega::zk_ams::mkhe) fn into_rns_native_tail_publication_v2(
+        self,
+    ) -> (ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1, P) {
+        (
+            self.finalized
+                .into_streaming_collective_encryption_key_authority_v1(),
+            self.publisher,
+        )
+    }
+}
+
 /// Sealed successful CPK products before evaluated-key runtime selection.
 ///
 /// The native `2P` key and both one-shot admissions have already been consumed.
@@ -995,6 +1049,63 @@ mod tests {
         assert!(finish.contains("mut self,"));
         assert!(!finish.contains("&mut self"));
     }
+
+    #[test]
+    fn owned_finalization_retains_the_exact_cas_backend_for_the_rns_tail() {
+        let source = production_source_v1();
+        let transition = source
+            .split("fn finish_with_owned_publication_v1")
+            .nth(1)
+            .expect("owned CPK publication transition")
+            .split("/// Move-only CPK successor")
+            .next()
+            .expect("owned transition boundary");
+        assert!(transition.contains("mut publisher: P"));
+        assert!(transition.contains("P: ZkAmsMkheDirectObjectCasPublicationV1"));
+        assert!(transition.contains("self.finish_v1(&mut publisher)?"));
+        assert!(transition.contains("finalized,"));
+        assert!(transition.contains("publisher,"));
+
+        let owner = source
+            .split("struct ZkAmsMkheFinalizedCpkPublicationOwnerV1")
+            .nth(1)
+            .expect("owned CPK publication owner")
+            .split("/// Sealed successful CPK products")
+            .next()
+            .expect("owned CPK publication owner boundary");
+        for required in [
+            "finalized: ZkAmsMkheFinalizedCpkCeremonyV1",
+            "publisher: P",
+            "fn into_rns_native_tail_publication_v2(",
+            ".into_streaming_collective_encryption_key_authority_v1()",
+        ] {
+            assert!(
+                owner.contains(required),
+                "missing owned-CAS guard: {required}"
+            );
+        }
+        for forbidden in ["derive(Clone", "derive(Copy", "Serialize", "Deserialize"] {
+            assert!(
+                !owner.contains(forbidden),
+                "owned CPK publication capability must not expose {forbidden}",
+            );
+        }
+
+        let tail = include_str!("collective/incremental_source_rns_native_tail_publication_v2.rs");
+        let entry = tail
+            .split("fn begin_from_finalized_cpk_v2")
+            .nth(1)
+            .expect("owned CPK to RNS-tail entry")
+            .split("/// Consume the exact providers")
+            .next()
+            .expect("owned CPK to RNS-tail boundary");
+        assert!(entry.contains("cpk: ZkAmsMkheFinalizedCpkPublicationOwnerV1<K>"));
+        assert!(entry.contains("cpk.into_rns_native_tail_publication_v2()"));
+        assert!(entry.contains("Self::begin_v2("));
+        assert!(tail.contains("RNS_NATIVE_CPK_OWNED_CAS_HANDOFF_IMPLEMENTED_V2: bool = true"));
+        assert!(tail.contains("RNS_NATIVE_KEY_TAIL_CAS_OWNER_AVAILABLE_V2: bool = false"));
+    }
+
     #[test]
     fn party_input_binds_the_share_epoch_and_transcript() {
         let _: fn(&ZkAmsMkheCollectivePublicKeyShareV1) -> u64 =

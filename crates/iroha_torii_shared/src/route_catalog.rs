@@ -1056,6 +1056,15 @@ pub mod offline {
     };
     /// Fetch the node's universal offline-wallet interface capability.
     pub const READINESS_PATH: &str = "/v1/offline/readiness";
+    /// Fetch finalized consensus-backed Kagemusha public-issuance status.
+    pub const KAGEMUSHA_ISSUANCE_STATUS_PATH: &str = "/v1/offline/kagemusha/issuance-status";
+    /// Fetch the finalized governed device-attestation policy and finality evidence.
+    pub const DEVICE_ATTESTATION_POLICY_PATH: &str = "/v1/offline/device-attestation-policy";
+    /// Advance a durable checkpoint toward the finalized device-attestation policy.
+    pub const DEVICE_ATTESTATION_POLICY_PROOF_PATH: &str =
+        "/v1/offline/device-attestation-policy/proof";
+    /// Evaluate one protected registration and issue a short-lived credential when eligible.
+    pub const DEVICE_ELIGIBILITY_PATH: &str = "/v1/offline/device-eligibility";
     /// Resolve proof-bearing active registration lineage for an authenticated account.
     pub const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
     /// Submit a signed online-to-offline top-up operation.
@@ -1077,6 +1086,64 @@ pub mod offline {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
+    .with_cors_options(true);
+    /// Descriptor for finalized Kagemusha public-issuance status.
+    pub const KAGEMUSHA_ISSUANCE_STATUS: RouteDescriptor = RouteDescriptor::new(
+        "offline.kagemusha.issuance_status",
+        HttpMethod::Get,
+        KAGEMUSHA_ISSUANCE_STATUS_PATH,
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
+    .with_implicit_head(true)
+    .with_cors_options(true);
+    /// Descriptor for the finalized governed device-attestation policy query.
+    pub const DEVICE_ATTESTATION_POLICY: RouteDescriptor = RouteDescriptor::new(
+        "offline.device_attestation_policy",
+        HttpMethod::Get,
+        DEVICE_ATTESTATION_POLICY_PATH,
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
+    .with_implicit_head(true)
+    .with_cors_options(true);
+    /// Descriptor for bounded checkpoint-to-policy finality proof pages.
+    pub const DEVICE_ATTESTATION_POLICY_PROOF: RouteDescriptor = RouteDescriptor::new(
+        "offline.device_attestation_policy_proof",
+        HttpMethod::Post,
+        DEVICE_ATTESTATION_POLICY_PROOF_PATH,
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
+    .with_cors_options(true);
+    /// Descriptor for authenticated device-eligibility evaluation and issuance.
+    pub const DEVICE_ELIGIBILITY: RouteDescriptor = RouteDescriptor::new(
+        "offline.device_eligibility",
+        HttpMethod::Post,
+        DEVICE_ELIGIBILITY_PATH,
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for proof-bearing receiver-registration lineage resolution.
     pub const RECIPIENT_LINEAGE: RouteDescriptor = RouteDescriptor::new(
@@ -1135,8 +1202,17 @@ pub mod offline {
     .with_implicit_head(true)
     .with_cors_options(true);
     /// Canonical first-release offline API catalog.
-    pub const ROUTES: &[RouteDescriptor] =
-        &[READINESS, RECIPIENT_LINEAGE, TOP_UP, REDEEM, OPERATION];
+    pub const ROUTES: &[RouteDescriptor] = &[
+        READINESS,
+        KAGEMUSHA_ISSUANCE_STATUS,
+        DEVICE_ATTESTATION_POLICY,
+        DEVICE_ATTESTATION_POLICY_PROOF,
+        DEVICE_ELIGIBILITY,
+        RECIPIENT_LINEAGE,
+        TOP_UP,
+        REDEEM,
+        OPERATION,
+    ];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {

@@ -337,6 +337,7 @@ impl ZkX509DerStarkShapeV1 {
 pub(crate) struct ZkX509DerStarkFixedScheduleV1;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509DerStarkFixedScheduleV1 {
+    #[cfg(test)]
     pub(crate) const fn active_rows(&self) -> usize {
         ZK_X509_DER_STARK_FIXED_NON_PADDING_ROWS_V1
     }

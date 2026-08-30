@@ -1065,7 +1065,9 @@ public final class IrohaSDK: @unchecked Sendable {
               verifierCommitment.count == 32 else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.productCapability")
         }
-        _ = try await toriiRestClient.getOfflineCapability()
+        _ = try await toriiRestClient.getOfflineCapability(
+            canonicalAuth: canonicalAuth
+        )
         let snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot(
             asset: assetDefinitionId,
             commitments: [],

@@ -2,7 +2,13 @@
 //! Four-peer lifecycle, admission, replay, and restart coverage for the
 //! canonical native Jindo direct action.
 use eyre::{Result, WrapErr as _, ensure, eyre};
-use integration_tests::sandbox;
+use integration_tests::{
+    privacy_exact12_controller::{
+        require_applied_privacy_action_v1, require_privacy_action_receipt_on_peer_v1,
+        submit_signed_privacy_action_and_wait_async_v1,
+    },
+    sandbox,
+};
 use iroha::client::Client;
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
@@ -25,8 +31,9 @@ use iroha_data_model::{
         PrivacyCapabilityLimitationV1, PrivacyCapabilityReadinessV1,
         PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
         PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1,
-        PrivacyParameterDigestV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        PrivacyOperationSchemaV1, PrivacyParameterDigestV1, PrivacyProofV1,
+        PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLifecycleV1,
     },
     query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
@@ -439,9 +446,14 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
         .with_permissioned_consensus();
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| {
+            eyre!(
+                "{context}: release-evidence qualification requires the four-peer localnet; \
+                 the experimental Jindo semantic gate cannot pass by skipping network execution"
+            )
+        })?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -675,15 +687,22 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
             restart_peer.shutdown_if_started().await,
             "selected Active Jindo peer was not running before restart coverage"
         );
-        let submitted_hash = submit_signed_transaction(
+        let final_handle = submit_signed_privacy_action_and_wait_async_v1(
             &client,
+            PrivacyOperationSchemaV1::JindoPolynomialEvaluationV1,
             &final_action,
-            "submit canonical active Jindo direct action",
+            SUBMISSION_TIMEOUT,
+            POLL_INTERVAL,
         )
-        .await?;
+        .await
+        .wrap_err("submit canonical active Jindo action through authenticated controller")?;
+        let final_view = require_applied_privacy_action_v1(
+            &final_handle,
+            PrivacyOperationSchemaV1::JindoPolynomialEvaluationV1,
+        )?;
         ensure!(
-            *submitted_hash.as_ref() == *final_action.hash().as_ref(),
-            "submitted Jindo transaction hash differs from the signed action"
+            final_view.transaction_hash() == *final_action.hash().as_ref(),
+            "authenticated Jindo transaction hash differs from the signed action"
         );
         let finalized_height = client
             .get_privacy_capabilities()
@@ -710,6 +729,9 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
             "healthy-peer Jindo finality",
         )
         .await?;
+        for peer in &healthy_clients {
+            require_privacy_action_receipt_on_peer_v1(peer, &final_handle)?;
+        }
         let replay_error = client
             .submit_transaction(&final_action)
             .expect_err("exact Jindo transaction replay was accepted");
@@ -751,6 +773,9 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
             "post-restart finalized Jindo transaction visibility",
         )
         .await?;
+        for peer in &all_clients {
+            require_privacy_action_receipt_on_peer_v1(peer, &final_handle)?;
+        }
         ensure!(
             canonical_genesis_hash(&bounded_client(restart_peer.client()))? == genesis_hash,
             "restarted peer derived a different canonical genesis hash"

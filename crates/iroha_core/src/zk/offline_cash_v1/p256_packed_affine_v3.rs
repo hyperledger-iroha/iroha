@@ -3773,10 +3773,6 @@ fn transpose_packed_trace<F: BigPrimeField>(
     // These are layout constants, so force them into the verifier-bound tail
     // before destructuring the builder. They may already be cached.
     let (one, minus_two, negative_radix) = ensure_layout_constants(&mut builder);
-    let zero = *builder
-        .constants
-        .get(&BigInt::from(0))
-        .expect("zero is a verifier-bound constant");
     let PackedBuilder {
         caller_instances,
         constant_instances,

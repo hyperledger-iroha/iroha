@@ -13,10 +13,10 @@ use iroha_crypto::confidential_spool::{
     ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
 use iroha_zkp_halo2::vega::{
-    ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
-    ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
-    ZkAmsMkheRnsNativeSourceProviderV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
-    ZkAmsMkheRnsNativeSourceWriterV1,
+    ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSecretChunkV1,
+    ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceErrorV1,
+    ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceProviderV1,
+    ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,
 };
 
 /// Core-owned factory for unlinked authenticated RNS-native source arenas.
@@ -136,6 +136,10 @@ impl ZkAmsMkheRnsNativeSourceWriterV1 for CoreZkAmsMkheRnsNativeSourceWriterV1 {
     type Chunk = CoreZkAmsMkheRnsNativeSecretChunkV1;
     type Snapshot = CoreZkAmsMkheRnsNativeSourceSnapshotV1;
 
+    fn layout(&self) -> ZkAmsMkheRnsNativeSourceLayoutV1 {
+        self.layout
+    }
+
     fn allocate_chunk(
         &self,
         arena: ZkAmsMkheRnsNativeSourceArenaV1,
@@ -229,6 +233,12 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for CoreZkAmsMkheRnsNativeSourceSnapshot
         })
     }
 }
+
+// The underlying confidential-spool snapshot is a seekable authenticated
+// owner. Its focused tests exercise same-slot repeatability, descending reads,
+// immutable snapshot identity, pure preflight errors, and permanent poisoning
+// after every operational error or unwind.
+impl ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1 for CoreZkAmsMkheRnsNativeSourceSnapshotV1 {}
 
 fn spool_layout_v1(
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -353,5 +363,11 @@ mod tests {
                 .to_string()
                 .contains(directory.path().to_string_lossy().as_ref())
         );
+    }
+
+    #[test]
+    fn core_snapshot_exposes_the_repeatable_source_capability() {
+        fn require_repeatable<S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>() {}
+        require_repeatable::<CoreZkAmsMkheRnsNativeSourceSnapshotV1>();
     }
 }

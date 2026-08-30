@@ -126,8 +126,11 @@ The complete first-release route set is:
 
 The legacy-named readiness route reports the universal, asset-neutral
 application protocol: `mandatory = false`,
-`cash_handoff_capability = "cash_handoff_v1"`, bridge ABI 22, maximum hop count
-8, `ready = true`, and empty `assets` and `blockers`. It takes no required query
+`cash_handoff_capability = "cash_handoff_v1"`, the separately advertised
+`eligibility_cash_handoff_capability = "cash_handoff_eligibility_v1"`, bridge
+ABI 22, maximum hop count 8, `ready = true`, and empty `assets` and `blockers`.
+The first value names the unchanged ABI-21/V4 proof contract; the second names
+the credential-bearing, one-use ABI-22 transport envelope. It takes no required query
 and never evaluates an asset, domain, dataspace, verifier catalog, or proof
 backend. Wallet/device handoff must continue without network discovery.
 

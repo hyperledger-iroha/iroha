@@ -59,12 +59,14 @@ export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 make bridge-xcframework
 ```
 
-The build requires Python 3.12, uses only the repository-root `Cargo.lock`, and
-rejects in-tree or symbolic Cargo targets. A nonempty external isolated target
-is supported; builds sharing that target or output are serialized by held locks,
-and every Apple slice is freshly invoked. The archive owner requires the explicit
-epoch, snapshots the complete authenticated generation under the output lock, and
-atomically publishes a sorted ZIP with normalized modes and timestamps.
+This default build requires Python 3.12, uses build-lock authority
+`workspace-v1` backed by the repository-root `Cargo.lock`, and records the v1
+three-profile Apple environment envelope. It rejects in-tree or symbolic Cargo
+targets. A nonempty external isolated target is supported; builds sharing that
+target or output are serialized by held locks, and every Apple slice is freshly
+invoked. The archive owner requires the explicit epoch, snapshots the complete
+authenticated generation under the output lock, and atomically publishes a
+sorted ZIP with normalized modes and timestamps.
 
 ### Swift Package Manager (`Package.swift`)
 
@@ -169,30 +171,33 @@ The canonical XCFramework contains `ios-arm64`, the universal
 
 The default bridge build deliberately keeps real privacy proving and verification
 fail-closed. After the privacy production-gate evidence has been approved, build
-an opt-in Apple artifact with:
+an opt-in Apple artifact only from the authenticated privacy-release corridor.
+Use `ci/privacy_sdk_cargo_lockfile.sh provision-ci`, install and seal the exact
+five Apple Rust targets, and apply the emitted environment and path files exactly
+as the `privacy_swift_sdk_parse` job in
+`.github/workflows/pr_privacy_sdk_guard.yml` does. Do not globally export
+`CARGO`, `RUSTC`, or `RUSTDOC`; the authenticated wrapper owns those executable
+selections, and generated toolchain or secret paths must not be logged. With that
+corridor active:
 
 ```bash
-export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
 export NORITO_BRIDGE_OUT_DIR=/absolute/non-symlink/path/to/iroha-apple-artifacts
 export NORITO_BRIDGE_BUILD_DIR=/absolute/non-symlink/path/to/iroha-apple-build
 mkdir -p \
-  "$CARGO_TARGET_DIR" \
   "$NORITO_BRIDGE_OUT_DIR" \
   "$NORITO_BRIDGE_BUILD_DIR"
-export CARGO_BUILD_JOBS=1
-export CARGO_INCREMENTAL=0
-export CARGO_NET_OFFLINE=true
-export RUSTC_BOOTSTRAP=1
-export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
 scripts/build_norito_xcframework.sh --privacy-production-enabled
 ```
 
 That option passes the existing `privacy-production-enabled` Cargo feature to
 every Apple slice and marks the XCFramework plus its artifact manifest. The
+privacy manifest uses build-lock authority `privacy-sdk-release-v2`, binds both
+the tracked root `Cargo.lock` and immutable
+`ci/privacy_sdk_release_lock_v2.toml`, and records the v2 five-profile Apple
+environment envelope. The
 `Mobile SDK Artifacts` manual workflow exposes the same default-off option.
-The builder always compiles all four slices into the one caller-selected target,
-uses the root `Cargo.lock`, and fails closed if `xcodebuild` cannot package them.
+The builder always compiles all four slices into the corridor-owned target and
+fails closed if either lock authority changes or `xcodebuild` cannot package them.
 There is no skip-build, preserved-target, alternate-lock, or manual-packaging mode.
 
 CI runs `.github/workflows/mobile_sdk_artifacts.yml` to authenticate the exact
@@ -1168,21 +1173,34 @@ the application owns reconciliation and any later explicit submission.
 `GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
 `POST /v1/offline/redeem`, `GET /v1/offline/operations/{operation_id}`, and
 `POST /v1/offline/receiver-lineage`.
-Use `getOfflineCapability()`, `submitKagemushaTopUp`,
-`submitKagemushaRedeem`, `getKagemushaOperationStatus(operationId:)`, and
+Use `getOfflineCapability(canonicalAuth:)`,
+`submitKagemushaTopUp(_:canonicalAuth:)`,
+`submitKagemushaRedeem(_:canonicalAuth:)`,
+`getKagemushaOperationStatus(operationId:chainDiscriminant:canonicalAuth:)`, and
 `getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
 No selector-taking readiness alias is exposed.
 
-Receiver-lineage proof evaluation requires `ToriiLocalSigningContext` and a
-per-call `ToriiCanonicalRequestAuth`. Swift signs the exact genesis-derived
-`NetworkId`, POST target, and raw Norito selector body, rejects redirects, and
-never retries the nonce-bearing request.
+Every Kagemusha call requires `ToriiLocalSigningContext` and a per-call
+`ToriiCanonicalRequestAuth`. Swift signs the exact genesis-derived `NetworkId`,
+method, target, and raw body, rejects redirects, and never retries the
+nonce-bearing request. `ToriiAuthenticatedKagemushaOperationTransport`
+generates a fresh timestamp and nonce for every status poll and submission.
 
 `ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
 settlement readiness. Swift accepts only `mandatory: false`,
-`cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `22`, the exact maximum
-hop bound, `ready: true`, and empty `assets` and `blockers`. Assets and
-dataspaces require no offline enrollment or backend enablement.
+`cash_handoff_capability: "cash_handoff_v1"`,
+`eligibility_cash_handoff_capability: "cash_handoff_eligibility_v1"`, bridge
+ABI `22`, the exact maximum hop bound, `ready: true`, and empty `assets` and
+`blockers`. Assets and dataspaces require no offline enrollment or backend
+enablement.
+
+The unchanged `cash_handoff_v1` value identifies the underlying ABI-21/V4
+payment capability. The eligibility-gated peer rail is advertised separately
+as `cash_handoff_eligibility_v1`; it does not relabel that proof. It uses IPM1
+PAYMENT schema `0x0103` for the canonical
+`KagemushaEligibilityPaymentEnvelopeV1`; legacy receive requests,
+acknowledgements, and unchanged ABI-21/V4 payment bodies remain schema `0x0102`
+and are never reinterpreted as eligibility envelopes.
 
 `KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
 typed Kagemusha Norito archive. They derive the lowercase idempotency key from
@@ -1253,21 +1271,56 @@ transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
 complete envelope profile tuple both at construction and final encoding.
 
-ABI22 intentionally remains exactly the five approved privacy C exports. It
-has no manifest validator export: Swift performs the strict bounded canonical
-and semantic manifest decode, anchored by the native catalog getter and native
-catalog validator on every authority-bearing path. A Rust-native semantic
-manifest-validation claim therefore requires separate evidence and is not
-implied by this Swift lane.
+ABI22 intentionally remains exactly the sixteen approved privacy C exports: the
+compiled-catalog getter and validator, the Exact12 fixture getter and validator,
+the signed-Exact12-action inspector, the authenticated committed-transaction
+details prepare/finalize/result projector, the authenticated finalized-action-
+receipt prepare/finalize/result projector, one generic finalized-state-query
+prepare/finalize/result projector for query IDs 97 through 104, and the
+authenticated offline-device-registration result projector, and the zeroizing
+buffer free. It has no manifest validator export: Swift performs the
+strict bounded canonical and semantic manifest decode, anchored by the native
+catalog getter and native catalog validator on every authority-bearing path.
+The committed-transaction details and finalized-state projectors authenticate
+Torii's committed-state answers; because those answers do not themselves carry
+a signed block header or QC, independent finality still requires separate
+exact-block verification. A Rust-native semantic manifest-validation claim
+therefore requires separate evidence and is not implied by this Swift lane.
 `exact12FixtureBundleV1()` returns byte-complete Rust-derived statements,
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
 accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 22
-availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
-the zeroizing-free symbol, and successful typed probes. Generic
+availability requires the complete sixteen-symbol privacy surface and successful
+typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.
+
+The eight `ToriiClient.getPrivacy…V1` finalized-state helpers cover only the
+closed native query IDs 97 through 104. Each requires HTTPS, an immutable local
+`NetworkId`, and `ToriiCanonicalRequestAuth` for a registered account. Native
+code constructs and verifies the exact authority-signed singular query, then
+canonical-decodes, re-encodes, validates, and request-binds the Norito response
+before Swift sees its typed projection. A 404 means that the requested public
+pool state or key-addressed provenance is not present and returns `nil`; it is
+not synthesized as an empty record. These views contain finalized public state
+and provenance only—never wallet witnesses, note plaintexts, secret keys, or
+authentication paths—and their finalized block hash is still not an
+independently verified QC.
+
+`ToriiClient.submitSignedPrivacyActionV1` treats HTTP 202 and pipeline
+`Committed` as nonterminal dispatch progress. `Applied` becomes a terminal
+`PrivacyActionOperationViewV1` only after both authenticated committed details
+and the finalized typed ID105 execution receipt agree on the transaction height
+and all operation, intent, statement, envelope, capability, and finalized-block
+bindings. The public view keeps the pre-submit capability digest/height separate
+from the four execution-receipt fields because consensus may admit a newer
+manifest. A 404 from either local evidence index is retryable propagation lag;
+a cache-resolved `Expired` status is likewise nonterminal. Every terminal
+committed height must be at least the fresh pre-submit capability height, while
+any binding, height, rejection/success, or terminal-state contradiction fails
+closed. The receipt's finalized block binding authenticates the typed Torii
+state projection; independent QC verification remains a separate API.
 
 `PrivacyExact12FixtureCodecV1` is the native-independent counterpart for the
 Rust-derived bundle in

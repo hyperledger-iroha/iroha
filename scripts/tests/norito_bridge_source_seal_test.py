@@ -183,17 +183,43 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             str(root_lock),
         )
 
-    def test_selected_lock_must_be_exact_root_regular_and_non_symbolic(self) -> None:
+    def test_selected_lock_must_be_canonical_regular_and_non_symbolic(self) -> None:
         root_lock = self.root / "Cargo.lock"
         self.assertEqual(seal.selected_lockfile_path(self.root), root_lock)
         self.assertEqual(seal.selected_lockfile_path(self.root, root_lock), root_lock)
 
-        with self.assertRaisesRegex(RuntimeError, "explicit root Cargo lock"):
+        with self.assertRaisesRegex(RuntimeError, "must be absolute"):
             seal.selected_lockfile_path(self.root, Path("Cargo.lock"))
+
+        external_directory = self.root / "private-lock"
+        external_directory.mkdir()
+        external = external_directory / "Cargo.lock"
+        external.write_text("# external release lock\n", encoding="utf-8")
+        self.assertEqual(
+            seal.selected_lockfile_path(self.root, external),
+            external,
+        )
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+            external_inputs = seal.seal_inputs(self.root, "apple", external)
+        external_fingerprint = seal.fingerprint(
+            self.root, external_inputs, external
+        )
+        root_contents = root_lock.read_bytes()
+        root_lock.write_bytes(root_contents + b"# workspace authority change\n")
+        self.assertNotEqual(
+            external_fingerprint,
+            seal.fingerprint(self.root, external_inputs, external),
+        )
+        root_lock.write_bytes(root_contents)
+        external.write_bytes(external.read_bytes() + b"# build authority change\n")
+        self.assertNotEqual(
+            external_fingerprint,
+            seal.fingerprint(self.root, external_inputs, external),
+        )
 
         alternate = self.root / "alternate-Cargo.lock"
         alternate.write_text("# alternate lock\n", encoding="utf-8")
-        with self.assertRaisesRegex(RuntimeError, "explicit root Cargo lock"):
+        with self.assertRaisesRegex(RuntimeError, "must end in Cargo.lock"):
             seal.selected_lockfile_path(self.root, alternate)
 
         root_lock.unlink()
@@ -201,12 +227,12 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             seal.selected_lockfile_path(self.root)
 
         root_lock.mkdir()
-        with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
+        with self.assertRaisesRegex(RuntimeError, "bounded, singly linked"):
             seal.selected_lockfile_path(self.root)
         root_lock.rmdir()
 
         root_lock.symlink_to(alternate)
-        with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
+        with self.assertRaisesRegex(RuntimeError, "bounded, singly linked"):
             seal.selected_lockfile_path(self.root)
 
     def test_source_seal_cargo_environment_binds_jobs_rustdoc_and_fixed_target(
@@ -310,12 +336,21 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
             builder,
         )
+        self.assertIn('cargo_executable="$CARGO_WRAPPER_BINARY"', builder)
+        self.assertIn(
+            'cargo_command=("$cargo_executable" "$cargo_subcommand" "$@")',
+            builder,
+        )
+        self.assertIn(
+            "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH",
+            builder,
+        )
         self.assertIn('--set "RUSTC_BOOTSTRAP=1"', builder)
         self.assertIn('--set "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"', builder)
         self.assertIn('--set "RUSTDOC=$RUSTDOC_BINARY"', builder)
         self.assertEqual(
             builder.count('--set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"'),
-            1,
+            2,
         )
         self.assertNotIn("CARGO_BUILD_DIR_", builder)
         self.assertNotRegex(builder, r"rm -rf[^\n]*CARGO_TARGET_DIR")
@@ -329,13 +364,53 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             builder,
         )
         self.assertIn(
-            '"cargo_lock_sha256": "$CARGO_LOCK_SHA256_START"',
+            '"workspace_cargo_lock_sha256": "$WORKSPACE_CARGO_LOCK_SHA256_START"',
+            builder,
+        )
+        self.assertIn(
+            '"build_cargo_lock_sha256": "$CARGO_LOCK_SHA256_START"',
+            builder,
+        )
+        self.assertIn(
+            '"build_cargo_lock_authority": "$BUILD_CARGO_LOCK_AUTHORITY"',
             builder,
         )
 
         runner = HERMETIC_RUNNER.read_text(encoding="utf-8")
         self.assertIn('"CARGO_BUILD_JOBS"', runner)
         self.assertIn('"RUSTDOC"', runner)
+        for profile in (
+            "privacy-apple-ios-device-arm64",
+            "privacy-apple-ios-simulator-arm64",
+            "privacy-apple-ios-simulator-x86_64",
+            "privacy-apple-macos-arm64",
+            "privacy-apple-macos-x86_64",
+        ):
+            self.assertIn(profile, runner)
+
+    def test_apple_builder_manifest_profiles_follow_lock_authority(self) -> None:
+        builder = APPLE_BUILDER.read_text(encoding="utf-8")
+        self.assertIn(
+            'BUILD_ENVIRONMENT_SCHEMA="iroha.mobile-native-build-environment.v1"',
+            builder,
+        )
+        self.assertIn(
+            'BUILD_ENVIRONMENT_SCHEMA="iroha.mobile-native-build-environment.v2"',
+            builder,
+        )
+        self.assertIn(
+            'HERMETIC_RUNNER_SCHEMA="iroha.mobile-hermetic-command.v1"',
+            builder,
+        )
+        self.assertIn(
+            'HERMETIC_RUNNER_SCHEMA="iroha.mobile-hermetic-command.v2"',
+            builder,
+        )
+        self.assertIn('if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then', builder)
+        self.assertIn('"schema": "$BUILD_ENVIRONMENT_SCHEMA"', builder)
+        self.assertIn(
+            '"hermetic_runner_schema": "$HERMETIC_RUNNER_SCHEMA"', builder
+        )
 
     def test_apple_hermetic_runner_rejects_incomplete_or_noncanonical_envelope(
         self,

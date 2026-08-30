@@ -38,6 +38,7 @@ public final class TransactionBuilderTests {
 
   public static void main(final String[] args) throws Exception {
     encodeAndSignWithExplicitSigner();
+    externalSignerOnlyBuilderRejectsAlias();
     publicBuilderPreservesExplicitQueuePlanIntent();
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
@@ -60,8 +61,7 @@ public final class TransactionBuilderTests {
 
     final FakeSigner signer = new FakeSigner();
     final NoritoCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    final TransactionBuilder builder =
-        new TransactionBuilder(codec, IrohaKeyManager.withSoftwareProvider());
+    final TransactionBuilder builder = new TransactionBuilder(codec);
 
     final TransactionPayload direct = codec.decodeTransaction(codec.encodeTransaction(payload));
     assert direct.admissionIntent() == TransactionAdmissionIntent.ORDINARY
@@ -98,6 +98,30 @@ public final class TransactionBuilderTests {
         : "Public signing must bind QueuePlan admission";
     assert payload.admissionIntent() == TransactionAdmissionIntent.ORDINARY
         : "Public signing must not mutate the caller payload";
+  }
+
+  private static void externalSignerOnlyBuilderRejectsAlias() throws Exception {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
+            .setNetworkId(TestNetworkIds.fromSeed(15L))
+            .setAuthority(TestAccountIds.ed25519Authority(0x41))
+            .setExecutable(Executable.ivm("external-only".getBytes()))
+            .build();
+    final TransactionBuilder builder =
+        new TransactionBuilder(
+            new NoritoJavaCodecAdapter(
+                org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT));
+
+    try {
+      builder.encodeAndSign(
+          payload,
+          "must-not-be-created",
+          IrohaKeyManager.KeySecurityPreference.SOFTWARE_ONLY);
+      throw new AssertionError("External-signer-only builder must reject an alias");
+    } catch (final org.hyperledger.iroha.android.KeyManagementException expected) {
+      assert expected.getMessage().contains("exact external signer");
+    }
   }
 
   private static void publicBuilderPreservesExplicitQueuePlanIntent() throws Exception {

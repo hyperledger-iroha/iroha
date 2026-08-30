@@ -66,6 +66,10 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         norito::json::from_slice(&readiness_body).expect("decode universal offline capability");
     assert!(!capability.mandatory);
     assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
+    assert_eq!(
+        capability.eligibility_cash_handoff_capability,
+        "cash_handoff_eligibility_v1"
+    );
     assert_eq!(capability.required_bridge_abi_version, 22);
     assert_eq!(capability.max_hops, 8);
     assert!(capability.ready);

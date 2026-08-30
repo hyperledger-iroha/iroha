@@ -47,9 +47,15 @@ use crate::{
             VeRangeBitLengthV1, VeRangeParametersV1, VeRangeType1BatchStatementV1, commit,
             prove_batch,
         },
-        zk_ace::{ZkAcePrivacyWitnessV1, prove_zk_ace_privacy_v1_with_rng},
+        zk_ace::{
+            ZK_ACE_FULL_ENGINE_AVAILABLE_V1, ZkAcePrivacyWitnessV1,
+            prove_zk_ace_privacy_v1_with_rng, prove_zk_ace_release_candidate_v2_with_rng,
+        },
     },
-    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
+    privacy_profiles::{
+        CompiledPrivacyProfileV1, compiled_privacy_profile_v1,
+        nonshipping_zk_ace_release_candidate_profile_v2,
+    },
     privacy_release_evidence::{EvidenceRng06, EvidenceRng09, PrivacyReleaseEvidenceErrorClassV1},
     privacy_state::compute_privacy_pgc_account_state_root_v1,
 };
@@ -71,7 +77,11 @@ use iroha_data_model::{
         PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyRootV1,
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
         PrivacyVeRangeBitLengthV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
-        VeRangeTransparentRangeStatementV1, ZkAcePqAuthorizationStatementV1,
+        PrivacyZkAceReplayNullifierProvenanceV1, VeRangeTransparentRangeStatementV1,
+        ZkAcePqAuthorizationStatementV1,
+    },
+    query::privacy::prelude::{
+        FindPrivacyProofManagedPoolStateV1, FindPrivacyZkAceReplayNullifierV1,
     },
     transaction::SignedTransaction,
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
@@ -137,6 +147,8 @@ pub struct PrivacyReleaseFcmpNetworkActionV1 {
     pub bootstrap: PrivacyProofManagedPoolBootstrapV1,
     /// Exact public statement carried by `transaction`.
     pub statement: MoneroFcmpPlusPlusStatementV1,
+    /// Typed finalized pool-state query used to bind the exact transition.
+    pub state_query: FindPrivacyProofManagedPoolStateV1,
 }
 /// One canonical private-IVM note action and its authoritative program-pool bootstrap.
 #[derive(Clone, Debug)]
@@ -147,11 +159,13 @@ pub struct PrivacyReleaseIvmPrivateNoteNetworkActionV1 {
     pub bootstrap: PrivacyProofManagedPoolBootstrapV1,
     /// Exact public statement carried by `transaction`.
     pub statement: IrohaIvmPrivateNoteStarkStatementV1,
+    /// Typed finalized pool-state query used to bind the exact transition.
+    pub state_query: FindPrivacyProofManagedPoolStateV1,
 }
-/// Candidate governed ZK-ACE transfer shape retained for fail-closed evidence.
+/// Governed ZK-ACE transfer and policy used by the committed-network evidence gate.
 ///
-/// Production builders cannot currently return this type because ZK-ACE has
-/// no activatable compiled profile.
+/// Production builders return this type only after the four native-stage
+/// evidence hashes have been reviewed and compiled into the source.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseZkAceNetworkActionV1 {
     /// Ordinary signed transaction carrying exactly one ZK-ACE proof.
@@ -160,6 +174,43 @@ pub struct PrivacyReleaseZkAceNetworkActionV1 {
     pub policy: PrivacyZkAcePolicyRecordV1,
     /// Exact public statement carried by `transaction`.
     pub statement: ZkAcePqAuthorizationStatementV1,
+    /// Authenticated typed query that must resolve the durable replay marker
+    /// after the transaction reaches finality.
+    pub replay_nullifier_query: FindPrivacyZkAceReplayNullifierV1,
+}
+impl PrivacyReleaseZkAceNetworkActionV1 {
+    /// Validate the finalized typed replay-marker query result against this
+    /// exact governed network action.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant`] if
+    /// any query key, policy revision, statement digest, action index, network
+    /// binding, or finalized provenance invariant differs.
+    pub fn validate_finalized_replay_provenance_v1(
+        &self,
+        provenance: &PrivacyZkAceReplayNullifierProvenanceV1,
+    ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
+        provenance
+            .validate()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+        let expected_statement_digest =
+            PrivacyStatementV1::ZkAcePqAuthorizationV0(self.statement.clone())
+                .digest()
+                .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+        if provenance.network_id != self.statement.context.network_id
+            || provenance.policy_id != self.replay_nullifier_query.policy_id()
+            || provenance.replay_nullifier != self.replay_nullifier_query.replay_nullifier()
+            || provenance.policy_id != self.policy.policy_id
+            || provenance.replay_nullifier != self.statement.replay_nullifier
+            || provenance.policy_record_digest != self.policy.record_digest
+            || provenance.statement_digest != expected_statement_digest
+            || provenance.action_index != self.statement.context.action_index
+        {
+            return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+        }
+        Ok(())
+    }
 }
 fn evidence_error() -> PrivacyReleaseEvidenceErrorClassV1 {
     PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed
@@ -209,7 +260,14 @@ fn finish_transaction_v1(
     }
     signed_payload_v1(payload, expected_intent, private_key)
 }
-fn placeholder_envelope_v1(
+/// Build the non-submittable envelope shape used solely to derive the
+/// transaction-intent digest before proof construction.
+///
+/// Every public builder replaces this value with [`final_envelope_v1`] and
+/// [`finish_transaction_v1`] validates the completed proof-bearing envelope
+/// before signing. Keeping the name explicit avoids suggesting that an
+/// incomplete draft transaction is an admissible network action.
+fn intent_draft_envelope_v1(
     profile: CompiledPrivacyProfileV1,
     statement: PrivacyStatementV1,
     proof: PrivacyProofV1,
@@ -267,11 +325,13 @@ fn secret_scalar_v1(
     );
     SecretScalarV1::from_bytes(bytes).map_err(|_| evidence_error())
 }
-/// Reject a governed ZK-ACE candidate before constructing a proof.
+/// Build one governed, transaction-intent-bound ZK-ACE transfer.
 ///
-/// Otherwise-valid inputs return
-/// [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`] while the
-/// compiled ZK-ACE profile is fail-closed.
+/// Before the public network-semantic pin exists, this builder selects the
+/// explicitly non-shipping candidate profile and candidate prover only when
+/// the four distinct stage pins are complete. After the public pin is
+/// reviewed, it selects the ordinary compiled profile and production prover.
+/// Ordinary wallet builders never call this feature-scoped selector.
 pub fn build_privacy_release_zk_ace_network_action_v1(
     transaction_context: PrivacyReleaseTransactionContextV1,
     source: AccountId,
@@ -286,15 +346,25 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
     if amount == 0 || source == destination {
         return Err(evidence_error());
     }
-    let profile = compiled_privacy_profile_v1(
-        iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
-    )
-    .map_err(|error| match error {
-        crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable { .. } => {
-            PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
-        }
-        _ => evidence_error(),
-    })?;
+    let (profile, use_nonshipping_candidate) = if ZK_ACE_FULL_ENGINE_AVAILABLE_V1 {
+        (
+            compiled_privacy_profile_v1(
+                iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            )
+            .map_err(|_| evidence_error())?,
+            false,
+        )
+    } else {
+        (
+            nonshipping_zk_ace_release_candidate_profile_v2().map_err(|error| match error {
+                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                    ..
+                } => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+                _ => evidence_error(),
+            })?,
+            true,
+        )
+    };
     let identity_root = network_seed_v1(fixture_seed, b"zk-ace-identity-root", 0);
     let identity_blinding = network_seed_v1(fixture_seed, b"zk-ace-identity-blinding", 0);
     let replay_secret = network_seed_v1(fixture_seed, b"zk-ace-replay-secret", 0);
@@ -329,7 +399,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
     };
     let intent = draft_intent_v1(
         &transaction_context,
-        placeholder_envelope_v1(
+        intent_draft_envelope_v1(
             profile,
             PrivacyStatementV1::ZkAcePqAuthorizationV0(statement.clone()),
             PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(Vec::new())),
@@ -345,24 +415,32 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
     let public_inputs =
         ZkAcePrivacyPublicInputsV1::new(statement.clone(), transaction_context.genesis_hash);
     let mut rng = EvidenceRng09::new(network_seed_v1(proof_seed, b"zk-ace-proof", 0));
-    let proof = prove_zk_ace_privacy_v1_with_rng(&public_inputs, &witness, &mut rng)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let proof = if use_nonshipping_candidate {
+        prove_zk_ace_release_candidate_v2_with_rng(&public_inputs, &witness, &mut rng)
+    } else {
+        prove_zk_ace_privacy_v1_with_rng(&public_inputs, &witness, &mut rng)
+    }
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let envelope = final_envelope_v1(
         profile,
         PrivacyStatementV1::ZkAcePqAuthorizationV0(statement.clone()),
         PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(proof)),
     )?;
     let transaction = finish_transaction_v1(&transaction_context, envelope, intent, private_key)?;
+    let replay_nullifier_query =
+        FindPrivacyZkAceReplayNullifierV1::new(statement.policy_id, statement.replay_nullifier);
     Ok(PrivacyReleaseZkAceNetworkActionV1 {
         transaction,
         policy,
         statement,
+        replay_nullifier_query,
     })
 }
 /// Build one transaction-intent- and genesis-bound native VeRange action.
 ///
-/// Values are restricted to the canonical 32-bit profile and the closed
-/// one-to-eight aggregation bound before any proof allocation.
+/// Values select the canonical 32-bit profile when every value fits in
+/// `u32`; otherwise the canonical 64-bit profile is used. Both profiles keep
+/// the same closed one-to-eight aggregation bound before any proof allocation.
 pub fn build_privacy_release_verange_network_action_v1(
     transaction_context: PrivacyReleaseTransactionContextV1,
     asset_definition_id: AssetDefinitionId,
@@ -373,18 +451,24 @@ pub fn build_privacy_release_verange_network_action_v1(
 ) -> Result<PrivacyReleaseVeRangeNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
     validate_context_and_signer_v1(&transaction_context, private_key)?;
     const MAX_AGGREGATION: usize = 8;
-    if values.is_empty()
-        || values.len() > MAX_AGGREGATION
-        || values.iter().any(|value| *value > u64::from(u32::MAX))
-        || policy_id.is_zero()
-    {
+    if values.is_empty() || values.len() > MAX_AGGREGATION || policy_id.is_zero() {
         return Err(evidence_error());
     }
     let profile = compiled_privacy_profile_v1(
         iroha_data_model::privacy::PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
     )
     .map_err(|_| evidence_error())?;
-    let native_profile = VeRangeBitLengthV1::Bits32;
+    let (native_profile, bit_length) = if values.iter().any(|value| *value > u64::from(u32::MAX)) {
+        (
+            VeRangeBitLengthV1::Bits64,
+            PrivacyVeRangeBitLengthV1::Bits64,
+        )
+    } else {
+        (
+            VeRangeBitLengthV1::Bits32,
+            PrivacyVeRangeBitLengthV1::Bits32,
+        )
+    };
     let blindings = (0..values.len())
         .map(|index| {
             secret_scalar_v1(
@@ -409,13 +493,13 @@ pub fn build_privacy_release_verange_network_action_v1(
             .iter()
             .map(|point| PrivacyP256PointV1::new(*point.as_bytes()))
             .collect(),
-        bit_length: PrivacyVeRangeBitLengthV1::Bits32,
+        bit_length,
         aggregation_count: u32::try_from(values.len()).expect("VeRange bound fits u32"),
     };
     let draft_statement = PrivacyStatementV1::VeRangeTransparentRangeV1(statement.clone());
     let intent = draft_intent_v1(
         &transaction_context,
-        placeholder_envelope_v1(
+        intent_draft_envelope_v1(
             profile,
             draft_statement,
             PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(Vec::new())),
@@ -544,7 +628,7 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
     };
     let intent = draft_intent_v1(
         &transaction_context,
-        placeholder_envelope_v1(
+        intent_draft_envelope_v1(
             profile,
             PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone()),
             PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(Vec::new())),
@@ -907,7 +991,7 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
     };
     let intent = draft_intent_v1(
         &transaction_context,
-        placeholder_envelope_v1(
+        intent_draft_envelope_v1(
             profile,
             PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement.clone()),
             PrivacyProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(Vec::new())),
@@ -1089,7 +1173,7 @@ pub fn build_privacy_release_fcmp_network_action_v1(
     };
     let intent = draft_intent_v1(
         &transaction_context,
-        placeholder_envelope_v1(
+        intent_draft_envelope_v1(
             profile,
             PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement.clone()),
             PrivacyProofV1::MoneroFcmpPlusPlusV1(PrivacyProofBytesV1::new(Vec::new())),
@@ -1132,6 +1216,10 @@ pub fn build_privacy_release_fcmp_network_action_v1(
         transaction,
         bootstrap,
         statement,
+        state_query: FindPrivacyProofManagedPoolStateV1::new(
+            iroha_data_model::privacy::PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            pool_id,
+        ),
     })
 }
 /// Build one canonical one-input/one-output private-IVM note transaction.
@@ -1192,7 +1280,7 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
         .map_err(|_| evidence_error())?;
     let intent = draft_intent_v1(
         &transaction_context,
-        placeholder_envelope_v1(
+        intent_draft_envelope_v1(
             profile,
             PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement.clone()),
             PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(PrivacyProofBytesV1::new(Vec::new())),
@@ -1229,6 +1317,10 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
         transaction,
         bootstrap,
         statement,
+        state_query: FindPrivacyProofManagedPoolStateV1::new(
+            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            pool_id,
+        ),
     })
 }
 // Stateful retained-network action builders are defined below. Keeping them
@@ -1237,6 +1329,9 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_engines::zk_ace::{
+        ZK_ACE_FULL_ENGINE_AVAILABLE_V1, zk_ace_nonshipping_release_candidate_available_v2,
+    };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
@@ -1278,6 +1373,38 @@ mod tests {
         let left_commitment = commit(VeRangeBitLengthV1::Bits32, 1, &left).expect("left commit");
         let right_commitment = commit(VeRangeBitLengthV1::Bits32, 1, &right).expect("right commit");
         assert_ne!(left_commitment, right_commitment);
+    }
+    #[test]
+    fn verange_network_builder_selects_exact_32_and_64_bit_profiles() {
+        let key_pair = KeyPair::try_from_seed(vec![0x12; 32], Algorithm::Ed25519)
+            .expect("release builder keypair");
+        let policy_id = PrivacyPolicyIdV1::new([0x32; 32]);
+        let bits32 = build_privacy_release_verange_network_action_v1(
+            context(&key_pair),
+            asset(),
+            policy_id,
+            vec![0, u64::from(u32::MAX)],
+            [0x42; 32],
+            key_pair.private_key(),
+        )
+        .expect("build canonical 32-bit VeRange action");
+        let bits64 = build_privacy_release_verange_network_action_v1(
+            context(&key_pair),
+            asset(),
+            policy_id,
+            vec![u64::from(u32::MAX) + 1, u64::MAX],
+            [0x43; 32],
+            key_pair.private_key(),
+        )
+        .expect("build canonical 64-bit VeRange action");
+        assert_eq!(
+            bits32.statement.bit_length,
+            PrivacyVeRangeBitLengthV1::Bits32
+        );
+        assert_eq!(
+            bits64.statement.bit_length,
+            PrivacyVeRangeBitLengthV1::Bits64
+        );
     }
     #[test]
     fn invalid_context_and_closed_builder_bounds_reject_before_proving() {
@@ -1327,25 +1454,49 @@ mod tests {
             .expect_err("zero ZK-ACE amount must reject"),
             PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed
         );
-        assert_eq!(
-            build_privacy_release_zk_ace_network_action_v1(
-                valid.clone(),
-                valid.authority.clone(),
-                AccountId::new(
-                    KeyPair::try_from_seed(vec![0x23; 32], Algorithm::Ed25519)
-                        .expect("fail-closed destination keypair")
-                        .public_key()
-                        .clone(),
+        if ZK_ACE_FULL_ENGINE_AVAILABLE_V1 {
+            assert!(
+                compiled_privacy_profile_v1(
+                    iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+                )
+                .is_ok(),
+                "closed public-pin gate must expose the exact compiled ZK-ACE profile"
+            );
+        } else if zk_ace_nonshipping_release_candidate_available_v2() {
+            assert_eq!(
+                compiled_privacy_profile_v1(
+                    iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
                 ),
-                asset(),
-                1,
-                [0x53; 32],
-                [0x54; 32],
-                key_pair.private_key(),
-            )
-            .expect_err("otherwise valid ZK-ACE builder must remain unavailable"),
-            PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
-        );
+                Err(
+                    crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                        protocol_id:
+                            iroha_data_model::privacy::PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+                    },
+                ),
+                "ordinary profile must remain closed in the candidate corridor"
+            );
+            assert!(nonshipping_zk_ace_release_candidate_profile_v2().is_ok());
+        } else {
+            assert_eq!(
+                build_privacy_release_zk_ace_network_action_v1(
+                    valid.clone(),
+                    valid.authority.clone(),
+                    AccountId::new(
+                        KeyPair::try_from_seed(vec![0x23; 32], Algorithm::Ed25519)
+                            .expect("release-gated destination keypair")
+                            .public_key()
+                            .clone(),
+                    ),
+                    asset(),
+                    1,
+                    [0x53; 32],
+                    [0x54; 32],
+                    key_pair.private_key(),
+                )
+                .expect_err("otherwise valid ZK-ACE builder must remain release-gated"),
+                PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
+            );
+        }
         let mut zero_genesis = valid.clone();
         zero_genesis.genesis_hash = [0; 32];
         assert_eq!(

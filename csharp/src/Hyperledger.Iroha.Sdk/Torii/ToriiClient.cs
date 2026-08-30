@@ -6589,7 +6589,13 @@ public sealed partial class ToriiClient : IDisposable
     {
         const string context = "pipeline transaction details response";
         var record = RequireJsonObject(root, context);
-        RequireExactJsonFields(record, context, "hash", "transaction", "trigger_completions");
+        RequireExactJsonFields(
+            record,
+            context,
+            "hash",
+            "block_height",
+            "transaction",
+            "trigger_completions");
         var hash = NormalizePipelineResponseTransactionHashHex(
             RequireJsonStringProperty(record, "hash", $"{context}.hash"),
             $"{context}.hash");
@@ -6597,6 +6603,7 @@ public sealed partial class ToriiClient : IDisposable
         {
             throw new JsonException($"{context}.hash does not match the signed query target.");
         }
+        _ = ValidatePositiveJsonUInt64Property(record, "block_height", $"{context}.block_height");
         _ = RequireJsonObjectProperty(record, "transaction", $"{context}.transaction");
         if (!record.TryGetProperty("trigger_completions", out var completions)
             || completions.ValueKind != JsonValueKind.Array)

@@ -6,8 +6,9 @@
 mod artifacts;
 mod cbor;
 mod mdl;
+pub(crate) use artifacts::vega_figure9_release_activation_binding_digest_v1;
 pub use artifacts::{
-    VEGA_MDL_FIGURE9_ARTIFACT_MANIFEST_SCHEMA_V1,
+    VEGA_FIGURE9_RELEASE_READINESS_BLOCKER_V1, VEGA_MDL_FIGURE9_ARTIFACT_MANIFEST_SCHEMA_V1,
     VEGA_MDL_FIGURE9_ARTIFACT_MANIFEST_SCHEMA_VERSION_V1,
     VEGA_MDL_FIGURE9_KEY_ARTIFACT_MAX_BYTES_V1, VegaMdlFigure9ArtifactBindingV1,
     VegaMdlFigure9ArtifactManifestV1, VegaMdlFigure9ArtifactQualificationErrorV1,
@@ -16,6 +17,7 @@ pub use artifacts::{
     VegaMdlFigure9VerifierArtifactInstallReceiptV1, VegaMdlFigure9VerifierArtifactSourceV1,
     qualify_and_install_vega_mdl_figure9_prover_artifacts_v1,
     qualify_and_install_vega_mdl_figure9_verifier_artifact_v1,
+    vega_figure9_release_prerequisite_pins_complete_v1,
 };
 use core::{fmt, num::NonZeroU32, time::Duration};
 use iroha_crypto::{Hash, PrivateKey, PublicKey as IrohaPublicKey};
@@ -541,6 +543,10 @@ pub enum VegaMdlError {
         /// Signature role.
         role: VegaSignatureRoleV1,
     },
+    /// The owner-supplied holder key does not match the device key committed
+    /// by the issuer-authenticated mobile security object.
+    #[error("Vega holder device signing key does not match the authenticated document key")]
+    DeviceSigningKeyMismatch,
     /// The birth signed-item digest does not match its authenticated MSO entry.
     #[error("Vega birth-date signed-item digest mismatch")]
     BirthDateDigestMismatch,
@@ -961,6 +967,68 @@ fn validate_vega_public_input_v1(
     }
     Ok(())
 }
+
+/// Preflight every Vega action constraint determined solely by the imported
+/// owner bundle before the isolated worker advertises it as ready.
+///
+/// The final holder signature and device-authentication digest remain bound to
+/// the subsequently constructed transaction intent. The issuer-authenticated
+/// document, trusted date, age policy, and holder-key ownership are complete at
+/// import time and are therefore validated here.
+pub fn preflight_vega_privacy_action_material_v1(
+    input: VegaPrivacyActionPublicInputV1,
+    witness_material: &VegaPrivacyActionWitnessMaterialV1,
+    device_signing_key: &P256SigningKey,
+    trusted_block_timestamp_ms: u64,
+) -> Result<(), VegaPrivacyActionBuildErrorV1> {
+    validate_vega_public_input_v1(input)?;
+    let _ = validate_date(input.presentation_date, "presentation_date")?;
+    if !(VEGA_MDL_MIN_PRESENTATION_YEAR_V1..=VEGA_MDL_MAX_PRESENTATION_YEAR_V1)
+        .contains(&input.presentation_date.year)
+    {
+        return Err(VegaMdlError::InvalidDate {
+            field: "presentation_date",
+        }
+        .into());
+    }
+    if !(VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1..=VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1)
+        .contains(&input.minimum_age_years)
+    {
+        return Err(VegaMdlError::InvalidAgeThreshold {
+            actual: input.minimum_age_years,
+            min: VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1,
+            max: VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1,
+        }
+        .into());
+    }
+    let unix_seconds = i64::try_from(trusted_block_timestamp_ms / 1_000)
+        .map_err(|_| VegaMdlError::TrustedTimestampOutOfRange)?;
+    let trusted_date = OffsetDateTime::from_unix_timestamp(unix_seconds)
+        .map_err(|_| VegaMdlError::TrustedTimestampOutOfRange)?
+        .date();
+    let trusted_date = PrivacyVegaMdlDateV1 {
+        year: u16::try_from(trusted_date.year())
+            .map_err(|_| VegaMdlError::TrustedTimestampOutOfRange)?,
+        month: u8::from(trusted_date.month()),
+        day: trusted_date.day(),
+    };
+    if trusted_date != input.presentation_date {
+        return Err(VegaMdlError::TrustedPresentationDateMismatch.into());
+    }
+    let expected_device_key = device_signing_key.verifying_key().to_encoded_point(true);
+    mdl::preflight_vega_action_material_v1(
+        input.issuer_record.issuer_public_key,
+        input.presentation_date,
+        input.minimum_age_years,
+        &witness_material.issuer_authentication_sig_structure,
+        &witness_material.mobile_security_object_payload,
+        &witness_material.birth_date_issuer_signed_item,
+        &witness_material.issuer_signature,
+        expected_device_key.as_bytes(),
+    )?;
+    Ok(())
+}
+
 fn vega_statement_context_v1(
     context: &VegaPrivacyActionTransactionContextV1,
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
@@ -1165,18 +1233,86 @@ pub fn prepare_vega_privacy_action_with_rng_v1<R>(
 where
     R: CryptoRng + RngCore,
 {
+    validate_vega_privacy_action_preprofile_v1(&context, input, canonical_genesis_hash)?;
+    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+    )
+    .map_err(|_| VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
+    prepare_vega_privacy_action_with_profile_and_rng_v1(
+        context,
+        input,
+        witness_material,
+        device_signing_key,
+        canonical_genesis_hash,
+        trusted_block_timestamp_ms,
+        profile,
+        rng,
+    )
+}
+/// Prepare one deterministic Vega release candidate without exposing it to
+/// the production compiled-profile catalog.
+///
+/// This boundary is available only to the non-shipping evidence feature. It
+/// still executes the exact action builder and canonical native prover; the
+/// sole difference is explicit selection of deterministic candidate profile
+/// material after ordinary public-boundary validation.
+#[cfg(feature = "privacy-release-evidence")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_vega_release_candidate_privacy_action_with_rng_v1<R>(
+    context: VegaPrivacyActionTransactionContextV1,
+    input: VegaPrivacyActionPublicInputV1,
+    witness_material: VegaPrivacyActionWitnessMaterialV1,
+    device_signing_key: &P256SigningKey,
+    canonical_genesis_hash: [u8; 32],
+    trusted_block_timestamp_ms: u64,
+    rng: &mut R,
+) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    validate_vega_privacy_action_preprofile_v1(&context, input, canonical_genesis_hash)?;
+    let profile = crate::privacy_profiles::vega_release_candidate_profile_material_v1()
+        .map_err(|_| VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
+    prepare_vega_privacy_action_with_profile_and_rng_v1(
+        context,
+        input,
+        witness_material,
+        device_signing_key,
+        canonical_genesis_hash,
+        trusted_block_timestamp_ms,
+        profile,
+        rng,
+    )
+}
+fn validate_vega_privacy_action_preprofile_v1(
+    context: &VegaPrivacyActionTransactionContextV1,
+    input: VegaPrivacyActionPublicInputV1,
+    canonical_genesis_hash: [u8; 32],
+) -> Result<(), VegaPrivacyActionBuildErrorV1> {
     if canonical_genesis_hash == [0; 32] {
         return Err(VegaPrivacyActionBuildErrorV1::ZeroGenesisHash);
     }
     if context.network_id.as_bytes() != &canonical_genesis_hash {
         return Err(VegaPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
-    validate_vega_transaction_context_v1(&context)?;
+    validate_vega_transaction_context_v1(context)?;
     validate_vega_public_input_v1(input)?;
-    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-    )
-    .map_err(|_| VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
+    Ok(())
+}
+#[allow(clippy::too_many_arguments)]
+fn prepare_vega_privacy_action_with_profile_and_rng_v1<R>(
+    context: VegaPrivacyActionTransactionContextV1,
+    input: VegaPrivacyActionPublicInputV1,
+    witness_material: VegaPrivacyActionWitnessMaterialV1,
+    device_signing_key: &P256SigningKey,
+    canonical_genesis_hash: [u8; 32],
+    trusted_block_timestamp_ms: u64,
+    profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
+    rng: &mut R,
+) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
     let draft_statement = vega_statement_v1(
         vega_statement_context_v1(
             &context,

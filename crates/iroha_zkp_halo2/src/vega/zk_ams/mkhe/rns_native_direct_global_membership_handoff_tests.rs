@@ -39,6 +39,7 @@ fn handoff_is_zero_wire_and_all_activation_authorities_remain_false() {
     );
     const {
         assert!(VERIFIER_SIDE_DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_IMPLEMENTED_V1);
+        assert!(VERIFIER_SIDE_AUTHENTICATED_REPLAY_HANDOFF_IMPLEMENTED_V1);
         assert!(!PRODUCTION_AUTHORITATIVE_NUMERIC_SOURCE_AVAILABLE_V1);
         assert!(!PRODUCTION_AUTHENTICATED_REPLAY_OWNER_AVAILABLE_V1);
         assert!(!PRODUCTION_DERIVED_MASK_OWNER_AVAILABLE_V1);
@@ -48,6 +49,75 @@ fn handoff_is_zero_wire_and_all_activation_authorities_remain_false() {
         assert!(!RECEIPT_AVAILABLE_V1);
         assert!(!RELEASE_READY_V1);
     }
+}
+
+#[test]
+fn authenticated_replay_stays_inside_the_combined_owner() {
+    let source = include_str!("rns_native_direct_global_membership_handoff.rs");
+    let replay = source
+        .split_once("impl<'owner, 'source, 'proof, S> RnsNativeSourcePackingAggregateReplayV1")
+        .expect("owned replay implementation")
+        .1
+        .split_once("/// Consume the completed membership chain")
+        .expect("owned replay boundary")
+        .0;
+    for required in [
+        "for &'owner mut RnsNativeDirectGlobalMembershipHandoffV1",
+        ".existing_radix()",
+        ".inventory()",
+        ".linked_mut()",
+        ".source_mut()",
+        ".snapshot_mut()",
+        "owner_coordinate_v1(ordinal)?",
+        "difference_source_index_v1(group, coordinate)?",
+        "signed_source_index_v1(signed_unit, coordinate)?",
+        "difference_scalar_from_be_bytes_v1(encoded)",
+        "signed_scalar_from_twos_complement_be_i64_v1(encoded)",
+        "self.replay_state.replayed = true;",
+        "value.clear_secret();",
+    ] {
+        assert!(replay.contains(required), "replay omission: {required}");
+    }
+    for forbidden in ["clone(", "to_vec(", "into_parts", "source: P"] {
+        assert!(
+            !replay.contains(forbidden),
+            "detached replay surface: {forbidden}"
+        );
+    }
+
+    let direct = include_str!("rns_native_cross_field_rlwe_direct.rs");
+    assert!(direct.contains("existing_radix: &existing_radix,"));
+    assert!(direct.contains("existing_radix: self.existing_radix,"));
+    assert!(direct.contains("pub(super) const fn existing_radix(&self)"));
+
+    let same_opening = include_str!("rns_native_source_packing_same_opening.rs");
+    let owned = same_opening
+        .split_once(
+            "pub(super) fn verify_rns_native_source_packing_same_opening_from_owned_replay_v1",
+        )
+        .expect("owned same-opening verifier")
+        .1
+        .split_once("#[cfg(test)]")
+        .expect("owned verifier boundary")
+        .0;
+    let equation = owned
+        .find("verify_equation_kernel_v1(")
+        .expect("same-opening equation");
+    let outer = owned
+        .find("previous.combined_outer_bindings_v1()")
+        .expect("post-equation outer bindings");
+    assert!(equation < outer);
+    assert!(owned.contains("&mut previous,"));
+    assert!(!owned.contains("context: RnsNativeSourcePackingSameOpeningContextV1"));
+
+    let carrier = include_str!(
+        "collective/incremental_source_rns_native_tail_publication_v2/pretranscript_public_statement_v2/claimed_qpcs_source_carrier_v2.rs"
+    );
+    assert!(carrier.contains("fn verify_source_packing_same_opening_v2("));
+    assert!(
+        carrier
+            .contains("verify_rns_native_source_packing_same_opening_from_owned_replay_v1(stage)?")
+    );
 }
 
 #[test]

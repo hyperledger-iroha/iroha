@@ -291,10 +291,10 @@ require_regex(
 for label, expected_size, expected_sha256 in (
     ("recipient_request_vector", 753,
      "d325566b1117fa368703a971367056173f2d8349d2e86101dc06187aaf8fd2b4"),
-    ("recipient_receive_offer_vector", 12_425,
-     "80a240eb19cabc0853a257b90c4e8a53b0ec0641acc9d7cb0080a4d6de77ec93"),
-    ("recipient_lineage_vector", 11_299,
-     "e9c3ab0cdf2781062dfe5539a5ed4e180cd29530e482eefa7693477e88a20f16"),
+    ("recipient_receive_offer_vector", 12_423,
+     "6b38813ab66f1ecb83861d1641454e2d4de438472189b02ccca52a22bc6431df"),
+    ("recipient_lineage_vector", 11_297,
+     "b61dd641527bfb9e09479906c008b6c061b54009229e6e9ec5f0717572cfb561"),
     ("recipient_checkpoint_vector", 393,
      "ed6f4796046ee1d35f844cc862586dbe1d7d0f59db51638c33559052f4196bef"),
     ("peer_payment_vector", 12_896,
@@ -571,7 +571,10 @@ require_regex(
     "android_keymint",
     r"generateRegistration\s*\("
     r"[\s\S]{0,900}?RegistrationParameters\s+parameters"
-    r"[\s\S]{0,1300}?requiredParameters\.attestationChallenge\(\)"
+    r"[\s\S]{0,1300}?AssertionProfile\s+assertionProfile\s*=\s*"
+    r"selectAssertionProfile\(strongBoxPolicy\)"
+    r"[\s\S]{0,900}?requiredParameters\.attestationChallenge\(assertionProfile\)"
+    r"[\s\S]{0,500}?strongBoxPolicy,\s*assertionProfile,"
     r"[\s\S]{0,900}?requiredParameters\.registration\(material\)",
     "registration-derived Android KeyMint pre-key challenge flow",
 )
@@ -1094,12 +1097,40 @@ for method in native_methods:
                 f"Rust JNI export {package}.{method}",
             )
 
-privacy_compiled_profile_symbols = (
+privacy_abi_symbols = (
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_inspect_signed_exact12_action_v1",
+    "iroha_privacy_authenticated_transaction_details_prepare_v1",
+    "iroha_privacy_authenticated_transaction_details_finalize_v1",
+    "iroha_privacy_authenticated_transaction_details_project_result_v1",
+    "iroha_privacy_authenticated_transaction_details_prepare_v2",
+    "iroha_privacy_authenticated_transaction_details_finalize_v2",
+    "iroha_privacy_authenticated_transaction_details_project_result_v2",
+    "iroha_privacy_authenticated_finality_proof_page_bind_v1",
+    "iroha_privacy_authenticated_finality_page_verify_v1",
+    "iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1",
+    "iroha_privacy_authenticated_finalized_action_rejection_project_v1",
+    "iroha_privacy_kagemusha_topup_finality_project_v4",
+    "iroha_privacy_authenticated_offline_device_registration_result_project_v1",
+    "iroha_privacy_authenticated_action_receipt_prepare_v1",
+    "iroha_privacy_authenticated_action_receipt_finalize_v1",
+    "iroha_privacy_authenticated_action_receipt_project_result_v1",
+    "iroha_privacy_authenticated_state_query_prepare_v1",
+    "iroha_privacy_authenticated_state_query_finalize_v1",
+    "iroha_privacy_authenticated_state_query_project_result_v1",
     "iroha_privacy_free_buffer",
+)
+offline_device_policy_symbols = (
+    "connect_norito_offline_device_policy_proof_request_v1",
+    "connect_norito_offline_device_policy_proof_verify_v1",
+    "connect_norito_offline_device_eligibility_request_v1",
+    "connect_norito_offline_device_eligibility_response_verify_v1",
+    "connect_norito_offline_device_attestation_policy_view_verify_v1",
+    "connect_norito_offline_device_eligibility_credential_verify_v1",
+    "connect_norito_offline_device_eligibility_peer_certificate_verify_v1",
 )
 base_bridge_symbols = (
     "connect_norito_bridge_abi_version",
@@ -1113,13 +1144,14 @@ base_bridge_symbols = (
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
-    *privacy_compiled_profile_symbols,
+    *privacy_abi_symbols,
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
     "connect_norito_sorafs_reference_validate_governance_dag_block_json",
     "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
+    *offline_device_policy_symbols,
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 )
 c_symbols = (
@@ -1170,6 +1202,12 @@ c_symbols = (
     "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
+    "connect_norito_kagemusha_eligibility_payment_prepare_v1",
+    "connect_norito_kagemusha_eligibility_payment_signing_bytes_v1",
+    "connect_norito_kagemusha_eligibility_payment_finalize_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_static_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
 )
 required_bridge_symbols = base_bridge_symbols + c_symbols
@@ -1215,8 +1253,19 @@ def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
 if actual_kagemusha_symbols != c_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 48-symbol Kagemusha C inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 54-symbol Kagemusha C inventory mismatch "
         f"(found {len(actual_kagemusha_symbols)})"
+    )
+
+actual_offline_device_policy_symbols = parse_shell_symbol_array(
+    "mobile_check", "OFFLINE_DEVICE_POLICY_C_SYMBOLS"
+)
+if actual_offline_device_policy_symbols != offline_device_policy_symbols:
+    errors.append(
+        f"{paths['mobile_check']}: exact ordered "
+        f"{len(offline_device_policy_symbols)}-symbol offline-device-policy "
+        "C inventory mismatch "
+        f"(found {len(actual_offline_device_policy_symbols)})"
     )
 
 actual_appeal_finance_symbols = parse_shell_symbol_array(
@@ -1231,25 +1280,27 @@ if actual_appeal_finance_symbols != expected_appeal_finance_symbols:
         f"(found {len(actual_appeal_finance_symbols)})"
     )
 
-actual_privacy_compiled_profile_symbols = parse_shell_symbol_array(
-    "mobile_check", "PRIVACY_COMPILED_PROFILE_C_SYMBOLS"
+actual_privacy_abi_symbols = parse_shell_symbol_array(
+    "mobile_check", "PRIVACY_ABI_C_SYMBOLS"
 )
-if actual_privacy_compiled_profile_symbols != privacy_compiled_profile_symbols:
+if actual_privacy_abi_symbols != privacy_abi_symbols:
     errors.append(
         f"{paths['mobile_check']}: exact ordered "
-        f"{len(privacy_compiled_profile_symbols)}-symbol privacy compiled-profile "
+        f"{len(privacy_abi_symbols)}-symbol privacy ABI "
         "C inventory mismatch "
-        f"(found {len(actual_privacy_compiled_profile_symbols)})"
+        f"(found {len(actual_privacy_abi_symbols)})"
     )
 
 actual_required_bridge_symbols: list[str] = []
 for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS"):
     if value == "${KAGEMUSHA_C_SYMBOLS[@]}":
         actual_required_bridge_symbols.extend(actual_kagemusha_symbols)
+    elif value == "${OFFLINE_DEVICE_POLICY_C_SYMBOLS[@]}":
+        actual_required_bridge_symbols.extend(actual_offline_device_policy_symbols)
     elif value == "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}":
         actual_required_bridge_symbols.extend(actual_appeal_finance_symbols)
-    elif value == "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}":
-        actual_required_bridge_symbols.extend(actual_privacy_compiled_profile_symbols)
+    elif value == "${PRIVACY_ABI_C_SYMBOLS[@]}":
+        actual_required_bridge_symbols.extend(actual_privacy_abi_symbols)
     else:
         actual_required_bridge_symbols.append(value)
 if tuple(actual_required_bridge_symbols) != required_bridge_symbols:
@@ -1579,6 +1630,15 @@ if mode == "--self-test":
         "exact sign-only P-256/SHA-256/challenge/single-use KeyMint generation profile",
     )
     run_negative(
+        "Android KeyMint registration challenge cannot omit its assertion profile",
+        lambda fixture: replace_once(
+            fixture / paths["android_keymint"],
+            "requiredParameters.attestationChallenge(assertionProfile)",
+            "requiredParameters.attestationChallenge()",
+        ),
+        "registration-derived Android KeyMint pre-key challenge flow",
+    )
+    run_negative(
         "required bridge symbol order drift is rejected",
         lambda fixture: replace_once(
             fixture / paths["xcframework_build"],
@@ -1598,7 +1658,7 @@ if mode == "--self-test":
             "  iroha_privacy_validate_compiled_profile_catalog_v1\n"
             "  iroha_privacy_compiled_profile_catalog_v1",
         ),
-        "exact ordered 5-symbol privacy compiled-profile C inventory mismatch",
+        f"exact ordered {len(privacy_abi_symbols)}-symbol privacy ABI C inventory mismatch",
     )
     run_negative(
         "privacy bridge manifest omission is rejected",

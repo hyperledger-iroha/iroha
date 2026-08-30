@@ -897,7 +897,12 @@ macro_rules! build_world_view_from_fields {
         WorldView {
             dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             $($prefix: $state.$prefix.view(),)*
+            privacy_pgc_accounts: $state.privacy_pgc_accounts.view(),
+            privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.view(),
+            privacy_nullifiers: $state.privacy_nullifiers.view(),
             privacy_commitments: $state.privacy_commitments.view(),
+            privacy_roots: $state.privacy_roots.view(),
+            privacy_root_heads: $state.privacy_root_heads.view(),
             $($suffix: $state.$suffix.view(),)*
         }
     };
@@ -7786,11 +7791,41 @@ pub struct WorldView<'world> {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
+    /// Canonical encrypted Anonymous PGC account state keyed by pool and public key.
+    privacy_pgc_accounts: StorageView<
+        'world,
+        crate::privacy_state::PrivacyPgcAccountKeyV1,
+        crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
+    privacy_pgc_pool_invariants: StorageView<
+        'world,
+        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+        crate::privacy_state::PrivacyPgcPoolInvariantV1,
+    >,
+    /// Private backing view used only for typed, validated replay-nullifier lookups.
+    privacy_nullifiers: StorageView<
+        'world,
+        crate::privacy_state::PrivacyNullifierKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
     /// Private backing view used only for typed, validated privacy lookups.
     privacy_commitments: StorageView<
         'world,
         crate::privacy_state::PrivacyCommitmentKeyV1,
         crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
+    /// Private backing view used only to reconstruct typed, validated privacy-pool state.
+    privacy_roots: StorageView<
+        'world,
+        crate::privacy_state::PrivacyRootKeyV1,
+        crate::privacy_state::PrivacyRootProvenanceV1,
+    >,
+    /// Private backing view used only to bind typed privacy-pool state to its current head.
+    privacy_root_heads: StorageView<
+        'world,
+        crate::privacy_state::PrivacyRootHeadKeyV1,
+        crate::privacy_state::PrivacyRootHeadRecordV1,
     >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs:
@@ -19602,6 +19637,137 @@ pub trait WorldReadOnly {
         issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
         policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
     ) -> core::result::Result<iroha_data_model::privacy::BootleLanternIssuerPolicyV1, String>;
+    /// Load the fixed durable fields for one policy-scoped ZK-ACE replay marker.
+    ///
+    /// The returned tuple is `(policy_record_digest, statement_digest,
+    /// admitted_at_height, action_index)`. Finality and network bindings belong
+    /// to [`StateReadOnly`] and are added by the authenticated query adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic error for an invalid lookup key, malformed
+    /// persisted record, or a record whose role or policy identity does not
+    /// match the exact replay key.
+    fn privacy_zk_ace_replay_nullifier_fields_v1(
+        &self,
+        policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+        replay_nullifier: iroha_data_model::privacy::PrivacyNullifierV1,
+    ) -> core::result::Result<
+        Option<(
+            iroha_data_model::privacy::PrivacyZkAcePolicyRecordDigestV1,
+            iroha_data_model::privacy::PrivacyStatementDigestV1,
+            u64,
+            u32,
+        )>,
+        String,
+    >;
+    /// Load bounded public fields for one fully validated FCMP++, private-IVM,
+    /// or PQ-MASP pool.
+    ///
+    /// `None` means the exact typed pool was never bootstrapped. Any malformed
+    /// or cross-protocol durable state returns an error rather than a partial
+    /// query view.
+    fn privacy_proof_managed_pool_query_state_v1(
+        &self,
+        protocol_id: iroha_data_model::privacy::PrivacyProtocolIdV1,
+        pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
+    ) -> core::result::Result<
+        Option<crate::privacy_state::PrivacyProofManagedPoolQueryStateV1>,
+        String,
+    >;
+    /// Load bounded public fields for one fully validated Orchard pool.
+    ///
+    /// `None` means the exact pool was never bootstrapped. Malformed compact
+    /// frontier, root-head, history, or bootstrap bindings return an error.
+    fn privacy_orchard_pool_query_state_v1(
+        &self,
+        pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
+    ) -> core::result::Result<Option<crate::privacy_state::PrivacyOrchardPoolQueryStateV1>, String>;
+    /// Load the fixed durable fields for one exact pool-scoped Orchard nullifier.
+    ///
+    /// The returned tuple is `(bootstrap_digest, statement_digest,
+    /// admitted_at_height, action_index)`. The lookup also validates the
+    /// complete current pool snapshot and its origin binding.
+    fn privacy_orchard_nullifier_fields_v1(
+        &self,
+        pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
+        nullifier: [u8; 32],
+    ) -> core::result::Result<
+        Option<(
+            iroha_data_model::privacy::PrivacyOrchardPoolBootstrapDigestV1,
+            iroha_data_model::privacy::PrivacyStatementDigestV1,
+            u64,
+            u32,
+        )>,
+        String,
+    >;
+    /// Load bounded public fields for one fully validated Anonymous PGC pool.
+    ///
+    /// `None` means the exact pool was never bootstrapped. Malformed encrypted
+    /// table, invariant, root history, or head state returns an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid pool identity or inconsistent durable pool state.
+    fn privacy_anonymous_pgc_pool_query_state_v1(
+        &self,
+        pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
+    ) -> core::result::Result<
+        Option<crate::privacy_state::PrivacyAnonymousPgcPoolQueryStateV1>,
+        String,
+    >;
+    /// Load complete committed provenance for one admitted ZK-AMS PHC anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid namespace or malformed/cross-bound admission state.
+    fn privacy_zk_ams_admission_query_state_v1(
+        &self,
+        issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
+        registry_id: iroha_data_model::privacy::PrivacyZkAmsRegistryIdV1,
+        policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+        phc_hash: iroha_data_model::privacy::PrivacyZkAmsPhcHashV1,
+    ) -> core::result::Result<Option<crate::privacy_state::PrivacyZkAmsAdmissionQueryStateV1>, String>;
+    /// Load complete committed provenance for one anonymous ZK-AMS provisioning.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid namespace or malformed/cross-bound provision state.
+    fn privacy_zk_ams_provision_query_state_v1(
+        &self,
+        issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
+        registry_id: iroha_data_model::privacy::PrivacyZkAmsRegistryIdV1,
+        policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+        key_image: iroha_data_model::privacy::PrivacyZkAmsKeyImageV1,
+    ) -> core::result::Result<Option<crate::privacy_state::PrivacyZkAmsProvisionQueryStateV1>, String>;
+    /// Load complete committed provenance for one consumed ZK-X509 certificate nullifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid namespace or malformed nullifier provenance.
+    fn privacy_zk_x509_certificate_nullifier_query_state_v1(
+        &self,
+        trust_anchor_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
+        policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+        nullifier: iroha_data_model::privacy::PrivacyNullifierV1,
+    ) -> core::result::Result<
+        Option<crate::privacy_state::PrivacyZkX509NullifierQueryStateV1>,
+        String,
+    >;
+    /// Load one immutable consensus-backed Exact12 execution receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid key or malformed/cross-key receipt record.
+    fn privacy_action_execution_receipt_record_v1(
+        &self,
+        protocol_id: iroha_data_model::privacy::PrivacyProtocolIdV1,
+        transaction_hash: [u8; 32],
+        action_index: u32,
+    ) -> core::result::Result<
+        Option<crate::privacy_state::PrivacyActionExecutionReceiptRecordV1>,
+        String,
+    >;
     world_ro_accessors!(governance, declaration);
     /// Return the single ABI version accepted by the first release runtime.
     fn abi_version(&self) -> u16 {
@@ -20269,6 +20435,596 @@ macro_rules! impl_world_ro {
                     &self.privacy_commitments,
                 )
             }
+            fn privacy_zk_ace_replay_nullifier_fields_v1(
+                &self,
+                policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+                replay_nullifier: iroha_data_model::privacy::PrivacyNullifierV1,
+            ) -> core::result::Result<
+                Option<(
+                    iroha_data_model::privacy::PrivacyZkAcePolicyRecordDigestV1,
+                    iroha_data_model::privacy::PrivacyStatementDigestV1,
+                    u64,
+                    u32,
+                )>,
+                String,
+            > {
+                let key = crate::privacy_state::PrivacyNullifierKeyV1::zk_ace_replay(
+                    policy_id,
+                    replay_nullifier,
+                )
+                .map_err(str::to_owned)?;
+                let Some(record) = self.privacy_nullifiers.get(&key) else {
+                    return Ok(None);
+                };
+                record.validate().map_err(|error| {
+                    format!("persisted ZK-ACE replay provenance is invalid: {error}")
+                })?;
+                match record {
+                    crate::privacy_state::PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization {
+                        policy_id: stored_policy_id,
+                        policy_record_digest,
+                        statement_digest,
+                        admitted_at_height,
+                        action_index,
+                    } if *stored_policy_id == policy_id => Ok(Some((
+                        *policy_record_digest,
+                        *statement_digest,
+                        *admitted_at_height,
+                        *action_index,
+                    ))),
+                    crate::privacy_state::PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization {
+                        ..
+                    } => Err(
+                        "persisted ZK-ACE replay provenance has a different policy identity"
+                            .to_owned(),
+                    ),
+                    _ => Err(
+                        "persisted ZK-ACE replay key contains a non-ZK-ACE provenance record"
+                            .to_owned(),
+                    ),
+                }
+            }
+            fn privacy_proof_managed_pool_query_state_v1(
+                &self,
+                protocol_id: iroha_data_model::privacy::PrivacyProtocolIdV1,
+                pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
+            ) -> core::result::Result<
+                Option<crate::privacy_state::PrivacyProofManagedPoolQueryStateV1>,
+                String,
+            > {
+                use iroha_data_model::privacy::{
+                    PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyPoolNamespaceV1,
+                    PrivacyProtocolIdV1,
+                };
+                if pool_id.is_zero() {
+                    return Err("proof-managed pool query id must be non-zero".to_owned());
+                }
+                if !matches!(
+                    protocol_id,
+                    PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
+                        | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+                        | PrivacyProtocolIdV1::PqMaspStarkV0
+                ) {
+                    return Err("proof-managed pool query protocol is unsupported".to_owned());
+                }
+                let namespace = PrivacyNamespaceV1::new(
+                    protocol_id,
+                    PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
+                );
+                let config_key =
+                    crate::privacy_state::PrivacyCommitmentKeyV1::proof_managed_pool_config(
+                        namespace,
+                    )
+                    .map_err(str::to_owned)?;
+                if self.privacy_commitments.get(&config_key).is_none() {
+                    return Ok(None);
+                }
+                let snapshot =
+                    crate::privacy_state::load_privacy_proof_managed_pool_snapshot_v1(
+                        namespace,
+                        crate::privacy_state::PrivacyRootRetentionWindowV1::from_policy(
+                            self.privacy_consensus_policy.get(),
+                        ),
+                        &self.privacy_commitments,
+                        &self.privacy_roots,
+                        &self.privacy_root_heads,
+                    )?;
+                Ok(Some(snapshot.query_state_v1()))
+            }
+            fn privacy_orchard_pool_query_state_v1(
+                &self,
+                pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
+            ) -> core::result::Result<
+                Option<crate::privacy_state::PrivacyOrchardPoolQueryStateV1>,
+                String,
+            > {
+                use iroha_data_model::privacy::{
+                    PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyPoolNamespaceV1,
+                    PrivacyProtocolIdV1,
+                };
+                if pool_id.is_zero() {
+                    return Err("Orchard pool query id must be non-zero".to_owned());
+                }
+                let namespace = PrivacyNamespaceV1::new(
+                    PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                    PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
+                );
+                let state_key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(
+                    namespace,
+                )
+                .map_err(str::to_owned)?;
+                if self.privacy_commitments.get(&state_key).is_none() {
+                    return Ok(None);
+                }
+                let snapshot = crate::privacy_state::load_privacy_orchard_pool_snapshot_v1(
+                    namespace,
+                    crate::privacy_state::PrivacyRootRetentionWindowV1::from_policy(
+                        self.privacy_consensus_policy.get(),
+                    ),
+                    &self.privacy_commitments,
+                    &self.privacy_roots,
+                    &self.privacy_root_heads,
+                )?;
+                Ok(Some(snapshot.query_state_v1()))
+            }
+            fn privacy_orchard_nullifier_fields_v1(
+                &self,
+                pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
+                nullifier: [u8; 32],
+            ) -> core::result::Result<
+                Option<(
+                    iroha_data_model::privacy::PrivacyOrchardPoolBootstrapDigestV1,
+                    iroha_data_model::privacy::PrivacyStatementDigestV1,
+                    u64,
+                    u32,
+                )>,
+                String,
+            > {
+                use iroha_data_model::privacy::{
+                    PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyPoolNamespaceV1,
+                    PrivacyProtocolIdV1,
+                };
+                if pool_id.is_zero() {
+                    return Err("Orchard nullifier query pool id must be non-zero".to_owned());
+                }
+                let namespace = PrivacyNamespaceV1::new(
+                    PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                    PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
+                );
+                let key = crate::privacy_state::PrivacyNullifierKeyV1::orchard_nullifier(
+                    namespace, nullifier,
+                )
+                .map_err(str::to_owned)?;
+                let Some(record) = self.privacy_nullifiers.get(&key) else {
+                    return Ok(None);
+                };
+                record.validate().map_err(|error| {
+                    format!("persisted Orchard nullifier provenance is invalid: {error}")
+                })?;
+                let snapshot = crate::privacy_state::load_privacy_orchard_pool_snapshot_v1(
+                    namespace,
+                    crate::privacy_state::PrivacyRootRetentionWindowV1::from_policy(
+                        self.privacy_consensus_policy.get(),
+                    ),
+                    &self.privacy_commitments,
+                    &self.privacy_roots,
+                    &self.privacy_root_heads,
+                )?;
+                match record {
+                    crate::privacy_state::PrivacyStateItemRecordV1::OrchardVerifiedNullifier {
+                        bootstrap_digest,
+                        statement_digest,
+                        admitted_at_height,
+                        action_index,
+                    } if *bootstrap_digest == snapshot.bootstrap_digest() => Ok(Some((
+                        *bootstrap_digest,
+                        *statement_digest,
+                        *admitted_at_height,
+                        *action_index,
+                    ))),
+                    crate::privacy_state::PrivacyStateItemRecordV1::OrchardVerifiedNullifier {
+                        ..
+                    } => Err(
+                        "persisted Orchard nullifier belongs to a different pool bootstrap"
+                            .to_owned(),
+                    ),
+                    _ => Err(
+                        "persisted Orchard nullifier key contains a non-Orchard provenance record"
+                            .to_owned(),
+                    ),
+                }
+            }
+            fn privacy_anonymous_pgc_pool_query_state_v1(
+                &self,
+                pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
+            ) -> core::result::Result<
+                Option<crate::privacy_state::PrivacyAnonymousPgcPoolQueryStateV1>,
+                String,
+            > {
+                use iroha_data_model::privacy::{
+                    PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyPoolNamespaceV1,
+                    PrivacyProtocolIdV1,
+                };
+                if pool_id.is_zero() {
+                    return Err("Anonymous PGC pool query id must be non-zero".to_owned());
+                }
+                let namespace = PrivacyNamespaceV1::new(
+                    PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                    PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
+                );
+                let invariant_key =
+                    crate::privacy_state::PrivacyPgcPoolInvariantKeyV1::new(namespace)
+                        .map_err(str::to_owned)?;
+                if self
+                    .privacy_pgc_pool_invariants
+                    .get(&invariant_key)
+                    .is_none()
+                {
+                    return Ok(None);
+                }
+                let snapshot = crate::privacy_state::load_privacy_pgc_pool_snapshot_v1(
+                    namespace,
+                    crate::privacy_state::PrivacyRootRetentionWindowV1::from_policy(
+                        self.privacy_consensus_policy.get(),
+                    ),
+                    &self.privacy_pgc_accounts,
+                    &self.privacy_pgc_pool_invariants,
+                    &self.privacy_roots,
+                    &self.privacy_root_heads,
+                )?;
+                snapshot.query_state_v1().map(Some)
+            }
+            fn privacy_zk_ams_admission_query_state_v1(
+                &self,
+                issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
+                registry_id: iroha_data_model::privacy::PrivacyZkAmsRegistryIdV1,
+                policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+                phc_hash: iroha_data_model::privacy::PrivacyZkAmsPhcHashV1,
+            ) -> core::result::Result<
+                Option<crate::privacy_state::PrivacyZkAmsAdmissionQueryStateV1>,
+                String,
+            > {
+                use iroha_data_model::privacy::{
+                    PrivacyIssuerRegistryPolicyNamespaceV1, PrivacyNamespaceScopeV1,
+                    PrivacyNamespaceV1, PrivacyProtocolIdV1,
+                };
+                let namespace = PrivacyNamespaceV1::new(
+                    PrivacyProtocolIdV1::IrohaZkAmsV1,
+                    PrivacyNamespaceScopeV1::IssuerRegistryPolicy(
+                        PrivacyIssuerRegistryPolicyNamespaceV1 {
+                            issuer_id,
+                            registry_id,
+                            policy_id,
+                        },
+                    ),
+                );
+                namespace
+                    .validate()
+                    .map_err(|error| format!("invalid ZK-AMS admission query namespace: {error}"))?;
+                let phc_key = crate::privacy_state::PrivacyCommitmentKeyV1::zk_ams_phc(
+                    namespace, phc_hash,
+                )
+                .map_err(str::to_owned)?;
+                let Some(record) = self.privacy_commitments.get(&phc_key) else {
+                    return Ok(None);
+                };
+                record.validate().map_err(|error| {
+                    format!("persisted ZK-AMS admission provenance is invalid: {error}")
+                })?;
+                let snapshot = crate::privacy_state::load_privacy_zk_ams_registry_snapshot_v1(
+                    namespace,
+                    crate::privacy_state::PrivacyRootRetentionWindowV1::from_policy(
+                        self.privacy_consensus_policy.get(),
+                    ),
+                    &self.privacy_commitments,
+                    &self.privacy_roots,
+                    &self.privacy_root_heads,
+                )?;
+                let crate::privacy_state::PrivacyStateItemRecordV1::ZkAmsVerifiedAdmissionAnchor {
+                    bootstrap_digest,
+                    issuer_policy_record_digest,
+                    policy_digest,
+                    registry_record_digest,
+                    parent_epoch,
+                    parent_root,
+                    phc_hash: stored_phc_hash,
+                    seed_public_key,
+                    anchor_index,
+                    batch_size,
+                    successor_epoch,
+                    successor_root,
+                    statement_digest,
+                    admitted_at_height,
+                    action_index,
+                } = record
+                else {
+                    return Err(
+                        "persisted ZK-AMS PHC lacks complete typed admission provenance"
+                            .to_owned(),
+                    );
+                };
+                if *stored_phc_hash != phc_hash || *bootstrap_digest != snapshot.bootstrap_digest() {
+                    return Err(
+                        "persisted ZK-AMS admission has a different anchor or bootstrap"
+                            .to_owned(),
+                    );
+                }
+                if *issuer_policy_record_digest != snapshot.issuer_policy_record_digest()
+                    || crate::privacy_state::validate_zk_ams_registry_record_binding_v1(
+                        namespace,
+                        *issuer_policy_record_digest,
+                        *policy_digest,
+                        *registry_record_digest,
+                        *parent_root,
+                        *parent_epoch,
+                    )
+                    .is_err()
+                    || (*parent_epoch).checked_add(1) != Some(*successor_epoch)
+                    || *successor_epoch > snapshot.current_epoch()
+                    || snapshot
+                        .retained_root_v1(*parent_epoch)
+                        .is_some_and(|root| root != *parent_root)
+                    || snapshot
+                        .retained_root_v1(*successor_epoch)
+                        .is_some_and(|root| root != *successor_root)
+                {
+                    return Err(
+                        "persisted ZK-AMS admission has inconsistent governed or root-transition provenance"
+                            .to_owned(),
+                    );
+                }
+                let seed_key = crate::privacy_state::PrivacyCommitmentKeyV1::zk_ams_seed_key(
+                    namespace,
+                    *seed_public_key,
+                )
+                .map_err(str::to_owned)?;
+                let paired_record = self.privacy_commitments.get(&seed_key).ok_or_else(|| {
+                    "persisted ZK-AMS admission has no paired seed-key record".to_owned()
+                })?;
+                if paired_record != record {
+                    return Err(
+                        "persisted ZK-AMS PHC and seed-key records carry different provenance"
+                            .to_owned(),
+                    );
+                }
+                Ok(Some(
+                    crate::privacy_state::PrivacyZkAmsAdmissionQueryStateV1 {
+                        seed_public_key: *seed_public_key,
+                        bootstrap_digest: *bootstrap_digest,
+                        issuer_policy_record_digest: *issuer_policy_record_digest,
+                        policy_digest: *policy_digest,
+                        registry_record_digest: *registry_record_digest,
+                        parent_epoch: *parent_epoch,
+                        parent_root: *parent_root,
+                        anchor_index: *anchor_index,
+                        batch_size: *batch_size,
+                        successor_epoch: *successor_epoch,
+                        successor_root: *successor_root,
+                        statement_digest: *statement_digest,
+                        admitted_at_height: *admitted_at_height,
+                        action_index: *action_index,
+                    },
+                ))
+            }
+            fn privacy_zk_ams_provision_query_state_v1(
+                &self,
+                issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
+                registry_id: iroha_data_model::privacy::PrivacyZkAmsRegistryIdV1,
+                policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+                key_image: iroha_data_model::privacy::PrivacyZkAmsKeyImageV1,
+            ) -> core::result::Result<
+                Option<crate::privacy_state::PrivacyZkAmsProvisionQueryStateV1>,
+                String,
+            > {
+                use iroha_data_model::privacy::{
+                    PrivacyIssuerRegistryPolicyNamespaceV1, PrivacyNamespaceScopeV1,
+                    PrivacyNamespaceV1, PrivacyProtocolIdV1,
+                };
+                let namespace = PrivacyNamespaceV1::new(
+                    PrivacyProtocolIdV1::IrohaZkAmsV1,
+                    PrivacyNamespaceScopeV1::IssuerRegistryPolicy(
+                        PrivacyIssuerRegistryPolicyNamespaceV1 {
+                            issuer_id,
+                            registry_id,
+                            policy_id,
+                        },
+                    ),
+                );
+                namespace
+                    .validate()
+                    .map_err(|error| format!("invalid ZK-AMS provision query namespace: {error}"))?;
+                let image_key = crate::privacy_state::PrivacyNullifierKeyV1::zk_ams_key_image(
+                    namespace, key_image,
+                )
+                .map_err(str::to_owned)?;
+                let Some(record) = self.privacy_nullifiers.get(&image_key) else {
+                    return Ok(None);
+                };
+                record.validate().map_err(|error| {
+                    format!("persisted ZK-AMS provision provenance is invalid: {error}")
+                })?;
+                let snapshot = crate::privacy_state::load_privacy_zk_ams_registry_snapshot_v1(
+                    namespace,
+                    crate::privacy_state::PrivacyRootRetentionWindowV1::from_policy(
+                        self.privacy_consensus_policy.get(),
+                    ),
+                    &self.privacy_commitments,
+                    &self.privacy_roots,
+                    &self.privacy_root_heads,
+                )?;
+                let crate::privacy_state::PrivacyStateItemRecordV1::ZkAmsVerifiedProvision {
+                    bootstrap_digest,
+                    key_image: stored_key_image,
+                    account_id,
+                    issuer_policy_record_digest,
+                    policy_digest,
+                    registry_record_digest,
+                    registry_epoch,
+                    registry_root,
+                    statement_digest,
+                    admitted_at_height,
+                    action_index,
+                } = record
+                else {
+                    return Err(
+                        "persisted ZK-AMS key image lacks complete typed provision provenance"
+                            .to_owned(),
+                    );
+                };
+                if *stored_key_image != key_image
+                    || *bootstrap_digest != snapshot.bootstrap_digest()
+                {
+                    return Err(
+                        "persisted ZK-AMS provision has a different key image or bootstrap"
+                            .to_owned(),
+                    );
+                }
+                if *issuer_policy_record_digest != snapshot.issuer_policy_record_digest()
+                    || crate::privacy_state::validate_zk_ams_registry_record_binding_v1(
+                        namespace,
+                        *issuer_policy_record_digest,
+                        *policy_digest,
+                        *registry_record_digest,
+                        *registry_root,
+                        *registry_epoch,
+                    )
+                    .is_err()
+                    || *registry_epoch > snapshot.current_epoch()
+                    || snapshot
+                        .retained_root_v1(*registry_epoch)
+                        .is_some_and(|root| root != *registry_root)
+                {
+                    return Err(
+                        "persisted ZK-AMS provision has inconsistent governed or registry provenance"
+                            .to_owned(),
+                    );
+                }
+                Ok(Some(
+                    crate::privacy_state::PrivacyZkAmsProvisionQueryStateV1 {
+                        account_id: account_id.clone(),
+                        bootstrap_digest: *bootstrap_digest,
+                        issuer_policy_record_digest: *issuer_policy_record_digest,
+                        policy_digest: *policy_digest,
+                        registry_record_digest: *registry_record_digest,
+                        registry_epoch: *registry_epoch,
+                        registry_root: *registry_root,
+                        statement_digest: *statement_digest,
+                        admitted_at_height: *admitted_at_height,
+                        action_index: *action_index,
+                    },
+                ))
+            }
+            fn privacy_zk_x509_certificate_nullifier_query_state_v1(
+                &self,
+                trust_anchor_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
+                policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+                nullifier: iroha_data_model::privacy::PrivacyNullifierV1,
+            ) -> core::result::Result<
+                Option<crate::privacy_state::PrivacyZkX509NullifierQueryStateV1>,
+                String,
+            > {
+                use iroha_data_model::privacy::{
+                    PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyProtocolIdV1,
+                    PrivacyTrustAnchorPolicyNamespaceV1,
+                };
+                let namespace = PrivacyNamespaceV1::new(
+                    PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+                    PrivacyNamespaceScopeV1::TrustAnchorPolicy(
+                        PrivacyTrustAnchorPolicyNamespaceV1 {
+                            trust_anchor_id,
+                            policy_id,
+                        },
+                    ),
+                );
+                namespace
+                    .validate()
+                    .map_err(|error| format!("invalid ZK-X509 nullifier namespace: {error}"))?;
+                let key =
+                    crate::privacy_state::PrivacyNullifierKeyV1::zk_x509_certificate_nullifier(
+                        namespace, nullifier,
+                    )
+                    .map_err(str::to_owned)?;
+                let Some(record) = self.privacy_nullifiers.get(&key) else {
+                    return Ok(None);
+                };
+                record.validate().map_err(|error| {
+                    format!("persisted ZK-X509 nullifier provenance is invalid: {error}")
+                })?;
+                // The nullifier marker is immutable historical evidence. Project its exact
+                // verified revision bindings directly so later governance rotations do not make
+                // a finalized certificate presentation unqueryable.
+                let crate::privacy_state::PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier {
+                    trust_anchor_record_digest,
+                    trust_anchor_record_epoch,
+                    certificate_policy_record_digest,
+                    certificate_policy_record_epoch,
+                    crl_record_digest,
+                    crl_record_epoch,
+                    statement_digest,
+                    admitted_at_height,
+                    action_index,
+                } = record
+                else {
+                    return Err(
+                        "persisted ZK-X509 nullifier key has wrong-role provenance".to_owned(),
+                    );
+                };
+                Ok(Some(
+                    crate::privacy_state::PrivacyZkX509NullifierQueryStateV1 {
+                        trust_anchor_record_digest: *trust_anchor_record_digest,
+                        trust_anchor_record_epoch: *trust_anchor_record_epoch,
+                        certificate_policy_record_digest: *certificate_policy_record_digest,
+                        certificate_policy_record_epoch: *certificate_policy_record_epoch,
+                        crl_record_digest: *crl_record_digest,
+                        crl_record_epoch: *crl_record_epoch,
+                        statement_digest: *statement_digest,
+                        admitted_at_height: *admitted_at_height,
+                        action_index: *action_index,
+                    },
+                ))
+            }
+            fn privacy_action_execution_receipt_record_v1(
+                &self,
+                protocol_id: iroha_data_model::privacy::PrivacyProtocolIdV1,
+                transaction_hash: [u8; 32],
+                action_index: u32,
+            ) -> core::result::Result<
+                Option<crate::privacy_state::PrivacyActionExecutionReceiptRecordV1>,
+                String,
+            > {
+                let key = crate::privacy_state::PrivacyCommitmentKeyV1::verified_action_execution_receipt(
+                    protocol_id,
+                    transaction_hash,
+                    action_index,
+                )
+                .map_err(str::to_owned)?;
+                let Some(record) = self.privacy_commitments.get(&key) else {
+                    return Ok(None);
+                };
+                record.validate().map_err(|error| {
+                    format!("persisted privacy execution receipt is invalid: {error}")
+                })?;
+                let crate::privacy_state::PrivacyStateItemRecordV1::VerifiedActionExecutionReceipt {
+                    receipt,
+                } = record
+                else {
+                    return Err(
+                        "persisted privacy execution-receipt key has wrong-role provenance"
+                            .to_owned(),
+                    );
+                };
+                if receipt.protocol_id != protocol_id
+                    || receipt.transaction_hash != transaction_hash
+                    || receipt.action_index != action_index
+                    || key.verified_action_execution_receipt_identity()
+                        != Some((protocol_id, transaction_hash, action_index))
+                {
+                    return Err(
+                        "persisted privacy execution receipt differs from its typed key".to_owned(),
+                    );
+                }
+                Ok(Some(*receipt))
+            }
             world_ro_accessors!(governance, implementation);
         }
     )*};
@@ -20417,6 +21173,96 @@ mod bootle_lantern_policy_world_read_tests {
             format!(
                 "Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} is invalid: {validation_error}"
             )
+        );
+    }
+}
+#[cfg(test)]
+mod zk_ace_replay_world_read_tests {
+    use super::*;
+    use crate::privacy_state::{PrivacyNullifierKeyV1, PrivacyStateItemRecordV1};
+    use iroha_data_model::privacy::{
+        PrivacyNullifierV1, PrivacyPolicyIdV1, PrivacyStatementDigestV1,
+        PrivacyZkAcePolicyRecordDigestV1,
+    };
+
+    #[test]
+    fn typed_replay_lookup_is_exact_across_every_world_view() {
+        let policy_id = PrivacyPolicyIdV1::new([0xA1; 32]);
+        let replay_nullifier = PrivacyNullifierV1::new([0xB1; 32]);
+        let policy_record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0xC1; 32]);
+        let statement_digest = PrivacyStatementDigestV1::new([0xD1; 32]);
+        let expected = Some((policy_record_digest, statement_digest, 7, 0));
+        let key = PrivacyNullifierKeyV1::zk_ace_replay(policy_id, replay_nullifier)
+            .expect("canonical ZK-ACE replay key");
+        let record = PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+            policy_id,
+            policy_record_digest,
+            statement_digest,
+            7,
+            0,
+        )
+        .expect("canonical ZK-ACE replay provenance");
+
+        let mut world = World::default();
+        assert_eq!(
+            world
+                .view()
+                .privacy_zk_ace_replay_nullifier_fields_v1(policy_id, replay_nullifier),
+            Ok(None)
+        );
+        world.privacy_nullifiers.insert(key, record);
+        assert_eq!(
+            world
+                .view()
+                .privacy_zk_ace_replay_nullifier_fields_v1(policy_id, replay_nullifier),
+            Ok(expected)
+        );
+        let mut block = world.block();
+        assert_eq!(
+            block.privacy_zk_ace_replay_nullifier_fields_v1(policy_id, replay_nullifier),
+            Ok(expected)
+        );
+        let transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
+        assert_eq!(
+            transaction.privacy_zk_ace_replay_nullifier_fields_v1(policy_id, replay_nullifier),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn typed_replay_lookup_rejects_invalid_keys_and_wrong_policy_provenance() {
+        let policy_id = PrivacyPolicyIdV1::new([0xA1; 32]);
+        let other_policy_id = PrivacyPolicyIdV1::new([0xA2; 32]);
+        let replay_nullifier = PrivacyNullifierV1::new([0xB1; 32]);
+        let key = PrivacyNullifierKeyV1::zk_ace_replay(policy_id, replay_nullifier)
+            .expect("canonical ZK-ACE replay key");
+        let wrong_policy_record = PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+            other_policy_id,
+            PrivacyZkAcePolicyRecordDigestV1::new([0xC1; 32]),
+            PrivacyStatementDigestV1::new([0xD1; 32]),
+            7,
+            0,
+        )
+        .expect("intrinsically valid wrong-policy provenance");
+        let mut world = World::default();
+        world.privacy_nullifiers.insert(key, wrong_policy_record);
+
+        assert_eq!(
+            world
+                .view()
+                .privacy_zk_ace_replay_nullifier_fields_v1(policy_id, replay_nullifier)
+                .expect_err("wrong-policy provenance must reject"),
+            "persisted ZK-ACE replay provenance has a different policy identity"
+        );
+        assert_eq!(
+            world
+                .view()
+                .privacy_zk_ace_replay_nullifier_fields_v1(
+                    PrivacyPolicyIdV1::new([0; 32]),
+                    replay_nullifier,
+                )
+                .expect_err("zero policy id must reject"),
+            "ZK-ACE policy id must be non-zero"
         );
     }
 }

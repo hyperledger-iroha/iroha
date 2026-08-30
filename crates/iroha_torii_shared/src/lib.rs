@@ -144,6 +144,15 @@ pub mod uri {
     pub const QUERY: &str = "/v1/query";
     /// URI used to evaluate offline-payment readiness.
     pub const OFFLINE_READINESS: &str = crate::route_catalog::offline::READINESS_PATH;
+    /// URI used to fetch the finalized governed device-attestation policy.
+    pub const OFFLINE_DEVICE_ATTESTATION_POLICY: &str =
+        crate::route_catalog::offline::DEVICE_ATTESTATION_POLICY_PATH;
+    /// URI used to advance a durable finality checkpoint to the governed device policy.
+    pub const OFFLINE_DEVICE_ATTESTATION_POLICY_PROOF: &str =
+        crate::route_catalog::offline::DEVICE_ATTESTATION_POLICY_PROOF_PATH;
+    /// URI used to evaluate one protected device and issue an eligibility credential.
+    pub const OFFLINE_DEVICE_ELIGIBILITY: &str =
+        crate::route_catalog::offline::DEVICE_ELIGIBILITY_PATH;
     /// URI used to resolve proof-bearing active receiver registration lineage.
     pub const OFFLINE_RECIPIENT_LINEAGE: &str =
         crate::route_catalog::offline::RECIPIENT_LINEAGE_PATH;
@@ -706,6 +715,8 @@ pub struct PipelineTransactionStatus {
 pub struct PipelineTransactionDetailsResponse {
     /// Canonical signed transaction hash requested by the caller.
     pub hash: String,
+    /// Exact committed block height containing this transaction.
+    pub block_height: u64,
     /// Exact committed transaction, including its entrypoint, result, and batch receipts.
     pub transaction: CommittedTransaction,
     /// Trigger completions associated with the exact committed entrypoint.

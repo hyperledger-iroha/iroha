@@ -5,6 +5,10 @@
 //! `A_r r + A_tau tau - I s1 - B s2 + A_m,hidden m_hidden
 //!      + A_m,public m_public = 0`.
 //!
+//! V1 deliberately has no per-credential revocation-root input or
+//! non-revocation witness. Revocation is the whole-lineage lifecycle of the
+//! exact current issuer-policy record compiled into this relation's scope.
+//!
 //! Publicly disclosed attributes are removed from the witness matrix and
 //! accumulated in the public offset. This fixed-width zero-column technique
 //! preserves one canonical witness layout for every disclosure bitmap.
@@ -17,8 +21,8 @@ use super::{
     transcript::{MatrixRoleV1, MatrixSeedV1, expand_application_matrix_v1},
 };
 use iroha_data_model::privacy::{
-    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyV1,
-    IrohaBootleLanternAnoncredStatementV1,
+    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternIssuerPolicyLifecycleV1,
+    BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
 };
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -154,9 +158,10 @@ impl BootleLanternApplicationRelationV1 {
 ///
 /// # Errors
 ///
-/// Rejects an intrinsically invalid policy, any statement-to-record mismatch,
-/// a missing required disclosure, a disallowed public value, a global
-/// parameter-seed mismatch, or transparent-matrix expansion failure.
+/// Rejects an intrinsically invalid or terminally revoked policy, any
+/// statement-to-record mismatch, a missing required disclosure, a disallowed
+/// public value, a global parameter-seed mismatch, or transparent-matrix
+/// expansion failure.
 pub fn compile_application_relation_v1(
     statement: &IrohaBootleLanternAnoncredStatementV1,
     policy: &BootleLanternIssuerPolicyV1,
@@ -166,6 +171,9 @@ pub fn compile_application_relation_v1(
     policy
         .validate()
         .map_err(|_| RelationErrorV1::InvalidIssuerPolicy)?;
+    if policy.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
+        return Err(RelationErrorV1::InvalidIssuerPolicy);
+    }
     if statement.issuer_id != policy.issuer_id {
         return Err(RelationErrorV1::IssuerMismatch);
     }
@@ -338,13 +346,7 @@ pub fn validate_presentation_witness_v1(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,
 ) -> Result<(), RelationErrorV1> {
-    for (index, tag) in witness.tag.iter().enumerate() {
-        let _decoded_tag = Zeroizing::new(tag.to_direct_attribute().map_err(|_| {
-            RelationErrorV1::NonBinaryTag {
-                index: u8::try_from(index).expect("tag index fits u8"),
-            }
-        })?);
-    }
+    preflight_presentation_witness_local_v1(witness)?;
     for (index, attribute) in witness.attributes.iter().enumerate() {
         if let Some(disclosed) = relation.disclosed_attribute(index)
             && disclosed != *attribute
@@ -353,6 +355,34 @@ pub fn validate_presentation_witness_v1(
                 index: u8::try_from(index).expect("attribute index fits u8"),
             });
         }
+    }
+    let witness_vector = canonical_witness_vector_v1(witness, relation.disclosure_bitmap);
+    for row in 0..APPLICATION_ROWS_V1 {
+        let mut equation = Zeroizing::new(relation.public_offset[row]);
+        for (column, witness_polynomial) in witness_vector.polynomials().iter().enumerate() {
+            let matrix_polynomial = relation
+                .get(row, column)
+                .ok_or(RelationErrorV1::InternalInvariant)?;
+            let product = Zeroizing::new(matrix_polynomial.multiply(*witness_polynomial));
+            *equation = (*equation).add(*product);
+        }
+        if *equation != ApplicationPolynomialV1::ZERO {
+            return Err(RelationErrorV1::ApplicationEquationFailed {
+                row: u8::try_from(row).expect("row fits u8"),
+            });
+        }
+    }
+    Ok(())
+}
+fn preflight_presentation_witness_local_v1(
+    witness: &BootleLanternPresentationWitnessV1,
+) -> Result<(), RelationErrorV1> {
+    for (index, tag) in witness.tag.iter().enumerate() {
+        let _decoded_tag = Zeroizing::new(tag.to_direct_attribute().map_err(|_| {
+            RelationErrorV1::NonBinaryTag {
+                index: u8::try_from(index).expect("tag index fits u8"),
+            }
+        })?);
     }
     let randomness_norm = Zeroizing::new(
         witness
@@ -375,23 +405,51 @@ pub fn validate_presentation_witness_v1(
     if *signature_norm > SIGNATURE_NORM_SQUARED_BOUND_V1 {
         return Err(RelationErrorV1::SignatureNormExceeded);
     }
-    let witness_vector = canonical_witness_vector_v1(witness, relation.disclosure_bitmap);
-    for row in 0..APPLICATION_ROWS_V1 {
-        let mut equation = Zeroizing::new(relation.public_offset[row]);
-        for (column, witness_polynomial) in witness_vector.polynomials().iter().enumerate() {
-            let matrix_polynomial = relation
-                .get(row, column)
-                .ok_or(RelationErrorV1::InternalInvariant)?;
-            let product = Zeroizing::new(matrix_polynomial.multiply(*witness_polynomial));
-            *equation = (*equation).add(*product);
+    Ok(())
+}
+/// Validate policy, selective-disclosure, tag, and norm constraints that are
+/// completely determined by an imported owner wallet bundle.
+pub fn preflight_presentation_wallet_bundle_v1(
+    policy: &BootleLanternIssuerPolicyV1,
+    disclosure_indices: &[u8],
+    witness: &BootleLanternPresentationWitnessV1,
+) -> Result<(), RelationErrorV1> {
+    policy
+        .validate()
+        .map_err(|_| RelationErrorV1::InvalidIssuerPolicy)?;
+    if policy.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
+        return Err(RelationErrorV1::InvalidIssuerPolicy);
+    }
+    let mut disclosure_bitmap = 0_u8;
+    let mut previous = None;
+    for &index in disclosure_indices {
+        let attribute_index = usize::from(index);
+        if attribute_index >= BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 {
+            return Err(RelationErrorV1::DisclosureIndexOutOfRange);
         }
-        if *equation != ApplicationPolynomialV1::ZERO {
-            return Err(RelationErrorV1::ApplicationEquationFailed {
-                row: u8::try_from(row).expect("row fits u8"),
-            });
+        if previous.is_some_and(|prior| prior >= index) {
+            return Err(RelationErrorV1::DisclosuresNotStrictlyIncreasing);
+        }
+        previous = Some(index);
+        disclosure_bitmap |= 1_u8 << index;
+        let value = witness.attributes[attribute_index];
+        let allowed = &policy.allowed_values[attribute_index].values;
+        if !allowed.is_empty()
+            && allowed
+                .binary_search_by_key(&value, |candidate| *candidate.as_bytes())
+                .is_err()
+        {
+            return Err(RelationErrorV1::DisclosedValueNotAllowed { index });
         }
     }
-    Ok(())
+    let missing_required = policy.required_disclosure_bitmap & !disclosure_bitmap;
+    if missing_required != 0 {
+        return Err(RelationErrorV1::MissingRequiredDisclosure {
+            index: u8::try_from(missing_required.trailing_zeros())
+                .expect("u8 bitmap position fits u8"),
+        });
+    }
+    preflight_presentation_witness_local_v1(witness)
 }
 /// Lift the canonical presentation witness into its fixed 48-polynomial application-relation order.
 ///
@@ -834,6 +892,18 @@ mod tests {
             compile_application_relation_v1(
                 &statement(&invalid_policy),
                 &invalid_policy,
+                matrix_seed(),
+                genesis_hash(),
+            ),
+            Err(RelationErrorV1::InvalidIssuerPolicy)
+        );
+        let mut revoked_policy = policy;
+        revoked_policy.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        redigest(&mut revoked_policy);
+        assert_eq!(
+            compile_application_relation_v1(
+                &statement(&revoked_policy),
+                &revoked_policy,
                 matrix_seed(),
                 genesis_hash(),
             ),

@@ -428,18 +428,25 @@ const PRIVACY_EXACT12_MANIFEST_CONSTRUCTOR = Symbol("Exact12 manifest constructo
 const privacyExact12ManifestState = new WeakMap();
 
 const PRIVACY_EXACT12_OPERATION_TUPLES_V1 = Object.freeze([
-  Object.freeze(["zk_ace_authorization_action_v1", "authorization_action", 0]),
-  Object.freeze(["anonymous_pgc_payment_action_v1", "payment_action", 6]),
-  Object.freeze(["verange_range_proof_v1", "component", 1]),
-  Object.freeze(["zk_ams_admission_and_provisioning_v1", "admission_action", 2]),
-  Object.freeze(["vega_credential_presentation_v1", "presentation_action", 2]),
-  Object.freeze(["zk_x509_identity_presentation_v1", "presentation_action", 2]),
-  Object.freeze(["jindo_polynomial_evaluation_v1", "component", 0]),
-  Object.freeze(["bootle_lantern_credential_presentation_v1", "presentation_action", 2]),
-  Object.freeze(["orchard_note_action_v1", "note_action", 7]),
-  Object.freeze(["fcmp_membership_payment_v1", "payment_action", 2]),
-  Object.freeze(["ivm_private_note_action_v1", "note_action", 7]),
-  Object.freeze(["pq_masp_note_action_v1", "note_action", 31]),
+  Object.freeze([Object.freeze(["zk_ace_authorization_action_v1"]), "authorization_action", 0]),
+  Object.freeze([Object.freeze(["anonymous_pgc_payment_action_v1"]), "payment_action", 6]),
+  Object.freeze([Object.freeze(["verange_range_proof_v1"]), "component", 1]),
+  Object.freeze([
+    Object.freeze([
+      "zk_ams_batch_admission_action_v1",
+      "zk_ams_provision_account_action_v1",
+    ]),
+    "admission_action",
+    2,
+  ]),
+  Object.freeze([Object.freeze(["vega_credential_presentation_v1"]), "presentation_action", 2]),
+  Object.freeze([Object.freeze(["zk_x509_identity_presentation_v1"]), "presentation_action", 2]),
+  Object.freeze([Object.freeze(["jindo_polynomial_evaluation_v1"]), "component", 0]),
+  Object.freeze([Object.freeze(["bootle_lantern_credential_presentation_v1"]), "presentation_action", 2]),
+  Object.freeze([Object.freeze(["orchard_note_action_v1"]), "note_action", 7]),
+  Object.freeze([Object.freeze(["fcmp_membership_payment_v1"]), "payment_action", 2]),
+  Object.freeze([Object.freeze(["ivm_private_note_action_v1"]), "note_action", 7]),
+  Object.freeze([Object.freeze(["pq_masp_note_action_v1"]), "note_action", 31]),
 ]);
 
 const PRIVACY_EXACT12_NATIVE_METHODS_V1 = Object.freeze([
@@ -462,7 +469,7 @@ export class PrivacyExact12CapabilityManifestError extends TypeError {
 /**
  * Immutable model created only from native-validated canonical manifest bytes.
  *
- * The public fields preserve the exact `manifest_digest`, `operation_schema`,
+ * The public fields preserve the exact `manifest_digest`, `operation_schemas`,
  * `execution_mode`, `privacy_feature_mask`, readiness, and `activation_state`
  * projection. The self-digest identifies content; it does not authenticate an
  * untrusted producer. Use authenticated Torii transport or a signed candidate.
@@ -650,7 +657,12 @@ function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
     manifest_digest: Array.from(manifest.manifest_digest),
     committed_height: manifest.committed_height,
     protocol_id: protocolId,
-    operation_schema: row.operation_schema.operation_schema,
+    operation_schemas: [
+      row.operation_schemas.primary.operation_schema,
+      ...(row.operation_schemas.secondary === null
+        ? []
+        : [row.operation_schemas.secondary.operation_schema]),
+    ],
     execution_mode: row.execution_mode.execution_mode,
     privacy_feature_mask: row.privacy_feature_mask,
     readiness,
@@ -764,7 +776,7 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
     const path = `Exact12 capability manifest.protocols[${index}]`;
     const row = exactManifestObjectV1(rawRow, [
       "protocol_id",
-      "operation_schema",
+      "operation_schemas",
       "execution_mode",
       "privacy_feature_mask",
       "compiled_profile",
@@ -774,15 +786,35 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
       "limitation",
     ], path);
     const base = snapshot.protocols[index];
-    const [operationSchema, executionMode, featureMask] =
+    const [operationSchemas, executionMode, featureMask] =
       PRIVACY_EXACT12_OPERATION_TUPLES_V1[index];
-    const operation = manifestTaggedUnitV1(
-      row.operation_schema,
+    const operationSet = exactManifestObjectV1(
+      row.operation_schemas,
+      ["primary", "secondary"],
+      `${path}.operation_schemas`,
+    );
+    const primaryOperation = manifestTaggedUnitV1(
+      operationSet.primary,
       "operation_schema",
       "value",
-      operationSchema,
-      `${path}.operation_schema`,
+      operationSchemas[0],
+      `${path}.operation_schemas.primary`,
     );
+    let secondaryOperation = null;
+    if (operationSchemas.length === 2) {
+      secondaryOperation = manifestTaggedUnitV1(
+        operationSet.secondary,
+        "operation_schema",
+        "value",
+        operationSchemas[1],
+        `${path}.operation_schemas.secondary`,
+      );
+    } else if (operationSet.secondary !== null) {
+      manifestFailV1(
+        "must be null for a single-operation protocol",
+        `${path}.operation_schemas.secondary`,
+      );
+    }
     const execution = manifestTaggedUnitV1(
       row.execution_mode,
       "execution_mode",
@@ -819,7 +851,10 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
     );
     return {
       ...base,
-      operation_schema: operation,
+      operation_schemas: {
+        primary: primaryOperation,
+        secondary: secondaryOperation,
+      },
       execution_mode: execution,
       privacy_feature_mask: featureMask,
       readiness,

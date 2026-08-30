@@ -526,8 +526,9 @@ def shell_array(name):
 
 for name in (
     "REQUIRED_BRIDGE_SYMBOLS",
+    "OFFLINE_DEVICE_POLICY_C_SYMBOLS",
     "SORAFS_APPEAL_FINANCE_C_SYMBOLS",
-    "PRIVACY_COMPILED_PROFILE_C_SYMBOLS",
+    "PRIVACY_ABI_C_SYMBOLS",
     "KAGEMUSHA_C_SYMBOLS",
 ):
     for symbol in shell_array(name):
@@ -581,9 +582,11 @@ def emit(symbol):
 emit("connect_norito_bridge_abi_version")
 for symbol in shell_array("KAGEMUSHA_C_SYMBOLS"):
     emit(symbol)
+for symbol in shell_array("OFFLINE_DEVICE_POLICY_C_SYMBOLS"):
+    emit(symbol)
 for symbol in shell_array("SORAFS_APPEAL_FINANCE_C_SYMBOLS"):
     emit(symbol)
-for symbol in shell_array("PRIVACY_COMPILED_PROFILE_C_SYMBOLS"):
+for symbol in shell_array("PRIVACY_ABI_C_SYMBOLS"):
     emit(symbol)
 for namespace in (
     "org_hyperledger_iroha_sdk_offline",
@@ -731,7 +734,7 @@ run_expect_android_missing_symbol_fail() {
     fail "expected Android validation to reject missing symbol $symbol"
   fi
   case "$output" in
-    *"bridge is missing ABI22/V4 symbols:"*"$symbol"*) ;;
+    *"bridge is missing ABI-21/V4 proof plus eligibility-envelope symbols through the ABI-22 native bridge:"*"$symbol"*) ;;
     *)
       printf '%s\n' "$output" >&2
       fail "expected Android missing-symbol failure for $symbol"
@@ -1424,7 +1427,7 @@ retired_swift_binding="$TMP_DIR/retired-swift-binding"
 make_fixture "$retired_swift_binding"
 printf '%s\n' 'let retired = "connect_norito_kagemusha_recursive_spend_init_v3"' \
   >>"$retired_swift_binding/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
-run_expect_fail "$retired_swift_binding" "Swift Kagemusha native symbol inventory is not exact ABI-22/V4"
+run_expect_fail "$retired_swift_binding" "Swift Kagemusha native symbol inventory is not the exact ABI-21/V4 proof plus eligibility-envelope surface through the ABI-22 native bridge"
 
 retired_swift_surface="$TMP_DIR/retired-swift-surface"
 make_fixture "$retired_swift_surface"
@@ -1500,13 +1503,13 @@ retired_kotlin_native="$TMP_DIR/retired-kotlin-native"
 make_fixture "$retired_kotlin_native"
 printf '%s\n' 'private external fun nativeArtifactBindingV3()' \
   >>"$retired_kotlin_native/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
-run_expect_fail "$retired_kotlin_native" "native method inventory is not exact ABI-22/V4" --android-only
+run_expect_fail "$retired_kotlin_native" "native method inventory is not the exact ABI-21/V4 proof plus eligibility-envelope surface through the ABI-22 native bridge" --android-only
 
 retired_java_native="$TMP_DIR/retired-java-native"
 make_fixture "$retired_java_native"
 printf '%s\n' 'private static native void nativeArtifactBindingV3();' \
   >>"$retired_java_native/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
-run_expect_fail "$retired_java_native" "native method inventory is not exact ABI-22/V4" --android-only
+run_expect_fail "$retired_java_native" "native method inventory is not the exact ABI-21/V4 proof plus eligibility-envelope surface through the ABI-22 native bridge" --android-only
 
 retired_rust_jni="$TMP_DIR/retired-rust-jni"
 make_fixture "$retired_rust_jni"
@@ -1527,18 +1530,18 @@ make_fixture "$tampered_apple_cargo_lock"
 printf '# changed after artifact creation\n' >>"$tampered_apple_cargo_lock/Cargo.lock"
 run_expect_fail \
   "$tampered_apple_cargo_lock" \
-  "selected Cargo lock digest does not match checkout"
+  "artifact workspace Cargo lock digest does not match checkout"
 
 malformed_apple_cargo_lock_hash="$TMP_DIR/malformed-apple-cargo-lock-hash"
 make_fixture "$malformed_apple_cargo_lock_hash"
 sed -i.bak \
-  's/"cargo_lock_sha256": "[0-9a-f]*"/"cargo_lock_sha256": "ABC"/' \
+  's/"build_cargo_lock_sha256": "[0-9a-f]*"/"build_cargo_lock_sha256": "ABC"/' \
   "$malformed_apple_cargo_lock_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
 rm -f \
   "$malformed_apple_cargo_lock_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail \
   "$malformed_apple_cargo_lock_hash" \
-  "NoritoBridge selected Cargo lock hash"
+  "NoritoBridge build Cargo lock hash"
 
 symlinked_apple_cargo_lock="$TMP_DIR/symlinked-apple-cargo-lock"
 make_fixture "$symlinked_apple_cargo_lock"
@@ -2474,8 +2477,71 @@ run_expect_android_missing_symbol_fail \
   "$android_inspection_tools"
 run_expect_android_missing_symbol_fail \
   "$with_android_outputs" \
+  "iroha_privacy_inspect_signed_exact12_action_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_transaction_details_prepare_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_transaction_details_finalize_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_transaction_details_project_result_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_offline_device_registration_result_project_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_action_receipt_prepare_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_action_receipt_finalize_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_action_receipt_project_result_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_state_query_prepare_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_state_query_finalize_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
+  "iroha_privacy_authenticated_state_query_project_result_v1" \
+  "$android_inspection_tools"
+run_expect_android_missing_symbol_fail \
+  "$with_android_outputs" \
   "iroha_privacy_free_buffer" \
   "$android_inspection_tools"
+for policy_or_envelope_symbol in \
+  connect_norito_offline_device_policy_proof_request_v1 \
+  connect_norito_offline_device_policy_proof_verify_v1 \
+  connect_norito_offline_device_eligibility_request_v1 \
+  connect_norito_offline_device_eligibility_response_verify_v1 \
+  connect_norito_offline_device_attestation_policy_view_verify_v1 \
+  connect_norito_offline_device_eligibility_credential_verify_v1 \
+  connect_norito_offline_device_eligibility_peer_certificate_verify_v1 \
+  connect_norito_kagemusha_eligibility_payment_prepare_v1 \
+  connect_norito_kagemusha_eligibility_payment_signing_bytes_v1 \
+  connect_norito_kagemusha_eligibility_payment_finalize_v1 \
+  connect_norito_kagemusha_eligibility_payment_validate_static_v1 \
+  connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1 \
+  connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1; do
+  run_expect_android_missing_symbol_fail \
+    "$with_android_outputs" \
+    "$policy_or_envelope_symbol" \
+    "$android_inspection_tools"
+done
 for privacy_jni_symbol in \
   Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion \
   Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog \
@@ -2486,7 +2552,9 @@ for privacy_jni_symbol in \
   Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeCompiledProfileCatalog \
   Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog \
   Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle \
-  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle; do
+  Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle \
+  Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactOfflineDeviceRegistrationResultV1 \
+  Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactOfflineDeviceRegistrationResultV1; do
   run_expect_android_missing_symbol_fail \
     "$with_android_outputs" \
     "$privacy_jni_symbol" \

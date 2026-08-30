@@ -4,7 +4,7 @@ use crate::vega::{
     sponge::Keccak256, zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::ProverFriRoundContextV2,
 };
 use core::sync::atomic;
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };

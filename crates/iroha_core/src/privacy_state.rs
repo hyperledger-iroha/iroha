@@ -5,7 +5,7 @@
 //! ledger. Every map still participates in the same [`crate::state::StateTransaction`], so a
 //! rejected transaction cannot leave a partial replay marker, commitment, or root behind.
 use iroha_data_model::{
-    AssetDefinitionId,
+    AssetDefinitionId, NetworkId,
     account::AccountId,
     asset::AssetBalanceScope,
     privacy::{
@@ -13,35 +13,42 @@ use iroha_data_model::{
         BootleLanternIssuerPolicyV1, FCMP_MAX_INPUTS_V1, FCMP_MAX_OUTPUTS_V1,
         IVM_PRIVATE_NOTE_MAX_INPUTS_V1, IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
         IrohaZkX509StarkP256StatementV1, ORCHARD_MAX_ACTIONS_V1, PQ_MASP_MAX_INPUTS_V1,
-        PQ_MASP_MAX_OUTPUTS_V1, PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
-        PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
-        PrivacyActivationValidationError, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-        PrivacyConsensusPolicyV1, PrivacyFcmpKeyImageV1, PrivacyFcmpOutputIdV1,
+        PQ_MASP_MAX_OUTPUTS_V1, PRIVACY_ACTION_EXECUTION_RECEIPT_VIEW_VERSION_V1,
+        PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+        PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyActivationValidationError, PrivacyCommitmentV1,
+        PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1,
+        PrivacyExact12CapabilityManifestDigestV1, PrivacyFcmpKeyImageV1, PrivacyFcmpOutputIdV1,
         PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
-        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1,
+        PrivacyIssuerRegistryPolicyNamespaceV1, PrivacyLedgerEffectKindV1, PrivacyNamespaceScopeV1,
+        PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyOperationSchemaV1,
         PrivacyOrchardPoolBootstrapDigestV1, PrivacyOrchardPoolBootstrapV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
-        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyProofManagedPoolBootstrapDigestV1,
-        PrivacyProofManagedPoolBootstrapV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, PrivacyRootManagementV1, PrivacyRootPublicationDigestV1,
-        PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyTrustAnchorNamespaceV1, PrivacyTrustAnchorPolicyNamespaceV1,
+        PrivacyOrchardPoolTransitionViewV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+        PrivacyProofManagedPoolBootstrapDigestV1, PrivacyProofManagedPoolBootstrapV1,
+        PrivacyProofManagedPoolTransitionViewV1, PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootManagementV1,
+        PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyTrustAnchorNamespaceV1, PrivacyTrustAnchorPolicyNamespaceV1,
         PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
         PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
         PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
-        PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
-        PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
-        PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
+        PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsRegistryRecordDigestV1,
+        PrivacyZkAmsSeedPublicKeyV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
+        PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordDigestV1,
+        PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
         PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
+        TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1,
         VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
-        ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
-        ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_LINEAGES_V1,
-        ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1, ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1,
-        validate_vega_issuer_revocation_v1, validate_vega_issuer_rotation_v1,
-        validate_zk_x509_certificate_policy_revocation_v1,
+        ZK_AMS_MAX_BATCH_SIZE_V1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
+        ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
+        ZK_X509_MAX_CRL_LINEAGES_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
+        ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1, validate_vega_issuer_revocation_v1,
+        validate_vega_issuer_rotation_v1, validate_zk_x509_certificate_policy_revocation_v1,
         validate_zk_x509_certificate_policy_rotation_v1,
         validate_zk_x509_trust_anchor_revocation_v1, validate_zk_x509_trust_anchor_rotation_v1,
+        zk_ams_registry_record_digest_v1,
     },
 };
 use mv::storage::StorageReadOnly;
@@ -625,6 +632,29 @@ pub(crate) struct PrivacyPgcPoolSnapshotV1 {
     retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     retained_roots: Vec<(PrivacyRootKeyV1, PrivacyRootProvenanceV1)>,
 }
+/// Bounded public fields projected from one fully validated Anonymous PGC pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivacyAnonymousPgcPoolQueryStateV1 {
+    /// Fixed aggregate value preserved by every governed pool transition.
+    pub(crate) total_supply: u32,
+    /// Initial authenticated pool root.
+    pub(crate) bootstrap_root: PrivacyRootV1,
+    /// Digest binding the immutable encrypted account-table bootstrap.
+    pub(crate) bootstrap_digest: PrivacyPgcAccountBootstrapDigestV1,
+    /// Digest of the proof authorizing that bootstrap.
+    pub(crate) bootstrap_proof_digest: PrivacyPgcBootstrapProofDigestV1,
+    /// Epoch of the current authenticated pool head.
+    pub(crate) current_epoch: u64,
+    /// Root of the current authenticated pool head.
+    pub(crate) current_root: PrivacyRootV1,
+    /// Exact number of encrypted accounts in the pool.
+    pub(crate) account_count: u32,
+    /// Height at which the current head became durable.
+    pub(crate) current_state_admitted_at_height: u64,
+    /// Provenance of the latest committed transition, absent at bootstrap.
+    pub(crate) latest_transition:
+        Option<iroha_data_model::privacy::PrivacyAnonymousPgcPoolTransitionViewV1>,
+}
 impl PrivacyPgcPoolSnapshotV1 {
     #[must_use]
     pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
@@ -658,6 +688,54 @@ impl PrivacyPgcPoolSnapshotV1 {
             .any(|(key, _)| key.epoch() == self.current_epoch && key.root() == self.current_root)
             .then_some((self.current_epoch, self.current_root))
     }
+    /// Project bounded query fields from the already cross-checked snapshot.
+    pub(crate) fn query_state_v1(&self) -> Result<PrivacyAnonymousPgcPoolQueryStateV1, String> {
+        let account_count = u32::try_from(self.accounts.len())
+            .map_err(|_| "Anonymous PGC account count cannot be represented".to_owned())?;
+        let (_, head_provenance) = self
+            .retained_roots
+            .last()
+            .ok_or_else(|| "Anonymous PGC snapshot has no retained head".to_owned())?;
+        let (current_state_admitted_at_height, latest_transition) = match *head_provenance {
+            PrivacyRootProvenanceV1::VerifiedBootstrap {
+                admitted_at_height, ..
+            } => (admitted_at_height, None),
+            PrivacyRootProvenanceV1::VerifiedPgcSuccessor {
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+                ..
+            } => (
+                admitted_at_height,
+                Some(
+                    iroha_data_model::privacy::PrivacyAnonymousPgcPoolTransitionViewV1 {
+                        statement_digest,
+                        successor_epoch: self.current_epoch,
+                        parent_epoch,
+                        parent_root,
+                        admitted_at_height,
+                        action_index,
+                    },
+                ),
+            ),
+            _ => {
+                return Err("Anonymous PGC snapshot head has non-PGC root provenance".to_owned());
+            }
+        };
+        Ok(PrivacyAnonymousPgcPoolQueryStateV1 {
+            total_supply: self.invariant.total_supply(),
+            bootstrap_root: self.invariant.bootstrap_root(),
+            bootstrap_digest: self.invariant.bootstrap_digest(),
+            bootstrap_proof_digest: self.invariant.bootstrap_proof_digest(),
+            current_epoch: self.current_epoch,
+            current_root: self.current_root,
+            account_count,
+            current_state_admitted_at_height,
+            latest_transition,
+        })
+    }
 }
 fn validate_pgc_successor_link_v1(
     namespace: PrivacyNamespaceV1,
@@ -690,6 +768,83 @@ fn validate_pgc_successor_link_v1(
     }
     Ok((parent_epoch, parent_root))
 }
+
+/// Effective and notice-window admission caps for one retained root history.
+///
+/// Existing state is bounded by `current`; a newly admitted successor may
+/// already be pruned to the lower `admission` cap during a scheduled
+/// tightening's notice window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyRootRetentionWindowV1 {
+    current: u32,
+    admission: u32,
+}
+impl PrivacyRootRetentionWindowV1 {
+    /// Derive the exact effective/admission pair from the consensus policy.
+    #[must_use]
+    pub(crate) const fn from_policy(policy: &PrivacyConsensusPolicyV1) -> Self {
+        Self {
+            current: policy.current_limits.retained_root_count,
+            admission: policy.admission_retained_root_count(),
+        }
+    }
+
+    fn counts_usize(self, label: &str) -> Result<(usize, usize), String> {
+        if self.current == 0 || self.admission == 0 {
+            return Err(format!("{label} retained-root counts must be non-zero"));
+        }
+        if self.admission > self.current {
+            return Err(format!(
+                "{label} admission retention {} exceeds current retention {}",
+                self.admission, self.current
+            ));
+        }
+        let current = usize::try_from(self.current)
+            .map_err(|_| format!("{label} current retention cannot be represented"))?;
+        let admission = usize::try_from(self.admission)
+            .map_err(|_| format!("{label} admission retention cannot be represented"))?;
+        Ok((current, admission))
+    }
+}
+impl From<u32> for PrivacyRootRetentionWindowV1 {
+    fn from(retained_root_count: u32) -> Self {
+        Self {
+            current: retained_root_count,
+            admission: retained_root_count,
+        }
+    }
+}
+
+fn validate_anchored_retention_window_len_v1(
+    label: &str,
+    current_retained_root_count: usize,
+    admission_retained_root_count: usize,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
+    history_len: usize,
+) -> Result<(), String> {
+    if current_retained_root_count == 0 || admission_retained_root_count == 0 {
+        return Err(format!("{label} retained-root counts must be non-zero"));
+    }
+    if admission_retained_root_count > current_retained_root_count {
+        return Err(format!(
+            "{label} admission retention {admission_retained_root_count} exceeds current retention {current_retained_root_count}"
+        ));
+    }
+    if history_len > current_retained_root_count {
+        return Err(format!(
+            "{label} history has {history_len} roots, exceeding current retention {current_retained_root_count}"
+        ));
+    }
+    if retention_anchor.is_some()
+        && history_len != current_retained_root_count
+        && history_len != admission_retained_root_count
+    {
+        return Err(format!(
+            "anchored {label} history has {history_len} roots but must fill current retention {current_retained_root_count} or notice-window admission retention {admission_retained_root_count}"
+        ));
+    }
+    Ok(())
+}
 /// Validate an independently retained, newest-first-pruned PGC root window.
 ///
 /// The first retained item is either the canonical epoch-one bootstrap or a successor whose missing
@@ -698,20 +853,20 @@ fn validate_pgc_successor_link_v1(
 fn validate_pgc_retained_root_chain_v1(
     namespace: PrivacyNamespaceV1,
     invariant: PrivacyPgcPoolInvariantV1,
-    retained_root_count: usize,
+    current_retained_root_count: usize,
+    admission_retained_root_count: usize,
     retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     history: &[(PrivacyRootKeyV1, PrivacyRootProvenanceV1)],
 ) -> Result<(), String> {
-    if retained_root_count == 0 {
-        return Err("privacy PGC retained-root count must be non-zero".to_owned());
-    }
+    validate_anchored_retention_window_len_v1(
+        "privacy PGC root",
+        current_retained_root_count,
+        admission_retained_root_count,
+        retention_anchor,
+        history.len(),
+    )?;
     if history.is_empty() {
         return Err("privacy PGC pool has no retained root history".to_owned());
-    }
-    if history.len() > retained_root_count {
-        return Err(format!(
-            "privacy PGC root history exceeds retention {retained_root_count}"
-        ));
     }
     let invariant_digest = invariant
         .digest(namespace)
@@ -812,12 +967,6 @@ fn validate_pgc_retained_root_chain_v1(
             ));
         }
     }
-    if retention_anchor.is_some() && history.len() != retained_root_count {
-        return Err(format!(
-            "privacy PGC anchored history has {} roots but must fill retention {retained_root_count}",
-            history.len()
-        ));
-    }
     Ok(())
 }
 /// Load and validate every persisted component of one Anonymous PGC pool.
@@ -832,7 +981,7 @@ fn validate_pgc_retained_root_chain_v1(
 /// incorrect provenance, a mixed account table, or any root mismatch.
 pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
     namespace: PrivacyNamespaceV1,
-    retained_root_count: u32,
+    retention_window: impl Into<PrivacyRootRetentionWindowV1>,
     pgc_accounts: &impl StorageReadOnly<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>,
     pgc_pool_invariants: &impl StorageReadOnly<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>,
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
@@ -844,11 +993,8 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
     if namespace.protocol_id() != PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
         return Err("privacy PGC pool snapshot has the wrong protocol".to_owned());
     }
-    if retained_root_count == 0 {
-        return Err("privacy PGC retained-root count must be non-zero".to_owned());
-    }
-    let retained_root_count = usize::try_from(retained_root_count)
-        .map_err(|_| "privacy PGC retained-root count cannot be represented".to_owned())?;
+    let (current_retained_root_count, admission_retained_root_count) =
+        retention_window.into().counts_usize("privacy PGC")?;
     let max_accounts = ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1
         .iter()
         .copied()
@@ -877,9 +1023,9 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
         namespace,
         PrivacyRootRoleV1::PgcAccountState,
     )) {
-        if retained_roots.len() == retained_root_count {
+        if retained_roots.len() == current_retained_root_count {
             return Err(format!(
-                "privacy PGC root history exceeds retention {retained_root_count}"
+                "privacy PGC root history exceeds current retention {current_retained_root_count}"
             ));
         }
         key.validate()
@@ -902,7 +1048,8 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
     validate_pgc_retained_root_chain_v1(
         namespace,
         invariant,
-        retained_root_count,
+        current_retained_root_count,
+        admission_retained_root_count,
         head.retention_anchor(),
         &retained_roots,
     )?;
@@ -1913,16 +2060,15 @@ fn validate_zk_x509_root_provenance_v1(
     }
     Ok(())
 }
+
 fn validate_zk_x509_root_history_v1(
     namespace: PrivacyNamespaceV1,
     role: PrivacyRootRoleV1,
-    retained_root_count: usize,
+    current_retained_root_count: usize,
+    admission_retained_root_count: usize,
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
 ) -> Result<PrivacyRootHeadRecordV1, String> {
-    if retained_root_count == 0 {
-        return Err("X.509 retained-root count must be non-zero".to_owned());
-    }
     let head_key = PrivacyRootHeadKeyV1::new(namespace, role)
         .map_err(|error| format!("invalid X.509 root-head key: {error}"))?;
     let head = root_heads
@@ -1934,9 +2080,9 @@ fn validate_zk_x509_root_history_v1(
     let retention_anchor = head.retention_anchor();
     let mut history = Vec::new();
     for (key, provenance) in roots.range(PrivacyRootKeyV1::history_range(namespace, role)) {
-        if history.len() == retained_root_count {
+        if history.len() == current_retained_root_count {
             return Err(format!(
-                "X.509 {role:?} history exceeds retention {retained_root_count}"
+                "X.509 {role:?} history exceeds current retention {current_retained_root_count}"
             ));
         }
         key.validate()
@@ -1947,6 +2093,13 @@ fn validate_zk_x509_root_history_v1(
         validate_zk_x509_root_provenance_v1(*key, *provenance)?;
         history.push((*key, *provenance));
     }
+    validate_anchored_retention_window_len_v1(
+        &format!("X.509 {role:?} root"),
+        current_retained_root_count,
+        admission_retained_root_count,
+        retention_anchor,
+        history.len(),
+    )?;
     let first = history
         .first()
         .ok_or_else(|| format!("X.509 {role:?} history is empty"))?;
@@ -2017,6 +2170,64 @@ impl PrivacyZkX509AuthoritativeStateV1 {
         self.ca_membership_root
     }
 }
+/// Assemble the exact public governance snapshot admitted by the isolated
+/// zk-X.509 prover worker.
+///
+/// This constructor is deliberately confined to the non-shipping release
+/// feature.  It accepts no caller-selected namespace and performs the same
+/// self-digest, lifecycle, lineage-identity, and CA-root binding checks that a
+/// ledger-backed load performs before the prover can observe witness bytes.
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn assemble_privacy_zk_x509_authoritative_state_for_worker_v1(
+    trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
+    certificate_policy: PrivacyZkX509CertificatePolicyRecordV1,
+    crl_record: PrivacyZkX509CrlRecordV1,
+    ca_membership_root_epoch: u64,
+    ca_membership_root: PrivacyRootV1,
+) -> Result<PrivacyZkX509AuthoritativeStateV1, String> {
+    trust_anchor
+        .validate()
+        .map_err(|error| format!("invalid X.509 worker trust-anchor record: {error}"))?;
+    certificate_policy
+        .validate()
+        .map_err(|error| format!("invalid X.509 worker certificate-policy record: {error}"))?;
+    crl_record
+        .validate()
+        .map_err(|error| format!("invalid X.509 worker signed-CRL record: {error}"))?;
+
+    let trust_anchor = require_active_zk_x509_trust_anchor_v1(trust_anchor)?;
+    let certificate_policy = require_active_zk_x509_certificate_policy_v1(certificate_policy)?;
+    let crl_record = require_active_zk_x509_crl_v1(crl_record)?;
+    if certificate_policy.trust_anchor_id != trust_anchor.trust_anchor_id
+        || crl_record.trust_anchor_id != trust_anchor.trust_anchor_id
+        || crl_record.certificate_policy_id != certificate_policy.policy_id
+    {
+        return Err(
+            "X.509 worker governance records do not belong to one anchor/policy lineage".to_owned(),
+        );
+    }
+    if ca_membership_root_epoch == 0
+        || ca_membership_root.is_zero()
+        || ca_membership_root_epoch != trust_anchor.ca_membership_root_epoch
+        || ca_membership_root != trust_anchor.ca_membership_root
+    {
+        return Err(
+            "X.509 worker CA root does not equal the active trust-anchor root binding".to_owned(),
+        );
+    }
+    let namespace = privacy_zk_x509_policy_namespace_v1(
+        trust_anchor.trust_anchor_id,
+        certificate_policy.policy_id,
+    )?;
+    Ok(PrivacyZkX509AuthoritativeStateV1 {
+        namespace,
+        trust_anchor,
+        certificate_policy,
+        crl_record,
+        ca_membership_root_epoch,
+        ca_membership_root,
+    })
+}
 fn validate_current_zk_x509_ca_root_binding_v1(
     head: PrivacyRootHeadRecordV1,
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
@@ -2042,17 +2253,18 @@ fn validate_current_zk_x509_ca_root_binding_v1(
 /// Validate the single trust-anchor-wide CA history against its active record.
 pub(crate) fn validate_privacy_zk_x509_trust_anchor_root_state_v1(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
-    retained_root_count: u32,
+    retention_window: impl Into<PrivacyRootRetentionWindowV1>,
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
 ) -> Result<(), String> {
-    let retained_root_count = usize::try_from(retained_root_count)
-        .map_err(|_| "X.509 retained-root count cannot be represented".to_owned())?;
+    let (current_retained_root_count, admission_retained_root_count) =
+        retention_window.into().counts_usize("X.509")?;
     let namespace = privacy_zk_x509_ca_namespace_v1(trust_anchor.trust_anchor_id)?;
     let head = validate_zk_x509_root_history_v1(
         namespace,
         PrivacyRootRoleV1::CertificateAuthorityMembership,
-        retained_root_count,
+        current_retained_root_count,
+        admission_retained_root_count,
         roots,
         root_heads,
     )?;
@@ -2062,12 +2274,12 @@ pub(crate) fn validate_privacy_zk_x509_trust_anchor_root_state_v1(
 pub(crate) fn load_privacy_zk_x509_authoritative_state_v1(
     trust_anchor_id: PrivacyIssuerIdV1,
     policy_id: PrivacyPolicyIdV1,
-    retained_root_count: u32,
+    retention_window: impl Into<PrivacyRootRetentionWindowV1>,
     commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
 ) -> Result<PrivacyZkX509AuthoritativeStateV1, String> {
-    let retained_root_count_u32 = retained_root_count;
+    let retention_window = retention_window.into();
     let index = load_privacy_zk_x509_governance_index_v1(commitments)?;
     let trust_anchor = index
         .trust_anchors
@@ -2096,7 +2308,7 @@ pub(crate) fn load_privacy_zk_x509_authoritative_state_v1(
     let namespace = privacy_zk_x509_policy_namespace_v1(trust_anchor_id, policy_id)?;
     validate_privacy_zk_x509_trust_anchor_root_state_v1(
         trust_anchor,
-        retained_root_count_u32,
+        retention_window,
         roots,
         root_heads,
     )?;
@@ -2242,6 +2454,84 @@ pub(crate) struct PrivacyZkAmsRegistrySnapshotV1 {
     retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     retained_roots: Vec<(PrivacyRootKeyV1, PrivacyRootProvenanceV1)>,
 }
+/// Durable typed fields for one admitted ZK-AMS PHC anchor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivacyZkAmsAdmissionQueryStateV1 {
+    /// Seed public key paired with the queried PHC.
+    pub(crate) seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
+    /// Immutable registry-bootstrap digest.
+    pub(crate) bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+    /// Governed issuer-policy record digest selected by the proof.
+    pub(crate) issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    /// Governed policy digest selected by the proof.
+    pub(crate) policy_digest: PrivacyPolicyDigestV1,
+    /// Authoritative parent-registry record digest.
+    pub(crate) registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    /// Registry epoch consumed by admission.
+    pub(crate) parent_epoch: u64,
+    /// Registry root consumed by admission.
+    pub(crate) parent_root: PrivacyRootV1,
+    /// Zero-based position in the admitted batch.
+    pub(crate) anchor_index: u32,
+    /// Exact admitted batch size.
+    pub(crate) batch_size: u32,
+    /// Registry epoch produced by admission.
+    pub(crate) successor_epoch: u64,
+    /// Registry root produced by admission.
+    pub(crate) successor_root: PrivacyRootV1,
+    /// Digest of the exact verified statement.
+    pub(crate) statement_digest: PrivacyStatementDigestV1,
+    /// Height at which admission became durable.
+    pub(crate) admitted_at_height: u64,
+    /// Transaction-local privacy action index.
+    pub(crate) action_index: u32,
+}
+/// Durable typed fields for one anonymous ZK-AMS account provisioning.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivacyZkAmsProvisionQueryStateV1 {
+    /// Exact account materialized by provisioning.
+    pub(crate) account_id: AccountId,
+    /// Immutable registry-bootstrap digest.
+    pub(crate) bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+    /// Governed issuer-policy record digest selected by the proof.
+    pub(crate) issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    /// Governed policy digest selected by the proof.
+    pub(crate) policy_digest: PrivacyPolicyDigestV1,
+    /// Authoritative registry record digest selected by the proof.
+    pub(crate) registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    /// Registry epoch used for membership.
+    pub(crate) registry_epoch: u64,
+    /// Registry root used for membership.
+    pub(crate) registry_root: PrivacyRootV1,
+    /// Digest of the exact verified statement.
+    pub(crate) statement_digest: PrivacyStatementDigestV1,
+    /// Height at which provisioning became durable.
+    pub(crate) admitted_at_height: u64,
+    /// Transaction-local privacy action index.
+    pub(crate) action_index: u32,
+}
+/// Durable typed fields for one consumed ZK-X509 certificate nullifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivacyZkX509NullifierQueryStateV1 {
+    /// Exact governed trust-anchor revision digest.
+    pub(crate) trust_anchor_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+    /// Exact governed trust-anchor revision epoch.
+    pub(crate) trust_anchor_record_epoch: u64,
+    /// Exact governed certificate-policy revision digest.
+    pub(crate) certificate_policy_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+    /// Exact governed certificate-policy revision epoch.
+    pub(crate) certificate_policy_record_epoch: u64,
+    /// Exact signed-CRL revision digest.
+    pub(crate) crl_record_digest: PrivacyZkX509CrlRecordDigestV1,
+    /// Exact signed-CRL revision epoch.
+    pub(crate) crl_record_epoch: u64,
+    /// Digest of the exact verified statement.
+    pub(crate) statement_digest: PrivacyStatementDigestV1,
+    /// Height at which nullifier consumption became durable.
+    pub(crate) admitted_at_height: u64,
+    /// Transaction-local privacy action index.
+    pub(crate) action_index: u32,
+}
 impl PrivacyZkAmsRegistrySnapshotV1 {
     #[must_use]
     pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
@@ -2276,6 +2566,13 @@ impl PrivacyZkAmsRegistrySnapshotV1 {
             .iter()
             .any(|(key, _)| key.epoch() == self.current_epoch && key.root() == self.current_root)
             .then_some((self.current_epoch, self.current_root))
+    }
+    /// Return the exact retained root for `epoch`, if it remains in the bounded window.
+    #[must_use]
+    pub(crate) fn retained_root_v1(&self, epoch: u64) -> Option<PrivacyRootV1> {
+        self.retained_roots
+            .iter()
+            .find_map(|(key, _)| (key.epoch() == epoch).then_some(key.root()))
     }
 }
 fn validate_zk_ams_successor_link_v1(
@@ -2312,20 +2609,20 @@ fn validate_zk_ams_successor_link_v1(
 fn validate_zk_ams_retained_root_chain_v1(
     namespace: PrivacyNamespaceV1,
     bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
-    retained_root_count: usize,
+    current_retained_root_count: usize,
+    admission_retained_root_count: usize,
     retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     history: &[(PrivacyRootKeyV1, PrivacyRootProvenanceV1)],
 ) -> Result<(), String> {
-    if retained_root_count == 0 {
-        return Err("ZK-AMS retained-root count must be non-zero".to_owned());
-    }
+    validate_anchored_retention_window_len_v1(
+        "ZK-AMS AccountRegistry root",
+        current_retained_root_count,
+        admission_retained_root_count,
+        retention_anchor,
+        history.len(),
+    )?;
     if history.is_empty() {
         return Err("ZK-AMS AccountRegistry has no retained root history".to_owned());
-    }
-    if history.len() > retained_root_count {
-        return Err(format!(
-            "ZK-AMS AccountRegistry history exceeds retention {retained_root_count}"
-        ));
     }
     let (first_key, first_provenance) = history[0];
     match first_provenance {
@@ -2412,12 +2709,6 @@ fn validate_zk_ams_retained_root_chain_v1(
             ));
         }
     }
-    if retention_anchor.is_some() && history.len() != retained_root_count {
-        return Err(format!(
-            "ZK-AMS anchored history has {} roots but must fill retention {retained_root_count}",
-            history.len()
-        ));
-    }
     Ok(())
 }
 /// Load and validate every bounded authoritative component of one ZK-AMS AccountRegistry.
@@ -2428,18 +2719,15 @@ fn validate_zk_ams_retained_root_chain_v1(
 /// chains, over-retention history, and a head that is not the exact newest retained root.
 pub(crate) fn load_privacy_zk_ams_registry_snapshot_v1(
     namespace: PrivacyNamespaceV1,
-    retained_root_count: u32,
+    retention_window: impl Into<PrivacyRootRetentionWindowV1>,
     commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
 ) -> Result<PrivacyZkAmsRegistrySnapshotV1, String> {
     validate_zk_ams_namespace(namespace)
         .map_err(|error| format!("invalid ZK-AMS registry namespace: {error}"))?;
-    if retained_root_count == 0 {
-        return Err("ZK-AMS retained-root count must be non-zero".to_owned());
-    }
-    let retained_root_count = usize::try_from(retained_root_count)
-        .map_err(|_| "ZK-AMS retained-root count cannot be represented".to_owned())?;
+    let (current_retained_root_count, admission_retained_root_count) =
+        retention_window.into().counts_usize("ZK-AMS")?;
     let mut issuer_record = None;
     for (key, record) in commitments.range(
         PrivacyCommitmentKeyV1::zk_ams_issuer_policy_record_range(namespace),
@@ -2480,9 +2768,9 @@ pub(crate) fn load_privacy_zk_ams_registry_snapshot_v1(
         namespace,
         PrivacyRootRoleV1::AccountRegistry,
     )) {
-        if retained_roots.len() == retained_root_count {
+        if retained_roots.len() == current_retained_root_count {
             return Err(format!(
-                "ZK-AMS AccountRegistry history exceeds retention {retained_root_count}"
+                "ZK-AMS AccountRegistry history exceeds current retention {current_retained_root_count}"
             ));
         }
         key.validate()
@@ -2505,7 +2793,8 @@ pub(crate) fn load_privacy_zk_ams_registry_snapshot_v1(
     validate_zk_ams_retained_root_chain_v1(
         namespace,
         bootstrap_digest,
-        retained_root_count,
+        current_retained_root_count,
+        admission_retained_root_count,
         head.retention_anchor(),
         &retained_roots,
     )?;
@@ -2987,6 +3276,28 @@ impl PrivacyProofManagedPoolAccumulatorStateV1 {
         }
     }
 }
+/// Bounded public fields projected from a fully validated proof-managed pool.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivacyProofManagedPoolQueryStateV1 {
+    /// Public asset definition whose confidential supply this pool manages.
+    pub(crate) asset_definition_id: AssetDefinitionId,
+    /// Closed root-history role selected by the protocol profile.
+    pub(crate) root_role: PrivacyRootRoleV1,
+    /// Digest of the immutable governed pool bootstrap.
+    pub(crate) bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+    /// Initial authenticated accumulator root.
+    pub(crate) initial_root: PrivacyRootV1,
+    /// Epoch of the current authenticated accumulator head.
+    pub(crate) current_epoch: u64,
+    /// Root of the current authenticated accumulator head.
+    pub(crate) current_root: PrivacyRootV1,
+    /// Exact number of durable outputs represented by the current head.
+    pub(crate) output_count: u64,
+    /// Height at which the pool bootstrap became durable.
+    pub(crate) bootstrap_admitted_at_height: u64,
+    /// Provenance of the latest committed transition, absent at bootstrap.
+    pub(crate) latest_transition: Option<PrivacyProofManagedPoolTransitionViewV1>,
+}
 /// Fully validated view of one FCMP++, private-IVM, or PQ-MASP pool.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PrivacyProofManagedPoolSnapshotV1 {
@@ -3005,6 +3316,32 @@ pub(crate) struct PrivacyProofManagedPoolSnapshotV1 {
     verified_batches: BTreeMap<u64, ProofManagedVerifiedBatchOriginV1>,
 }
 impl PrivacyProofManagedPoolSnapshotV1 {
+    /// Project only bounded public fields after the complete pool snapshot has
+    /// passed its cross-map and native-frontier validation.
+    pub(crate) fn query_state_v1(&self) -> PrivacyProofManagedPoolQueryStateV1 {
+        let latest_transition = self
+            .verified_batches
+            .get(&self.current_epoch)
+            .map(|origin| PrivacyProofManagedPoolTransitionViewV1 {
+                statement_digest: origin.statement_digest,
+                successor_epoch: self.current_epoch,
+                admitted_at_height: origin.admitted_at_height,
+                action_index: origin.action_index,
+                nullifier_count: origin.nullifier_count,
+                output_count: origin.output_count,
+            });
+        PrivacyProofManagedPoolQueryStateV1 {
+            asset_definition_id: self.bootstrap.asset_definition_id().clone(),
+            root_role: self.root_role,
+            bootstrap_digest: self.bootstrap_digest,
+            initial_root: self.initial_root,
+            current_epoch: self.current_epoch,
+            current_root: self.current_root,
+            output_count: self.output_count,
+            bootstrap_admitted_at_height: self.bootstrap_admitted_at_height,
+            latest_transition,
+        }
+    }
     #[must_use]
     pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
         self.namespace
@@ -3411,21 +3748,21 @@ fn validate_proof_managed_pool_retained_root_chain_v1(
     namespace: PrivacyNamespaceV1,
     bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
     initial_root: PrivacyRootV1,
-    retained_root_count: usize,
+    current_retained_root_count: usize,
+    admission_retained_root_count: usize,
     retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     history: &[(PrivacyRootKeyV1, PrivacyRootProvenanceV1)],
 ) -> Result<(), String> {
     const INITIAL_EPOCH: u64 = 1;
-    if retained_root_count == 0 {
-        return Err("proof-managed pool retained-root count must be non-zero".to_owned());
-    }
+    validate_anchored_retention_window_len_v1(
+        "proof-managed pool root",
+        current_retained_root_count,
+        admission_retained_root_count,
+        retention_anchor,
+        history.len(),
+    )?;
     if history.is_empty() {
         return Err("proof-managed pool has no retained root history".to_owned());
-    }
-    if history.len() > retained_root_count {
-        return Err(format!(
-            "proof-managed pool root history exceeds retention {retained_root_count}"
-        ));
     }
     let protocol_id = namespace.protocol_id();
     let (first_key, first_provenance) = history[0];
@@ -3519,12 +3856,6 @@ fn validate_proof_managed_pool_retained_root_chain_v1(
                 child_key.epoch()
             ));
         }
-    }
-    if retention_anchor.is_some() && history.len() != retained_root_count {
-        return Err(format!(
-            "anchored proof-managed history has {} roots but must fill retention {retained_root_count}",
-            history.len()
-        ));
     }
     Ok(())
 }
@@ -3752,18 +4083,15 @@ fn validate_proof_managed_origin_sequence_v1(
 /// Load and cross-check every authoritative component of one proof-managed pool.
 pub(crate) fn load_privacy_proof_managed_pool_snapshot_v1(
     namespace: PrivacyNamespaceV1,
-    retained_root_count: u32,
+    retention_window: impl Into<PrivacyRootRetentionWindowV1>,
     commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
 ) -> Result<PrivacyProofManagedPoolSnapshotV1, String> {
     let root_role = proof_managed_pool_root_role_v1(namespace)
         .map_err(|error| format!("invalid proof-managed pool namespace: {error}"))?;
-    if retained_root_count == 0 {
-        return Err("proof-managed pool retained-root count must be non-zero".to_owned());
-    }
-    let retained_root_count = usize::try_from(retained_root_count)
-        .map_err(|_| "proof-managed retained-root count cannot be represented".to_owned())?;
+    let (current_retained_root_count, admission_retained_root_count) =
+        retention_window.into().counts_usize("proof-managed pool")?;
     let config_key = PrivacyCommitmentKeyV1::proof_managed_pool_config(namespace)
         .map_err(|error| format!("invalid proof-managed pool config key: {error}"))?;
     let config_record = commitments
@@ -4043,9 +4371,9 @@ pub(crate) fn load_privacy_proof_managed_pool_snapshot_v1(
         .map_err(|error| format!("invalid proof-managed pool head: {error}"))?;
     let mut retained_roots = Vec::new();
     for (key, provenance) in roots.range(PrivacyRootKeyV1::history_range(namespace, root_role)) {
-        if retained_roots.len() == retained_root_count {
+        if retained_roots.len() == current_retained_root_count {
             return Err(format!(
-                "proof-managed pool root history exceeds retention {retained_root_count}"
+                "proof-managed pool root history exceeds current retention {current_retained_root_count}"
             ));
         }
         key.validate()
@@ -4069,7 +4397,8 @@ pub(crate) fn load_privacy_proof_managed_pool_snapshot_v1(
         namespace,
         bootstrap_digest,
         initial_root,
-        retained_root_count,
+        current_retained_root_count,
+        admission_retained_root_count,
         head.retention_anchor(),
         &retained_roots,
     )?;
@@ -4290,7 +4619,12 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         record
             .validate()
             .map_err(|error| format!("invalid privacy commitment provenance: {error}"))?;
-        if key.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+        if key.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
+            || matches!(
+                key,
+                PrivacyCommitmentKeyV1::VerifiedActionExecutionReceipt { .. }
+            )
+        {
             ensure_protocol_activation(key.protocol_id())?;
         }
     }
@@ -4315,21 +4649,20 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             .or_default()
             .push((*key, *provenance));
     }
-    let mut zk_ams_bootstraps =
-        BTreeMap::<PrivacyNamespaceV1, PrivacyZkAmsRegistryBootstrapDigestV1>::new();
+    let mut zk_ams_registries =
+        BTreeMap::<PrivacyNamespaceV1, PrivacyZkAmsRegistrySnapshotV1>::new();
     let mut orchard_bootstraps =
         BTreeMap::<PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1>::new();
     let mut proof_managed_pools =
         BTreeMap::<PrivacyNamespaceV1, PrivacyProofManagedPoolSnapshotV1>::new();
+    let retention_window = PrivacyRootRetentionWindowV1::from_policy(policy);
+    let (retained, admission_retained) =
+        retention_window.counts_usize("privacy persisted state")?;
     for ((namespace, role), history) in &history_by_scope {
-        let retained_root_count =
-            if namespace.protocol_id() == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
-                policy.current_limits.retained_root_count
-            } else {
-                policy.admission_retained_root_count()
-            };
-        let retained = usize::try_from(retained_root_count)
-            .map_err(|_| "privacy retained-root count cannot be represented".to_owned())?;
+        // A pending tightening constrains only newly admitted root histories.
+        // The retained state remains valid under the currently effective cap
+        // throughout its notice window and is pruned atomically either by a
+        // new admission or at the tightening's effective block height.
         if history.len() > retained {
             return Err(format!(
                 "privacy root history for {namespace:?}/{role:?} exceeds retention {retained}"
@@ -4362,6 +4695,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                 *namespace,
                 invariant,
                 retained,
+                admission_retained,
                 head.retention_anchor(),
                 history,
             )?;
@@ -4370,15 +4704,12 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         {
             let snapshot = load_privacy_zk_ams_registry_snapshot_v1(
                 *namespace,
-                retained_root_count,
+                retention_window,
                 commitments,
                 roots,
                 root_heads,
             )?;
-            if zk_ams_bootstraps
-                .insert(*namespace, snapshot.bootstrap_digest())
-                .is_some()
-            {
+            if zk_ams_registries.insert(*namespace, snapshot).is_some() {
                 return Err(format!(
                     "duplicate ZK-AMS AccountRegistry scope for {namespace:?}"
                 ));
@@ -4388,7 +4719,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         {
             let snapshot = load_privacy_orchard_pool_snapshot_v1(
                 *namespace,
-                retained_root_count,
+                retention_window,
                 commitments,
                 roots,
                 root_heads,
@@ -4406,7 +4737,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         {
             let snapshot = load_privacy_proof_managed_pool_snapshot_v1(
                 *namespace,
-                retained_root_count,
+                retention_window,
                 commitments,
                 roots,
                 root_heads,
@@ -4417,6 +4748,13 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                 ));
             }
         } else if namespace.protocol_id() == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+            validate_anchored_retention_window_len_v1(
+                &format!("X.509 root for {namespace:?}/{role:?}"),
+                retained,
+                admission_retained,
+                head.retention_anchor(),
+                history.len(),
+            )?;
             let Some((first_key, _)) = history.first() else {
                 return Err("grouped X.509 root history is unexpectedly empty".to_owned());
             };
@@ -4578,7 +4916,6 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             ));
         }
     }
-    let x509_retained_root_count = policy.admission_retained_root_count();
     for lineage in zk_x509_index.trust_anchors.values() {
         let last_active = lineage
             .iter()
@@ -4588,12 +4925,13 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             .expect("validated X.509 trust-anchor lineage begins active");
         validate_privacy_zk_x509_trust_anchor_root_state_v1(
             last_active,
-            x509_retained_root_count,
+            retention_window,
             roots,
             root_heads,
         )?;
     }
     let mut zk_ace_policy_ids = BTreeSet::new();
+    let mut privacy_execution_receipt_actions = BTreeSet::<([u8; 32], u32)>::new();
     for (key, record) in commitments.iter() {
         match key {
             PrivacyCommitmentKeyV1::ZkAcePolicy { policy_id } => {
@@ -4734,25 +5072,102 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             PrivacyCommitmentKeyV1::ZkAmsIssuerPolicyRecord { namespace, .. }
             | PrivacyCommitmentKeyV1::ZkAmsPhc { namespace, .. }
             | PrivacyCommitmentKeyV1::ZkAmsSeedKey { namespace, .. } => {
-                let bootstrap_digest = zk_ams_bootstraps.get(namespace).ok_or_else(|| {
+                let snapshot = zk_ams_registries.get(namespace).ok_or_else(|| {
                     format!("ZK-AMS commitment {namespace:?} has no authoritative AccountRegistry")
                 })?;
+                let bootstrap_digest = snapshot.bootstrap_digest();
                 let role_matches = match key {
                     PrivacyCommitmentKeyV1::ZkAmsIssuerPolicyRecord { .. } => matches!(
                         record,
                         PrivacyStateItemRecordV1::ZkAmsGovernance {
                             bootstrap_digest: observed,
                             ..
-                        } if observed == bootstrap_digest
+                        } if *observed == bootstrap_digest
                     ),
-                    PrivacyCommitmentKeyV1::ZkAmsPhc { .. }
-                    | PrivacyCommitmentKeyV1::ZkAmsSeedKey { .. } => matches!(
-                        record,
+                    PrivacyCommitmentKeyV1::ZkAmsPhc { phc_hash, .. } => match record {
                         PrivacyStateItemRecordV1::ZkAmsVerifiedProof {
                             bootstrap_digest: observed,
                             ..
-                        } if observed == bootstrap_digest
-                    ),
+                        } => *observed == bootstrap_digest,
+                        PrivacyStateItemRecordV1::ZkAmsVerifiedAdmissionAnchor {
+                            bootstrap_digest: observed,
+                            issuer_policy_record_digest,
+                            policy_digest,
+                            registry_record_digest,
+                            parent_epoch,
+                            parent_root,
+                            phc_hash: stored_phc_hash,
+                            successor_epoch,
+                            successor_root,
+                            ..
+                        } => {
+                            *observed == bootstrap_digest
+                                && *issuer_policy_record_digest
+                                    == snapshot.issuer_policy_record_digest()
+                                && validate_zk_ams_registry_record_binding_v1(
+                                    *namespace,
+                                    *issuer_policy_record_digest,
+                                    *policy_digest,
+                                    *registry_record_digest,
+                                    *parent_root,
+                                    *parent_epoch,
+                                )
+                                .is_ok()
+                                && stored_phc_hash == phc_hash
+                                && (*parent_epoch).checked_add(1) == Some(*successor_epoch)
+                                && *successor_epoch <= snapshot.current_epoch()
+                                && snapshot
+                                    .retained_root_v1(*parent_epoch)
+                                    .is_none_or(|root| root == *parent_root)
+                                && snapshot
+                                    .retained_root_v1(*successor_epoch)
+                                    .is_none_or(|root| root == *successor_root)
+                        }
+                        _ => false,
+                    },
+                    PrivacyCommitmentKeyV1::ZkAmsSeedKey {
+                        seed_public_key, ..
+                    } => match record {
+                        PrivacyStateItemRecordV1::ZkAmsVerifiedProof {
+                            bootstrap_digest: observed,
+                            ..
+                        } => *observed == bootstrap_digest,
+                        PrivacyStateItemRecordV1::ZkAmsVerifiedAdmissionAnchor {
+                            bootstrap_digest: observed,
+                            issuer_policy_record_digest,
+                            policy_digest,
+                            registry_record_digest,
+                            parent_epoch,
+                            parent_root,
+                            seed_public_key: stored_seed_public_key,
+                            successor_epoch,
+                            successor_root,
+                            ..
+                        } => {
+                            *observed == bootstrap_digest
+                                && *issuer_policy_record_digest
+                                    == snapshot.issuer_policy_record_digest()
+                                && validate_zk_ams_registry_record_binding_v1(
+                                    *namespace,
+                                    *issuer_policy_record_digest,
+                                    *policy_digest,
+                                    *registry_record_digest,
+                                    *parent_root,
+                                    *parent_epoch,
+                                )
+                                .is_ok()
+                                && stored_seed_public_key == seed_public_key
+                                && (*parent_epoch).checked_add(1) == Some(*successor_epoch)
+                                && *successor_epoch <= snapshot.current_epoch()
+                                && snapshot
+                                    .retained_root_v1(*parent_epoch)
+                                    .is_none_or(|root| root == *parent_root)
+                                && snapshot
+                                    .retained_root_v1(*successor_epoch)
+                                    .is_none_or(|root| root == *successor_root)
+                        }
+                        _ => false,
+                    },
                     PrivacyCommitmentKeyV1::ZkAcePolicy { .. }
                     | PrivacyCommitmentKeyV1::BootleLanternIssuerPolicy { .. }
                     | PrivacyCommitmentKeyV1::VegaIssuerRevision { .. }
@@ -4762,11 +5177,59 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     | PrivacyCommitmentKeyV1::FcmpOutput { .. }
                     | PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision { .. }
                     | PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision { .. }
-                    | PrivacyCommitmentKeyV1::ZkX509CrlCurrent { .. } => false,
+                    | PrivacyCommitmentKeyV1::ZkX509CrlCurrent { .. }
+                    | PrivacyCommitmentKeyV1::VerifiedActionExecutionReceipt { .. } => false,
                 };
                 if !role_matches {
                     return Err(format!(
                         "ZK-AMS commitment {namespace:?} has wrong-role or cross-bootstrap provenance"
+                    ));
+                }
+                if let PrivacyStateItemRecordV1::ZkAmsVerifiedAdmissionAnchor {
+                    phc_hash,
+                    seed_public_key,
+                    ..
+                } = record
+                {
+                    let counterpart = match key {
+                        PrivacyCommitmentKeyV1::ZkAmsPhc { .. } => {
+                            PrivacyCommitmentKeyV1::zk_ams_seed_key(*namespace, *seed_public_key)
+                        }
+                        PrivacyCommitmentKeyV1::ZkAmsSeedKey { .. } => {
+                            PrivacyCommitmentKeyV1::zk_ams_phc(*namespace, *phc_hash)
+                        }
+                        _ => continue,
+                    }
+                    .map_err(str::to_owned)?;
+                    if commitments.get(&counterpart) != Some(record) {
+                        return Err(format!(
+                            "ZK-AMS admission {namespace:?} is missing its identical PHC/seed counterpart"
+                        ));
+                    }
+                }
+            }
+            PrivacyCommitmentKeyV1::VerifiedActionExecutionReceipt {
+                protocol_id,
+                transaction_hash,
+                action_index,
+            } => {
+                let PrivacyStateItemRecordV1::VerifiedActionExecutionReceipt { receipt } = record
+                else {
+                    return Err(format!(
+                        "privacy execution receipt {protocol_id:?}/{transaction_hash:?}/{action_index} has wrong-role provenance"
+                    ));
+                };
+                if receipt.protocol_id != *protocol_id
+                    || receipt.transaction_hash != *transaction_hash
+                    || receipt.action_index != *action_index
+                {
+                    return Err(format!(
+                        "privacy execution receipt {protocol_id:?}/{transaction_hash:?}/{action_index} key differs from its record"
+                    ));
+                }
+                if !privacy_execution_receipt_actions.insert((*transaction_hash, *action_index)) {
+                    return Err(format!(
+                        "privacy transaction action {transaction_hash:?}/{action_index} has more than one execution receipt"
                     ));
                 }
             }
@@ -4777,17 +5240,50 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             PrivacyNullifierKeyV1::ZkAceReplay { policy_id, .. } => {
                 validate_privacy_zk_ace_replay_binding_v1(&zk_ace_policy_ids, *policy_id, record)?;
             }
-            PrivacyNullifierKeyV1::ZkAmsKeyImage { namespace, .. } => {
-                let bootstrap_digest = zk_ams_bootstraps.get(namespace).ok_or_else(|| {
+            PrivacyNullifierKeyV1::ZkAmsKeyImage {
+                namespace,
+                key_image,
+            } => {
+                let snapshot = zk_ams_registries.get(namespace).ok_or_else(|| {
                     format!("ZK-AMS nullifier {namespace:?} has no authoritative AccountRegistry")
                 })?;
-                if !matches!(
-                    record,
+                let bootstrap_digest = snapshot.bootstrap_digest();
+                let role_matches = match record {
                     PrivacyStateItemRecordV1::ZkAmsVerifiedProof {
                         bootstrap_digest: observed,
                         ..
-                    } if observed == bootstrap_digest
-                ) {
+                    } => *observed == bootstrap_digest,
+                    PrivacyStateItemRecordV1::ZkAmsVerifiedProvision {
+                        bootstrap_digest: observed,
+                        key_image: stored_key_image,
+                        issuer_policy_record_digest,
+                        policy_digest,
+                        registry_record_digest,
+                        registry_epoch,
+                        registry_root,
+                        ..
+                    } => {
+                        *observed == bootstrap_digest
+                            && stored_key_image == key_image
+                            && *issuer_policy_record_digest
+                                == snapshot.issuer_policy_record_digest()
+                            && validate_zk_ams_registry_record_binding_v1(
+                                *namespace,
+                                *issuer_policy_record_digest,
+                                *policy_digest,
+                                *registry_record_digest,
+                                *registry_root,
+                                *registry_epoch,
+                            )
+                            .is_ok()
+                            && *registry_epoch <= snapshot.current_epoch()
+                            && snapshot
+                                .retained_root_v1(*registry_epoch)
+                                .is_none_or(|root| root == *registry_root)
+                    }
+                    _ => false,
+                };
+                if !role_matches {
                     return Err(format!(
                         "ZK-AMS key image {namespace:?} has wrong-role or cross-bootstrap provenance"
                     ));
@@ -5335,7 +5831,62 @@ pub(crate) struct PrivacyOrchardPoolSnapshotV1 {
     retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     retained_roots: Vec<(PrivacyRootKeyV1, PrivacyRootProvenanceV1)>,
 }
+/// Bounded public fields projected from a fully validated Orchard pool.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivacyOrchardPoolQueryStateV1 {
+    /// Public asset definition whose confidential supply this pool manages.
+    pub(crate) asset_definition_id: AssetDefinitionId,
+    /// Governed public-balance scope used by the optional reserve bridge.
+    pub(crate) public_balance_scope: AssetBalanceScope,
+    /// Exact reserve account authorized by the governed bootstrap.
+    pub(crate) reserve_account: AccountId,
+    /// Digest of the immutable governed Orchard bootstrap.
+    pub(crate) bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+    /// Epoch of the current authenticated note-tree head.
+    pub(crate) current_epoch: u64,
+    /// Root of the current authenticated note-tree head.
+    pub(crate) current_root: PrivacyRootV1,
+    /// Exact number of leaves represented by the current head.
+    pub(crate) tree_size: u64,
+    /// Provenance of the latest committed transition, absent at bootstrap.
+    pub(crate) latest_transition: Option<PrivacyOrchardPoolTransitionViewV1>,
+}
 impl PrivacyOrchardPoolSnapshotV1 {
+    /// Project only bounded public fields after the complete compact frontier,
+    /// typed root head, and retained history have passed validation.
+    pub(crate) fn query_state_v1(&self) -> PrivacyOrchardPoolQueryStateV1 {
+        let latest_transition = self.retained_roots.last().and_then(|(key, provenance)| {
+            let PrivacyRootProvenanceV1::OrchardPoolSuccessor {
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+                ..
+            } = *provenance
+            else {
+                return None;
+            };
+            Some(PrivacyOrchardPoolTransitionViewV1 {
+                statement_digest,
+                successor_epoch: key.epoch(),
+                parent_epoch,
+                parent_root,
+                admitted_at_height,
+                action_index,
+            })
+        });
+        PrivacyOrchardPoolQueryStateV1 {
+            asset_definition_id: self.state.asset_definition_id().clone(),
+            public_balance_scope: self.state.public_balance_scope(),
+            reserve_account: self.state.reserve_account().clone(),
+            bootstrap_digest: self.state.bootstrap_digest(),
+            current_epoch: self.state.epoch(),
+            current_root: self.state.root(),
+            tree_size: self.state.tree_size(),
+            latest_transition,
+        }
+    }
     #[must_use]
     pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
         self.namespace
@@ -5456,20 +6007,20 @@ fn validate_orchard_successor_link_v1(
 fn validate_orchard_retained_root_chain_v1(
     namespace: PrivacyNamespaceV1,
     bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
-    retained_root_count: usize,
+    current_retained_root_count: usize,
+    admission_retained_root_count: usize,
     retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     history: &[(PrivacyRootKeyV1, PrivacyRootProvenanceV1)],
 ) -> Result<(), String> {
-    if retained_root_count == 0 {
-        return Err("Orchard retained-root count must be non-zero".to_owned());
-    }
+    validate_anchored_retention_window_len_v1(
+        "Orchard note-commitment root",
+        current_retained_root_count,
+        admission_retained_root_count,
+        retention_anchor,
+        history.len(),
+    )?;
     if history.is_empty() {
         return Err("Orchard pool has no retained note-commitment roots".to_owned());
-    }
-    if history.len() > retained_root_count {
-        return Err(format!(
-            "Orchard note-commitment history exceeds retention {retained_root_count}"
-        ));
     }
     let canonical_empty_root =
         PrivacyRootV1::new(crate::privacy_engines::orchard::orchard_empty_root_v1());
@@ -5565,29 +6116,20 @@ fn validate_orchard_retained_root_chain_v1(
             ));
         }
     }
-    if retention_anchor.is_some() && history.len() != retained_root_count {
-        return Err(format!(
-            "Orchard anchored history has {} roots but must fill retention {retained_root_count}",
-            history.len()
-        ));
-    }
     Ok(())
 }
 /// Load and cross-validate every authoritative component of one Orchard pool.
 pub(crate) fn load_privacy_orchard_pool_snapshot_v1(
     namespace: PrivacyNamespaceV1,
-    retained_root_count: u32,
+    retention_window: impl Into<PrivacyRootRetentionWindowV1>,
     commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
 ) -> Result<PrivacyOrchardPoolSnapshotV1, String> {
     validate_orchard_namespace(namespace)
         .map_err(|error| format!("invalid Orchard pool namespace: {error}"))?;
-    if retained_root_count == 0 {
-        return Err("Orchard retained-root count must be non-zero".to_owned());
-    }
-    let retained_root_count = usize::try_from(retained_root_count)
-        .map_err(|_| "Orchard retained-root count cannot be represented".to_owned())?;
+    let (current_retained_root_count, admission_retained_root_count) =
+        retention_window.into().counts_usize("Orchard")?;
     let state_key = PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
         .map_err(|error| format!("invalid Orchard pool-state key: {error}"))?;
     let state_record = commitments
@@ -5614,9 +6156,9 @@ pub(crate) fn load_privacy_orchard_pool_snapshot_v1(
         namespace,
         PrivacyRootRoleV1::NoteCommitmentAnchor,
     )) {
-        if retained_roots.len() == retained_root_count {
+        if retained_roots.len() == current_retained_root_count {
             return Err(format!(
-                "Orchard note-commitment history exceeds retention {retained_root_count}"
+                "Orchard note-commitment history exceeds current retention {current_retained_root_count}"
             ));
         }
         key.validate()
@@ -5639,7 +6181,8 @@ pub(crate) fn load_privacy_orchard_pool_snapshot_v1(
     validate_orchard_retained_root_chain_v1(
         namespace,
         state.bootstrap_digest(),
-        retained_root_count,
+        current_retained_root_count,
+        admission_retained_root_count,
         head.retention_anchor(),
         &retained_roots,
     )?;
@@ -6107,6 +6650,15 @@ pub enum PrivacyCommitmentKeyV1 {
         /// Canonical seed public key.
         seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
     },
+    /// One immutable receipt for a successfully executed Exact12 action.
+    VerifiedActionExecutionReceipt {
+        /// Exact protocol selected by the verified proof envelope.
+        protocol_id: PrivacyProtocolIdV1,
+        /// Hash of the signed transaction containing the action.
+        transaction_hash: [u8; 32],
+        /// Zero-based privacy-action index within that transaction.
+        action_index: u32,
+    },
 }
 impl PrivacyCommitmentKeyV1 {
     /// Construct the authoritative key for one ZK-ACE policy lineage.
@@ -6153,7 +6705,8 @@ impl PrivacyCommitmentKeyV1 {
             | Self::ZkX509CrlCurrent { .. }
             | Self::ZkAmsIssuerPolicyRecord { .. }
             | Self::ZkAmsPhc { .. }
-            | Self::ZkAmsSeedKey { .. } => None,
+            | Self::ZkAmsSeedKey { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Construct the singleton compact-state key for one Orchard pool.
@@ -6318,7 +6871,8 @@ impl PrivacyCommitmentKeyV1 {
             | Self::ZkX509CrlCurrent { .. }
             | Self::ZkAmsIssuerPolicyRecord { .. }
             | Self::ZkAmsPhc { .. }
-            | Self::ZkAmsSeedKey { .. } => None,
+            | Self::ZkAmsSeedKey { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Return the proof-managed pool namespace, if this key belongs to one.
@@ -6338,7 +6892,8 @@ impl PrivacyCommitmentKeyV1 {
             | Self::ZkX509CrlCurrent { .. }
             | Self::ZkAmsIssuerPolicyRecord { .. }
             | Self::ZkAmsPhc { .. }
-            | Self::ZkAmsSeedKey { .. } => None,
+            | Self::ZkAmsSeedKey { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Construct the exact key for one immutable X.509 trust-anchor revision.
@@ -6500,6 +7055,38 @@ impl PrivacyCommitmentKeyV1 {
             seed_public_key,
         })
     }
+    /// Construct the immutable receipt key for one successfully executed action.
+    pub(crate) fn verified_action_execution_receipt(
+        protocol_id: PrivacyProtocolIdV1,
+        transaction_hash: [u8; 32],
+        action_index: u32,
+    ) -> Result<Self, &'static str> {
+        if transaction_hash.iter().all(|byte| *byte == 0) {
+            return Err("privacy execution receipt transaction hash must be non-zero");
+        }
+        if action_index >= TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1 {
+            return Err("privacy execution receipt action index is outside the transaction bound");
+        }
+        Ok(Self::VerifiedActionExecutionReceipt {
+            protocol_id,
+            transaction_hash,
+            action_index,
+        })
+    }
+    /// Return the complete receipt identity, if this is an execution-receipt key.
+    #[must_use]
+    pub(crate) const fn verified_action_execution_receipt_identity(
+        self,
+    ) -> Option<(PrivacyProtocolIdV1, [u8; 32], u32)> {
+        match self {
+            Self::VerifiedActionExecutionReceipt {
+                protocol_id,
+                transaction_hash,
+                action_index,
+            } => Some((protocol_id, transaction_hash, action_index)),
+            _ => None,
+        }
+    }
     /// Return the exact ZK-AMS namespace, if this is a ZK-AMS record.
     #[must_use]
     pub const fn zk_ams_namespace(self) -> Option<PrivacyNamespaceV1> {
@@ -6513,7 +7100,8 @@ impl PrivacyCommitmentKeyV1 {
             | Self::FcmpOutput { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
-            | Self::ZkX509CrlCurrent { .. } => None,
+            | Self::ZkX509CrlCurrent { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
             Self::ZkAmsIssuerPolicyRecord { namespace, .. }
             | Self::ZkAmsPhc { namespace, .. }
             | Self::ZkAmsSeedKey { namespace, .. } => Some(namespace),
@@ -6538,6 +7126,7 @@ impl PrivacyCommitmentKeyV1 {
             Self::ZkAmsIssuerPolicyRecord { .. }
             | Self::ZkAmsPhc { .. }
             | Self::ZkAmsSeedKey { .. } => PrivacyProtocolIdV1::IrohaZkAmsV1,
+            Self::VerifiedActionExecutionReceipt { protocol_id, .. } => protocol_id,
         }
     }
     /// Return the governed issuer-policy digest for that exact key role.
@@ -6555,7 +7144,8 @@ impl PrivacyCommitmentKeyV1 {
             | Self::FcmpOutput { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
-            | Self::ZkX509CrlCurrent { .. } => None,
+            | Self::ZkX509CrlCurrent { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
             Self::ZkAmsIssuerPolicyRecord { record_digest, .. } => Some(record_digest),
             Self::ZkAmsPhc { .. } | Self::ZkAmsSeedKey { .. } => None,
         }
@@ -6646,6 +7236,14 @@ impl PrivacyCommitmentKeyV1 {
                 namespace,
                 seed_public_key,
             } => Self::zk_ams_seed_key(namespace, seed_public_key).map(|_| ()),
+            Self::VerifiedActionExecutionReceipt {
+                protocol_id,
+                transaction_hash,
+                action_index,
+            } => {
+                Self::verified_action_execution_receipt(protocol_id, transaction_hash, action_index)
+                    .map(|_| ())
+            }
         }
     }
 }
@@ -6655,6 +7253,60 @@ fn validate_zk_ams_namespace(namespace: PrivacyNamespaceV1) -> Result<(), &'stat
         .map_err(|_| "ZK-AMS state namespace is invalid")?;
     if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkAmsV1 {
         return Err("ZK-AMS state key requires the ZK-AMS protocol namespace");
+    }
+    Ok(())
+}
+fn zk_ams_namespace_components_v1(
+    namespace: PrivacyNamespaceV1,
+) -> Result<PrivacyIssuerRegistryPolicyNamespaceV1, &'static str> {
+    validate_zk_ams_namespace(namespace)?;
+    let PrivacyNamespaceScopeV1::IssuerRegistryPolicy(scope) = namespace.scope() else {
+        return Err("ZK-AMS namespace does not carry issuer/registry/policy scope");
+    };
+    Ok(scope)
+}
+/// Validate the complete governed ZK-AMS registry-record binding retained in durable provenance.
+///
+/// Keeping this check shared by snapshot restore and finalized queries prevents either path from
+/// accepting a non-zero, attacker-mutated registry-record digest after its referenced root has
+/// fallen outside the retained root window.
+///
+/// # Errors
+///
+/// Rejects an invalid namespace, zero authoritative field, pre-bootstrap epoch, or digest that
+/// does not recompute from the exact namespace, policy, root, and epoch.
+pub(crate) fn validate_zk_ams_registry_record_binding_v1(
+    namespace: PrivacyNamespaceV1,
+    issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    policy_digest: PrivacyPolicyDigestV1,
+    registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    registry_root: PrivacyRootV1,
+    registry_epoch: u64,
+) -> Result<(), &'static str> {
+    let scope = zk_ams_namespace_components_v1(namespace)?;
+    if issuer_policy_record_digest.is_zero()
+        || policy_digest.is_zero()
+        || registry_record_digest.is_zero()
+    {
+        return Err("ZK-AMS authoritative registry-record digests must be non-zero");
+    }
+    if registry_root.is_zero() {
+        return Err("ZK-AMS authoritative registry root must be non-zero");
+    }
+    if registry_epoch < ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1 {
+        return Err("ZK-AMS authoritative registry epoch precedes its bootstrap");
+    }
+    let expected = zk_ams_registry_record_digest_v1(
+        scope.issuer_id,
+        scope.registry_id,
+        scope.policy_id,
+        issuer_policy_record_digest,
+        policy_digest,
+        registry_root,
+        registry_epoch,
+    );
+    if registry_record_digest != expected {
+        return Err("ZK-AMS registry-record digest differs from its authoritative fields");
     }
     Ok(())
 }
@@ -7687,6 +8339,209 @@ impl PrivacyRootHeadRecordV1 {
         .map(|_| ())
     }
 }
+/// Complete input for one validated Exact12 execution receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyActionExecutionReceiptFieldsV1 {
+    /// Genesis-derived network identity executing the action.
+    pub(crate) network_id: NetworkId,
+    /// Closed native protocol selected by the envelope.
+    pub(crate) protocol_id: PrivacyProtocolIdV1,
+    /// Exact public operation selected by the statement.
+    pub(crate) operation_schema: PrivacyOperationSchemaV1,
+    /// Typed ledger-effect class returned by native verification.
+    pub(crate) ledger_effect_kind: PrivacyLedgerEffectKindV1,
+    /// Hash of the exact signed transaction carrying the action.
+    pub(crate) transaction_hash: [u8; 32],
+    /// Transaction-local privacy action index.
+    pub(crate) action_index: u32,
+    /// Intent digest authenticated by the verified statement.
+    pub(crate) transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+    /// Digest of the exact verified statement.
+    pub(crate) statement_digest: PrivacyStatementDigestV1,
+    /// Iroha hash of the exact canonical proof envelope.
+    pub(crate) proof_envelope_hash: [u8; 32],
+    /// Exact admitted capability-manifest digest.
+    pub(crate) capability_manifest_digest: PrivacyExact12CapabilityManifestDigestV1,
+    /// Committed state height bound into that capability manifest.
+    pub(crate) capability_committed_height: u64,
+    /// Height at which the action effect and receipt became durable.
+    pub(crate) admitted_at_height: u64,
+}
+/// Consensus-backed immutable record for one successfully executed Exact12 action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+pub struct PrivacyActionExecutionReceiptRecordV1 {
+    /// Exact durable receipt schema version.
+    pub(crate) version: u16,
+    /// Genesis-derived network identity executing the action.
+    pub(crate) network_id: NetworkId,
+    /// Closed native protocol selected by the envelope.
+    pub(crate) protocol_id: PrivacyProtocolIdV1,
+    /// Exact public operation selected by the statement.
+    pub(crate) operation_schema: PrivacyOperationSchemaV1,
+    /// Typed ledger-effect class returned by native verification.
+    pub(crate) ledger_effect_kind: PrivacyLedgerEffectKindV1,
+    /// Hash of the exact signed transaction carrying the action.
+    pub(crate) transaction_hash: [u8; 32],
+    /// Transaction-local privacy action index.
+    pub(crate) action_index: u32,
+    /// Intent digest authenticated by the verified statement.
+    pub(crate) transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+    /// Digest of the exact verified statement.
+    pub(crate) statement_digest: PrivacyStatementDigestV1,
+    /// Iroha hash of the exact canonical proof envelope.
+    pub(crate) proof_envelope_hash: [u8; 32],
+    /// Exact admitted capability-manifest digest.
+    pub(crate) capability_manifest_digest: PrivacyExact12CapabilityManifestDigestV1,
+    /// Committed state height bound into that capability manifest.
+    pub(crate) capability_committed_height: u64,
+    /// Height at which the action effect and receipt became durable.
+    pub(crate) admitted_at_height: u64,
+}
+impl PrivacyActionExecutionReceiptRecordV1 {
+    /// Construct a fully bound receipt record before any corresponding effects are applied.
+    ///
+    /// # Errors
+    ///
+    /// Rejects inconsistent protocol, operation, effect, hash, digest, position, NetworkId, or
+    /// height bindings.
+    pub(crate) fn new(fields: PrivacyActionExecutionReceiptFieldsV1) -> Result<Self, &'static str> {
+        let PrivacyActionExecutionReceiptFieldsV1 {
+            network_id,
+            protocol_id,
+            operation_schema,
+            ledger_effect_kind,
+            transaction_hash,
+            action_index,
+            transaction_intent_digest,
+            statement_digest,
+            proof_envelope_hash,
+            capability_manifest_digest,
+            capability_committed_height,
+            admitted_at_height,
+        } = fields;
+        let receipt = Self {
+            version: PRIVACY_ACTION_EXECUTION_RECEIPT_VIEW_VERSION_V1,
+            network_id,
+            protocol_id,
+            operation_schema,
+            ledger_effect_kind,
+            transaction_hash,
+            action_index,
+            transaction_intent_digest,
+            statement_digest,
+            proof_envelope_hash,
+            capability_manifest_digest,
+            capability_committed_height,
+            admitted_at_height,
+        };
+        receipt.validate()?;
+        Ok(receipt)
+    }
+    /// Validate every durable binding independently of a later finalized query snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unsupported version or inconsistent protocol, operation, effect, hash, digest,
+    /// position, NetworkId, or height binding.
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if self.version != PRIVACY_ACTION_EXECUTION_RECEIPT_VIEW_VERSION_V1 {
+            return Err("privacy execution receipt version is unsupported");
+        }
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err("privacy execution receipt NetworkId must be non-zero");
+        }
+        if self.operation_schema.protocol_id() != self.protocol_id {
+            return Err("privacy execution receipt operation has a different protocol");
+        }
+        if self.operation_schema.ledger_effect_kind() != self.ledger_effect_kind {
+            return Err("privacy execution receipt operation has a different ledger effect");
+        }
+        PrivacyCommitmentKeyV1::verified_action_execution_receipt(
+            self.protocol_id,
+            self.transaction_hash,
+            self.action_index,
+        )?;
+        if self.transaction_intent_digest.is_zero() {
+            return Err("privacy execution receipt transaction-intent digest must be non-zero");
+        }
+        if self.statement_digest.is_zero() {
+            return Err("privacy execution receipt statement digest must be non-zero");
+        }
+        if self.proof_envelope_hash.iter().all(|byte| *byte == 0) {
+            return Err("privacy execution receipt proof-envelope hash must be non-zero");
+        }
+        if self.capability_manifest_digest.is_zero() {
+            return Err("privacy execution receipt capability-manifest digest must be non-zero");
+        }
+        if self.capability_committed_height == 0
+            || self.admitted_at_height < self.capability_committed_height
+        {
+            return Err("privacy execution receipt capability/admission heights are invalid");
+        }
+        Ok(())
+    }
+}
+/// Complete durable provenance fields for one admitted ZK-AMS PHC/seed anchor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyZkAmsVerifiedAdmissionAnchorFieldsV1 {
+    /// Governed AccountRegistry bootstrap digest.
+    pub(crate) bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+    /// Exact governed issuer-policy record digest.
+    pub(crate) issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    /// Exact policy digest authenticated by the admission proof.
+    pub(crate) policy_digest: PrivacyPolicyDigestV1,
+    /// Exact AccountRegistry record digest authenticated by the proof.
+    pub(crate) registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    /// Registry epoch consumed by the admission.
+    pub(crate) parent_epoch: u64,
+    /// Registry root consumed by the admission.
+    pub(crate) parent_root: PrivacyRootV1,
+    /// Admitted PHC hash.
+    pub(crate) phc_hash: PrivacyZkAmsPhcHashV1,
+    /// Admitted seed public key paired with the PHC hash.
+    pub(crate) seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
+    /// Zero-based position inside the authenticated batch.
+    pub(crate) anchor_index: u32,
+    /// Exact authenticated batch size.
+    pub(crate) batch_size: u32,
+    /// Registry epoch produced by the admission.
+    pub(crate) successor_epoch: u64,
+    /// Registry root produced by the admission.
+    pub(crate) successor_root: PrivacyRootV1,
+    /// Digest of the exact verified admission statement.
+    pub(crate) statement_digest: PrivacyStatementDigestV1,
+    /// Height at which the admission became durable.
+    pub(crate) admitted_at_height: u64,
+    /// Transaction-local privacy action index.
+    pub(crate) action_index: u32,
+}
+/// Complete durable provenance fields for one anonymous ZK-AMS provisioning.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyZkAmsVerifiedProvisionFieldsV1 {
+    /// Governed AccountRegistry bootstrap digest.
+    pub(crate) bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+    /// One-use anonymous provisioning key image.
+    pub(crate) key_image: PrivacyZkAmsKeyImageV1,
+    /// Newly provisioned canonical account identity.
+    pub(crate) account_id: AccountId,
+    /// Exact governed issuer-policy record digest.
+    pub(crate) issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    /// Exact policy digest authenticated by the provisioning proof.
+    pub(crate) policy_digest: PrivacyPolicyDigestV1,
+    /// Exact AccountRegistry record digest authenticated by the proof.
+    pub(crate) registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    /// AccountRegistry epoch authenticated by the proof.
+    pub(crate) registry_epoch: u64,
+    /// AccountRegistry root authenticated by the proof.
+    pub(crate) registry_root: PrivacyRootV1,
+    /// Digest of the exact verified provisioning statement.
+    pub(crate) statement_digest: PrivacyStatementDigestV1,
+    /// Height at which the provisioning became durable.
+    pub(crate) admitted_at_height: u64,
+    /// Transaction-local privacy action index.
+    pub(crate) action_index: u32,
+}
 /// Durable, origin-typed provenance for one privacy state item.
 ///
 /// Governance records and proof-produced items are distinct closed variants;
@@ -7896,6 +8751,69 @@ pub enum PrivacyStateItemRecordV1 {
         admitted_at_height: u64,
         /// Zero-based privacy-action index within the transaction.
         action_index: u32,
+    },
+    /// Exact PHC/seed pair emitted by one verified ZK-AMS batch admission.
+    ZkAmsVerifiedAdmissionAnchor {
+        /// Registry bootstrap whose append-only history admitted this item.
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+        /// Exact authoritative issuer-key/policy revision selected by the proof.
+        issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+        /// Governed policy digest bound into the selected registry record.
+        policy_digest: PrivacyPolicyDigestV1,
+        /// Exact authoritative pre-transition registry snapshot selected by the proof.
+        registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+        /// Registry epoch consumed by the verified batch.
+        parent_epoch: u64,
+        /// Registry root consumed by the verified batch.
+        parent_root: PrivacyRootV1,
+        /// Exact PHC hash in the ordered verified anchor.
+        phc_hash: PrivacyZkAmsPhcHashV1,
+        /// Exact seed public key paired with the PHC hash.
+        seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
+        /// Zero-based anchor position in the verified batch.
+        anchor_index: u32,
+        /// Exact number of ordered anchors in the verified batch.
+        batch_size: u32,
+        /// Registry epoch produced by the verified batch.
+        successor_epoch: u64,
+        /// Registry root produced by the verified batch.
+        successor_root: PrivacyRootV1,
+        /// Digest of the exact verified public statement.
+        statement_digest: PrivacyStatementDigestV1,
+        /// Block height at which the anchor became durable.
+        admitted_at_height: u64,
+        /// Zero-based privacy-action index within the transaction.
+        action_index: u32,
+    },
+    /// Key image and account effect emitted by one verified ZK-AMS provisioning.
+    ZkAmsVerifiedProvision {
+        /// Registry bootstrap whose admitted seed set authorized this action.
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+        /// Exact consumed LSAG key image.
+        key_image: PrivacyZkAmsKeyImageV1,
+        /// Exact account materialized by the committed action.
+        account_id: AccountId,
+        /// Exact authoritative issuer-key/policy revision used by the proof.
+        issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+        /// Governed policy digest bound into the selected registry record.
+        policy_digest: PrivacyPolicyDigestV1,
+        /// Exact authoritative registry snapshot record used by the proof.
+        registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+        /// Registry epoch used for LSAG ring membership.
+        registry_epoch: u64,
+        /// Registry root used for LSAG ring membership.
+        registry_root: PrivacyRootV1,
+        /// Digest of the exact verified public statement.
+        statement_digest: PrivacyStatementDigestV1,
+        /// Block height at which the key image and account became durable.
+        admitted_at_height: u64,
+        /// Zero-based privacy-action index within the transaction.
+        action_index: u32,
+    },
+    /// Receipt emitted only after native verification and all typed effects succeed.
+    VerifiedActionExecutionReceipt {
+        /// Complete immutable execution binding.
+        receipt: PrivacyActionExecutionReceiptRecordV1,
     },
 }
 impl PrivacyStateItemRecordV1 {
@@ -8369,6 +9287,132 @@ impl PrivacyStateItemRecordV1 {
             action_index,
         })
     }
+    /// Construct complete durable provenance for one admitted PHC/seed anchor.
+    pub(crate) fn zk_ams_verified_admission_anchor(
+        fields: PrivacyZkAmsVerifiedAdmissionAnchorFieldsV1,
+    ) -> Result<Self, &'static str> {
+        let PrivacyZkAmsVerifiedAdmissionAnchorFieldsV1 {
+            bootstrap_digest,
+            issuer_policy_record_digest,
+            policy_digest,
+            registry_record_digest,
+            parent_epoch,
+            parent_root,
+            phc_hash,
+            seed_public_key,
+            anchor_index,
+            batch_size,
+            successor_epoch,
+            successor_root,
+            statement_digest,
+            admitted_at_height,
+            action_index,
+        } = fields;
+        if bootstrap_digest.is_zero() {
+            return Err("ZK-AMS admission bootstrap digest must be non-zero");
+        }
+        if issuer_policy_record_digest.is_zero()
+            || policy_digest.is_zero()
+            || registry_record_digest.is_zero()
+        {
+            return Err("ZK-AMS admission authoritative record digests must be non-zero");
+        }
+        if parent_epoch < ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1
+            || parent_epoch.checked_add(1) != Some(successor_epoch)
+        {
+            return Err("ZK-AMS admission must advance its parent by exactly one epoch");
+        }
+        if parent_root.is_zero() {
+            return Err("ZK-AMS admission parent root must be non-zero");
+        }
+        if phc_hash.is_zero() || seed_public_key.is_zero() {
+            return Err("ZK-AMS admission anchor fields must be non-zero");
+        }
+        if batch_size == 0 || batch_size > ZK_AMS_MAX_BATCH_SIZE_V1 || anchor_index >= batch_size {
+            return Err("ZK-AMS admission batch position is outside the closed profile");
+        }
+        if successor_root.is_zero() {
+            return Err("ZK-AMS admission successor root must be non-zero");
+        }
+        if statement_digest.is_zero() {
+            return Err("ZK-AMS admission statement digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("ZK-AMS admission height must be non-zero");
+        }
+        Ok(Self::ZkAmsVerifiedAdmissionAnchor {
+            bootstrap_digest,
+            issuer_policy_record_digest,
+            policy_digest,
+            registry_record_digest,
+            parent_epoch,
+            parent_root,
+            phc_hash,
+            seed_public_key,
+            anchor_index,
+            batch_size,
+            successor_epoch,
+            successor_root,
+            statement_digest,
+            admitted_at_height,
+            action_index,
+        })
+    }
+    /// Construct complete durable provenance for one anonymous provisioning.
+    pub(crate) fn zk_ams_verified_provision(
+        fields: PrivacyZkAmsVerifiedProvisionFieldsV1,
+    ) -> Result<Self, &'static str> {
+        let PrivacyZkAmsVerifiedProvisionFieldsV1 {
+            bootstrap_digest,
+            key_image,
+            account_id,
+            issuer_policy_record_digest,
+            policy_digest,
+            registry_record_digest,
+            registry_epoch,
+            registry_root,
+            statement_digest,
+            admitted_at_height,
+            action_index,
+        } = fields;
+        if bootstrap_digest.is_zero() {
+            return Err("ZK-AMS provision bootstrap digest must be non-zero");
+        }
+        if key_image.is_zero() {
+            return Err("ZK-AMS provision key image must be non-zero");
+        }
+        if issuer_policy_record_digest.is_zero()
+            || policy_digest.is_zero()
+            || registry_record_digest.is_zero()
+        {
+            return Err("ZK-AMS provision authoritative record digests must be non-zero");
+        }
+        if registry_epoch < ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1 {
+            return Err("ZK-AMS provision registry epoch precedes its bootstrap");
+        }
+        if registry_root.is_zero() {
+            return Err("ZK-AMS provision registry root must be non-zero");
+        }
+        if statement_digest.is_zero() {
+            return Err("ZK-AMS provision statement digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("ZK-AMS provision height must be non-zero");
+        }
+        Ok(Self::ZkAmsVerifiedProvision {
+            bootstrap_digest,
+            key_image,
+            account_id,
+            issuer_policy_record_digest,
+            policy_digest,
+            registry_record_digest,
+            registry_epoch,
+            registry_root,
+            statement_digest,
+            admitted_at_height,
+            action_index,
+        })
+    }
     /// Validate persisted provenance restored from a snapshot.
     ///
     /// # Errors
@@ -8565,6 +9609,69 @@ impl PrivacyStateItemRecordV1 {
                 *action_index,
             )
             .map(|_| ()),
+            Self::ZkAmsVerifiedAdmissionAnchor {
+                bootstrap_digest,
+                issuer_policy_record_digest,
+                policy_digest,
+                registry_record_digest,
+                parent_epoch,
+                parent_root,
+                phc_hash,
+                seed_public_key,
+                anchor_index,
+                batch_size,
+                successor_epoch,
+                successor_root,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+            } => Self::zk_ams_verified_admission_anchor(
+                PrivacyZkAmsVerifiedAdmissionAnchorFieldsV1 {
+                    bootstrap_digest: *bootstrap_digest,
+                    issuer_policy_record_digest: *issuer_policy_record_digest,
+                    policy_digest: *policy_digest,
+                    registry_record_digest: *registry_record_digest,
+                    parent_epoch: *parent_epoch,
+                    parent_root: *parent_root,
+                    phc_hash: *phc_hash,
+                    seed_public_key: *seed_public_key,
+                    anchor_index: *anchor_index,
+                    batch_size: *batch_size,
+                    successor_epoch: *successor_epoch,
+                    successor_root: *successor_root,
+                    statement_digest: *statement_digest,
+                    admitted_at_height: *admitted_at_height,
+                    action_index: *action_index,
+                },
+            )
+            .map(|_| ()),
+            Self::ZkAmsVerifiedProvision {
+                bootstrap_digest,
+                key_image,
+                account_id,
+                issuer_policy_record_digest,
+                policy_digest,
+                registry_record_digest,
+                registry_epoch,
+                registry_root,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+            } => Self::zk_ams_verified_provision(PrivacyZkAmsVerifiedProvisionFieldsV1 {
+                bootstrap_digest: *bootstrap_digest,
+                key_image: *key_image,
+                account_id: account_id.clone(),
+                issuer_policy_record_digest: *issuer_policy_record_digest,
+                policy_digest: *policy_digest,
+                registry_record_digest: *registry_record_digest,
+                registry_epoch: *registry_epoch,
+                registry_root: *registry_root,
+                statement_digest: *statement_digest,
+                admitted_at_height: *admitted_at_height,
+                action_index: *action_index,
+            })
+            .map(|_| ()),
+            Self::VerifiedActionExecutionReceipt { receipt } => receipt.validate(),
         }
     }
     /// Return the immutable ZK-AMS registry origin bound to this item, if any.
@@ -8586,11 +9693,18 @@ impl PrivacyStateItemRecordV1 {
             | Self::ProofManagedPoolVerifiedNullifier { .. }
             | Self::ProofManagedPoolVerifiedCommitment { .. }
             | Self::FcmpVerifiedOutput { .. }
-            | Self::ZkAceVerifiedAuthorization { .. } => None,
+            | Self::ZkAceVerifiedAuthorization { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
             Self::ZkAmsGovernance {
                 bootstrap_digest, ..
             }
             | Self::ZkAmsVerifiedProof {
+                bootstrap_digest, ..
+            }
+            | Self::ZkAmsVerifiedAdmissionAnchor {
+                bootstrap_digest, ..
+            }
+            | Self::ZkAmsVerifiedProvision {
                 bootstrap_digest, ..
             } => Some(*bootstrap_digest),
         }
@@ -8636,7 +9750,10 @@ impl PrivacyStateItemRecordV1 {
             | Self::FcmpVerifiedOutput { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
-            | Self::ZkAmsVerifiedProof { .. } => None,
+            | Self::ZkAmsVerifiedProof { .. }
+            | Self::ZkAmsVerifiedAdmissionAnchor { .. }
+            | Self::ZkAmsVerifiedProvision { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Return the immutable proof-managed pool origin bound to this item.
@@ -8674,7 +9791,10 @@ impl PrivacyStateItemRecordV1 {
             | Self::OrchardVerifiedNullifier { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
-            | Self::ZkAmsVerifiedProof { .. } => None,
+            | Self::ZkAmsVerifiedProof { .. }
+            | Self::ZkAmsVerifiedAdmissionAnchor { .. }
+            | Self::ZkAmsVerifiedProvision { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Borrow the authoritative ZK-ACE policy carried by this record.
@@ -8698,7 +9818,10 @@ impl PrivacyStateItemRecordV1 {
             | Self::ProofManagedPoolVerifiedCommitment { .. }
             | Self::FcmpVerifiedOutput { .. }
             | Self::ZkAmsGovernance { .. }
-            | Self::ZkAmsVerifiedProof { .. } => None,
+            | Self::ZkAmsVerifiedProof { .. }
+            | Self::ZkAmsVerifiedAdmissionAnchor { .. }
+            | Self::ZkAmsVerifiedProvision { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Borrow the authoritative Bootle/Lantern issuer policy carried by this record.
@@ -8722,7 +9845,10 @@ impl PrivacyStateItemRecordV1 {
             | Self::FcmpVerifiedOutput { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
-            | Self::ZkAmsVerifiedProof { .. } => None,
+            | Self::ZkAmsVerifiedProof { .. }
+            | Self::ZkAmsVerifiedAdmissionAnchor { .. }
+            | Self::ZkAmsVerifiedProvision { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Borrow the immutable Vega issuer revision carried by this record.
@@ -8746,7 +9872,10 @@ impl PrivacyStateItemRecordV1 {
             | Self::FcmpVerifiedOutput { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
-            | Self::ZkAmsVerifiedProof { .. } => None,
+            | Self::ZkAmsVerifiedProof { .. }
+            | Self::ZkAmsVerifiedAdmissionAnchor { .. }
+            | Self::ZkAmsVerifiedProvision { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Borrow the complete authoritative Orchard pool state carried by this record.
@@ -8770,7 +9899,10 @@ impl PrivacyStateItemRecordV1 {
             | Self::FcmpVerifiedOutput { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
-            | Self::ZkAmsVerifiedProof { .. } => None,
+            | Self::ZkAmsVerifiedProof { .. }
+            | Self::ZkAmsVerifiedAdmissionAnchor { .. }
+            | Self::ZkAmsVerifiedProvision { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Borrow the immutable X.509 trust-anchor revision carried by this record.
@@ -8794,7 +9926,10 @@ impl PrivacyStateItemRecordV1 {
             | Self::FcmpVerifiedOutput { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
-            | Self::ZkAmsVerifiedProof { .. } => None,
+            | Self::ZkAmsVerifiedProof { .. }
+            | Self::ZkAmsVerifiedAdmissionAnchor { .. }
+            | Self::ZkAmsVerifiedProvision { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Borrow the immutable X.509 certificate-policy revision carried by this record.
@@ -8820,7 +9955,10 @@ impl PrivacyStateItemRecordV1 {
             | Self::FcmpVerifiedOutput { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
-            | Self::ZkAmsVerifiedProof { .. } => None,
+            | Self::ZkAmsVerifiedProof { .. }
+            | Self::ZkAmsVerifiedAdmissionAnchor { .. }
+            | Self::ZkAmsVerifiedProvision { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
     /// Borrow the current X.509 signed-CRL record carried by this state item.
@@ -8844,7 +9982,10 @@ impl PrivacyStateItemRecordV1 {
             | Self::FcmpVerifiedOutput { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
-            | Self::ZkAmsVerifiedProof { .. } => None,
+            | Self::ZkAmsVerifiedProof { .. }
+            | Self::ZkAmsVerifiedAdmissionAnchor { .. }
+            | Self::ZkAmsVerifiedProvision { .. }
+            | Self::VerifiedActionExecutionReceipt { .. } => None,
         }
     }
 }
@@ -9107,9 +10248,9 @@ pub(crate) fn plan_privacy_root_retention_reduction_v1(
 /// Validate that every unanchored history already satisfies a future retention cap.
 ///
 /// PGC account-state, ZK-AMS registry, Orchard note-commitment, proof-managed
-/// FCMP++/private-IVM/PQ-MASP, and typed X.509 CA/CRL histories carry exact provenance plus a
+/// FCMP++/private-IVM/PQ-MASP, and typed X.509 CA histories carry exact provenance plus a
 /// pruned-prefix anchor and can therefore be reduced atomically at the scheduled height. Every
-/// other history must already fit the future cap; governance cannot silently orphan it.
+/// other future root family must already fit the future cap; governance cannot silently orphan it.
 pub(crate) fn validate_unanchored_privacy_root_retention_v1(
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     retained_root_count: u32,
@@ -9203,12 +10344,14 @@ mod tests {
         BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1, PrivacyActiveLifecycleV1,
         PrivacyAttributeDigestV1, PrivacyBootleLanternIssuerPolicyDigestV1,
         PrivacyCertificateKeyDigestV1, PrivacyChallengeV1, PrivacyCommitmentV1,
-        PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
-        PrivacyIssuerRegistryPolicyNamespaceV1, PrivacyNamespaceScopeV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyParameterNamespaceV1, PrivacyPolicyDigestV1,
-        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProposedLifecycleV1,
-        PrivacyProtocolLifecycleV1, PrivacyRetiredLifecycleV1, PrivacyRootV1,
-        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1, PrivacySuspendedLifecycleV1,
+        PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1,
+        PrivacyExact12CapabilityManifestDigestV1, PrivacyIssuerIdV1,
+        PrivacyIssuerRegistryPolicyNamespaceV1, PrivacyLedgerEffectKindV1, PrivacyNamespaceScopeV1,
+        PrivacyOperationSchemaV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+        PrivacyParameterNamespaceV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1,
+        PrivacyRetiredLifecycleV1, PrivacyRootV1, PrivacyStatementContextV1,
+        PrivacyStatementSchemaDigestV1, PrivacySuspendedLifecycleV1,
         PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorNamespaceV1,
         PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVegaIssuerRecordDigestV1,
         PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
@@ -9467,6 +10610,36 @@ mod tests {
             &commitments.view(),
             &roots.view(),
             &root_heads.view(),
+        )
+    }
+    fn validate_receipt_commitments(
+        commitments: &Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+    ) -> Result<(), String> {
+        let mut activations = Storage::new();
+        for protocol_id in [
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        ] {
+            let activation = crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
+                .expect("compiled receipt-test privacy profile")
+                .activation_record(PrivacyProtocolLifecycleV1::Active(
+                    PrivacyActiveLifecycleV1 {
+                        proposed_at_height: 1,
+                        activated_at_height: 2,
+                        state_since_height: 2,
+                    },
+                ));
+            activations.insert(PrivacyActivationKeyV1::new(protocol_id), activation);
+        }
+        validate_privacy_persisted_state_v1(
+            &PrivacyConsensusPolicyV1::taira_default(),
+            &activations.view(),
+            &Storage::<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>::new().view(),
+            &Storage::<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>::new().view(),
+            &Storage::<PrivacyNullifierKeyV1, PrivacyStateItemRecordV1>::new().view(),
+            &commitments.view(),
+            &Storage::<PrivacyRootKeyV1, PrivacyRootProvenanceV1>::new().view(),
+            &Storage::<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>::new().view(),
         )
     }
     fn pgc_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
@@ -12036,42 +13209,12 @@ mod tests {
         }
     }
     #[test]
-    fn future_unanchored_retention_is_prevalidated_while_typed_histories_are_prunable() {
-        let unanchored_namespace = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
-            PrivacyNamespaceScopeV1::IssuerPolicy(
-                iroha_data_model::privacy::PrivacyIssuerPolicyNamespaceV1 {
-                    issuer_id: PrivacyIssuerIdV1::new(nonzero(0xA6)),
-                    policy_id: PrivacyPolicyIdV1::new(nonzero(0xA7)),
-                },
-            ),
-        );
+    fn every_current_root_family_uses_its_typed_retention_planner() {
         let provenance = PrivacyRootProvenanceV1::governance(
             PrivacyRootPublicationDigestV1::new(nonzero(0xA8)),
             1,
         )
         .expect("governance provenance");
-        let mut non_pgc_roots = Storage::new();
-        for epoch in 1..=2 {
-            non_pgc_roots.insert(
-                PrivacyRootKeyV1::new(
-                    unanchored_namespace,
-                    PrivacyRootRoleV1::Revocation,
-                    epoch,
-                    PrivacyRootV1::new([u8::try_from(epoch).expect("small epoch"); 32]),
-                )
-                .expect("FCMP++ root key"),
-                provenance,
-            );
-        }
-        validate_unanchored_privacy_root_retention_v1(&non_pgc_roots.view(), 2)
-            .expect("inclusive future cap");
-        assert!(
-            validate_unanchored_privacy_root_retention_v1(&non_pgc_roots.view(), 1)
-                .expect_err("unanchored histories cannot be implicitly pruned")
-                .contains("exceeding scheduled retention 1")
-        );
-        assert!(validate_unanchored_privacy_root_retention_v1(&non_pgc_roots.view(), 0).is_err());
         for (namespace, role, label) in [
             (
                 pgc_namespace(0xB7),
@@ -12288,7 +13431,7 @@ mod tests {
                     0xB2,
                     1,
                     BootleLanternIssuerPolicyLifecycleV1::Active,
-                )
+                );
             } => PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(
                 mismatched_policy,
                 7,
@@ -12296,9 +13439,9 @@ mod tests {
             reject "key/record identity mismatch must reject", "does not match";
 
             corrupted {
-                let mut corrupted_policy = policy.clone()
+                let mut corrupted_policy = policy.clone();
                 corrupted_policy.record_digest =
-                    PrivacyBootleLanternIssuerPolicyDigestV1::new(nonzero(0xB5))
+                    PrivacyBootleLanternIssuerPolicyDigestV1::new(nonzero(0xB5));
             } => PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
                 policy: corrupted_policy,
                 admitted_at_height: 7,
@@ -12307,14 +13450,14 @@ mod tests {
                 "unexpected record digest validation error";
 
             corrupted_parameter {
-                let mut wrong_parameter_digest = policy.clone()
+                let mut wrong_parameter_digest = policy.clone();
                 wrong_parameter_digest.issuer_parameter_digest =
-                    PrivacyParameterDigestV1::new(nonzero(0xB6))
+                    PrivacyParameterDigestV1::new(nonzero(0xB6));
                 wrong_parameter_digest.record_digest =
-                    PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32])
+                    PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
                 wrong_parameter_digest.record_digest = wrong_parameter_digest
                     .computed_record_digest()
-                    .expect("recompute outer record digest")
+                    .expect("recompute outer record digest");
             } => PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
                 policy: wrong_parameter_digest,
                 admitted_at_height: 7,
@@ -12537,14 +13680,14 @@ mod tests {
                     1,
                     None,
                     PrivacyVegaIssuerRecordLifecycleV1::Active,
-                )
+                );
             } => PrivacyStateItemRecordV1::vega_issuer_governance(mismatched, 7)
                 .expect("intrinsically valid mismatched issuer");
             reject "key/record mismatch must reject", "differs from its record";
 
             corrupted {
-                let mut corrupt_digest = record
-                corrupt_digest.record_digest.0[0] ^= 1
+                let mut corrupt_digest = record;
+                corrupt_digest.record_digest.0[0] ^= 1;
             } => PrivacyStateItemRecordV1::VegaIssuerGovernance {
                 record: corrupt_digest,
                 admitted_at_height: 7,
@@ -12552,8 +13695,8 @@ mod tests {
             reject "self-digest corruption must reject", "is invalid";
 
             corrupted_key {
-                let mut invalid_key_bytes = [u8::MAX; 33]
-                invalid_key_bytes[0] = 0x02
+                let mut invalid_key_bytes = [u8::MAX; 33];
+                invalid_key_bytes[0] = 0x02;
                 let off_curve = PrivacyVegaIssuerRecordV1::new(
                     issuer_id,
                     1,
@@ -12566,7 +13709,7 @@ mod tests {
                     None,
                     PrivacyVegaIssuerRecordLifecycleV1::Active,
                 )
-                .expect("wire-level compressed shape is valid")
+                .expect("wire-level compressed shape is valid");
             } => PrivacyStateItemRecordV1::VegaIssuerGovernance {
                 record: off_curve,
                 admitted_at_height: 7,
@@ -13321,17 +14464,17 @@ mod tests {
         assert_fixture_record_field_corruptions! {
             proof_managed_persisted_fixture(),
             PrivacyStateItemRecordV1::ProofManagedPoolVerifiedCommitment;
-            duplicate_position, prepare [duplicate_position.advance(&outputs)],
+            duplicate_position, prepare [duplicate_position.advance(&outputs);],
                 key = output_key(&duplicate_position, 1),
                 "second output", append_position mutate { *append_position = 2; },
                 "output must carry commitment provenance",
                 "duplicate append position must reject", "duplicate position";
-            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs)],
+            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs);],
                 key = output_key(&duplicate_output_index, 1),
                 "second output", output_index mutate { *output_index = 0; },
                 "output must carry commitment provenance",
                 "duplicate output index must reject", "statement order";
-            future_epoch, prepare [future_epoch.advance(&outputs)],
+            future_epoch, prepare [future_epoch.advance(&outputs);],
                 key = output_key(&future_epoch, 0),
                 "first output", successor_epoch mutate { *successor_epoch = 3; },
                 "output must carry commitment provenance",
@@ -13698,7 +14841,7 @@ mod tests {
             fcmp_persisted_fixture(), PrivacyStateItemRecordV1::FcmpBootstrapOutput;
             substituted_tuple, prepare [
                 let original = substituted_tuple.bootstrap.initial_fcmp_outputs()
-                    .expect("genesis outputs")[0]
+                    .expect("genesis outputs")[0];
             ],
                 key = PrivacyCommitmentKeyV1::fcmp_output(
                     substituted_tuple.namespace,
@@ -13712,7 +14855,7 @@ mod tests {
                 "tuple substitution under an old id must reject", "complete tuple";
             reordered, prepare [
                 let second = reordered.bootstrap.initial_fcmp_outputs()
-                    .expect("genesis outputs")[1]
+                    .expect("genesis outputs")[1];
             ],
                 key = PrivacyCommitmentKeyV1::fcmp_output(
                     reordered.namespace,
@@ -13796,7 +14939,7 @@ mod tests {
         assert_fixture_record_field_corruptions! {
             fcmp_persisted_fixture(),
             PrivacyStateItemRecordV1::FcmpVerifiedOutput;
-            duplicate_position, prepare [duplicate_position.advance(&outputs)],
+            duplicate_position, prepare [duplicate_position.advance(&outputs);],
                 second_key = PrivacyCommitmentKeyV1::fcmp_output(
                 duplicate_position.namespace,
                 outputs[1].output_id(),
@@ -13804,7 +14947,7 @@ mod tests {
                 "second verified output", append_position mutate { *append_position = 2; },
                 "verified FCMP++ provenance",
                 "duplicate verified append position must reject", "duplicate position";
-            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs)],
+            duplicate_output_index, prepare [duplicate_output_index.advance(&outputs);],
                 second_key = PrivacyCommitmentKeyV1::fcmp_output(
                 duplicate_output_index.namespace,
                 outputs[1].output_id(),
@@ -13812,7 +14955,7 @@ mod tests {
                 "second verified output", output_index mutate { *output_index = 0; },
                 "verified FCMP++ provenance",
                 "duplicate statement output index must reject", "statement order";
-            substituted_output, prepare [substituted_output.advance(&outputs)],
+            substituted_output, prepare [substituted_output.advance(&outputs);],
                 first_key = PrivacyCommitmentKeyV1::fcmp_output(
                 substituted_output.namespace,
                 outputs[0].output_id(),
@@ -13926,6 +15069,7 @@ mod tests {
             bootstrap_digest,
             roots[0],
             4,
+            4,
             None,
             &complete,
         )
@@ -13936,6 +15080,7 @@ mod tests {
             namespace,
             bootstrap_digest,
             roots[0],
+            2,
             2,
             Some(anchor),
             &anchored,
@@ -13968,16 +15113,18 @@ mod tests {
                 anchored.clone(),
             ),
         ] {
+            let retained_root_count = if history.len() == complete.len() {
+                4
+            } else {
+                2
+            };
             assert!(
                 validate_proof_managed_pool_retained_root_chain_v1(
                     namespace,
                     bootstrap_digest,
                     initial_root,
-                    if history.len() == complete.len() {
-                        4
-                    } else {
-                        2
-                    },
+                    retained_root_count,
+                    retained_root_count,
                     anchor,
                     &history,
                 )
@@ -13998,6 +15145,7 @@ mod tests {
                 bootstrap_digest,
                 roots[0],
                 4,
+                4,
                 None,
                 &forged_parent,
             )
@@ -14017,6 +15165,7 @@ mod tests {
                 bootstrap_digest,
                 roots[0],
                 4,
+                4,
                 None,
                 &cross_origin,
             )
@@ -14034,6 +15183,7 @@ mod tests {
                 namespace,
                 bootstrap_digest,
                 roots[0],
+                4,
                 4,
                 None,
                 &cross_protocol,
@@ -14091,7 +15241,7 @@ mod tests {
             reject "wrong-role value must reject", "wrong-role";
 
             mismatched {
-                let mismatched_policy_id = zk_ace_policy_id(2)
+                let mismatched_policy_id = zk_ace_policy_id(2);
             } => PrivacyStateItemRecordV1::zk_ace_policy_governance(
                 zk_ace_policy_record(mismatched_policy_id),
                 7,
@@ -14099,9 +15249,9 @@ mod tests {
             reject "key/payload mismatch must reject", "does not match";
 
             corrupted {
-                let mut corrupted_policy = zk_ace_policy_record(policy_id)
+                let mut corrupted_policy = zk_ace_policy_record(policy_id);
                 corrupted_policy.record_digest =
-                    PrivacyZkAcePolicyRecordDigestV1::new(nonzero(25))
+                    PrivacyZkAcePolicyRecordDigestV1::new(nonzero(25));
             } => PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
                 policy: corrupted_policy,
                 admitted_at_height: 7,
@@ -14231,6 +15381,205 @@ mod tests {
                 .contains("missing policy")
         );
         assert_eq!(valid.zk_ace_policy(), None);
+    }
+    #[test]
+    fn exact12_execution_receipt_roundtrips_and_restore_rejects_cross_key_identity() {
+        let protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
+        let transaction_hash = nonzero(0xA1);
+        let receipt =
+            PrivacyActionExecutionReceiptRecordV1::new(PrivacyActionExecutionReceiptFieldsV1 {
+                network_id: network_id(0xA2),
+                protocol_id,
+                operation_schema: PrivacyOperationSchemaV1::AnonymousPgcPaymentActionV1,
+                ledger_effect_kind: PrivacyLedgerEffectKindV1::AnonymousPgcAccountStateTransition,
+                transaction_hash,
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(nonzero(0xA3)),
+                statement_digest: PrivacyStatementDigestV1::new(nonzero(0xA4)),
+                proof_envelope_hash: nonzero(0xA5),
+                capability_manifest_digest: PrivacyExact12CapabilityManifestDigestV1::new(nonzero(
+                    0xA6,
+                )),
+                capability_committed_height: 5,
+                admitted_at_height: 7,
+            })
+            .expect("canonical Exact12 execution receipt");
+        let record = PrivacyStateItemRecordV1::VerifiedActionExecutionReceipt { receipt };
+        let bytes = norito::to_bytes(&record).expect("encode Exact12 execution receipt");
+        let decoded: PrivacyStateItemRecordV1 =
+            norito::decode_from_bytes(&bytes).expect("decode Exact12 execution receipt");
+        assert_eq!(decoded, record);
+        decoded.validate().expect("roundtripped receipt validates");
+
+        let key = PrivacyCommitmentKeyV1::verified_action_execution_receipt(
+            protocol_id,
+            transaction_hash,
+            0,
+        )
+        .expect("canonical Exact12 execution-receipt key");
+        let mut commitments = Storage::new();
+        commitments.insert(key, record.clone());
+        validate_receipt_commitments(&commitments).expect("matching receipt key restores");
+
+        let mismatched_key = PrivacyCommitmentKeyV1::verified_action_execution_receipt(
+            protocol_id,
+            nonzero(0xA7),
+            0,
+        )
+        .expect("individually valid mismatched receipt key");
+        let mut mismatched_commitments = Storage::new();
+        mismatched_commitments.insert(mismatched_key, record.clone());
+        let error = validate_receipt_commitments(&mismatched_commitments)
+            .expect_err("cross-key receipt identity must reject during restore");
+        assert!(error.contains("key differs from its record"), "{error}");
+
+        let verification_receipt =
+            PrivacyActionExecutionReceiptRecordV1::new(PrivacyActionExecutionReceiptFieldsV1 {
+                network_id: network_id(0xA2),
+                protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                operation_schema: PrivacyOperationSchemaV1::VeRangeRangeProofV1,
+                ledger_effect_kind: PrivacyLedgerEffectKindV1::VerificationOnly,
+                transaction_hash,
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(nonzero(0xA8)),
+                statement_digest: PrivacyStatementDigestV1::new(nonzero(0xA9)),
+                proof_envelope_hash: nonzero(0xAA),
+                capability_manifest_digest: PrivacyExact12CapabilityManifestDigestV1::new(nonzero(
+                    0xAB,
+                )),
+                capability_committed_height: 5,
+                admitted_at_height: 7,
+            })
+            .expect("canonical verification-only execution receipt");
+        let verification_key = PrivacyCommitmentKeyV1::verified_action_execution_receipt(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            transaction_hash,
+            0,
+        )
+        .expect("verification-only execution-receipt key");
+        let mut duplicate_action_receipts = Storage::new();
+        duplicate_action_receipts.insert(key, record);
+        duplicate_action_receipts.insert(
+            verification_key,
+            PrivacyStateItemRecordV1::VerifiedActionExecutionReceipt {
+                receipt: verification_receipt,
+            },
+        );
+        let error = validate_receipt_commitments(&duplicate_action_receipts)
+            .expect_err("one transaction action cannot restore with two protocol receipts");
+        assert!(error.contains("more than one execution receipt"), "{error}");
+
+        let mut wrong_operation = receipt;
+        wrong_operation.operation_schema = PrivacyOperationSchemaV1::VeRangeRangeProofV1;
+        assert!(wrong_operation.validate().is_err());
+        let mut wrong_effect = receipt;
+        wrong_effect.ledger_effect_kind = PrivacyLedgerEffectKindV1::VerificationOnly;
+        assert!(wrong_effect.validate().is_err());
+        let mut wrong_height = receipt;
+        wrong_height.capability_committed_height = 8;
+        assert!(wrong_height.validate().is_err());
+        assert!(
+            PrivacyCommitmentKeyV1::verified_action_execution_receipt(protocol_id, [0; 32], 0)
+                .is_err()
+        );
+        assert!(
+            PrivacyCommitmentKeyV1::verified_action_execution_receipt(
+                protocol_id,
+                transaction_hash,
+                TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1,
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn zk_ams_admission_and_provision_reject_mutated_registry_record_bindings() {
+        let namespace = zk_ams_namespace(0xB1);
+        let PrivacyNamespaceScopeV1::IssuerRegistryPolicy(scope) = namespace.scope() else {
+            unreachable!("ZK-AMS fixture namespace")
+        };
+        let issuer_policy_record_digest =
+            PrivacyZkAmsIssuerPolicyRecordDigestV1::new(nonzero(0xB2));
+        let policy_digest = PrivacyPolicyDigestV1::new(nonzero(0xB3));
+        let parent_root = PrivacyRootV1::new(nonzero(0xB4));
+        let parent_epoch = ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1;
+        let registry_record_digest = zk_ams_registry_record_digest_v1(
+            scope.issuer_id,
+            scope.registry_id,
+            scope.policy_id,
+            issuer_policy_record_digest,
+            policy_digest,
+            parent_root,
+            parent_epoch,
+        );
+        validate_zk_ams_registry_record_binding_v1(
+            namespace,
+            issuer_policy_record_digest,
+            policy_digest,
+            registry_record_digest,
+            parent_root,
+            parent_epoch,
+        )
+        .expect("canonical ZK-AMS admission registry binding");
+
+        let mut mutated_registry_record_digest = registry_record_digest;
+        mutated_registry_record_digest.0[0] ^= 1;
+        assert!(
+            validate_zk_ams_registry_record_binding_v1(
+                namespace,
+                issuer_policy_record_digest,
+                policy_digest,
+                mutated_registry_record_digest,
+                parent_root,
+                parent_epoch,
+            )
+            .expect_err("mutated admission registry digest must reject")
+            .contains("differs")
+        );
+
+        let provision_root = PrivacyRootV1::new(nonzero(0xB5));
+        let provision_epoch = parent_epoch + 1;
+        let provision_registry_record_digest = zk_ams_registry_record_digest_v1(
+            scope.issuer_id,
+            scope.registry_id,
+            scope.policy_id,
+            issuer_policy_record_digest,
+            policy_digest,
+            provision_root,
+            provision_epoch,
+        );
+        validate_zk_ams_registry_record_binding_v1(
+            namespace,
+            issuer_policy_record_digest,
+            policy_digest,
+            provision_registry_record_digest,
+            provision_root,
+            provision_epoch,
+        )
+        .expect("canonical ZK-AMS provision registry binding");
+        assert!(
+            validate_zk_ams_registry_record_binding_v1(
+                namespace,
+                issuer_policy_record_digest,
+                PrivacyPolicyDigestV1::new(nonzero(0xB6)),
+                provision_registry_record_digest,
+                provision_root,
+                provision_epoch,
+            )
+            .expect_err("mutated provision policy digest must reject")
+            .contains("differs")
+        );
+        assert!(
+            validate_zk_ams_registry_record_binding_v1(
+                namespace,
+                issuer_policy_record_digest,
+                PrivacyPolicyDigestV1::new([0; 32]),
+                provision_registry_record_digest,
+                provision_root,
+                provision_epoch,
+            )
+            .expect_err("zero provision policy digest must reject")
+            .contains("non-zero")
+        );
     }
     #[test]
     fn identical_key_images_in_distinct_registries_have_distinct_keys() {

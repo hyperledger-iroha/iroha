@@ -40,7 +40,7 @@ use crate::{
     },
 };
 use core::convert::Infallible;
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
 use std::path::PathBuf;

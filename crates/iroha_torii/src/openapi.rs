@@ -882,6 +882,100 @@ mod tests {
             "package-local OpenAPI authority must use canonical pretty Norito JSON bytes"
         );
     }
+    #[test]
+    fn kagemusha_public_issuance_openapi_is_closed_authenticated_and_exactly_versioned() {
+        const PATH: &str = "/v1/offline/kagemusha/issuance-status";
+        const SCHEMA: &str = "OfflineKagemushaPublicIssuanceStatusV1";
+        const REQUIRED: &[&str] = &[
+            "schema_version",
+            "status",
+            "evaluated_height",
+            "finalized_height",
+            "activation_committed_height",
+            "asset_definition_id",
+            "asset_scale",
+            "recursive_proof_abi_version",
+            "manifest_version",
+            "cash_handoff_capability",
+            "eligibility_cash_handoff_capability",
+            "required_bridge_abi_version",
+            "max_hops",
+            "release_manifest_sha256",
+            "activation_transaction_hash",
+            "governance_policy_sha256",
+            "lifecycle_state_sha256",
+            "runtime_effective_config_sha256",
+            "finality_block_hash",
+        ];
+
+        let document = canonical_document();
+        let operation = openapi_operation(&document, PATH, "get");
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", PATH),
+            "#/components/schemas/OfflineKagemushaPublicIssuanceStatusV1"
+        );
+        assert_canonical_auth_required_response(
+            operation,
+            PATH,
+            "canonical_authentication_required",
+        );
+        let responses = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("issuance-status responses");
+        assert_eq!(
+            documented_reject_codes(responses, "503"),
+            vec!["offline_kagemusha_public_issuance_unavailable"]
+        );
+
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(schemas, SCHEMA, REQUIRED, &[]);
+        let properties = component_properties(schemas, SCHEMA);
+        for (field, expected) in [
+            ("schema_version", 1),
+            ("recursive_proof_abi_version", 21),
+            ("manifest_version", 4),
+            ("required_bridge_abi_version", 22),
+            ("max_hops", 8),
+        ] {
+            assert_eq!(
+                properties[field].get("const").and_then(Value::as_u64),
+                Some(expected),
+                "{SCHEMA}.{field} exact version constant"
+            );
+        }
+        for (field, expected) in [
+            ("status", "public-enabled"),
+            ("cash_handoff_capability", "cash_handoff_v1"),
+            (
+                "eligibility_cash_handoff_capability",
+                "cash_handoff_eligibility_v1",
+            ),
+        ] {
+            assert_eq!(
+                properties[field].get("const").and_then(Value::as_str),
+                Some(expected),
+                "{SCHEMA}.{field} exact protocol constant"
+            );
+        }
+        for field in [
+            "release_manifest_sha256",
+            "governance_policy_sha256",
+            "lifecycle_state_sha256",
+            "runtime_effective_config_sha256",
+            "finality_block_hash",
+        ] {
+            assert_eq!(
+                properties[field].get("pattern").and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$"),
+                "{SCHEMA}.{field} exact lowercase hash encoding"
+            );
+        }
+        assert_eq!(
+            property_ref(schemas, SCHEMA, "activation_transaction_hash"),
+            "#/components/schemas/OfflineTransactionHash"
+        );
+    }
     #[cfg(all(
         feature = "node-api",
         feature = "ws_integration_tests",
@@ -1186,6 +1280,18 @@ mod tests {
         assert_eq!(
             operation_response_schema_ref(details, "200", "transaction details"),
             "#/components/schemas/PipelineTransactionDetailsResponse"
+        );
+        let details_schema = &schemas["PipelineTransactionDetailsResponse"];
+        assert_eq!(
+            details_schema["properties"]["block_height"]["format"].as_str(),
+            Some("uint64")
+        );
+        assert!(
+            details_schema["required"]
+                .as_array()
+                .expect("transaction-details required fields")
+                .iter()
+                .any(|field| field.as_str() == Some("block_height"))
         );
         assert_eq!(
             details.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
@@ -2817,6 +2923,7 @@ mod tests {
             component_required(schemas, "OfflineReadiness"),
             [
                 "cash_handoff_capability",
+                "eligibility_cash_handoff_capability",
                 "required_bridge_abi_version",
                 "max_hops",
                 "asset_definition_id",
@@ -3248,6 +3355,191 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
+        let policy_operation = paths
+            .get("/v1/offline/device-attestation-policy")
+            .and_then(Value::as_object)
+            .and_then(|item| item.get("get"))
+            .and_then(Value::as_object)
+            .expect("finalized device-attestation policy operation");
+        assert_canonical_auth_required_response(
+            policy_operation,
+            "/v1/offline/device-attestation-policy",
+            "canonical_authentication_required",
+        );
+        let policy_response_schema = policy_operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/x-norito"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .expect("finalized device-attestation policy response schema");
+        assert_eq!(
+            policy_response_schema
+                .get("x-iroha-norito-schema")
+                .and_then(Value::as_str),
+            Some(iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_SCHEMA_NAME_V1)
+        );
+        assert_eq!(
+            policy_response_schema["x-iroha-max-bytes"].as_u64(),
+            Some(
+                iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+                    as u64
+            )
+        );
+        assert_eq!(
+            documented_reject_codes(
+                policy_operation
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .expect("finalized device-attestation policy responses"),
+                "503",
+            ),
+            ["offline_device_policy_unavailable"]
+        );
+        for (
+            path,
+            request_schema_name,
+            request_max_bytes,
+            response_schema_name,
+            response_max_bytes,
+        ) in [
+            (
+                "/v1/offline/device-attestation-policy/proof",
+                iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_REQUEST_SCHEMA_NAME,
+                iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_REQUEST_MAX_BYTES,
+                iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_RESPONSE_SCHEMA_NAME,
+                iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+            ),
+            (
+                "/v1/offline/device-eligibility",
+                iroha_torii_shared::offline_api::OFFLINE_DEVICE_ELIGIBILITY_REQUEST_SCHEMA_NAME,
+                iroha_torii_shared::offline_api::OFFLINE_DEVICE_ELIGIBILITY_REQUEST_MAX_BYTES,
+                iroha_torii_shared::offline_api::OFFLINE_DEVICE_ELIGIBILITY_RESPONSE_SCHEMA_NAME,
+                iroha_torii_shared::offline_api::OFFLINE_DEVICE_ELIGIBILITY_MAX_RESPONSE_BYTES,
+            ),
+        ] {
+            let operation = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get("post"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("authenticated offline operation: {path}"));
+            assert_canonical_auth_required_response(
+                operation,
+                path,
+                "canonical_authentication_required",
+            );
+            assert_eq!(
+                operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+                Some("read"),
+                "authenticated offline query effect: {path}"
+            );
+            let request_schema = operation
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .and_then(|body| body.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/x-norito"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("canonical Norito request schema: {path}"));
+            assert_eq!(
+                request_schema
+                    .get("x-iroha-norito-schema")
+                    .and_then(Value::as_str),
+                Some(request_schema_name),
+                "request schema identity: {path}"
+            );
+            assert_eq!(
+                request_schema
+                    .get("x-iroha-max-bytes")
+                    .and_then(Value::as_u64),
+                Some(request_max_bytes as u64),
+                "request byte bound: {path}"
+            );
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("authenticated offline responses: {path}"));
+            let response_schema = responses
+                .get("200")
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/x-norito"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("canonical Norito response schema: {path}"));
+            assert_eq!(
+                response_schema
+                    .get("x-iroha-norito-schema")
+                    .and_then(Value::as_str),
+                Some(response_schema_name),
+                "response schema identity: {path}"
+            );
+            assert_eq!(
+                response_schema
+                    .get("x-iroha-max-bytes")
+                    .and_then(Value::as_u64),
+                Some(response_max_bytes as u64),
+                "response byte bound: {path}"
+            );
+            assert!(
+                responses.values().all(|response| {
+                    response["headers"]["Cache-Control"]["schema"]["const"].as_str()
+                        == Some("private, no-store")
+                }),
+                "authenticated offline responses must be private: {path}"
+            );
+        }
+        let proof_responses =
+            paths["/v1/offline/device-attestation-policy/proof"]["post"]["responses"]
+                .as_object()
+                .expect("device-policy proof responses");
+        assert_eq!(
+            documented_reject_codes(proof_responses, "400"),
+            ["offline_device_policy_proof_request_invalid"]
+        );
+        assert_eq!(
+            documented_reject_codes(proof_responses, "409"),
+            [
+                "offline_device_policy_finality_page_too_large",
+                "offline_device_policy_proof_too_large",
+            ]
+        );
+        assert_eq!(
+            documented_reject_codes(proof_responses, "503"),
+            ["offline_device_policy_proof_unavailable"]
+        );
+        let eligibility_responses = paths["/v1/offline/device-eligibility"]["post"]["responses"]
+            .as_object()
+            .expect("device-eligibility responses");
+        assert_eq!(
+            documented_reject_codes(eligibility_responses, "400"),
+            ["offline_device_eligibility_request_invalid"]
+        );
+        assert_eq!(
+            documented_reject_codes(eligibility_responses, "404"),
+            ["offline_device_registration_not_found"]
+        );
+        assert_eq!(
+            documented_reject_codes(eligibility_responses, "409"),
+            [
+                "offline_device_eligibility_response_too_large",
+                "offline_device_registration_expired",
+            ]
+        );
+        assert_eq!(
+            documented_reject_codes(eligibility_responses, "503"),
+            ["offline_device_eligibility_unavailable"]
+        );
         for [path, method] in openapi_contract_fixed_rows::<2>(
             "openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.rows.1",
         ) {
@@ -4180,6 +4472,7 @@ mod tests {
             );
         }
     }
+    #[test]
     fn openapi_schemas_include_system_keys() {
         let schemas = openapi_schemas();
         for key in openapi_contract_strings("openapi.openapi_schemas_include_system_keys.strings.1")

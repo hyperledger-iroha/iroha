@@ -11,11 +11,12 @@ use crate::{
         PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1, PrivacyActionTransactionContextV1,
         SignedPrivacyActionV1, build_signed_privacy_native_action_v1,
         inspect_signed_privacy_native_action_v1, network_id_from_genesis_hash_bytes,
-        privacy_native_action_capability_for_protocol_v1,
+        privacy_native_action_capabilities_for_protocol_v1,
+        privacy_native_action_capability_for_protocol_and_schema_v1,
     },
     privacy_wallet_bundle::{
         InspectedPrivacyWalletExecutionBundleV1, PrivacyWalletExecutionBundleManifestV1,
-        decode_privacy_wallet_execution_bundle_v1, inspect_privacy_wallet_execution_bundle_v1,
+        decode_privacy_wallet_execution_bundle_v1, prevalidate_privacy_wallet_execution_bundle_v1,
     },
 };
 use iroha_crypto::Algorithm;
@@ -34,7 +35,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use zeroize::{Zeroize, Zeroizing};
-pub const PROTOCOL_VERSION: u8 = 1;
+/// Authenticated IPWW wire version requiring intent-bound import and action-bound leases.
+pub const PROTOCOL_VERSION: u8 = 2;
 pub const MAX_FRAME_BYTES: usize = 34 * 1_024 * 1_024;
 pub const MAX_CREDENTIAL_BYTES: u64 = 8_388_608;
 pub const MAX_CANONICAL_PUBLIC_INTENT_BYTES: usize = 524_288;
@@ -42,6 +44,12 @@ pub const MAX_CANONICAL_EXECUTION_PLAN_BYTES: usize = 2 * 1_024 * 1_024;
 pub const MAX_HANDLES: usize = 1_024;
 pub const MIN_TTL_MILLIS: u64 = 1_000;
 pub const MAX_TTL_MILLIS: u64 = 15 * 60 * 1_000;
+/// Maximum lifetime of a worker-built native privacy transaction.
+///
+/// The creation time is bound before native proving starts, so this bound must
+/// cover the reviewed maximum-shape prover plus submission/finality latency.
+/// It deliberately matches the closed 15-minute worker-custody ceiling.
+pub const MAX_TRANSACTION_TTL_MILLIS: u64 = 15 * 60 * 1_000;
 const MAGIC: &[u8; 4] = b"IPWW";
 const AUTH_TAG_BYTES: usize = 32;
 const HANDLE_BYTES: usize = 32;
@@ -193,6 +201,8 @@ pub fn canonical_public_intent_digest(canonical_public_intent: &[u8]) -> [u8; DI
 pub struct ImportRequest {
     pub credential_path: PathBuf,
     pub binding: WitnessBinding,
+    /// Exact canonical public intent whose digest is already present in `binding`.
+    pub canonical_public_intent: Vec<u8>,
     pub ttl_millis: u64,
 }
 #[derive(Clone, Eq, PartialEq)]
@@ -248,18 +258,16 @@ impl WitnessVault {
     ) -> Result<WitnessLease, WorkerError> {
         request.binding.validate()?;
         validate_clock_and_ttl(now_millis, request.ttl_millis)?;
+        let public_intent =
+            validate_canonical_public_intent(&request.canonical_public_intent, &request.binding)?;
         self.purge_expired_at(now_millis);
         if self.entries.len() >= self.maximum_handles {
             return Err(WorkerError::CapacityExceeded);
         }
-        let material = read_credential_file(&request.credential_path)?;
-        let inspection = inspect_privacy_wallet_execution_bundle_v1(&material)
+        let mut material = read_credential_file(&request.credential_path)?;
+        let inspection = prevalidate_privacy_wallet_execution_bundle_v1(&mut material)
             .map_err(|_| WorkerError::InvalidExecutionBundle)?;
-        if request.binding.signer != inspection.manifest.wallet_id
-            || request.binding.protocol != inspection.manifest.protocol_id.canonical_label()
-        {
-            return Err(WorkerError::WrongBinding);
-        }
+        validate_import_inspection(&request.binding, &public_intent, &inspection)?;
         let expires_at_millis = now_millis
             .checked_add(request.ttl_millis)
             .ok_or(WorkerError::InvalidTtl)?;
@@ -625,6 +633,29 @@ struct ValidatedPublicIntentV1 {
     operation_schema: String,
     public_action: Vec<u8>,
 }
+fn validate_import_inspection(
+    binding: &WitnessBinding,
+    public_intent: &ValidatedPublicIntentV1,
+    inspection: &InspectedPrivacyWalletExecutionBundleV1,
+) -> Result<(), WorkerError> {
+    if binding.signer != inspection.manifest.wallet_id
+        || binding.protocol != inspection.manifest.protocol_id.canonical_label()
+        || public_intent.operation_schema != inspection.manifest.operation_schema
+    {
+        return Err(WorkerError::WrongBinding);
+    }
+    let expected_public_action_digest =
+        crate::privacy_wallet_bundle::privacy_wallet_bundle_public_action_digest_v1(
+            &public_intent.public_action,
+        );
+    if !constant_time_eq(
+        &expected_public_action_digest,
+        &inspection.public_action_digest,
+    ) {
+        return Err(WorkerError::PublicActionMismatch);
+    }
+    Ok(())
+}
 struct ValidatedExecutionPlanV1 {
     context: PrivacyActionTransactionContextV1,
     public_action: Vec<u8>,
@@ -659,14 +690,16 @@ fn dispatch(vault: &mut WitnessVault, kind: CommandKind, payload: &[u8]) -> Comm
 }
 pub fn encode_import_payload(request: &ImportRequest) -> Result<Vec<u8>, WorkerError> {
     request.binding.validate()?;
+    validate_canonical_public_intent(&request.canonical_public_intent, &request.binding)?;
     let path = request
         .credential_path
         .to_str()
         .ok_or(WorkerError::InvalidCredentialPath)?;
     validate_text("credential path", path, MAX_PATH_BYTES)?;
-    let mut payload = Vec::with_capacity(768);
+    let mut payload = Vec::with_capacity(768 + request.canonical_public_intent.len());
     put_text(&mut payload, path);
     encode_binding(&mut payload, &request.binding);
+    put_bytes_u32(&mut payload, &request.canonical_public_intent)?;
     payload.extend_from_slice(&request.ttl_millis.to_be_bytes());
     Ok(payload)
 }
@@ -709,12 +742,16 @@ fn decode_import(payload: &[u8]) -> Result<ImportRequest, WorkerError> {
     let mut cursor = Cursor::new(payload);
     let path = cursor.text(MAX_PATH_BYTES)?;
     let binding = decode_binding(&mut cursor)?;
+    let canonical_public_intent = cursor
+        .bytes_u32(MAX_CANONICAL_PUBLIC_INTENT_BYTES)?
+        .to_vec();
     let ttl_millis = cursor.u64()?;
     cursor.finish()?;
     let credential_path = PathBuf::from(path);
     Ok(ImportRequest {
         credential_path,
         binding,
+        canonical_public_intent,
         ttl_millis,
     })
 }
@@ -779,6 +816,7 @@ fn execute_native_action_v1(
                     .map_err(|_| WorkerError::InvalidExecutionBundle)?;
             if decoded.manifest != manifest
                 || decoded.request.protocol_id() != manifest.protocol_id
+                || decoded.request.operation_schema() != manifest.operation_schema
                 || decoded.manifest.operation_schema != plan.operation_schema
             {
                 return Err(WorkerError::WrongBinding);
@@ -804,6 +842,9 @@ fn signed_action_response_v1(
     let inspected = inspect_signed_privacy_native_action_v1(signed.signed_transaction())
         .map_err(|_| WorkerError::NativeSelfInspectionFailed)?;
     if inspected.protocol_id() != manifest.protocol_id
+        || inspected.operation_schema() != manifest.operation_schema
+        || signed.operation_schema() != manifest.operation_schema
+        || inspected.operation_schema() != signed.operation_schema()
         || signed
             .signed_transaction()
             .network_id()
@@ -847,7 +888,7 @@ fn signed_action_response_v1(
     }
     Ok(SignedActionResponseV1 {
         protocol_id: manifest.protocol_id.canonical_label().to_owned(),
-        operation_schema: manifest.operation_schema.to_owned(),
+        operation_schema: signed.operation_schema().to_owned(),
         network_id,
         authority: manifest.authority.to_string(),
         authority_public_key: manifest.public_key.to_string(),
@@ -902,6 +943,7 @@ fn encode_response(response: CommandResponse) -> Vec<u8> {
             put_text(&mut output, &lease.manifest.public_key.to_string());
             put_text(&mut output, lease.manifest.protocol_id.canonical_label());
             put_text(&mut output, lease.manifest.operation_schema);
+            output.extend_from_slice(&lease.public_action_digest);
         }
         CommandResponse::Cancelled => output.push(2),
         CommandResponse::SignedAction(signed) => {
@@ -1148,8 +1190,12 @@ fn retained_protocol(protocol: &str) -> Result<PrivacyProtocolIdV1, WorkerError>
             return Err(WorkerError::UnsupportedProtocol);
         }
     }
-    privacy_native_action_capability_for_protocol_v1(protocol_id)
-        .ok_or(WorkerError::UnsupportedProtocol)?;
+    if privacy_native_action_capabilities_for_protocol_v1(protocol_id)
+        .next()
+        .is_none()
+    {
+        return Err(WorkerError::UnsupportedProtocol);
+    }
     Ok(protocol_id)
 }
 fn feature_bit(field: &str) -> Option<u8> {
@@ -1196,8 +1242,13 @@ fn validate_canonical_public_intent(
         return Err(WorkerError::InvalidPublicIntent);
     };
     let protocol_id = retained_protocol(&binding.protocol)?;
-    let capability = privacy_native_action_capability_for_protocol_v1(protocol_id)
-        .ok_or(WorkerError::UnsupportedProtocol)?;
+    let operation_schema = object
+        .get("operation_schema")
+        .and_then(norito::json::Value::as_str)
+        .ok_or(WorkerError::InvalidPublicIntent)?;
+    let capability =
+        privacy_native_action_capability_for_protocol_and_schema_v1(protocol_id, operation_schema)
+            .ok_or(WorkerError::InvalidPublicIntent)?;
     if object.len() != PUBLIC_INTENT_BASE_FIELDS.len()
         || !PUBLIC_INTENT_BASE_FIELDS
             .iter()
@@ -1214,10 +1265,6 @@ fn validate_canonical_public_intent(
             .get("signer_wallet_id")
             .and_then(norito::json::Value::as_str)
             != Some(binding.signer.as_str())
-        || object
-            .get("operation_schema")
-            .and_then(norito::json::Value::as_str)
-            != Some(capability.operation_schema)
     {
         return Err(WorkerError::InvalidPublicIntent);
     }
@@ -1362,7 +1409,7 @@ fn validate_execution_plan_v1(
     if creation_time_ms == 0
         || creation_time_ms < now.saturating_sub(30_000)
         || creation_time_ms > now.saturating_add(5_000)
-        || !(1..=120_000).contains(&ttl_ms)
+        || !(1..=MAX_TRANSACTION_TTL_MILLIS).contains(&ttl_ms)
         || expires_at <= now
     {
         return Err(WorkerError::InvalidExecutionPlan);
@@ -1593,6 +1640,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::privacy_wallet_bundle::inspect_privacy_wallet_execution_bundle_v1;
     use iroha_crypto::{PrivateKey, PublicKey};
     use iroha_data_model::transaction::SignedTransaction;
     use iroha_version::codec::DecodeVersioned;
@@ -1609,7 +1657,7 @@ mod tests {
     const KEY: [u8; 32] = [0x51; 32];
     const TEST_SIGNER_SEED: [u8; 32] = [7; 32];
     const JINDO_PUBLIC_ACTION: &[u8] = br#"{"evaluation_point_hex":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
-    const JINDO_WITNESS: &[u8] = br#"{"polynomials_hex":[["0000000000000000000000000000000000000000000000000000000000000000"]]}"#;
+    const JINDO_WITNESS: &[u8] = br#"{"polynomials_hex":[["0000000000000000000000000000000000000000000000000000000000000000"],["0000000000000000000000000000000000000000000000000000000000000001"],["0000000000000000000000000000000000000000000000000000000000000002"],["0000000000000000000000000000000000000000000000000000000000000003"]]}"#;
     const CANONICAL_JINDO_PUBLIC_INTENT: &[u8] = br#"{"algorithm_id":"iroha-jindo-polynomial-commitment-v0","operation_schema":"jindo_polynomial_evaluation_v1","protocol_id":"iroha-jindo-polynomial-commitment-v0","public_action":{"evaluation_point_hex":"0000000000000000000000000000000000000000000000000000000000000000"},"selected_criteria":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"selected_features":{"hide_amount":false,"hide_asset_type":false,"hide_receiver":false,"hide_sender":false,"post_quantum":false},"signer_wallet_id":"alice@wonderland"}"#;
     fn binding() -> WitnessBinding {
         WitnessBinding {
@@ -1679,7 +1727,7 @@ mod tests {
             assert!(retained_protocol(protocol).is_ok(), "{protocol}");
         }
     }
-    fn canonical_execution_plan() -> Vec<u8> {
+    fn canonical_execution_plan_with_ttl(ttl_ms: u64) -> Vec<u8> {
         let (_, public_key, authority) = test_signer();
         let now = unix_time_millis().expect("native clock");
         let raw = format!(
@@ -1695,17 +1743,45 @@ mod tests {
                 "\"public_action\":{{\"evaluation_point_hex\":\"0000000000000000000000000000000000000000000000000000000000000000\"}},",
                 "\"schema_version\":1,",
                 "\"transaction_metadata\":{{}},",
-                "\"ttl_ms\":120000}}"
+                "\"ttl_ms\":{}}}"
             ),
             authority,
             public_key,
             now,
             "01".repeat(32),
+            ttl_ms,
         );
         let value = norito::json::parse_value(&raw).expect("execution plan JSON");
         norito::json::to_json(&value)
             .expect("canonical execution plan")
             .into_bytes()
+    }
+    fn canonical_execution_plan() -> Vec<u8> {
+        canonical_execution_plan_with_ttl(120_000)
+    }
+    fn canonical_zk_ams_public_intent(operation_schema: &str, action_kind: &str) -> Vec<u8> {
+        let raw = format!(
+            concat!(
+                "{{\"algorithm_id\":\"iroha-zk-ams-v1\",",
+                "\"operation_schema\":\"{}\",",
+                "\"protocol_id\":\"iroha-zk-ams-v1\",",
+                "\"public_action\":{{\"kind\":\"{}\"}},",
+                "\"selected_criteria\":{{\"hide_amount\":false,\"hide_asset_type\":false,\"hide_receiver\":false,\"hide_sender\":true,\"post_quantum\":false}},",
+                "\"selected_features\":{{\"hide_amount\":false,\"hide_asset_type\":false,\"hide_receiver\":false,\"hide_sender\":true,\"post_quantum\":false}},",
+                "\"signer_wallet_id\":\"alice@wonderland\"}}"
+            ),
+            operation_schema, action_kind,
+        );
+        let value = norito::json::parse_value(&raw).expect("ZK-AMS intent JSON");
+        norito::json::to_json(&value)
+            .expect("canonical ZK-AMS intent")
+            .into_bytes()
+    }
+    fn binding_for_intent(protocol: &str, canonical_public_intent: &[u8]) -> WitnessBinding {
+        let mut value = binding();
+        value.protocol = protocol.to_owned();
+        value.public_intent_digest = canonical_public_intent_digest(canonical_public_intent);
+        value
     }
     fn import(vault: &mut WitnessVault, path: &Path) -> WitnessLease {
         vault
@@ -1713,17 +1789,116 @@ mod tests {
                 ImportRequest {
                     credential_path: path.to_owned(),
                     binding: binding(),
+                    canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
                     ttl_millis: 30_000,
                 },
                 NOW,
             )
             .expect("import")
     }
+    #[test]
+    fn v2_import_wire_requires_the_exact_bound_canonical_public_intent() {
+        let request = ImportRequest {
+            credential_path: PathBuf::from("/owner-only/execution.ipwb"),
+            binding: binding(),
+            canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
+            ttl_millis: 30_000,
+        };
+        let payload = encode_import_payload(&request).expect("encode hardened import");
+        let decoded = decode_import(&payload).expect("decode hardened import");
+        assert_eq!(decoded.credential_path, request.credential_path);
+        assert!(decoded.binding == request.binding);
+        assert_eq!(
+            decoded.canonical_public_intent,
+            request.canonical_public_intent
+        );
+        assert_eq!(decoded.ttl_millis, request.ttl_millis);
+
+        let mut historical_shape = Vec::new();
+        put_text(&mut historical_shape, "/owner-only/execution.ipwb");
+        encode_binding(&mut historical_shape, &request.binding);
+        historical_shape.extend_from_slice(&request.ttl_millis.to_be_bytes());
+        assert!(
+            decode_import(&historical_shape).is_err(),
+            "v2 import must not fall back to the pre-intent payload shape"
+        );
+    }
+    #[test]
+    fn authenticated_pipe_import_returns_only_the_exact_bound_public_lease() {
+        let directory = TempDir::new().expect("temp dir");
+        let path = execution_bundle_file(&directory, "pipe-import", JINDO_WITNESS);
+        let request = ImportRequest {
+            credential_path: path,
+            binding: binding(),
+            canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
+            ttl_millis: 30_000,
+        };
+        let payload = encode_import_payload(&request).expect("encode import");
+        let request_frame = encode_frame(
+            &AuthenticatedFrame {
+                kind: CommandKind::Import,
+                sequence: 1,
+                payload,
+            },
+            &KEY,
+        )
+        .expect("authenticate import");
+        let mut reader = IoCursor::new(request_frame);
+        let mut writer = Vec::new();
+        run_pipe_session(&mut reader, &mut writer, Zeroizing::new(KEY))
+            .expect("run authenticated import session");
+        let mut response_reader = IoCursor::new(writer);
+        let response = read_frame(&mut response_reader, &KEY)
+            .expect("decode response frame")
+            .expect("one response frame");
+        assert!(response.kind == CommandKind::Import);
+        assert_eq!(response.sequence, 1);
+        assert!(
+            read_frame(&mut response_reader, &KEY)
+                .expect("response EOF")
+                .is_none()
+        );
+        let mut cursor = Cursor::new(&response.payload);
+        assert_eq!(cursor.take(1).expect("lease tag"), [1]);
+        let handle: [u8; HANDLE_BYTES] = cursor.array().expect("lease handle");
+        assert_ne!(handle, [0; HANDLE_BYTES]);
+        assert!(cursor.u64().expect("lease expiry") > 0);
+        assert_eq!(cursor.take(1).expect("bundle schema"), [1]);
+        assert_eq!(
+            cursor.text(MAX_SIGNER_BYTES).expect("wallet"),
+            "alice@wonderland"
+        );
+        let _authority = cursor.text(MAX_SIGNER_BYTES).expect("authority");
+        let _public_key = cursor.text(4_096).expect("authority public key");
+        assert_eq!(
+            cursor.text(MAX_PROTOCOL_BYTES).expect("protocol"),
+            "iroha-jindo-polynomial-commitment-v0"
+        );
+        assert_eq!(
+            cursor.text(128).expect("operation"),
+            "jindo_polynomial_evaluation_v1"
+        );
+        assert_eq!(
+            cursor.array::<DIGEST_BYTES>().expect("action digest"),
+            crate::privacy_wallet_bundle::privacy_wallet_bundle_public_action_digest_v1(
+                JINDO_PUBLIC_ACTION,
+            )
+        );
+        cursor.finish().expect("closed lease response");
+        assert!(
+            !response
+                .payload
+                .windows(JINDO_WITNESS.len())
+                .any(|window| window == JINDO_WITNESS),
+            "authenticated import response must not export witness bytes"
+        );
+    }
     fn import_now(vault: &mut WitnessVault, path: &Path) -> WitnessLease {
         vault
             .import_credential(ImportRequest {
                 credential_path: path.to_owned(),
                 binding: binding(),
+                canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
                 ttl_millis: 30_000,
             })
             .expect("import")
@@ -1841,6 +2016,7 @@ mod tests {
                 ImportRequest {
                     credential_path: second.clone(),
                     binding: binding(),
+                    canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
                     ttl_millis: 30_000,
                 },
                 NOW + 1,
@@ -1854,6 +2030,7 @@ mod tests {
                     ImportRequest {
                         credential_path: second,
                         binding: binding(),
+                        canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
                         ttl_millis: 30_000,
                     },
                     lease.expires_at_millis,
@@ -1871,6 +2048,7 @@ mod tests {
                     ImportRequest {
                         credential_path: path.clone(),
                         binding: binding(),
+                        canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
                         ttl_millis: ttl,
                     },
                     NOW,
@@ -1891,6 +2069,7 @@ mod tests {
                 ImportRequest {
                     credential_path: path,
                     binding: invalid,
+                    canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
                     ttl_millis: MIN_TTL_MILLIS,
                 },
                 NOW,
@@ -1957,6 +2136,26 @@ mod tests {
         assert_eq!(decoded.sequence, 1);
         assert!(decoded.payload.is_empty());
         assert_eq!(encode_frame(&decoded, &KEY).expect("re-encode"), encoded);
+    }
+    #[test]
+    fn authenticated_ipww_v1_downgrade_is_rejected_even_with_a_valid_tag() {
+        let mut encoded = encode_frame(
+            &AuthenticatedFrame {
+                kind: CommandKind::Ping,
+                sequence: 1,
+                payload: vec![],
+            },
+            &KEY,
+        )
+        .expect("encode IPWW v2 frame");
+        encoded[8] = 1;
+        let tag_offset = encoded.len() - AUTH_TAG_BYTES;
+        let tag = hmac_sha256(&KEY, &encoded[4..tag_offset]);
+        encoded[tag_offset..].copy_from_slice(&tag);
+        assert!(matches!(
+            decode_frame(&encoded, &KEY),
+            Err(WorkerError::InvalidFrame)
+        ));
     }
     #[test]
     fn tampering_wrong_key_trailing_bytes_and_bad_lengths_are_rejected() {
@@ -2160,7 +2359,43 @@ mod tests {
         );
     }
     #[test]
-    fn public_validation_failures_do_not_consume_but_native_bundle_failure_is_terminal() {
+    fn transaction_ttl_covers_slow_native_proving_but_remains_closed() {
+        let bundle = execution_bundle(JINDO_WITNESS);
+        let inspection = inspect_privacy_wallet_execution_bundle_v1(&bundle)
+            .expect("inspect canonical execution bundle");
+        let binding = binding();
+        let public_intent =
+            validate_canonical_public_intent(CANONICAL_JINDO_PUBLIC_INTENT, &binding)
+                .expect("validate canonical public intent");
+        let plan = validate_execution_plan_v1(
+            &canonical_execution_plan_with_ttl(MAX_TRANSACTION_TTL_MILLIS),
+            &binding,
+            &inspection.manifest,
+            &public_intent,
+        )
+        .expect("the reviewed maximum transaction lifetime is accepted");
+        assert_eq!(
+            plan.context.time_to_live,
+            Some(Duration::from_millis(MAX_TRANSACTION_TTL_MILLIS))
+        );
+        let creation_time_ms = plan.context.creation_time.as_millis();
+        let expires_at_ms = creation_time_ms + u128::from(MAX_TRANSACTION_TTL_MILLIS);
+        assert!(
+            expires_at_ms > creation_time_ms + 180_000,
+            "a transaction created before proving must remain live after a >120s proof"
+        );
+        assert!(matches!(
+            validate_execution_plan_v1(
+                &canonical_execution_plan_with_ttl(MAX_TRANSACTION_TTL_MILLIS + 1),
+                &binding,
+                &inspection.manifest,
+                &public_intent,
+            ),
+            Err(WorkerError::InvalidExecutionPlan)
+        ));
+    }
+    #[test]
+    fn public_validation_failures_do_not_consume_and_invalid_bundles_never_lease() {
         let directory = TempDir::new().expect("temp dir");
         let valid_path = execution_bundle_file(&directory, "valid", JINDO_WITNESS);
         let mut vault = WitnessVault::default();
@@ -2196,25 +2431,90 @@ mod tests {
             .expect("cancel preserved handle");
         let malformed_bundle =
             execution_bundle_file(&directory, "malformed-witness", br#"{"unexpected":true}"#);
-        let malformed_lease = import_now(&mut vault, &malformed_bundle);
-        let execute_payload = encode_execute_payload(
-            malformed_lease.handle,
-            &binding(),
-            CANONICAL_JINDO_PUBLIC_INTENT,
-            &canonical_execution_plan(),
-        )
-        .expect("execute payload");
         assert!(matches!(
-            dispatch(&mut vault, CommandKind::Execute, &execute_payload),
-            CommandResponse::Error(WorkerError::InvalidExecutionBundle)
+            vault.import_credential(ImportRequest {
+                credential_path: malformed_bundle,
+                binding: binding(),
+                canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
+                ttl_millis: 30_000,
+            }),
+            Err(WorkerError::InvalidExecutionBundle)
         ));
         assert!(
-            matches!(
-                vault.inspect(malformed_lease.handle, &binding()),
-                Err(WorkerError::UnknownHandle)
-            ),
-            "a native callback failure must remain terminal and non-retryable"
+            vault.entries.is_empty(),
+            "an invalid typed bundle must never create a readiness lease"
         );
+    }
+    #[test]
+    fn import_rejects_a_valid_bundle_for_a_different_bound_public_action() {
+        let directory = TempDir::new().expect("temp dir");
+        let path = execution_bundle_file(&directory, "valid-wrong-action", JINDO_WITNESS);
+        let wrong_intent = std::str::from_utf8(CANONICAL_JINDO_PUBLIC_INTENT)
+            .expect("canonical intent UTF-8")
+            .replace(
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "0100000000000000000000000000000000000000000000000000000000000000",
+            )
+            .into_bytes();
+        let wrong_binding =
+            binding_for_intent("iroha-jindo-polynomial-commitment-v0", &wrong_intent);
+        let mut vault = WitnessVault::default();
+        assert!(matches!(
+            vault.import_credential(ImportRequest {
+                credential_path: path,
+                binding: wrong_binding,
+                canonical_public_intent: wrong_intent,
+                ttl_millis: 30_000,
+            }),
+            Err(WorkerError::PublicActionMismatch)
+        ));
+        assert!(
+            vault.is_empty(),
+            "a valid bundle for another bound action must never create a handle"
+        );
+    }
+    #[test]
+    fn import_binding_distinguishes_both_zk_ams_operations_and_exact_actions() {
+        const BATCH: &str = "zk_ams_batch_admission_action_v1";
+        const PROVISION: &str = "zk_ams_provision_account_action_v1";
+        let batch_intent = canonical_zk_ams_public_intent(BATCH, "batch");
+        let provision_intent = canonical_zk_ams_public_intent(PROVISION, "provision");
+        let changed_batch_intent = canonical_zk_ams_public_intent(BATCH, "different-batch");
+        let batch_binding = binding_for_intent("iroha-zk-ams-v1", &batch_intent);
+        let provision_binding = binding_for_intent("iroha-zk-ams-v1", &provision_intent);
+        let changed_batch_binding = binding_for_intent("iroha-zk-ams-v1", &changed_batch_intent);
+        let batch =
+            validate_canonical_public_intent(&batch_intent, &batch_binding).expect("batch intent");
+        let provision = validate_canonical_public_intent(&provision_intent, &provision_binding)
+            .expect("provision intent");
+        let changed_batch =
+            validate_canonical_public_intent(&changed_batch_intent, &changed_batch_binding)
+                .expect("changed batch intent");
+        let (_, public_key, authority) = test_signer();
+        let inspection = InspectedPrivacyWalletExecutionBundleV1 {
+            manifest: PrivacyWalletExecutionBundleManifestV1 {
+                schema_version: 1,
+                wallet_id: "alice@wonderland".to_owned(),
+                authority,
+                public_key,
+                protocol_id: PrivacyProtocolIdV1::IrohaZkAmsV1,
+                operation_schema: BATCH,
+            },
+            public_action_digest:
+                crate::privacy_wallet_bundle::privacy_wallet_bundle_public_action_digest_v1(
+                    br#"{"kind":"batch"}"#,
+                ),
+        };
+        validate_import_inspection(&batch_binding, &batch, &inspection)
+            .expect("matching batch import");
+        assert!(matches!(
+            validate_import_inspection(&provision_binding, &provision, &inspection),
+            Err(WorkerError::WrongBinding)
+        ));
+        assert!(matches!(
+            validate_import_inspection(&changed_batch_binding, &changed_batch, &inspection),
+            Err(WorkerError::PublicActionMismatch)
+        ));
     }
     #[test]
     fn forged_ipc_time_never_releases_or_consumes() {
@@ -2227,6 +2527,7 @@ mod tests {
                 ImportRequest {
                     credential_path: path,
                     binding: binding(),
+                    canonical_public_intent: CANONICAL_JINDO_PUBLIC_INTENT.to_vec(),
                     ttl_millis: 30_000,
                 },
                 now,

@@ -93,10 +93,11 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_primitives::{json::Json, numeric::NumericOperationError};
 #[cfg(test)]
 use iroha_torii::sorafs::api::StorageStoredFileDto;
+#[cfg(any(target_os = "linux", test))]
+use iroha_torii::sorafs::site::{decode_content_cid, encode_content_cid};
 use iroha_torii::sorafs::{
     EndpointKind, ProviderAdvertCache, ReplicationOrderV1, TransportProtocol,
     api::StorageManifestResponseDto,
-    site::{decode_content_cid, encode_content_cid},
 };
 use ivm::{
     CoreHost, IVM, IVMHost, Memory, PointerType, PreparedContract, RuntimeTemplate, VMError,
@@ -115,14 +116,16 @@ use rand::{
     rand_core::{TryCryptoRng, TryRngCore as _},
     rngs::OsRng,
 };
+#[cfg(any(target_os = "linux", test))]
+use sorafs_car::bundle_archive::{
+    BundleArchiveEntry, BundleArchiveEntryKind, BundleArchiveLimits, visit_gzip_ustar,
+};
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarWriter, FilePlan,
-    bundle_archive::{
-        BundleArchiveEntry, BundleArchiveEntryKind, BundleArchiveLimits, visit_gzip_ustar,
-    },
-    compute_chunk_plan_digest_sha3, compute_por_root,
+    CarBuildPlan, CarChunk, CarWriter, FilePlan, compute_chunk_plan_digest_sha3, compute_por_root,
 };
 use sorafs_node::store::{StorageBackend, StoredManifest};
+#[cfg(any(target_os = "linux", test))]
+use std::net::{Shutdown, TcpListener};
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd as _, OwnedFd};
 #[cfg(target_os = "linux")]
@@ -136,7 +139,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Read as _, Seek as _, Write as _},
-    net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs},
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
@@ -166,10 +169,15 @@ const INROU_HOST_HEARTBEAT_TTL_FLOOR_MS: u64 = 300_000;
 const INROU_HOST_HEARTBEAT_REFRESH_MARGIN_FLOOR_MS: u64 = 60_000;
 const INROU_PLACEMENT_RECONCILE_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const SORACLOUD_LOCAL_READ_MAX_SNAPSHOT_LAG_BLOCKS: u64 = 64;
+#[cfg(target_os = "linux")]
 const INROU_PORTABLE_START_GRACE_FLOOR: Duration = Duration::from_secs(180);
+#[cfg(any(target_os = "linux", test))]
 const INROU_PORTABLE_BUNDLE_BLOCK_MEMBER: &str = "inrou_bundle.raw";
+#[cfg(any(target_os = "linux", test))]
 const INROU_PORTABLE_BUNDLE_DEVICE_SERIAL: &str = "sora_bundle";
+#[cfg(any(target_os = "linux", test))]
 const INROU_PORTABLE_BLOCK_SECTOR_BYTES: usize = 512;
+#[cfg(any(target_os = "linux", test))]
 const INROU_PORTABLE_BUNDLE_GUEST_ROOT: &str = "/var/lib/soracloud/materialization/bundle";
 #[cfg(target_os = "linux")]
 const INROU_SHARED_VOLUME_GUEST_UID: u32 = 1_000;
@@ -196,8 +204,11 @@ const SORACLOUD_REMOTE_HYDRATION_MAX_IN_MEMORY_PAYLOAD_BYTES: u64 = 256 * 1024 *
 const SORACLOUD_LOCAL_HYDRATION_STREAM_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 const SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1: usize = 10_000;
 const SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
+#[cfg(target_os = "linux")]
 const SORACLOUD_INROU_HOST_COMMAND_STDOUT_MAX_BYTES: usize = 64 * 1024;
+#[cfg(target_os = "linux")]
 const SORACLOUD_INROU_BACKEND_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QMP_MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -224,9 +235,13 @@ const SORACLOUD_INROU_IP6TABLES_CHAIN_MARKER: &str = "iroha-inrou6-owned-v1";
 const SORACLOUD_INROU_IPTABLES_LOCK_PATH: &str = "/run/iroha-inrou-firewall-v1.lock";
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_IPTABLES_MAX_OWNED_JUMPS: usize = 4;
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_PROXY_MAX_CONNECTIONS: usize = 256;
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_PROXY_SESSION_STACK_BYTES: usize = 256 * 1024;
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_PROXY_IO_POLL: Duration = Duration::from_millis(250);
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_PROXY_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QMP_IO_POLL: Duration = Duration::from_millis(100);
@@ -234,13 +249,16 @@ const SORACLOUD_INROU_QMP_IO_POLL: Duration = Duration::from_millis(100);
 const SORACLOUD_INROU_QMP_SESSION_ATTEST_TIMEOUT: Duration = Duration::from_secs(2);
 const SORACLOUD_INROU_CHILD_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const SORACLOUD_INROU_LOG_DRAIN_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_PRIMARY_ID_MIN: u32 = 65_536;
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE: u32 = 524_288;
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_SERVICE_IDENTITY_NAME: &str = "iroha-inrou";
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_SERVICE_HOME: &str = "/nonexistent";
 // Linux misc-device major 10, KVM minor 232 in the kernel dev_t encoding.
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_KVM_DEVICE_RDEV: u64 = (10_u64 << 8) | 232_u64;
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QEMU_SANDBOX_POLICY: &str =
@@ -335,12 +353,14 @@ for inrou_fd_path in /proc/self/fd/*; do
     eval "exec ${inrou_fd}>&-" || exit 125
 done
 exec "$@""#;
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_LOG_TRUNCATION_MARKER: &[u8] =
     b"\n[Inrou runtime log truncated at the configured safety limit]\n";
 const SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_REPLICAS: usize = 4_096;
 const SORACLOUD_RUNTIME_STATE_MAX_STRING_BYTES: usize = 4 * 1024;
+#[cfg(target_os = "linux")]
 const SORACLOUD_INROU_BOOTSTRAP_USER_DATA_MAX_BYTES: u64 = 1024 * 1024;
 const SORACLOUD_RUNTIME_STDERR_TAIL_BYTES: u64 = 64 * 1024;
 const SORACLOUD_HF_RUNNER_RESPONSE_OVERHEAD_BYTES: u64 = 64 * 1024;
@@ -968,6 +988,7 @@ fn current_host_inrou_guest_isa() -> SoraInrouGuestIsaV1 {
     #[allow(unreachable_code)]
     SoraInrouGuestIsaV1::Aarch64
 }
+#[cfg(any(target_os = "linux", test))]
 fn portable_vm_guest_machine_profile(
     guest_isa: SoraInrouGuestIsaV1,
 ) -> PortableVmGuestMachineProfile {
@@ -4581,6 +4602,7 @@ struct VerifiedRemoteManifest {
     chunk_count: usize,
     chunker_handle: String,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SorafsHydratedFileLayout {
     path: Vec<String>,
@@ -7471,6 +7493,7 @@ impl SoracloudRuntimeManager {
         }
         Ok(None)
     }
+    #[cfg(target_os = "linux")]
     fn read_committed_sorafs_directory_payload_by_digest(
         &self,
         view: &StateView<'_>,
@@ -7544,6 +7567,7 @@ impl SoracloudRuntimeManager {
             expected_manifest_cid,
         )
     }
+    #[cfg(target_os = "linux")]
     fn read_committed_remote_sorafs_directory_payload(
         &self,
         remote_sources: &[RemoteHydrationSource],
@@ -7667,6 +7691,7 @@ impl SoracloudRuntimeManager {
         }
         Ok(None)
     }
+    #[cfg(target_os = "linux")]
     fn hydrate_operator_preseed_inrou_guest_image_artifact(
         &self,
         bundle_root: &Path,
@@ -7713,6 +7738,7 @@ impl SoracloudRuntimeManager {
         })?;
         Ok(true)
     }
+    #[cfg(target_os = "linux")]
     fn hydrate_published_inrou_guest_image_artifact(
         &self,
         bundle_root: &Path,
@@ -13141,6 +13167,7 @@ fn remove_hf_local_runner_worker_if_same(
         workers.remove(source_id);
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn open_inrou_runtime_log(path: &Path, label: &str) -> io::Result<fs::File> {
     let named = match fs::symlink_metadata(path) {
         Ok(metadata) => Some(metadata),
@@ -13224,6 +13251,7 @@ fn open_inrou_runtime_log(path: &Path, label: &str) -> io::Result<fs::File> {
     file.set_len(0)?;
     Ok(file)
 }
+#[cfg(any(target_os = "linux", test))]
 fn drain_inrou_runtime_log_bounded(mut reader: impl io::Read, mut log: fs::File) -> io::Result<()> {
     let payload_limit = SORACLOUD_INROU_LOG_MAX_BYTES
         .saturating_sub(SORACLOUD_INROU_LOG_TRUNCATION_MARKER.len() as u64);
@@ -13262,6 +13290,7 @@ fn drain_inrou_runtime_log_bounded(mut reader: impl io::Read, mut log: fs::File)
     }
     Ok(())
 }
+#[cfg(target_os = "linux")]
 fn spawn_inrou_runtime_log_drain(
     reader: impl io::Read + Send + 'static,
     log: fs::File,
@@ -13275,6 +13304,7 @@ fn spawn_inrou_runtime_log_drain(
             }
         })
 }
+#[cfg(target_os = "linux")]
 fn attach_inrou_runtime_log_drains(
     child: &mut std::process::Child,
     stderr_log: fs::File,
@@ -13710,6 +13740,7 @@ impl Drop for HfLocalRunnerWorker {
     }
 }
 impl HostedHttpWorker {
+    #[cfg(target_os = "linux")]
     fn new(
         cache_key: HostedHttpWorkerCacheKey,
         child: std::process::Child,
@@ -14118,10 +14149,12 @@ fn build_hosted_http_service_volume_dir(
         })
         .join(storage_path_component(volume_name))
 }
+#[cfg(any(target_os = "linux", test))]
 struct InrouSharedFilesystemMount {
     mount_path: String,
     kind: InrouSharedFilesystemMountKind,
 }
+#[cfg(any(target_os = "linux", test))]
 enum InrouSharedFilesystemMountKind {
     #[allow(dead_code)]
     Nfs {
@@ -14140,6 +14173,7 @@ struct InrouLeaseFsExport {
     mount_path: String,
     host_path: PathBuf,
 }
+#[cfg(any(target_os = "linux", test))]
 struct PortableVmLeaseDisk {
     mount_path: String,
     image_path: PathBuf,
@@ -14149,6 +14183,7 @@ struct PortableVmLeaseDisk {
     mount_options: String,
     initialize_filesystem: bool,
 }
+#[cfg(any(target_os = "linux", test))]
 struct PortableVmNetworkPlan {
     netdev: String,
     listen_base_url: String,
@@ -14156,12 +14191,14 @@ struct PortableVmNetworkPlan {
     backend_reservation: TcpListener,
     expected_backend: SocketAddr,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PortableVmChildIdentity {
     uid: u32,
     gid: u32,
     supplementary_gids: Vec<u32>,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PortableVmKvmDeviceAccess {
     uid: u32,
@@ -14222,7 +14259,9 @@ const SORACLOUD_INROU_IPTABLES_CHAINS: [InrouOwnedIptablesChain; 3] = [
         family: InrouIptablesFamily::Ipv6,
     },
 ];
+#[cfg(any(target_os = "linux", test))]
 type PortableVmBackendAttestor = Arc<dyn Fn(SocketAddr, &AtomicBool) -> bool + Send + Sync>;
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Copy)]
 struct PortableVmGuestMachineProfile {
     emulator_candidates: &'static [&'static str],
@@ -14232,6 +14271,7 @@ struct PortableVmGuestMachineProfile {
     block_device: &'static str,
     net_device: &'static str,
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Copy)]
 struct PortableVmBundleBinding {
     expected_hash: Hash,
@@ -14275,13 +14315,6 @@ impl InrouTapNetworkAttachment {
         })
     }
 }
-#[cfg(not(target_os = "linux"))]
-impl InrouTapNetworkAttachment {
-    fn cleanup(&mut self) {}
-    fn accounted_egress_bytes(&self) -> io::Result<u64> {
-        Ok(0)
-    }
-}
 #[allow(dead_code)]
 fn resolve_inrou_mke2fs_executable() -> Option<PathBuf> {
     resolve_executable_candidates(&["mke2fs", "mkfs.ext4"]).or_else(|| {
@@ -14290,6 +14323,7 @@ fn resolve_inrou_mke2fs_executable() -> Option<PathBuf> {
             .find_map(|candidate| resolve_executable_candidate(&candidate))
     })
 }
+#[cfg(target_os = "linux")]
 fn resolve_inrou_qemu_img_executable() -> Option<PathBuf> {
     resolve_executable_candidates(&["qemu-img"])
 }
@@ -14392,6 +14426,7 @@ fn is_root_owned_executable_path(candidate: &Path) -> bool {
         })
     })
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_portable_vm_kvm_identity(
     identity: &PortableVmChildIdentity,
     device: PortableVmKvmDeviceAccess,
@@ -14428,6 +14463,7 @@ fn validate_portable_vm_kvm_identity(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_portable_vm_child_identity_values(
     identity: &PortableVmChildIdentity,
 ) -> eyre::Result<()> {
@@ -14453,6 +14489,7 @@ fn validate_portable_vm_child_identity_values(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn inrou_supplementary_gid_is_host_reserved(gid: u32) -> bool {
     matches!(gid, 65_534 | 65_535)
         || (60_001..=60_705).contains(&gid)
@@ -14990,6 +15027,7 @@ fn resolve_inrou_rpc_nfsd_executable() -> Option<PathBuf> {
 fn resolve_inrou_mount_executable() -> Option<PathBuf> {
     resolve_executable_on_path("mount")
 }
+#[cfg(any(target_os = "linux", test))]
 fn resolve_inrou_bundle_member_path(
     bundle_root: &Path,
     declared_path: &str,
@@ -15837,6 +15875,7 @@ fn install_staged_inrou_disk(
     )?;
     validate_reusable_inrou_disk(final_path, exact_bytes)
 }
+#[cfg(any(target_os = "linux", test))]
 fn inrou_rootfs_base_binding(
     bundle: &SoraDeploymentBundleV1,
     plan: &SoracloudRuntimeInrouPlan,
@@ -15965,6 +16004,7 @@ fn ensure_inrou_root_disk(
     }
     Ok(root_disk_path)
 }
+#[cfg(any(target_os = "linux", test))]
 fn ensure_inrou_portable_root_disk(
     qemu_img: &Path,
     base_rootfs_image_path: &Path,
@@ -16136,6 +16176,7 @@ fn ensure_inrou_leasefs_exports(
     }
     Ok(exports)
 }
+#[cfg(any(target_os = "linux", test))]
 fn ensure_inrou_portable_lease_disks(
     qemu_img: &Path,
     plan: &SoracloudRuntimeServicePlan,
@@ -16205,6 +16246,7 @@ fn ensure_inrou_portable_lease_disks(
     }
     Ok(disks)
 }
+#[cfg(target_os = "linux")]
 fn build_inrou_portable_shared_filesystem_mounts(
     lease_disks: &[PortableVmLeaseDisk],
 ) -> Vec<InrouSharedFilesystemMount> {
@@ -16221,10 +16263,12 @@ fn build_inrou_portable_shared_filesystem_mounts(
         })
         .collect()
 }
+#[cfg(any(target_os = "linux", test))]
 fn portable_vm_block_device_serial(volume_name: &str) -> String {
     let sanitized = sanitize_path_component(volume_name);
     format!("sora-{sanitized}").chars().take(20).collect()
 }
+#[cfg(any(target_os = "linux", test))]
 fn build_portable_vm_network_plan(
     guest_port: u16,
     firewall_plan: &InrouTapFirewallPlan,
@@ -16940,6 +16984,7 @@ impl PortableVmLoopbackProxy {
         Self::start_with_attestor(public_listener, backend, attestor)
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn start_with_attestor(
         public_listener: TcpListener,
         backend: SocketAddr,
@@ -17038,6 +17083,7 @@ impl Drop for PortableVmLoopbackProxy {
         self.stop();
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn proxy_portable_vm_connection(
     client: TcpStream,
     backend: SocketAddr,
@@ -17093,6 +17139,7 @@ fn proxy_portable_vm_connection(
         let _ = upstream.join();
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn proxy_portable_vm_direction(
     mut reader: TcpStream,
     mut writer: TcpStream,
@@ -17128,6 +17175,7 @@ fn proxy_portable_vm_direction(
     let _ = reader.shutdown(Shutdown::Both);
     let _ = writer.shutdown(Shutdown::Both);
 }
+#[cfg(any(target_os = "linux", test))]
 fn write_inrou_proxy_buffer_bounded(
     writer: &mut TcpStream,
     mut payload: &[u8],
@@ -17198,6 +17246,7 @@ fn write_inrou_cloud_init_documents(
         .wrap_err("write Inrou cloud-init user-data")?;
     Ok(seed_root)
 }
+#[cfg(any(target_os = "linux", test))]
 fn stage_portable_vm_bundle_block_device(
     materialization_dir: &Path,
     bundle_cache_path: &Path,
@@ -17231,18 +17280,22 @@ fn stage_portable_vm_bundle_block_device(
         .wrap_err_with(|| format!("stage verified bundle block {}", bundle_path.display()))?;
     Ok((bundle_path, exact_bytes))
 }
+#[cfg(any(target_os = "linux", test))]
 fn portable_vm_kernel_cmdline(profile: PortableVmGuestMachineProfile) -> String {
     format!(
         "console={} root=LABEL={} rw rootwait rootfstype=ext4 panic=1",
         profile.serial_console, profile.root_label
     )
 }
+#[cfg(target_os = "linux")]
 fn portable_vm_vcpu_count(resources: &iroha_data_model::soracloud::SoraResourceLimitsV1) -> u32 {
     u32::from(resources.cpu_millis.get()).div_ceil(1_000).max(1)
 }
+#[cfg(target_os = "linux")]
 fn portable_vm_memory_mib(resources: &iroha_data_model::soracloud::SoraResourceLimitsV1) -> u64 {
     resources.memory_bytes.get().div_ceil(1024 * 1024).max(128)
 }
+#[cfg(any(target_os = "linux", test))]
 fn append_portable_vm_drive(
     command: &mut Command,
     profile: PortableVmGuestMachineProfile,
@@ -17263,6 +17316,7 @@ fn append_portable_vm_drive(
         None,
     )
 }
+#[cfg(any(target_os = "linux", test))]
 fn append_portable_vm_drive_with_serial(
     command: &mut Command,
     profile: PortableVmGuestMachineProfile,
@@ -17291,6 +17345,7 @@ fn append_portable_vm_drive_with_serial(
         .arg(device);
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn append_portable_vm_vvfat_drive(
     command: &mut Command,
     profile: PortableVmGuestMachineProfile,
@@ -17306,6 +17361,7 @@ fn append_portable_vm_vvfat_drive(
         .arg(format!("{},drive=seed", profile.block_device));
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn qemu_option_path(path: &Path) -> eyre::Result<String> {
     let path = path
         .to_str()
@@ -17912,6 +17968,7 @@ fn run_inrou_qemu_command_capture_stdout_bounded(
     let borrowed = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_host_command_capture_stdout_bounded(setpriv, &borrowed, timeout, maximum_stdout_bytes)
 }
+#[cfg(any(target_os = "linux", test))]
 fn drain_host_command_stdout_bounded(
     mut reader: impl io::Read,
     maximum_bytes: usize,
@@ -17943,6 +18000,7 @@ fn drain_host_command_stdout_bounded(
     }
     Ok((output, truncated))
 }
+#[cfg(any(target_os = "linux", test))]
 fn run_host_command_capture_stdout_bounded(
     program: &Path,
     args: &[&str],
@@ -17965,6 +18023,7 @@ fn run_host_command_capture_stdout_bounded(
     }
     Ok(output)
 }
+#[cfg(any(target_os = "linux", test))]
 fn run_host_command_capture_stdout_status_bounded(
     program: &Path,
     args: &[&str],
@@ -18054,6 +18113,7 @@ fn run_host_command_capture_stdout_status_bounded(
     }
     Ok((status, output))
 }
+#[cfg(any(target_os = "linux", test))]
 fn finish_inrou_stdout_drain_bounded(
     drain: thread::JoinHandle<io::Result<(Vec<u8>, bool)>>,
 ) -> eyre::Result<(Vec<u8>, bool)> {
@@ -18197,6 +18257,7 @@ fn build_inrou_network_config(network_attachment: &InrouTapNetworkAttachment) ->
         network_attachment.guest_ip, network_attachment.host_ip, nameserver_yaml
     )
 }
+#[cfg(any(target_os = "linux", test))]
 fn build_inrou_portable_network_config() -> String {
     String::from(concat!(
         "version: 2\n",
@@ -18208,6 +18269,7 @@ fn build_inrou_portable_network_config() -> String {
         "    dhcp6: false\n"
     ))
 }
+#[cfg(any(target_os = "linux", test))]
 fn build_inrou_user_data(
     plan: &SoracloudRuntimeServicePlan,
     cache_key: &HostedHttpWorkerCacheKey,
@@ -18737,6 +18799,7 @@ fn build_inrou_user_data(
     }
     Ok(user_data)
 }
+#[cfg(any(target_os = "linux", test))]
 fn yaml_block_literal(contents: &str, indent: usize) -> String {
     let padding = " ".repeat(indent);
     let mut output = String::new();
@@ -18747,9 +18810,11 @@ fn yaml_block_literal(contents: &str, indent: usize) -> String {
     }
     output
 }
+#[cfg(any(target_os = "linux", test))]
 fn yaml_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
+#[cfg(any(target_os = "linux", test))]
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
@@ -18798,6 +18863,7 @@ fn sanitize_env_var_component(value: &str) -> String {
         sanitized
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn ensure_native_bundle_extracted(
     bundle_cache_path: &Path,
     bundle_hash: Hash,
@@ -18878,6 +18944,7 @@ fn ensure_native_bundle_extracted(
     }
     transaction_result
 }
+#[cfg(any(target_os = "linux", test))]
 fn inrou_bundle_archive_limits(
     config: &iroha_config::parameters::actual::SoracloudRuntimeInrou,
     bundle_cache_max_bytes: u64,
@@ -18893,6 +18960,7 @@ fn inrou_bundle_archive_limits(
         max_total_file_bytes: config.bundle_archive_max_total_file_bytes.get(),
     }
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InrouMaterializationDirectoryIdentity {
     #[cfg(unix)]
@@ -18900,6 +18968,7 @@ struct InrouMaterializationDirectoryIdentity {
     #[cfg(unix)]
     inode: u64,
 }
+#[cfg(any(target_os = "linux", test))]
 impl InrouMaterializationDirectoryIdentity {
     fn inspect(path: &Path) -> io::Result<Self> {
         let metadata = fs::symlink_metadata(path)?;
@@ -18997,6 +19066,7 @@ fn read_inrou_qmp_command_response(
         "Inrou QMP did not return command id `{expected_id}` within its bounded message window"
     )
 }
+#[cfg(any(target_os = "linux", test))]
 fn parse_inrou_qmp_usernet_forward(
     output: &str,
     expected_guest_port: u16,
@@ -19303,6 +19373,7 @@ fn query_inrou_qmp_host_forward(
     }
     Ok((forward, control))
 }
+#[cfg(any(target_os = "linux", test))]
 fn random_inrou_materialization_path(
     parent: &Path,
     root_name: &str,
@@ -19327,6 +19398,7 @@ fn random_inrou_materialization_path(
         "failed to allocate a unique Inrou materialization transaction path",
     ))
 }
+#[cfg(any(target_os = "linux", test))]
 fn create_unique_inrou_materialization_directory(
     parent: &Path,
     root_name: &str,
@@ -19364,6 +19436,7 @@ fn create_unique_inrou_materialization_directory(
         "failed to create a unique Inrou materialization transaction directory",
     ))
 }
+#[cfg(any(target_os = "linux", test))]
 fn recover_interrupted_inrou_bundle_swap(
     parent: &Path,
     root_name: &str,
@@ -19420,6 +19493,7 @@ fn recover_interrupted_inrou_bundle_swap(
     }
     sync_directory_if_supported(parent)
 }
+#[cfg(any(target_os = "linux", test))]
 fn materialize_inrou_bundle_entry(
     staging_root: &Path,
     entry: &BundleArchiveEntry,
@@ -19471,6 +19545,7 @@ fn materialize_inrou_bundle_entry(
     }
     sync_directory_if_supported(&parent).map_err(|error| io::Error::other(error.to_string()))
 }
+#[cfg(any(target_os = "linux", test))]
 fn create_or_validate_inrou_staging_directory(path: &Path) -> io::Result<()> {
     match fs::create_dir(path) {
         Ok(()) => {
@@ -19492,6 +19567,7 @@ fn create_or_validate_inrou_staging_directory(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn install_staged_inrou_bundle(
     staging_root: &Path,
     staging_identity: InrouMaterializationDirectoryIdentity,
@@ -19559,6 +19635,7 @@ fn install_staged_inrou_bundle(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn remove_owned_inrou_materialization_directory(
     path: &Path,
     expected_identity: InrouMaterializationDirectoryIdentity,
@@ -19574,6 +19651,7 @@ fn remove_owned_inrou_materialization_directory(
     fs::remove_dir_all(path)
         .wrap_err_with(|| format!("remove owned Inrou transaction path {}", path.display()))
 }
+#[cfg(any(target_os = "linux", test))]
 fn ensure_inrou_entrypoint_present(bundle_root: &Path, entrypoint: &str) -> eyre::Result<()> {
     let entrypoint_path = resolve_inrou_bundle_member_path(bundle_root, entrypoint)?;
     #[cfg(unix)]
@@ -20381,6 +20459,7 @@ fn parse_sorafs_manifest_digest_hex(raw: &str) -> eyre::Result<[u8; 32]> {
     }
     Ok(digest)
 }
+#[cfg(target_os = "linux")]
 fn parse_canonical_sorafs_content_cid(raw: &str) -> eyre::Result<Vec<u8>> {
     const MAX_CONTENT_CID_TEXT_BYTES: usize = 512;
     if raw.is_empty() || raw.len() > MAX_CONTENT_CID_TEXT_BYTES {
@@ -20395,6 +20474,7 @@ fn parse_canonical_sorafs_content_cid(raw: &str) -> eyre::Result<Vec<u8>> {
     }
     Ok(cid)
 }
+#[cfg(any(target_os = "linux", test))]
 fn canonical_inrou_bundle_member_components(declared_path: &str) -> eyre::Result<Vec<String>> {
     const MAX_COMPONENTS: usize = 64;
     const MAX_PATH_BYTES: usize = 256;
@@ -20429,6 +20509,7 @@ fn canonical_inrou_bundle_member_components(declared_path: &str) -> eyre::Result
     }
     Ok(components)
 }
+#[cfg(any(target_os = "linux", test))]
 fn canonical_published_inrou_member_components(declared_path: &str) -> eyre::Result<Vec<String>> {
     const MAX_COMPONENTS: usize = 64;
     const MAX_COMPONENT_BYTES: usize = 255;
@@ -20469,6 +20550,7 @@ fn canonical_published_inrou_member_components(declared_path: &str) -> eyre::Res
     }
     Ok(components)
 }
+#[cfg(any(target_os = "linux", test))]
 fn is_portable_inrou_member_component(component: &str) -> bool {
     if !component.is_ascii()
         || component.is_empty()
@@ -20499,6 +20581,7 @@ fn is_portable_inrou_member_component(component: &str) -> bool {
     }
     true
 }
+#[cfg(any(target_os = "linux", test))]
 fn validate_published_inrou_guest_image_files(
     plan: &SoracloudRuntimeInrouPlan,
     files: &[SorafsHydratedFileLayout],
@@ -20576,6 +20659,7 @@ fn validate_remote_hydration_file_plan(
     }
     Ok(())
 }
+#[cfg(target_os = "linux")]
 fn canonical_remote_hydration_file_layouts(
     plan: &RemoteHydrationPlan,
     car_plan: &CarBuildPlan,
@@ -20598,12 +20682,14 @@ fn canonical_remote_hydration_file_layouts(
         })
         .collect()
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug)]
 struct SorafsStreamMaterializationFile {
     target: PathBuf,
     offset: u64,
     size: u64,
 }
+#[cfg(any(target_os = "linux", test))]
 fn plan_operator_preseed_sorafs_files(
     files: &[SorafsHydratedFileLayout],
     target_root: &Path,
@@ -20702,6 +20788,7 @@ fn plan_operator_preseed_sorafs_files(
     }
     Ok(planned)
 }
+#[cfg(target_os = "linux")]
 fn create_real_sorafs_directory_chain(root: &Path, directory: &Path) -> eyre::Result<()> {
     ensure_existing_directory_is_not_symlink(root, "operator-preseed materialization root")?;
     let relative = directory.strip_prefix(root).map_err(|_| {
@@ -20743,6 +20830,7 @@ fn create_real_sorafs_directory_chain(root: &Path, directory: &Path) -> eyre::Re
     }
     Ok(())
 }
+#[cfg(target_os = "linux")]
 fn materialize_operator_preseed_sorafs_files(
     store: &StorageBackend,
     manifest: &StoredManifest,
@@ -20856,6 +20944,7 @@ fn materialize_operator_preseed_sorafs_files(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn materialize_sorafs_payload_files(
     payload: &[u8],
     files: &[SorafsHydratedFileLayout],
@@ -20964,12 +21053,14 @@ fn materialize_sorafs_payload_files(
     }
     materialize_sorafs_directory_transaction(payload, &planned, target_root, maximum_total_bytes)
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug)]
 struct SorafsMaterializationFile {
     target: PathBuf,
     start: usize,
     end: usize,
 }
+#[cfg(any(target_os = "linux", test))]
 fn materialize_sorafs_directory_transaction(
     payload: &[u8],
     planned: &[SorafsMaterializationFile],
@@ -21078,6 +21169,7 @@ fn materialize_sorafs_directory_transaction(
     }
     transaction_result
 }
+#[cfg(any(target_os = "linux", test))]
 fn recover_sorafs_materialization_swap(
     payload: &[u8],
     planned: &[SorafsMaterializationFile],
@@ -21118,6 +21210,7 @@ fn recover_sorafs_materialization_swap(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn sorafs_materialization_matches(
     payload: &[u8],
     planned: &[SorafsMaterializationFile],
@@ -21147,6 +21240,7 @@ fn sorafs_materialization_matches(
     }
     Ok(true)
 }
+#[cfg(any(target_os = "linux", test))]
 fn soracloud_file_matches_bytes(path: &Path, expected: &[u8]) -> io::Result<bool> {
     let (mut file, fingerprint) =
         open_soracloud_regular_file_no_follow(path, "existing SoraFS materialization member")?;
@@ -21172,6 +21266,7 @@ fn soracloud_file_matches_bytes(path: &Path, expected: &[u8]) -> io::Result<bool
     Ok(same_soracloud_regular_file(&fingerprint, &opened_after)
         && same_soracloud_regular_file(&opened_after, &named_after))
 }
+#[cfg(any(target_os = "linux", test))]
 fn copy_sorafs_materialization_tree(
     source: &Path,
     destination: &Path,
@@ -21242,6 +21337,7 @@ fn copy_sorafs_materialization_tree(
     sync_directory_if_supported(destination)?;
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn ensure_existing_directory_is_not_symlink(path: &Path, label: &str) -> eyre::Result<()> {
     let metadata = fs::symlink_metadata(path).wrap_err_with(|| format!("inspect {label}"))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -21249,6 +21345,7 @@ fn ensure_existing_directory_is_not_symlink(path: &Path, label: &str) -> eyre::R
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn remove_owned_materialization_directory(path: &Path) -> eyre::Result<()> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("inspect owned SoraFS transaction path {}", path.display()))?;
@@ -21271,6 +21368,7 @@ fn sync_directory_if_supported(path: &Path) -> eyre::Result<()> {
 fn sync_directory_if_supported(_path: &Path) -> eyre::Result<()> {
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
 fn sorafs_hydrated_file_target(root: &Path, components: &[String]) -> eyre::Result<PathBuf> {
     if components.is_empty() {
         eyre::bail!("published SoraFS directory artifact file path must not be empty");

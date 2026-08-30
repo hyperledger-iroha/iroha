@@ -507,7 +507,7 @@ mod tests {
         let attestation_report_hash = Hash::new(&attestation_report);
         let evidence = b"offline-attestation-roundtrip-evidence".to_vec();
         OfflineDeviceAttestationRegistration {
-            version: 1,
+            version: 2,
             platform: "android-keymint".to_owned(),
             key_id: "offline-attestation-roundtrip-key".to_owned(),
             device_id: "offline-attestation-roundtrip-device".to_owned(),
@@ -518,6 +518,25 @@ mod tests {
             ios_environment: None,
             android_package_name: Some("org.hyperledger.iroha.roundtrip".to_owned()),
             android_signing_certificate_sha256: Some(vec![0x51; 32]),
+            android_attested_device_properties: Some(
+                crate::offline::OfflineAndroidAttestedDevicePropertiesV2 {
+                    version: crate::offline::OFFLINE_ANDROID_ATTESTED_DEVICE_PROPERTIES_VERSION_V2,
+                    attestation_version: 300,
+                    keymint_version: 300,
+                    security_level: crate::offline::OfflineAndroidDeviceSecurityLevelV2::StrongBox,
+                    brand: "google".to_owned(),
+                    device: "husky".to_owned(),
+                    product: "husky".to_owned(),
+                    manufacturer: "Google".to_owned(),
+                    model: "Pixel 8 Pro".to_owned(),
+                    os_version: 140_000,
+                    os_patch_level: 202_608,
+                    vendor_patch_level: 20_260_805,
+                    boot_patch_level: 20_260_801,
+                    verified_boot_key: vec![0x42; 32],
+                    verified_boot_hash: [0x24; 32],
+                },
+            ),
             public_key,
             assertion_scheme: "android-keymint".to_owned(),
             assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),

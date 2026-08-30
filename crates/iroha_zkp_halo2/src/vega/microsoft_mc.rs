@@ -38,6 +38,16 @@ mod verify;
 #[path = "microsoft_mc/wire.rs"]
 mod wire;
 
+/// Test-only access to the compatibility boundary's dependency-free SHA-256.
+///
+/// Keeping this adapter here prevents sibling protocol tests from depending on
+/// the private Microsoft wire implementation or introducing a second hashing
+/// dependency merely to freeze deterministic fixtures.
+#[cfg(test)]
+pub(in crate::vega) fn dependency_free_sha256_for_tests(input: &[u8]) -> [u8; 32] {
+    sha256::sha256(input).expect("in-memory test fixture fits SHA-256 length bounds")
+}
+
 static GOVERNED_FIGURE9_ARTIFACTS: GovernedFigure9ArtifactSlots =
     GovernedFigure9ArtifactSlots::new();
 

@@ -37,6 +37,15 @@ internal object TransportSecurity {
         body: ByteArray?,
     ) {
         if (!isSensitive(headers, body)) return
+        requireAuthenticatedHttpRequestAllowed(context, baseUri, targetUri)
+    }
+
+    /** Reject a request whose authentication is carried inside an opaque binary body. */
+    fun requireAuthenticatedHttpRequestAllowed(
+        context: String,
+        baseUri: URI,
+        targetUri: URI,
+    ) {
         val targetScheme = normalize(targetUri.scheme)
         require(targetScheme == "https") {
             "$context refuses insecure transport over ${renderScheme(targetScheme)}; use https."

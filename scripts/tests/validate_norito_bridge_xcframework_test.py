@@ -117,9 +117,13 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "source_commit": "1" * 40,
             "source_tree_dirty": False,
             "source_fingerprint_sha256": "2" * 64,
-            "cargo_lock_sha256": hashlib.sha256(
+            "workspace_cargo_lock_sha256": hashlib.sha256(
                 (ROOT / "Cargo.lock").read_bytes()
             ).hexdigest(),
+            "build_cargo_lock_sha256": hashlib.sha256(
+                (ROOT / "Cargo.lock").read_bytes()
+            ).hexdigest(),
+            "build_cargo_lock_authority": "workspace-v1",
             "bridge_header_sha256": hashlib.sha256(header).hexdigest(),
             "required_symbols": list(validator.EXPECTED_REQUIRED_SYMBOLS),
             "forbidden_symbols": list(validator.EXPECTED_FORBIDDEN_SYMBOLS),
@@ -174,6 +178,78 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
     def test_accepts_only_the_canonical_inventory(self) -> None:
         self.validate()
 
+    def test_accepts_the_exact_external_privacy_release_lock_authority(self) -> None:
+        private = Path(self.temporary.name).resolve() / "private"
+        private.mkdir()
+        lockfile = private / "Cargo.lock"
+        lockfile.write_bytes(
+            (ROOT / "ci/privacy_sdk_release_lock_v2.toml").read_bytes()
+        )
+        self.payload["build_cargo_lock_sha256"] = (
+            validator.PRIVACY_SDK_RELEASE_V2_LOCK_SHA256
+        )
+        self.payload["build_cargo_lock_authority"] = "privacy-sdk-release-v2"
+        self.payload["build_environment"]["schema"] = (
+            "iroha.mobile-native-build-environment.v2"
+        )
+        self.payload["build_environment"]["hermetic_runner_schema"] = (
+            "iroha.mobile-hermetic-command.v2"
+        )
+        self.payload["build_environment"]["environment_profiles"] = (
+            validator.EXPECTED_PRIVACY_ENVIRONMENT_PROFILES
+        )
+        self.write_manifest()
+        validator.validate(
+            root=ROOT,
+            xcframework=self.xcframework,
+            manifest_path=self.manifest,
+            manifest_link=self.manifest_link,
+            expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
+            swift_loader=self.loader,
+            lockfile_path=lockfile,
+        )
+
+        self.payload["build_environment"]["environment_profiles"] = (
+            validator.EXPECTED_WORKSPACE_ENVIRONMENT_PROFILES
+        )
+        self.write_manifest()
+        with self.assertRaisesRegex(
+            validator.ValidationError, "environment allowlists"
+        ):
+            validator.validate(
+                root=ROOT,
+                xcframework=self.xcframework,
+                manifest_path=self.manifest,
+                manifest_link=self.manifest_link,
+                expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
+                swift_loader=self.loader,
+                lockfile_path=lockfile,
+            )
+
+        self.payload["build_cargo_lock_authority"] = "workspace-v1"
+        self.payload["build_environment"]["schema"] = (
+            "iroha.mobile-native-build-environment.v1"
+        )
+        self.payload["build_environment"]["hermetic_runner_schema"] = (
+            "iroha.mobile-hermetic-command.v1"
+        )
+        self.payload["build_environment"]["environment_profiles"] = (
+            validator.EXPECTED_WORKSPACE_ENVIRONMENT_PROFILES
+        )
+        self.write_manifest()
+        with self.assertRaisesRegex(
+            validator.ValidationError, "privacy build-lock authority"
+        ):
+            validator.validate(
+                root=ROOT,
+                xcframework=self.xcframework,
+                manifest_path=self.manifest,
+                manifest_link=self.manifest_link,
+                expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
+                swift_loader=self.loader,
+                lockfile_path=lockfile,
+            )
+
     def test_rejects_unknown_manifest_fields_and_stale_pins(self) -> None:
         self.payload["legacy_hash"] = "4" * 64
         self.write_manifest()
@@ -186,6 +262,35 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         self.write_loader(stale)
         with self.assertRaisesRegex(validator.ValidationError, "pins are stale"):
             self.validate()
+
+    def test_rejects_decimal_native_bridge_abi(self) -> None:
+        self.payload["native_bridge_abi_version"] = 22.0
+        self.write_manifest()
+        with self.assertRaisesRegex(
+            validator.ValidationError,
+            "exact native bridge ABI 22",
+        ):
+            self.validate()
+
+    def test_exact_json_type_matcher_recurses_and_preserves_booleans(self) -> None:
+        expected = {
+            "registry": [
+                {"abi": 21, "production_ready": False},
+            ],
+        }
+        self.assertTrue(validator._matches_exact_json_types(expected, expected))
+        self.assertFalse(
+            validator._matches_exact_json_types(
+                {"registry": [{"abi": 21.0, "production_ready": False}]},
+                expected,
+            )
+        )
+        self.assertFalse(
+            validator._matches_exact_json_types(
+                {"registry": [{"abi": 21, "production_ready": 0}]},
+                expected,
+            )
+        )
 
     def test_decoy_pin_dictionary_cannot_replace_expected_hashes(self) -> None:
         contents = self.loader.read_text(encoding="utf-8")
@@ -245,10 +350,24 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "role registry"):
             self.validate()
 
+        roles = validator.expected_kagemusha_roles(False)
+        roles[0]["abi"] = 21.0
+        self.payload["kagemusha_mobile_artifact_roles"] = roles
+        self.write_manifest()
+        with self.assertRaisesRegex(validator.ValidationError, "role registry"):
+            self.validate()
+
+        roles = validator.expected_kagemusha_roles(False)
+        roles[1]["production_ready"] = 0
+        self.payload["kagemusha_mobile_artifact_roles"] = roles
+        self.write_manifest()
+        with self.assertRaisesRegex(validator.ValidationError, "role registry"):
+            self.validate()
+
         self.payload["kagemusha_mobile_artifact_roles"] = (
             validator.expected_kagemusha_roles(False)
         )
-        self.payload["cargo_lock_sha256"] = "3" * 64
+        self.payload["build_cargo_lock_sha256"] = "3" * 64
         self.write_manifest()
         with self.assertRaisesRegex(validator.ValidationError, "Cargo.lock digest"):
             self.validate()

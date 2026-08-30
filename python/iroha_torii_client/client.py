@@ -1846,6 +1846,7 @@ _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 22
 _KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
+_KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY = "cash_handoff_eligibility_v1"
 _KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4 = 16 * 1024 * 1024
 _KAGEMUSHA_VERIFIER_BACKEND = "halo2/ipa"
 _KAGEMUSHA_VERIFIER_ROLES = {
@@ -2258,6 +2259,7 @@ class OfflineStatus:
 
     mandatory: bool
     cash_handoff_capability: str
+    eligibility_cash_handoff_capability: str
     required_bridge_abi_version: int
     max_hops: int
     ready: bool
@@ -2276,6 +2278,7 @@ class OfflineStatus:
             required=(
                 "mandatory",
                 "cash_handoff_capability",
+                "eligibility_cash_handoff_capability",
                 "required_bridge_abi_version",
                 "max_hops",
                 "ready",
@@ -2294,6 +2297,20 @@ class OfflineStatus:
             raise RuntimeError(
                 f"{context}.cash_handoff_capability must be "
                 f"{_KAGEMUSHA_CASH_HANDOFF_CAPABILITY}"
+            )
+        eligibility_capability = _offline_exact_string(
+            _offline_required(
+                record, "eligibility_cash_handoff_capability", context
+            ),
+            f"{context}.eligibility_cash_handoff_capability",
+        )
+        if (
+            eligibility_capability
+            != _KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY
+        ):
+            raise RuntimeError(
+                f"{context}.eligibility_cash_handoff_capability must be "
+                f"{_KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY}"
             )
         abi = _offline_unsigned(
             _offline_required(record, "required_bridge_abi_version", context),
@@ -2326,6 +2343,9 @@ class OfflineStatus:
         return cls(
             mandatory=False,
             cash_handoff_capability=_KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
+            eligibility_cash_handoff_capability=(
+                _KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY
+            ),
             required_bridge_abi_version=_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
             max_hops=_KAGEMUSHA_MAX_HOPS,
             ready=True,
@@ -2547,6 +2567,8 @@ class OfflineReadiness:
     be used to enroll or gate a deployment, dataspace, or asset.
     """
 
+    cash_handoff_capability: str
+    eligibility_cash_handoff_capability: str
     required_bridge_abi_version: int
     max_hops: int
     asset_definition_id: str
@@ -2579,6 +2601,8 @@ class OfflineReadiness:
             record,
             context,
             required=(
+                "cash_handoff_capability",
+                "eligibility_cash_handoff_capability",
                 "required_bridge_abi_version",
                 "max_hops",
                 "asset_definition_id",
@@ -2597,6 +2621,29 @@ class OfflineReadiness:
                 "blockers",
             ),
         )
+        cash_handoff_capability = _offline_exact_string(
+            _offline_required(record, "cash_handoff_capability", context),
+            f"{context}.cash_handoff_capability",
+        )
+        if cash_handoff_capability != _KAGEMUSHA_CASH_HANDOFF_CAPABILITY:
+            raise RuntimeError(
+                f"{context}.cash_handoff_capability must be "
+                f"{_KAGEMUSHA_CASH_HANDOFF_CAPABILITY}"
+            )
+        eligibility_cash_handoff_capability = _offline_exact_string(
+            _offline_required(
+                record, "eligibility_cash_handoff_capability", context
+            ),
+            f"{context}.eligibility_cash_handoff_capability",
+        )
+        if (
+            eligibility_cash_handoff_capability
+            != _KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY
+        ):
+            raise RuntimeError(
+                f"{context}.eligibility_cash_handoff_capability must be "
+                f"{_KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY}"
+            )
         required_bridge_abi_version = _offline_unsigned(
             _offline_required(record, "required_bridge_abi_version", context),
             f"{context}.required_bridge_abi_version",
@@ -2906,6 +2953,10 @@ class OfflineReadiness:
                 f"{context}.ready must equal the complete ABI-21 runtime conjunction"
             )
         return cls(
+            cash_handoff_capability=cash_handoff_capability,
+            eligibility_cash_handoff_capability=(
+                eligibility_cash_handoff_capability
+            ),
             required_bridge_abi_version=required_bridge_abi_version,
             max_hops=max_hops,
             asset_definition_id=asset_definition_id,

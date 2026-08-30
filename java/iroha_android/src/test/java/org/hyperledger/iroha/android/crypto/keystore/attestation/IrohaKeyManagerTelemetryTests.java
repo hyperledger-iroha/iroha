@@ -162,7 +162,8 @@ public final class IrohaKeyManagerTelemetryTests {
               new byte[] {0x02},
               true,
               true,
-              false);
+              false,
+              null);
       return Optional.of(result);
     }
 
@@ -257,7 +258,8 @@ public final class IrohaKeyManagerTelemetryTests {
               new byte[] {0x02},
               true,
               true,
-              false);
+              false,
+              null);
       return Optional.of(result);
     }
 

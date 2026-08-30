@@ -5,7 +5,18 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional, TypeAlias, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Final,
+    Iterable,
+    Mapping,
+    Optional,
+    TypeAlias,
+    Union,
+)
 
 from ._native import load_crypto_extension
 from .address import AccountAddress
@@ -170,8 +181,14 @@ __all__ = [
     "build_find_asset_escrows_by_seller_query",
     "build_find_asset_escrows_by_buyer_query",
     "build_find_committed_transaction_query",
+    "build_find_committed_transaction_query_with_signer",
+    "build_find_privacy_action_execution_receipt_query_with_signer",
+    "build_privacy_finalized_state_query_with_signer",
     "build_find_block_by_hash_query",
     "committed_transaction_carrier_block_hash",
+    "inspect_pipeline_transaction_details",
+    "inspect_privacy_action_execution_receipt_response",
+    "inspect_privacy_finalized_state_query_response",
     "verify_committed_transaction_inclusion",
     "hash_blake2b_32",
     "decode_zk_vk_transaction_payload",
@@ -596,6 +613,443 @@ def build_find_committed_transaction_query(
             transaction_hash,
         )
     )
+
+
+def build_find_committed_transaction_query_with_signer(
+    authority: str,
+    signer: Callable[[bytes], bytes | bytearray | memoryview],
+    network_id: NetworkId,
+    transaction_hash: str,
+) -> bytes:
+    """Build one native query without exporting the authority's signing key.
+
+    The callback receives only the canonical Iroha hash of the complete
+    nonce-bearing query payload. The native boundary parses and verifies the
+    returned Ed25519 signature against ``authority`` before encoding the wire.
+    """
+
+    if not callable(signer):
+        raise TypeError("signer must be callable")
+
+    def exact_signer(message: bytes) -> bytes:
+        signature = signer(bytes(message))
+        if not isinstance(signature, (bytes, bytearray, memoryview)):
+            raise TypeError("signer must return bytes-like signature material")
+        return bytes(signature)
+
+    return bytes(
+        _crypto.build_find_committed_transaction_query_with_signer(
+            authority,
+            exact_signer,
+            _require_network_id(network_id),
+            transaction_hash,
+        )
+    )
+
+
+def build_find_privacy_action_execution_receipt_query_with_signer(
+    authority: str,
+    signer: Callable[[bytes], bytes | bytearray | memoryview],
+    network_id: NetworkId,
+    operation_index: int,
+    transaction_hash: str,
+    action_index: int = 0,
+) -> bytes:
+    """Build one signed singular query for an exact finalized Exact12 receipt.
+
+    The callback receives only the canonical hash of the nonce-bearing query.
+    Native code verifies its Ed25519 signature against ``authority`` before the
+    query wire is returned.
+    """
+
+    if not callable(signer):
+        raise TypeError("signer must be callable")
+    if type(operation_index) is not int or not 0 <= operation_index < 13:
+        raise ValueError("operation_index must select one of the 13 Exact12 operations")
+    if type(action_index) is not int or not 0 <= action_index <= 0xFFFF_FFFF:
+        raise ValueError("action_index must be a u32")
+
+    def exact_signer(message: bytes) -> bytes:
+        signature = signer(bytes(message))
+        if not isinstance(signature, (bytes, bytearray, memoryview)):
+            raise TypeError("signer must return bytes-like signature material")
+        return bytes(signature)
+
+    return bytes(
+        _crypto.build_find_privacy_action_execution_receipt_query_with_signer(
+            authority,
+            exact_signer,
+            _require_network_id(network_id),
+            operation_index,
+            transaction_hash,
+            action_index,
+        )
+    )
+
+
+def build_privacy_finalized_state_query_with_signer(
+    authority: str,
+    signer: Callable[[bytes], bytes | bytearray | memoryview],
+    network_id: NetworkId,
+    query_id: int,
+    protocol_index: int,
+    request_binding: bytes | bytearray | memoryview,
+) -> bytes:
+    """Build one authenticated typed privacy-state query for stable ID 97–104."""
+
+    if not callable(signer):
+        raise TypeError("signer must be callable")
+    if type(query_id) is not int or not 97 <= query_id <= 104:
+        raise ValueError("query_id must be one of the stable privacy query IDs 97 through 104")
+    if type(protocol_index) is not int or not 0 <= protocol_index <= 2:
+        raise ValueError("protocol_index must be a closed proof-managed protocol index")
+    if query_id != 98 and protocol_index != 0:
+        raise ValueError("protocol_index must be zero outside privacy query ID 98")
+    if not isinstance(request_binding, (bytes, bytearray, memoryview)):
+        raise TypeError("request_binding must be bytes-like")
+
+    def exact_signer(message: bytes) -> bytes:
+        signature = signer(bytes(message))
+        if not isinstance(signature, (bytes, bytearray, memoryview)):
+            raise TypeError("signer must return bytes-like signature material")
+        return bytes(signature)
+
+    return bytes(
+        _crypto.build_privacy_finalized_state_query_with_signer(
+            authority,
+            exact_signer,
+            _require_network_id(network_id),
+            query_id,
+            protocol_index,
+            bytes(request_binding),
+        )
+    )
+
+
+def inspect_privacy_action_execution_receipt_response(
+    network_id: NetworkId,
+    operation_index: int,
+    transaction_hash: str,
+    action_index: int,
+    transaction_intent_digest: bytes | bytearray | memoryview,
+    statement_digest: bytes | bytearray | memoryview,
+    proof_envelope_hash: bytes | bytearray | memoryview,
+    response_bytes: bytes | bytearray | memoryview,
+) -> Dict[str, Any]:
+    """Natively validate and bind one canonical finalized Exact12 receipt reply."""
+
+    if type(operation_index) is not int or not 0 <= operation_index < 13:
+        raise ValueError("operation_index must select one of the 13 Exact12 operations")
+    if type(action_index) is not int or not 0 <= action_index <= 0xFFFF_FFFF:
+        raise ValueError("action_index must be a u32")
+    byte_values: list[bytes] = []
+    for value, label in (
+        (transaction_intent_digest, "transaction_intent_digest"),
+        (statement_digest, "statement_digest"),
+        (proof_envelope_hash, "proof_envelope_hash"),
+        (response_bytes, "response_bytes"),
+    ):
+        if not isinstance(value, (bytes, bytearray, memoryview)):
+            raise TypeError(f"{label} must be bytes-like")
+        byte_values.append(bytes(value))
+    projection = dict(
+        _crypto.inspect_privacy_action_execution_receipt_response(
+            _require_network_id(network_id),
+            operation_index,
+            transaction_hash,
+            action_index,
+            byte_values[0],
+            byte_values[1],
+            byte_values[2],
+            byte_values[3],
+        )
+    )
+    expected_fields = {
+        "version",
+        "network_id",
+        "protocol_id",
+        "operation_schema",
+        "ledger_effect_kind",
+        "transaction_hash",
+        "action_index",
+        "transaction_intent_digest",
+        "statement_digest",
+        "proof_envelope_hash",
+        "capability_manifest_digest",
+        "capability_committed_height",
+        "admitted_at_height",
+        "finalized_height",
+        "finalized_block_hash",
+    }
+    if set(projection) != expected_fields:
+        raise RuntimeError("native Exact12 execution-receipt projection has invalid fields")
+    for field in (
+        "network_id",
+        "transaction_hash",
+        "transaction_intent_digest",
+        "statement_digest",
+        "proof_envelope_hash",
+        "capability_manifest_digest",
+        "finalized_block_hash",
+    ):
+        value = projection[field]
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or value.lower() != value
+            or any(character not in "0123456789abcdef" for character in value)
+            or not any(character != "0" for character in value)
+        ):
+            raise RuntimeError(
+                f"native Exact12 execution-receipt {field} is not canonical non-zero hex"
+            )
+    for field in (
+        "capability_committed_height",
+        "admitted_at_height",
+        "finalized_height",
+    ):
+        value = projection[field]
+        if type(value) is not int or not 0 < value <= (1 << 64) - 1:
+            raise RuntimeError(
+                f"native Exact12 execution-receipt {field} is not a positive u64"
+            )
+    if (
+        projection["version"] != 1
+        or projection["action_index"] != action_index
+        or projection["admitted_at_height"] < projection["capability_committed_height"]
+        or projection["finalized_height"] < projection["admitted_at_height"]
+    ):
+        raise RuntimeError("native Exact12 execution-receipt projection is inconsistent")
+    return projection
+
+
+_PRIVACY_FINALIZED_STATE_PROJECTION_FIELDS_V1: Final[Mapping[int, frozenset[str]]] = (
+    MappingProxyType(
+        {
+            97: frozenset(
+                {
+                    "network_id",
+                    "policy_id",
+                    "replay_nullifier",
+                    "policy_record_digest",
+                    "statement_digest",
+                    "admitted_at_height",
+                    "action_index",
+                    "finalized_height",
+                    "finalized_block_hash",
+                }
+            ),
+            98: frozenset(
+                {
+                    "network_id",
+                    "protocol_id",
+                    "pool_id",
+                    "asset_definition_id",
+                    "root_role",
+                    "bootstrap_digest",
+                    "initial_root",
+                    "current_epoch",
+                    "current_root",
+                    "output_count",
+                    "bootstrap_admitted_at_height",
+                    "latest_transition",
+                    "finalized_height",
+                    "finalized_block_hash",
+                }
+            ),
+            99: frozenset(
+                {
+                    "network_id",
+                    "pool_id",
+                    "asset_definition_id",
+                    "public_balance_scope",
+                    "reserve_account",
+                    "bootstrap_digest",
+                    "current_epoch",
+                    "current_root",
+                    "tree_size",
+                    "latest_transition",
+                    "finalized_height",
+                    "finalized_block_hash",
+                }
+            ),
+            100: frozenset(
+                {
+                    "network_id",
+                    "pool_id",
+                    "nullifier",
+                    "bootstrap_digest",
+                    "statement_digest",
+                    "admitted_at_height",
+                    "action_index",
+                    "finalized_height",
+                    "finalized_block_hash",
+                }
+            ),
+            101: frozenset(
+                {
+                    "network_id",
+                    "pool_id",
+                    "total_supply",
+                    "bootstrap_root",
+                    "bootstrap_digest",
+                    "bootstrap_proof_digest",
+                    "current_epoch",
+                    "current_root",
+                    "account_count",
+                    "current_state_admitted_at_height",
+                    "latest_transition",
+                    "finalized_height",
+                    "finalized_block_hash",
+                }
+            ),
+            102: frozenset(
+                {
+                    "network_id",
+                    "issuer_id",
+                    "registry_id",
+                    "policy_id",
+                    "phc_hash",
+                    "seed_public_key",
+                    "bootstrap_digest",
+                    "issuer_policy_record_digest",
+                    "policy_digest",
+                    "registry_record_digest",
+                    "parent_epoch",
+                    "parent_root",
+                    "anchor_index",
+                    "batch_size",
+                    "successor_epoch",
+                    "successor_root",
+                    "statement_digest",
+                    "admitted_at_height",
+                    "action_index",
+                    "finalized_height",
+                    "finalized_block_hash",
+                }
+            ),
+            103: frozenset(
+                {
+                    "network_id",
+                    "issuer_id",
+                    "registry_id",
+                    "policy_id",
+                    "key_image",
+                    "account_id",
+                    "bootstrap_digest",
+                    "issuer_policy_record_digest",
+                    "policy_digest",
+                    "registry_record_digest",
+                    "registry_epoch",
+                    "registry_root",
+                    "statement_digest",
+                    "admitted_at_height",
+                    "action_index",
+                    "finalized_height",
+                    "finalized_block_hash",
+                }
+            ),
+            104: frozenset(
+                {
+                    "network_id",
+                    "trust_anchor_id",
+                    "policy_id",
+                    "nullifier",
+                    "trust_anchor_record_digest",
+                    "trust_anchor_record_epoch",
+                    "certificate_policy_record_digest",
+                    "certificate_policy_record_epoch",
+                    "crl_record_digest",
+                    "crl_record_epoch",
+                    "statement_digest",
+                    "admitted_at_height",
+                    "action_index",
+                    "finalized_height",
+                    "finalized_block_hash",
+                }
+            ),
+        }
+    )
+)
+
+
+def inspect_privacy_finalized_state_query_response(
+    network_id: NetworkId,
+    query_id: int,
+    protocol_index: int,
+    request_binding: bytes | bytearray | memoryview,
+    response_bytes: bytes | bytearray | memoryview,
+) -> Dict[str, Any]:
+    """Natively validate one canonical finalized response for query ID 97–104."""
+
+    if type(query_id) is not int or query_id not in _PRIVACY_FINALIZED_STATE_PROJECTION_FIELDS_V1:
+        raise ValueError("query_id must be one of the stable privacy query IDs 97 through 104")
+    if type(protocol_index) is not int or not 0 <= protocol_index <= 2:
+        raise ValueError("protocol_index must be a closed proof-managed protocol index")
+    if query_id != 98 and protocol_index != 0:
+        raise ValueError("protocol_index must be zero outside privacy query ID 98")
+    for value, label in (
+        (request_binding, "request_binding"),
+        (response_bytes, "response_bytes"),
+    ):
+        if not isinstance(value, (bytes, bytearray, memoryview)):
+            raise TypeError(f"{label} must be bytes-like")
+    projection = json.loads(
+        _crypto.inspect_privacy_finalized_state_query_response(
+            _require_network_id(network_id),
+            query_id,
+            protocol_index,
+            bytes(request_binding),
+            bytes(response_bytes),
+        )
+    )
+    if not isinstance(projection, dict):
+        raise RuntimeError("native privacy state-query projection returned a non-object")
+    if set(projection) != _PRIVACY_FINALIZED_STATE_PROJECTION_FIELDS_V1[query_id]:
+        raise RuntimeError("native privacy state-query projection has invalid fields")
+    finalized_height = projection.get("finalized_height")
+    if type(finalized_height) is not int or not 0 < finalized_height <= (1 << 64) - 1:
+        raise RuntimeError("native privacy state-query finality height is not a positive u64")
+    return projection
+
+
+def inspect_pipeline_transaction_details(
+    transaction_hash: str,
+    response_bytes: bytes,
+) -> Dict[str, Any]:
+    """Decode and bind an authenticated canonical transaction-details reply."""
+
+    payload = json.loads(
+        _crypto.inspect_pipeline_transaction_details_json(
+            transaction_hash,
+            response_bytes,
+        )
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("native transaction-details inspector returned a non-object")
+    expected_fields = {
+        "transaction_hash",
+        "block_hash",
+        "block_height",
+        "result_hash",
+        "result_ok",
+        "rejection_code",
+        "rejection_message",
+        "trigger_completion_count",
+    }
+    if set(payload) != expected_fields:
+        raise RuntimeError("native transaction-details inspector returned an invalid shape")
+    block_height = payload["block_height"]
+    if (
+        isinstance(block_height, bool)
+        or not isinstance(block_height, int)
+        or block_height <= 0
+        or block_height > (1 << 64) - 1
+    ):
+        raise RuntimeError(
+            "native transaction-details inspector returned an invalid block height"
+        )
+    return payload
 
 
 def build_find_block_by_hash_query(

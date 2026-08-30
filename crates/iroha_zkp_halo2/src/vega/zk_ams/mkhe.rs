@@ -113,6 +113,8 @@ mod direct_rkg_ephemeral_membership;
 )]
 #[path = "mkhe/exact_eight_chunk_membership.rs"]
 mod exact_eight_chunk_membership;
+#[path = "mkhe/global_lookup_statement_v1.rs"]
+mod global_lookup_statement_v1;
 #[path = "mkhe/manifest.rs"]
 mod manifest;
 #[path = "mkhe/noise.rs"]
@@ -137,6 +139,14 @@ mod phase23_ingress;
 mod phase23_mask_proof;
 #[path = "mkhe/phase23_materialized_wire.rs"]
 mod phase23_materialized_wire;
+#[path = "mkhe/phase23_rns_link.rs"]
+mod phase23_rns_link;
+#[allow(
+    dead_code,
+    reason = "authenticated RNS transport remains non-authorizing until production context issuance and algebraic verification are connected"
+)]
+#[path = "mkhe/phase23_rns_link_wire.rs"]
+mod phase23_rns_link_wire;
 #[allow(
     dead_code,
     reason = "the verified-receipt audit remains fail-closed until every opaque handoff is wired"
@@ -185,6 +195,8 @@ mod rns_native_existing_radix_commitment_view;
 mod rns_native_global_lookup_z_commitment_view;
 #[path = "mkhe/rns_native_profile.rs"]
 mod rns_native_profile;
+#[path = "mkhe/rns_native_profile_authority_v2.rs"]
+mod rns_native_profile_authority_v2;
 #[path = "mkhe/rns_native_public_polynomial_publisher.rs"]
 mod rns_native_public_polynomial_publisher;
 #[path = "mkhe/rns_native_public_polynomial_reader.rs"]
@@ -199,6 +211,8 @@ mod rns_native_qpcs_initial;
 mod rns_native_qpcs_prefix;
 #[path = "mkhe/rns_native_radix_complement_linear_relation.rs"]
 mod rns_native_radix_complement_linear_relation;
+#[path = "mkhe/rns_native_receipt_consumers.rs"]
+mod rns_native_receipt_consumers;
 #[allow(
     dead_code,
     reason = "the private source-statement prerequisite remains non-authorizing until the concrete RLWE/qPCS relation verifier consumes it"
@@ -223,6 +237,8 @@ mod rns_native_source_packing_same_opening;
 )]
 #[path = "mkhe/rns_native_source_terminal_cross_field.rs"]
 mod rns_native_source_terminal_cross_field;
+#[path = "mkhe/rns_native_split_decryption_source_v2.rs"]
+mod rns_native_split_decryption_source_v2;
 #[path = "mkhe/rns_native_terminal_cross_basis.rs"]
 mod rns_native_terminal_cross_basis;
 #[allow(
@@ -501,9 +517,12 @@ pub use release_evidence::{
 };
 pub use resource::ZkAmsMkheResourceCertificateV1;
 pub use rns_native_composite_verifier::{
+    ZK_AMS_MKHE_RNS_NATIVE_ALGEBRAIC_RECEIPT_VERSION_V1,
     ZK_AMS_MKHE_RNS_NATIVE_COMPOSITE_VERIFICATION_VERSION_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_VERIFIER_TRANSPORT_VERSION_V1, ZkAmsMkheRnsNativeAlgebraicReceiptV1,
     ZkAmsMkheRnsNativeCompositeCandidateReceiptV1, ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
-    ZkAmsMkheRnsNativeVerificationStageV1, verify_zk_ams_mkhe_rns_native_composite_v1,
+    ZkAmsMkheRnsNativeVerificationStageV1, ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1,
+    verify_zk_ams_mkhe_rns_native_algebraic_v1, verify_zk_ams_mkhe_rns_native_composite_v1,
 };
 pub use rns_native_profile::{
     ZK_AMS_MKHE_RNS_NATIVE_CENTERED_CAPACITY_BITS_V1,
@@ -527,6 +546,17 @@ pub use rns_native_profile::{
     zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
     zk_ams_mkhe_rns_native_topology_v1,
 };
+pub use rns_native_profile_authority_v2::{
+    ZK_AMS_MKHE_RNS_NATIVE_PROFILE_AUTHORITY_VERSION_V2, ZkAmsMkheRnsNativeProfileAuthorityV2,
+    ZkAmsMkheRnsNativeProfileGenerationV2, resolve_zk_ams_mkhe_rns_native_profile_authority_v2,
+};
+pub use rns_native_receipt_consumers::{
+    ZkAmsMkheRnsNativeSplitDecryptionUseV1, ZkAmsMkheRnsNativeTerminalMaterializationUseV1,
+    bind_zk_ams_mkhe_rns_native_split_decryption_uses_v1,
+    bind_zk_ams_mkhe_rns_native_terminal_materialization_use_v1,
+    zk_ams_mkhe_rns_native_terminal_materialization_binding_v1,
+};
+pub use rns_native_rlwe_source_statement::ZkAmsMkheRnsNativePublicCiphertextIdentityManifestV1;
 pub use rns_native_section_codec::{
     ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1,
     ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1, ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1,
@@ -541,10 +571,24 @@ pub use rns_native_source::{
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_PLAINTEXT_BYTES_V1,
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_TOTAL_FILE_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_SOURCE_VERSION_V1,
+    ZkAmsMkheRnsNativeRepeatableSourceEvidenceV1, ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
     ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
     ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
     ZkAmsMkheRnsNativeSourceProviderV1, ZkAmsMkheRnsNativeSourceReceiptV1,
     ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,
+    verify_zk_ams_mkhe_rns_native_source_repeatability_v1,
+};
+pub use rns_native_split_decryption_source_v2::{
+    ZK_AMS_MKHE_RNS_NATIVE_SPLIT_DECRYPTION_RECORD_COUNT_V2,
+    ZkAmsMkheRnsNativeCiphertextEqualityInputV2, ZkAmsMkheRnsNativeEncryptionWitnessKindV2,
+    ZkAmsMkheRnsNativeEncryptionWitnessWriterV2, ZkAmsMkheRnsNativeSplitDecryptionRecordReceiptV2,
+    ZkAmsMkheRnsNativeSplitDecryptionSourceErrorV2,
+    ZkAmsMkheRnsNativeSplitDecryptionSourceSealReceiptV2,
+    ZkAmsMkheRnsNativeSplitDecryptionSourceSnapshotV2,
+    ZkAmsMkheRnsNativeSplitDecryptionSourceWriterV2,
+    ZkAmsMkheRnsNativeVerifiedSplitDecryptionRecordV2,
+    bind_zk_ams_mkhe_rns_native_ciphertext_equality_input_v2,
+    zk_ams_mkhe_rns_native_split_decryption_authority_v2,
 };
 pub use rns_native_transcript::{
     ZK_AMS_MKHE_RNS_NATIVE_QPCS_ROOT_COUNT_V1,
@@ -4138,7 +4182,7 @@ mod tests {
         assert!(readiness.packing_gate);
         assert!(!readiness.phase23_gate);
         assert!(!readiness.receipt_capability_gate);
-        assert_eq!(readiness.receipt_capability_blocker_mask, 0xf0);
+        assert_eq!(readiness.receipt_capability_blocker_mask, 0x1f0);
         assert!(!readiness.release_kat_gate);
         assert!(!readiness.is_ready());
         assert_eq!(

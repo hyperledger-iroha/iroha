@@ -18,10 +18,13 @@ on:
       - "**/rust-toolchain"
       - "**/rust-toolchain.toml"
       - "crates/**"
+      - "integration_tests/**"
       - "vendor/**"
       - ".github/workflows/pr_privacy_sdk_guard.yml"
       - ".github/workflows/mobile_sdk_artifacts.yml"
       - "ci/check_connect_norito_bridge_header.sh"
+      - "ci/check_agents_guardrails.sh"
+      - "ci/cargo_lock_workspace_edge_review_v1.json"
       - "ci/check_no_tracked_python_bytecode.sh"
       - "ci/check_privacy_csharp_sdk.sh"
       - "ci/check_privacy_js_sdk.sh"
@@ -34,13 +37,34 @@ on:
       - "ci/privacy_sdk_cargo_lockfile.sh"
       - "ci/privacy_sdk_cargo_lockfile_test_cleanup.sh"
       - "ci/privacy_sdk_cargo_lockfile_test.sh"
+      - "ci/privacy_sdk_release_lock_v1.toml"
+      - "ci/privacy_sdk_release_lock_v2.toml"
+      - "ci/audit_privacy_sdk_release_lock_transition.py"
       - "ci/privacy_sdk_cargo_wrapper.sh"
       - "ci/verify_privacy_python_wheel.py"
       - "scripts/check_native_sdk_abi22_artifact.py"
+      - "scripts/tests/cargo_lock_workspace_edge_review_test.py"
       - "scripts/archive_norito_xcframework.py"
       - "scripts/build_norito_xcframework.sh"
       - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_privacy_python_witness_boundary.py"
+      - "scripts/package_privacy_wallet_worker.py"
+      - "scripts/tests/package_privacy_wallet_worker_test.py"
+      - "scripts/package_zk_x509_prover_worker.py"
+      - "scripts/tests/package_zk_x509_prover_worker_test.py"
+      - "scripts/capture_zk_x509_native_candidate.py"
+      - "scripts/tests/capture_zk_x509_native_candidate_test.py"
+      - "scripts/verify_ec2_instance_identity.py"
+      - "scripts/tests/verify_ec2_instance_identity_test.py"
+      - "ci/check_taira_privacy_native_host.sh"
+      - "ci/taira_privacy_native_host_probe.c"
+      - "scripts/tests/check_taira_privacy_native_host_test.py"
+      - "docs/source/zk_x509_native_candidate_capture.md"
+      - "scripts/package_vega_figure9_artifacts.py"
+      - "scripts/tests/package_vega_figure9_artifacts_test.py"
+      - "docs/source/vega_figure9_artifact_release.md"
+      - "ci/privacy_generic11_worker_source_closure_v1.txt"
+      - "ci/privacy_zk_x509_worker_source_closure_v1.txt"
       - "scripts/compute_workspace_source_manifest.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
@@ -57,9 +81,11 @@ on:
       - "scripts/tests/check_privacy_csharp_native_contract_test.py"
       - "scripts/tests/check_privacy_jvm_native_contract_test.py"
       - "scripts/tests/check_privacy_swift_native_contract_test.py"
+      - "scripts/tests/audit_privacy_sdk_release_lock_transition_test.py"
       - "scripts/tests/package_mobile_sdk_artifacts_test.py"
       - "scripts/tests/render_norito_bridge_podspec_test.py"
       - "scripts/tests/norito_bridge_source_seal_test.py"
+      - "scripts/tests/privacy_apple_cargo_wrapper_test.py"
       - "scripts/update_norito_bridge_swift_pins.py"
       - "scripts/validate_norito_bridge_xcframework.py"
       - "scripts/tests/mobile_sdk_python312_contract.sh"
@@ -153,6 +179,7 @@ on:
       - "python/iroha_python/src/iroha_python/verange.py"
       - "python/iroha_python/src/iroha_python/zk_ams.py"
       - "python/iroha_python/src/iroha_python/zk_x509.py"
+      - "python/iroha_python/src/iroha_python/privacy_zk_x509_worker.py"
       - "python/iroha_python/src/iroha_python/zkat.py"
       - "python/iroha_python/tests/privacy_catalog_test.py"
       - "python/iroha_python/tests/privacy_exact12_fixture_test.py"
@@ -160,6 +187,7 @@ on:
       - "python/iroha_python/tests/privacy_native_registry_test.py"
       - "python/iroha_python/tests/privacy_native_integration_test.py"
       - "python/iroha_python/tests/privacy_wallet_worker_controller_test.py"
+      - "python/iroha_python/tests/privacy_zk_x509_worker_controller_test.py"
       - "python/iroha_python/tests/crypto_algorithms_test.py"
       - "python/iroha_python/tests/dependency_lock_test.py"
       - "python/iroha_python/tests/anonymous_pgc_test.py"
@@ -176,6 +204,8 @@ on:
       - "IrohaSwift/IrohaSwift.podspec"
       - "IrohaSwift/README.md"
       - "IrohaSwift/VERSION"
+      - "IrohaSwift/Sources/IrohaSwift/**"
+      - "IrohaSwift/Tests/IrohaSwiftTests/**"
       - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
       - "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
       - "IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift"
@@ -195,6 +225,10 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift"
       - "java/iroha_android/README.md"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/**"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/**"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/**"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/**"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/LanePrivacyMerkleWitness.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/LanePrivacyProof.java"
@@ -217,6 +251,10 @@ on:
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureCodecV1Tests.java"
       - "kotlin/README.md"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/**"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/**"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/**"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/**"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructions.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt"
@@ -228,6 +266,8 @@ on:
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1Test.kt"
       - "csharp/README.md"
+      - "csharp/src/Hyperledger.Iroha.Sdk/**"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/**"
       - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
       - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureModelsV1.cs"
@@ -313,24 +353,20 @@ jobs:
               "1.93.1-aarch64-apple-darwin" \
               --profile minimal \
               --no-self-update
-          echo "RUSTUP_TOOLCHAIN=1.93.1-aarch64-apple-darwin" >> "$GITHUB_ENV"
-      - name: Download frozen source-bound privacy lock input
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: privacy-jvm-native-abi22-${{ github.sha }}
-          path: ${{ runner.temp }}/privacy-jvm-native-abi22
-      - name: Authenticate distinct privacy release lock and enforce requalification blocker
+      - name: Provision private privacy Swift Cargo lock
+        shell: bash
         run: |
-          release_lock="$RUNNER_TEMP/privacy-jvm-native-abi22/Cargo.lock"
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
-          ! cmp -s "$release_lock" Cargo.lock
-          source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
-          [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
-          echo "SOURCE_DATE_EPOCH=$source_date_epoch" >> "$GITHUB_ENV"
-          echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
-          echo "::error::Swift privacy release tooling is not yet requalified to consume the distinct external cd9e Cargo.lock without replacing the tracked c90b root authority"
-          exit 1
+          env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH \
+            ci/privacy_sdk_cargo_lockfile.sh provision-ci \
+            "${GITHUB_WORKSPACE}" \
+            "${RUNNER_TEMP}/iroha-privacy-swift-cargo" \
+            "${GITHUB_ENV}" \
+            "${GITHUB_PATH}" \
+            "${HOME}/.cargo/bin/rustup" \
+            "1.93.1-aarch64-apple-darwin" \
+            "${{ steps.privacy-swift-python.outputs.python-path }}"
+      - name: Verify privacy Swift Cargo lock isolation
+        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "${{ steps.privacy-swift-python.outputs.python-path }}"
       - name: Prepare external privacy Swift build and artifact roots
         run: |
           artifact_dir="$RUNNER_TEMP/iroha-privacy-swift-artifacts"
@@ -339,38 +375,75 @@ jobs:
           mkdir -p "$artifact_dir" "$build_dir" "$scratch_dir"
           echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_PRIVACY_PRODUCTION_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_SWIFT_SCRATCH_DIR=$scratch_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
-      - name: Install Apple Rust targets and prime frozen dependencies
+          source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
+          echo "SOURCE_DATE_EPOCH=$source_date_epoch" >> "$GITHUB_ENV"
+      - name: Install and seal exact Apple Rust targets
+        shell: bash
         run: |
-          rustup target add --toolchain 1.93.1-aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
-          cargo fetch --locked
-      - name: Bind the external privacy Swift Cargo envelope
-        run: |
-          cargo_target="$RUNNER_TEMP/iroha-privacy-swift-cargo"
-          mkdir -p "$cargo_target"
-          cargo_target="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
-          echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
-          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
-          echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
-          echo "RUSTC=$(rustup which --toolchain 1.93.1-aarch64-apple-darwin rustc)" >> "$GITHUB_ENV"
-          echo "RUSTC_BOOTSTRAP=1" >> "$GITHUB_ENV"
-          echo "RUSTDOC=$(rustup which --toolchain 1.93.1-aarch64-apple-darwin rustdoc)" >> "$GITHUB_ENV"
+          [[ "$IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR" == "1.93.1-aarch64-apple-darwin" ]]
+          env -i \
+            HOME="$HOME" \
+            CARGO_HOME="$IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME" \
+            RUSTUP_HOME="$HOME/.rustup" \
+            RUSTUP_DIST_SERVER="https://static.rust-lang.org" \
+            TMPDIR="$RUNNER_TEMP" \
+            LANG=C.UTF-8 \
+            LC_ALL=C.UTF-8 \
+            "$IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH" target add \
+              --toolchain "$IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR" \
+              aarch64-apple-ios \
+              aarch64-apple-ios-sim \
+              x86_64-apple-ios \
+              aarch64-apple-darwin \
+              x86_64-apple-darwin
+          source ci/privacy_sdk_cargo_lockfile.sh
+          privacy_sdk_assert_authenticated_toolchain_state \
+            "$GITHUB_WORKSPACE" \
+            "$GITHUB_WORKSPACE" \
+            "$MOBILE_SDK_PYTHON_BINARY"
+          target_manifest="$RUNNER_TEMP/iroha-privacy-swift-cargo/apple-targets.json"
+          target_manifest_seal="$(
+            env -i \
+              HOME=/tmp \
+              PATH=/usr/bin:/bin \
+              TMPDIR="$RUNNER_TEMP" \
+              LANG=C.UTF-8 \
+              LC_ALL=C.UTF-8 \
+              "$MOBILE_SDK_PYTHON_BINARY" -I -S -B \
+                scripts/run_mobile_hermetic_command.py seal-apple-targets \
+                --toolchain-cargo "$IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH" \
+                --toolchain-selector \
+                  "$IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR" \
+                --output "$target_manifest"
+          )"
+          echo "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH=$target_manifest" >> "$GITHUB_ENV"
+          echo "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL=$target_manifest_seal" >> "$GITHUB_ENV"
+      - name: Prime frozen privacy Swift dependencies
+        env:
+          CARGO_NET_OFFLINE: "false"
+        run: cargo fetch --locked
       - name: Make reviewed privacy Swift source read-only
         run: chmod -R a-w "$GITHUB_WORKSPACE"
       - name: Swift privacy native fail-closed contract
         run: python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py
+      - name: Authenticated Apple Cargo wrapper contract
+        run: |
+          "$MOBILE_SDK_PYTHON_BINARY" -I -B scripts/tests/privacy_apple_cargo_wrapper_test.py
       - name: Rebuild exact ABI22 XCFramework under full Xcode
-        run: scripts/build_norito_xcframework.sh
+        run: scripts/build_norito_xcframework.sh --privacy-production-enabled
       - name: Privacy Swift SDK parse and native ABI22 tests
         run: ci/check_privacy_swift_sdk.sh
       - name: Revalidate frozen Swift inputs and ABI22 artifacts
         if: always()
         run: |
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
+          ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "${{ steps.privacy-swift-python.outputs.python-path }}"
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH")" == "31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d" ]]
           scripts/check_mobile_sdk_artifacts.sh --apple-only
 
   privacy_jvm_sdk_tests:
@@ -437,9 +510,16 @@ jobs:
     timeout-minutes: 10
     env:
       IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"
-      LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi22
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Bind authenticated privacy-native runtime path
+        shell: bash
+        run: |
+          if [[ -z "${RUNNER_TEMP:-}" || "$RUNNER_TEMP" != /* || -z "${GITHUB_ENV:-}" ]]; then
+            echo "GitHub runner paths are unavailable; refusing an unauthenticated privacy-native fallback" >&2
+            exit 1
+          fi
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/privacy-jvm-native-abi22" >> "$GITHUB_ENV"
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: 8.0.x
@@ -458,8 +538,8 @@ jobs:
           PRIVACY_CSHARP_PYTHON: ${{ steps.privacy-csharp-python.outputs.python-path }}
         run: |
           input="$RUNNER_TEMP/privacy-jvm-native-abi22"
-          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$input/Cargo.lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$input/Cargo.lock")" == "31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d" ]]
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7" ]]
           "$PRIVACY_CSHARP_PYTHON" -I -S scripts/check_native_sdk_abi22_artifact.py verify \
             --artifact "$input/libconnect_norito_bridge.so" \
             --manifest "$input/native-sdk-abi22-csharp.json" \
@@ -507,22 +587,23 @@ jobs:
               "1.93.1-x86_64-unknown-linux-gnu" \
               --profile minimal \
               --no-self-update
-      - name: Download frozen source-bound privacy lock input
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: privacy-jvm-native-abi22-${{ github.sha }}
-          path: ${{ runner.temp }}/privacy-jvm-native-abi22
-      - name: Authenticate distinct privacy release lock and enforce requalification blocker
-        env:
-          PRIVACY_JS_PYTHON: ${{ steps.privacy-js-python.outputs.python-path }}
+      - name: Provision private privacy N-API Cargo lock
+        shell: bash
         run: |
-          release_lock="$RUNNER_TEMP/privacy-jvm-native-abi22/Cargo.lock"
-          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
-          ! cmp -s "$release_lock" Cargo.lock
-          echo "::error::JavaScript privacy release tooling is not yet requalified to consume the distinct external cd9e Cargo.lock without replacing the tracked c90b root authority"
-          exit 1
+          env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH \
+            ci/privacy_sdk_cargo_lockfile.sh provision-ci \
+            "${GITHUB_WORKSPACE}" \
+            "${RUNNER_TEMP}/iroha-privacy-js-cargo" \
+            "${GITHUB_ENV}" \
+            "${GITHUB_PATH}" \
+            "${HOME}/.cargo/bin/rustup" \
+            "1.93.1-x86_64-unknown-linux-gnu" \
+            "${{ steps.privacy-js-python.outputs.python-path }}"
+      - name: Verify privacy N-API Cargo lock isolation
+        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "${{ steps.privacy-js-python.outputs.python-path }}"
       - name: Prime privacy N-API dependencies from the frozen lock
+        env:
+          CARGO_NET_OFFLINE: "false"
         run: cargo fetch --locked
       - name: Install JavaScript SDK dependencies
         run: npm ci --prefix javascript/iroha_js
@@ -530,6 +611,9 @@ jobs:
         env:
           PRIVACY_JS_SDK_PYTHON_BIN: ${{ steps.privacy-js-python.outputs.python-path }}
         run: ci/check_privacy_js_sdk.sh
+      - name: Verify final privacy N-API Cargo lock isolation
+        if: always()
+        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "${{ steps.privacy-js-python.outputs.python-path }}"
 
   privacy_python_sdk_tests:
     runs-on: ubuntu-latest
@@ -581,6 +665,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
       - name: Install host-qualified privacy SDK Rust toolchain
         shell: bash
         run: |
@@ -608,6 +694,14 @@ jobs:
           mobile_python="$("$SETUP_PYTHON_PATH" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
           [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
           echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
+      - name: Authenticate frozen-base Cargo lock workspace-edge review
+        run: |
+          "$MOBILE_SDK_PYTHON_BINARY" -I -S \
+            scripts/tests/cargo_lock_workspace_edge_review_test.py \
+            --validate \
+            --root "$GITHUB_WORKSPACE" \
+            --base-commit be874e0f08743929a492dd17383747a96a4f0879 \
+            --review "$GITHUB_WORKSPACE/ci/cargo_lock_workspace_edge_review_v1.json"
       - name: Provision private privacy SDK Cargo lock
         shell: bash
         run: |
@@ -637,10 +731,16 @@ jobs:
           ci/check_connect_norito_bridge_header.sh --self-test-missing-privacy-rust-symbol
       - name: Reject tracked Python bytecode
         run: bash ci/check_no_tracked_python_bytecode.sh
+      - name: Vega Figure 9 governed artifact packager self-test
+        run: python3 -I -B scripts/tests/package_vega_figure9_artifacts_test.py
       - name: Mobile SDK artifact readiness checker self-test
         # This fixture generator writes only its own temporary Cargo.lock. Keep
         # the job-wide wrapper reserved for commands against the real workspace.
         run: PATH="$(dirname "${IROHA_PRIVACY_REAL_CARGO}"):${PATH}" bash scripts/check_mobile_sdk_artifacts_test.sh
+      - name: Audit reviewed privacy Cargo lock transition
+        run: |
+          "$MOBILE_SDK_PYTHON_BINARY" -I -B ci/audit_privacy_sdk_release_lock_transition.py --json >/dev/null
+          "$MOBILE_SDK_PYTHON_BINARY" -I -B scripts/tests/audit_privacy_sdk_release_lock_transition_test.py
       - name: Privacy SDK authenticated Cargo lock self-test
         run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH PRIVACY_SDK_LOCK_TEST_PYTHON_BIN="${{ steps.privacy-python.outputs.python-path }}" bash ci/privacy_sdk_cargo_lockfile_test.sh
       - name: Privacy SDK guard negative controls
@@ -658,6 +758,7 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-manifest-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-exact12-bridge-test-fixtures
           ci/check_privacy_sdk_guard.sh --negative-control-exact12-conformance-rand-edge
+          ci/check_privacy_sdk_guard.sh --negative-control-exact12-halo2-forwarding
           ci/check_privacy_sdk_guard.sh --negative-control-exact12-release-evidence-test-fixtures
           ci/check_privacy_sdk_guard.sh --negative-control-vendor-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-rust-toolchain-install-workflow

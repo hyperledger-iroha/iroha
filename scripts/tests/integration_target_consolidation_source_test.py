@@ -270,9 +270,9 @@ WAVE_TWO_TARGETS = (
 WAVE_TWO_MANIFEST_BASE_SHA256 = {
     "crates/iroha_derive": "93c00d79bedfb21c6f4be400b7090050faedd8beeac477ce119ef03695e30b35",
     "crates/iroha_monitor": "b939b6dacf84952700e3d4fe47d657c31cfa90b2a29894f9334edba541483bb5",
-    "crates/iroha_primitives": "e50a81a1a73a621cf671aaf80b82fbf490487e85518fc472177d10bb33947ed2",
+    "crates/iroha_primitives": "094bbfb1e32d123a20708cf0650b79985bd23b5edccc9b04ac771ae785fe4dc5",
     "crates/iroha_version_derive": "d652a0868d36147e19e196692830566858eed0a46b92b752ae451a93eaeb2977",
-    "crates/iroha_zkp_halo2": "a36b5af199792222b2622bced949bac7599fea6e9d6137ab336543226f8152aa",
+    "crates/iroha_zkp_halo2": "191aa250aabbac123f7cbc7fa6f51ed0481cbf921081940fa0fddb7cad1d9ba6",
     "crates/soranet_pq": "09814d2ba4ed385c0683a0ecb7b8936b99f7df631391ce09dbe783e96c791c83",
     "mochi/mochi-core": "41aa8dfc5df7782ebf28c7ce4e536f22ec339251bf1598af049f36d202ae3087",
     "mochi/mochi-integration": "d85af2df1130e942def7e0754c26470977eb54d42405bcc361a300c34f7e7009",
@@ -295,11 +295,11 @@ WAVE_TWO_SOURCE_SHA256 = {
     "crates/iroha_version_derive/tests/codec.rs": "f4386043897cf21f4c4115ad453c1495a59d258b65e12471dc5ea75e116ccf46",
     "crates/iroha_version_derive/tests/json.rs": "8092c6769cdeec5ffde1cacf13626193c88324ae8d76a940cc41a5d29d21a041",
     "crates/iroha_version_derive/tests/ui.rs": "72fcf2f051e0f9d9d85a5918820d62e2d65168d4ad00d8cb7eb7584236776823",
-    "crates/iroha_zkp_halo2/tests/vega_engine_reachability.rs": "6350e46bd567e6eb2ea523e725e50fb93d76878c76244b27220456a692a520f9",
-    "crates/iroha_zkp_halo2/tests/vega_microsoft_cross_conformance.rs": "a2e9e478e3ff26826c5bf7ea4fc72762312cc3a464f8dfeb4171cc69e1e60c34",
+    "crates/iroha_zkp_halo2/tests/vega_engine_reachability.rs": "6a014a9cbbc9482ff6796f86ec762bf1c699eeb014a0ac6db5d32939a049c11e",
+    "crates/iroha_zkp_halo2/tests/vega_microsoft_cross_conformance.rs": "e0324517601b889fd7eb2ab52b6b550502fc5a77971eadd1065e0f8dcfb9a15b",
     "crates/soranet_pq/tests/kat_vectors.rs": "84b89d698051989013d4147dffd10d5261c741e352f213ad9150aa0b1c28321c",
     "crates/soranet_pq/tests/pq_kat.rs": "69491d6c86e58a8f3edb74d40ca46cd261801fbfbd2f459cfcd86cfe64fcc98a",
-    "crates/sorafs_node/tests/cli.rs": "7e8d976e7fc2e1496d4d5524191faa0d8f0268138c13ad8e6c61273d9703ff43",
+    "crates/sorafs_node/tests/cli.rs": "ba3232c0349859e47003b163faf21b7cc4a0b86f3a3217f0c9c2750a0ec6ef1f",
     "crates/sorafs_node/tests/pin_workflows.rs": "24e7d0547db730c3eb561c55d606b4f5526309b29432923d048f9b511e8f675d",
     "mochi/mochi-core/tests/composer_drafts.rs": "9aee3bade320bf3c19c9cb00cd8d2e8dab96250d3e91c058b97331bac4daf32b",
     "mochi/mochi-core/tests/torii_streams.rs": "9eeff756579057756031e656fe84e404d0931461b06c8afcce035a9327a6bdc0",
@@ -308,7 +308,7 @@ WAVE_TWO_SOURCE_SHA256 = {
     "tools/soranet-handshake-harness/tests/fixtures_verify.rs": "8487b4d970bdf1cdbab49a344bfbc07c7e7e2e4b3ca701f97c8811952d7e48dc",
     "tools/soranet-handshake-harness/tests/interop_parity.rs": "8f6fdaa1660770c86bd0d5a1c1c6c6b8cd61fdbf6bef95749c9694e1896aa745",
     "tools/soranet-handshake-harness/tests/perf_gate.rs": "daa16e6ec412927c7a6adc7056b34c22e69e9fb6be4fd934aa43bfa1c49dbff2",
-    "tools/soranet-handshake-harness/tests/simulate_cli.rs": "bf336921bcf4832dccab35e2adf36f64d606db46b76c53b8e42d5f56c52ff9c2",
+    "tools/soranet-handshake-harness/tests/simulate_cli.rs": "da3e01bfc1434feabbce2e46ec22fb420a37d779cc1c74459caa8283da241363",
 }
 
 WAVE_TWO_TARGET_INVENTORY_SHA256 = (
@@ -318,7 +318,7 @@ WAVE_TWO_MODULE_INVENTORY_SHA256 = (
     "931d70b2ecfbf8865ee9e1c9ed4486b4280d508cb109776b52b8e4397bed56f6"
 )
 WAVE_TWO_TEST_INVENTORY_SHA256 = (
-    "5ed15c8aa7951bbab01d42c03820f284ccfc6e4a793b911eb66ed5495bf76d30"
+    "d1f595e10d9f0c50607357285fdb8d4a2ba2fc235f1925c38262f98fb44acccc"
 )
 
 SERIAL_GUARD_SOURCE = """fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -543,7 +543,7 @@ def validate_wave_two(sources: dict[str, str] | None = None) -> None:
         for attribute, name in _test_items(source):
             test_rows.append(f"{path}\0{attribute}\0{name}\n")
     test_digest = hashlib.sha256("".join(test_rows).encode()).hexdigest()
-    if len(test_rows) != 60 or test_digest != WAVE_TWO_TEST_INVENTORY_SHA256:
+    if len(test_rows) != 64 or test_digest != WAVE_TWO_TEST_INVENTORY_SHA256:
         raise AssertionError("wave-two test ID, attribute, or order drifted")
 
 
@@ -701,7 +701,7 @@ WAVE_THREE_TOP_LEVEL_RS = {
 }
 
 WAVE_THREE_MANIFEST_BASE_SHA256 = {
-    "crates/iroha": "a9251faa0432d815ec56cbe0abac7a1bcd5ee90b597c728e6d0d36144011cc3d",
+    "crates/iroha": "693059e6642a42461357c2bb59b7171e131e9e7ff465fd4aa5fac676c27f63b4",
     "crates/iroha_p2p": "dad3d6d19e110a7a2785acf87fb35d20c2d3b0b3a7e1a16f221ba7248ef90cb8",
     "crates/norito_derive": "d093eec7685436db5a148bb34282979f162d6b3b33c058f83372584a566f54aa",
     "crates/sorafs_chunker": "7d651022b88c1c27bb6236ba14cfed1a653fe4db6f417586d342a0b227acc63d",
@@ -1114,14 +1114,14 @@ WAVE_FOUR_ROOT_MODULES = {
 }
 
 WAVE_FOUR_MANIFEST_BASE_SHA256 = {
-    "crates/iroha_core": "c2c3c34263cb9a4199518ee55ff1f081c00199460fe8fdc2610fde36c17034e1",
-    "crates/iroha_data_model": "2cc2b7167159ef10fdde5dd493a1298a08f6a79729fdde111e17d767c1b5396e",
+    "crates/iroha_core": "e1a24cb5ce458f24abeca22d6cf4b65a982e5a031369c23a8ebed23077e6f797",
+    "crates/iroha_data_model": "7b278a625c8d1e0caacc41bb91c9b13ce17b75ea154fa884e10cfb330313ea06",
     "crates/iroha_data_model_derive": "9d6ae350da056233903b17e51a6d6c616b39060a0e2916ace12b20604b13fbb1",
 }
 
 WAVE_FOUR_SOURCE_SHA256 = {
     "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs": "158977f8837214618d7e9aa4623b58b0b278f71488528c9b015b682a1f74fb66",
-    "crates/iroha_core/tests/kaigi_privacy.rs": "a4aa54ac64369f3335c017d05dd5392b36284cba671105546caa24b94c800040",
+    "crates/iroha_core/tests/kaigi_privacy.rs": "ca7b75630e8256409d8dc56a8432f576d0d1bd08680de03db625dcbd255dfc06",
     "crates/iroha_core/tests/kagemusha_artifact_v4_streaming.rs": "cd36e1946b112a27381760e32b6b67e52af3ef9bb94224c1a1025c224abf6bee",
     "crates/iroha_core/tests/common/world_fixture.rs": "0b5a48b01d34081f8f1948c4557c2aaf673ffea21f24a7680e76437e9ba6fdbf",
     "crates/iroha_data_model/tests/query_serialization_allocations.rs": "d737cadc0ed62a5f78aa95af8667edd7383d04ad7d5f28804b04114da1946133",
@@ -1172,7 +1172,7 @@ WAVE_FOUR_MODULE_INVENTORY_SHA256 = (
     "c28fc0e6af8901152d4da26c538661e9cd865fac5e045ffdd83dc7a35f3db465"
 )
 WAVE_FOUR_TEST_INVENTORY_SHA256 = (
-    "555378335996d3ac24f1682c4738db0450c578e337f8f219ad4a174e48de943e"
+    "ca7bd522f46077145181d42a826d73102285d3db01e2a4205114bad17498c71e"
 )
 
 
@@ -1373,9 +1373,9 @@ class WaveFourIntegrationTargetConsolidationTest(unittest.TestCase):
             _replace_once(
                 sources,
                 "crates/iroha_core/tests/kaigi_privacy.rs",
-                "#[test]\nfn kaigi_privacy_join_updates_record_and_private_leave_is_rejected()",
+                "#[test]\nfn kaigi_privacy_join_fails_closed_until_authority_is_bound()",
                 "#[ignore]\n#[test]\n"
-                "fn kaigi_privacy_join_updates_record_and_private_leave_is_rejected()",
+                "fn kaigi_privacy_join_fails_closed_until_authority_is_bound()",
             ),
             _replace_once(
                 sources,
@@ -1420,5 +1420,255 @@ class WaveFourIntegrationTargetConsolidationTest(unittest.TestCase):
 
 
 # END WAVE FOUR INTEGRATION-TARGET CONTRACT
+
+
+# BEGIN EXACT12 RELEASE-HARNESS OWNERSHIP CONTRACT
+EXACT12_RELEASE_TARGET = "privacy_release_network"
+EXACT12_RELEASE_ROOT = "integration_tests/tests/privacy_release_network.rs"
+EXACT12_REQUIRED_FEATURES = ("zk-stark", "privacy-release-evidence")
+EXACT12_NETWORK_MODULES = (
+    (
+        "privacy_exact12_activation_network",
+        "privacy_exact12_activation_network.rs",
+    ),
+    ("privacy_exact12_jindo_network", "privacy_exact12_jindo_network.rs"),
+    (
+        "privacy_exact12_orchard_pq_masp_network",
+        "privacy_exact12_orchard_pq_masp_network.rs",
+    ),
+    (
+        "privacy_exact12_retained_network",
+        "privacy_exact12_retained_network.rs",
+    ),
+    (
+        "privacy_exact12_zk_ams_vega_network",
+        "privacy_exact12_zk_ams_vega_network.rs",
+    ),
+    (
+        "privacy_exact12_zk_x509_network",
+        "privacy_exact12_zk_x509_network.rs",
+    ),
+    ("zk_ace_localnet", "zk_ace_localnet.rs"),
+)
+EXACT12_REQUIRED_TESTS = {
+    "privacy_exact12_activation_network": (
+        "canonical_exact12_governance_survives_four_peer_activation_replay_and_restart"
+    ),
+    "privacy_exact12_jindo_network": (
+        "canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart"
+    ),
+    "privacy_exact12_orchard_pq_masp_network": (
+        "canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart"
+    ),
+    "privacy_exact12_retained_network": (
+        "canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart"
+    ),
+    "privacy_exact12_zk_ams_vega_network": (
+        "canonical_zk_ams_and_vega_actions_survive_four_validator_activation_replay_and_restart"
+    ),
+    "privacy_exact12_zk_x509_network": (
+        "canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart"
+    ),
+    "zk_ace_localnet": "zk_ace_privacy_transfer_fails_closed_taira_localnet",
+}
+NETWORK_FUNCTIONAL_ROOT = "integration_tests/tests/network_functional.rs"
+NETWORK_FUNCTIONAL_MODULES = (
+    ("concurrency", "concurrency.rs"),
+    ("extra_functional", "extra_functional/mod.rs"),
+    ("observer_sync", "observer_sync.rs"),
+    ("sccp_route_governance", "sccp_route_governance.rs"),
+)
+EXACT12_README = "integration_tests/README.md"
+EXACT12_AGENTS = "integration_tests/AGENTS.md"
+
+
+def _integration_test_targets(manifest: str) -> tuple[tuple[str, str, str], ...]:
+    targets: list[tuple[str, str, str]] = []
+    for table in _test_tables(manifest):
+        name_match = re.search(r'(?m)^name = "([^"]+)"$', table)
+        path_match = re.search(r'(?m)^path = "([^"]+)"$', table)
+        if name_match is None or path_match is None:
+            raise AssertionError("integration_tests: malformed explicit test target")
+        targets.append((name_match.group(1), path_match.group(1), table))
+    return tuple(targets)
+
+
+def _read_exact12_release_sources() -> dict[str, str]:
+    manifest_path = "integration_tests/Cargo.toml"
+    manifest = (ROOT / manifest_path).read_text(encoding="utf-8")
+    paths = {
+        manifest_path,
+        EXACT12_README,
+        EXACT12_AGENTS,
+        *(f"integration_tests/tests/{path}" for _, path in EXACT12_NETWORK_MODULES),
+    }
+    paths.update(
+        f"integration_tests/{path}"
+        for _, path, _ in _integration_test_targets(manifest)
+    )
+    return {
+        path: (ROOT / path).read_text(encoding="utf-8") for path in sorted(paths)
+    }
+
+
+def validate_exact12_release_harness(
+    sources: dict[str, str] | None = None,
+) -> None:
+    if sources is None:
+        sources = _read_exact12_release_sources()
+    manifest = sources["integration_tests/Cargo.toml"]
+    targets = _integration_test_targets(manifest)
+    target_tables = {name: table for name, _, table in targets}
+    if len(target_tables) != len(targets):
+        raise AssertionError("integration_tests: duplicate explicit test target name")
+
+    required_features = ", ".join(
+        f'"{feature}"' for feature in EXACT12_REQUIRED_FEATURES
+    )
+    expected_release_table = (
+        f'name = "{EXACT12_RELEASE_TARGET}"\n'
+        'path = "tests/privacy_release_network.rs"\n'
+        f"required-features = [{required_features}]"
+    )
+    if target_tables.get(EXACT12_RELEASE_TARGET) != expected_release_table:
+        raise AssertionError(
+            "privacy_release_network must require the exact release feature pair"
+        )
+    expected_ambient_table = (
+        'name = "network_functional"\npath = "tests/network_functional.rs"'
+    )
+    if target_tables.get("network_functional") != expected_ambient_table:
+        raise AssertionError("network_functional target contract drifted")
+
+    release_root = sources[EXACT12_RELEASE_ROOT]
+    if _module_rows(release_root) != EXACT12_NETWORK_MODULES:
+        raise AssertionError(
+            "privacy_release_network must own the exact seven-module inventory"
+        )
+    if re.search(r"(?m)^#!?\[cfg", release_root):
+        raise AssertionError(
+            "privacy_release_network module inventory must be unconditional"
+        )
+
+    ambient_root = sources[NETWORK_FUNCTIONAL_ROOT]
+    if _module_rows(ambient_root) != NETWORK_FUNCTIONAL_MODULES:
+        raise AssertionError(
+            "network_functional must retain only its four ambient network modules"
+        )
+
+    owners = {module: [] for module, _ in EXACT12_NETWORK_MODULES}
+    exact_paths = {path: module for module, path in EXACT12_NETWORK_MODULES}
+    exact_modules = dict(EXACT12_NETWORK_MODULES)
+    for target, path, _ in targets:
+        root_path = f"integration_tests/{path}"
+        if root_path not in sources:
+            raise AssertionError(f"missing explicit target root {root_path}")
+        for module, module_path in _module_rows(sources[root_path]):
+            canonical_module = exact_paths.get(module_path)
+            if canonical_module is None and module in exact_modules:
+                canonical_module = module
+            if canonical_module is not None:
+                owners[canonical_module].append((target, module, module_path))
+    for module, path in EXACT12_NETWORK_MODULES:
+        expected_owner = [(EXACT12_RELEASE_TARGET, module, path)]
+        if owners[module] != expected_owner:
+            raise AssertionError(
+                f"{module}: Exact12 module must have one release-harness owner; "
+                f"found {owners[module]!r}"
+            )
+
+    allowed_crate_cfgs = {
+        f'feature = "{feature}"' for feature in EXACT12_REQUIRED_FEATURES
+    }
+    for module, path in EXACT12_NETWORK_MODULES:
+        source_path = f"integration_tests/tests/{path}"
+        source = sources[source_path]
+        crate_cfgs = set(re.findall(r"(?m)^#!\[cfg\(([^]]+)\)\]$", source))
+        if not crate_cfgs.issubset(allowed_crate_cfgs):
+            raise AssertionError(
+                f"{module}: release module has an unsatisfied crate-level cfg"
+            )
+        tests = {name: attributes for attributes, name in _wave_three_test_items(source)}
+        required_test = EXACT12_REQUIRED_TESTS[module]
+        attributes = tests.get(required_test)
+        if attributes is None:
+            raise AssertionError(
+                f"{module}: missing non-vacuous release test {required_test}"
+            )
+        if "ignore" in attributes or "cfg(" in attributes:
+            raise AssertionError(
+                f"{module}: release test {required_test} must be unconditional and non-ignored"
+            )
+
+    readme = sources[EXACT12_README]
+    for statement in (
+        "sole Cargo harness that owns all seven Exact12 network",
+        "general-purpose `network_functional` harness retains only its",
+    ):
+        if statement not in readme:
+            raise AssertionError("Exact12 release-harness ownership documentation drifted")
+    agents = sources[EXACT12_AGENTS]
+    if (
+        "`privacy_release_network` (requires "
+        "`zk-stark,privacy-release-evidence` and solely owns the seven Exact12 "
+        "network modules)"
+    ) not in agents:
+        raise AssertionError("integration-test contributor guidance drifted")
+
+
+class Exact12ReleaseHarnessOwnershipTest(unittest.TestCase):
+    def test_exact12_release_harness_is_the_sole_non_vacuous_owner(self) -> None:
+        validate_exact12_release_harness()
+
+    def test_exact12_release_harness_guard_rejects_mutations(self) -> None:
+        sources = _read_exact12_release_sources()
+        validate_exact12_release_harness(sources)
+        mutations = (
+            _replace_once(
+                sources,
+                "integration_tests/Cargo.toml",
+                'required-features = ["zk-stark", "privacy-release-evidence"]',
+                'required-features = ["zk-stark"]',
+            ),
+            _replace_once(
+                sources,
+                EXACT12_RELEASE_ROOT,
+                '#[path = "zk_ace_localnet.rs"]\nmod zk_ace_localnet;',
+                "",
+            ),
+            _replace_once(
+                sources,
+                NETWORK_FUNCTIONAL_ROOT,
+                '#[path = "sccp_route_governance.rs"]',
+                '#[path = "privacy_exact12_jindo_network.rs"]\n'
+                'mod privacy_exact12_jindo_network;\n'
+                '#[path = "sccp_route_governance.rs"]',
+            ),
+            _replace_once(
+                sources,
+                EXACT12_RELEASE_ROOT,
+                '#[path = "privacy_exact12_jindo_network.rs"]',
+                '#[cfg(feature = "zk-stark")]\n'
+                '#[path = "privacy_exact12_jindo_network.rs"]',
+            ),
+            _replace_once(
+                sources,
+                "integration_tests/tests/privacy_exact12_jindo_network.rs",
+                '#[tokio::test(flavor = "multi_thread", worker_threads = 4)]\n'
+                "async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart",
+                '#[ignore]\n'
+                '#[tokio::test(flavor = "multi_thread", worker_threads = 4)]\n'
+                "async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart",
+            ),
+        )
+        for index, mutation in enumerate(mutations):
+            with self.subTest(index=index):
+                with self.assertRaises(AssertionError):
+                    validate_exact12_release_harness(mutation)
+
+
+# END EXACT12 RELEASE-HARNESS OWNERSHIP CONTRACT
+
+
 if __name__ == "__main__":
     unittest.main()

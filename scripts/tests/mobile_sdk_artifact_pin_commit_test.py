@@ -21,7 +21,7 @@ SPEC.loader.exec_module(pin)
 def loader(first: str = "1", *, extra: str = "") -> str:
     return (
         "enum Loader {\n"
-        "    static let expectedHashes = [\n"
+            "    private static let expectedHashes: [String: String] = [\n"
         f'        "macos-arm64_x86_64": "{first * 64}",\n'
         f'        "ios-arm64": "{first * 64}",\n'
         f'        "ios-arm64_x86_64-simulator": "{first * 64}"\n'

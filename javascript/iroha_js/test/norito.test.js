@@ -1863,17 +1863,53 @@ test("burn trigger fixture matches canonical Norito bytes", () => {
   assert.equal(encodedHex, expectedHex);
 });
 
-baseTest("noritoEncodeInstruction requires native binding for unsupported instruction JSON", () => {
+baseTest("Log instructions have a browser-safe canonical Norito codec", () => {
   const instruction = {
     Log: {
-      level: "INFO",
-      message: "unsupported by the pure JS fallback",
+      level: "TRACE",
+      msg: "browser-safe validation marker",
     },
   };
   withMissingNativeBinding(() => {
+    const encoded = noritoEncodeInstruction(instruction);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
     assert.throws(
-      () => noritoEncodeInstruction(instruction),
-      /Native binding required/,
+      () =>
+        noritoEncodeInstruction({
+          Log: { level: "TRACE", message: instruction.Log.msg },
+        }),
+      /Log.*message|Log\.msg/u,
     );
   });
+});
+
+test("browser-safe Log instruction bytes match native Rust Norito", () => {
+  const instruction = {
+    Log: {
+      level: "INFO",
+      msg: "browser/native Log parity marker",
+    },
+  };
+  const expectedHex =
+    "4e5254300000862a7d77075d4d23ff6c1261db027811006300000000000000" +
+    "ed1d63cda15f7243020a0969726f68612e6c6f67574f000000000000004e52" +
+    "543000008e55c03b421e22131dbca44b0bdeb9570027000000000000007a8f" +
+    "f76545d36c0d020402000000212062726f777365722f6e6174697665204c6f" +
+    "6720706172697479206d61726b6572";
+  const browserEncoded = Buffer.from(
+    withMissingNativeBinding(() => noritoEncodeInstruction(instruction)),
+  );
+  assert.equal(browserEncoded.toString("hex"), expectedHex);
+  const nativeEncoded = Buffer.from(
+    nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
+  );
+  assert.deepEqual(browserEncoded, nativeEncoded);
+  assert.deepEqual(
+    withMissingNativeBinding(() => noritoDecodeInstruction(nativeEncoded)),
+    instruction,
+  );
+  assert.deepEqual(
+    JSON.parse(nativeBinding.noritoDecodeInstruction(browserEncoded)),
+    instruction,
+  );
 });

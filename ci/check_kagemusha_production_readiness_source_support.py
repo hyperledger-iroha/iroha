@@ -615,8 +615,12 @@ def device_attestation_governance_source_errors(texts: dict[str, str]) -> list[s
         android_auth, ANDROID_AUTH, errors,
         (r"packages\.len\(\) != 1.*?signature_digests\.len\(\) != 1.*?"
          r"verified_boot_key\.is_empty\(\).*?!device_locked.*?VERIFIED.*?"
-         r"verified_boot_hash\.len\(\) != 32.*?seen_tags.*?"
-         r"!seen_tags\.insert\(tag\.number\).*?!hardware_enforced.*?"
+         r"verified_boot_hash\.len\(\) != 32.*?"
+         r"fn require_hardware_enforced_android_property\(.*?"
+         r"!hardware_enforced.*?seen_tags.*?"
+         r"!seen_tags\.insert\(tag\.number\).*?"
+         r"OFFLINE_ATTESTATION_ANDROID_TAG_ROOT_OF_TRUST.*?"
+         r"require_hardware_enforced_android_property\(hardware_enforced, \"rootOfTrust\"\).*?"
          r"validate_android_root_of_trust\(value\)"),
         "strict Android application, boot, and authorization identity",
     )

@@ -17,11 +17,14 @@
 //! bindings are admitted only through the source/packing child's post-equation
 //! outer bundle.
 //!
-//! No production numeric source, replay owner, mask owner, staged adapter,
-//! composite capability, readiness, receipt, or release authority is made
-//! available by this private handoff.
+//! The source-only combined owner now lends its recursively owned repeatable
+//! snapshot to the same-opening verifier without detaching either owner, and
+//! retains the authenticated radix alias needed by that replay. No live
+//! production numeric source, prover mask owner, staged entry, composite
+//! capability, readiness, receipt, or release authority is made available by
+//! this private handoff.
 
-use core::fmt;
+use core::{cell::Cell, fmt};
 
 use super::{
     rns_native_cross_field_rlwe_direct::{
@@ -33,11 +36,33 @@ use super::{
         RnsNativeGlobalMembershipPrerequisiteV1,
         derive_rns_native_verified_global_lookup_core_root_v2,
     },
-    rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
-    rns_native_source_packing_same_opening::{
-        RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1,
-        RnsNativeSourcePackingCombinedOuterBindingsV1, RnsNativeSourcePackingSafeCoreV1,
+    rns_native_profile::zk_ams_mkhe_rns_native_profile_manifest_v1,
+    rns_native_source::{
+        ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSecretChunkV1,
+        ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
     },
+    rns_native_source_packing_same_opening::{
+        RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_BLOCKS_PER_GROUP_V1,
+        RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_GROUP_COUNT_V1,
+        RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_SCALARS_PER_BLOCK_V1,
+        RNS_NATIVE_SOURCE_PACKING_OWNER_COUNT_V1, RNS_NATIVE_SOURCE_PACKING_RADIX_LOW_DIGITS_V1,
+        RNS_NATIVE_SOURCE_PACKING_SIGNED_BLOCKS_PER_PLANE_V1,
+        RNS_NATIVE_SOURCE_PACKING_SIGNED_OWNER_COUNT_V1,
+        RNS_NATIVE_SOURCE_PACKING_SIGNED_SCALARS_PER_BLOCK_V1,
+        RNS_NATIVE_SOURCE_PACKING_VECTOR_COORDINATES_V1, RnsNativeSignedSourceRoleV1,
+        RnsNativeSourcePackingAggregateReplayV1, RnsNativeSourcePackingAuthenticatedSourceAxesV1,
+        RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1,
+        RnsNativeSourcePackingCombinedOuterBindingsV1, RnsNativeSourcePackingOwnerCoordinateV1,
+        RnsNativeSourcePackingReplayReceiptV1, RnsNativeSourcePackingSafeCoreV1,
+        RnsNativeSourcePackingSameOpeningContextV1, RnsNativeSourcePackingSameOpeningErrorV1,
+        canonical_replay_schedule_digest_v1, difference_scalar_from_be_bytes_v1,
+        difference_source_index_v1, owner_coordinate_v1,
+        signed_scalar_from_twos_complement_be_i64_v1, signed_source_index_v1,
+    },
+};
+use crate::vega::{
+    VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+    bulletproof_t256::ZeroizingT256ScalarVecV1,
 };
 
 const DIGEST_BYTES_V1: usize = 32;
@@ -49,6 +74,7 @@ const DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_SUCCESSOR_MAX_BYTES_V1: usize =
     RNS_NATIVE_GLOBAL_MEMBERSHIP_RESIDUAL_MAX_BYTES_V1;
 
 const VERIFIER_SIDE_DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_IMPLEMENTED_V1: bool = true;
+const VERIFIER_SIDE_AUTHENTICATED_REPLAY_HANDOFF_IMPLEMENTED_V1: bool = true;
 const PRODUCTION_AUTHORITATIVE_NUMERIC_SOURCE_AVAILABLE_V1: bool = false;
 const PRODUCTION_AUTHENTICATED_REPLAY_OWNER_AVAILABLE_V1: bool = false;
 const PRODUCTION_DERIVED_MASK_OWNER_AVAILABLE_V1: bool = false;
@@ -62,6 +88,7 @@ const _: () = {
     assert!(DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_OWNED_WIRE_BYTES_V1 == 0);
     assert!(DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_SUCCESSOR_MAX_BYTES_V1 == 108_464);
     assert!(VERIFIER_SIDE_DIRECT_GLOBAL_MEMBERSHIP_HANDOFF_IMPLEMENTED_V1);
+    assert!(VERIFIER_SIDE_AUTHENTICATED_REPLAY_HANDOFF_IMPLEMENTED_V1);
     assert!(!PRODUCTION_AUTHORITATIVE_NUMERIC_SOURCE_AVAILABLE_V1);
     assert!(!PRODUCTION_AUTHENTICATED_REPLAY_OWNER_AVAILABLE_V1);
     assert!(!PRODUCTION_DERIVED_MASK_OWNER_AVAILABLE_V1);
@@ -79,6 +106,7 @@ pub(super) enum RnsNativeDirectGlobalMembershipHandoffErrorV1 {
     Direct(RnsNativeCrossFieldRlweDirectErrorV1),
     GlobalLookupRoot,
     ZeroPaddingRoot,
+    SourceReplayContext,
 }
 
 impl fmt::Display for RnsNativeDirectGlobalMembershipHandoffErrorV1 {
@@ -109,6 +137,89 @@ fn source_packing_safe_core_v1(
     }
 }
 
+struct ZeroizingReplayScalarV1(Scalar);
+
+impl ZeroizingReplayScalarV1 {
+    const fn new_v1(value: Scalar) -> Self {
+        Self(value)
+    }
+
+    const fn as_ref_v1(&self) -> &Scalar {
+        &self.0
+    }
+}
+
+impl Drop for ZeroizingReplayScalarV1 {
+    fn drop(&mut self) {
+        self.0.clear_secret();
+    }
+}
+
+struct RnsNativeDirectGlobalMembershipReplayStateV1 {
+    difference_low_reads: Cell<usize>,
+    difference_top_reads: Cell<usize>,
+    signed_reads: Cell<usize>,
+    replayed: bool,
+}
+
+impl RnsNativeDirectGlobalMembershipReplayStateV1 {
+    const fn new_v1() -> Self {
+        Self {
+            difference_low_reads: Cell::new(0),
+            difference_top_reads: Cell::new(0),
+            signed_reads: Cell::new(0),
+            replayed: false,
+        }
+    }
+}
+
+fn authenticated_source_axes_v1<S>(
+    direct: &RnsNativeCrossFieldRlweAllRootsVerifiedV2<'_, '_, S>,
+) -> Result<
+    RnsNativeSourcePackingAuthenticatedSourceAxesV1,
+    RnsNativeDirectGlobalMembershipHandoffErrorV1,
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    let source = direct.inventory().linked().source();
+    let snapshot = source.snapshot();
+    let layout = snapshot.layout();
+    let receipt = snapshot
+        .structural_receipt()
+        .map_err(|_| RnsNativeDirectGlobalMembershipHandoffErrorV1::SourceReplayContext)?;
+    receipt
+        .validate(layout)
+        .map_err(|_| RnsNativeDirectGlobalMembershipHandoffErrorV1::SourceReplayContext)?;
+    let profile_manifest = zk_ams_mkhe_rns_native_profile_manifest_v1()
+        .map_err(|_| RnsNativeDirectGlobalMembershipHandoffErrorV1::SourceReplayContext)?;
+    Ok(RnsNativeSourcePackingAuthenticatedSourceAxesV1 {
+        profile_manifest_digest: profile_manifest.manifest_digest,
+        source_binding_digest: layout.source_binding_digest(),
+        main_snapshot_digest: receipt.main_snapshot_digest,
+        nonce_snapshot_digest: receipt.nonce_snapshot_digest,
+        source_receipt_digest: receipt.receipt_digest,
+        source_formula_digest: source.formula_digest(),
+        source_mapping_digest: source.mapping_digest(),
+    })
+}
+
+fn replay_context_v1(
+    source: RnsNativeSourcePackingAuthenticatedSourceAxesV1,
+    safe_core: RnsNativeSourcePackingSafeCoreV1,
+) -> RnsNativeSourcePackingSameOpeningContextV1 {
+    RnsNativeSourcePackingSameOpeningContextV1 {
+        profile_manifest_digest: source.profile_manifest_digest,
+        source_binding_digest: source.source_binding_digest,
+        main_snapshot_digest: source.main_snapshot_digest,
+        nonce_snapshot_digest: source.nonce_snapshot_digest,
+        source_receipt_digest: source.source_receipt_digest,
+        source_formula_digest: source.source_formula_digest,
+        source_mapping_digest: source.source_mapping_digest,
+        safe_core,
+    }
+}
+
 /// Move-only evidence that both the exact direct frame and the recursively
 /// owned global-membership chain verified in one chronology.
 ///
@@ -131,6 +242,9 @@ pub(super) struct RnsNativeDirectGlobalMembershipHandoffV1<
     _atomic_direct: RnsNativeCrossFieldRlweAllRootsVerifiedV2<'source, 'proof, S>,
     membership_residual: &'proof [u8],
     safe_core: RnsNativeSourcePackingSafeCoreV1,
+    authenticated_source_axes: RnsNativeSourcePackingAuthenticatedSourceAxesV1,
+    canonical_replay_schedule_digest: [u8; DIGEST_BYTES_V1],
+    replay_state: RnsNativeDirectGlobalMembershipReplayStateV1,
     outer_bindings: RnsNativeSourcePackingCombinedOuterBindingsV1,
 }
 
@@ -148,6 +262,286 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
     fn combined_outer_bindings_v1(&self) -> RnsNativeSourcePackingCombinedOuterBindingsV1 {
         self.outer_bindings
+    }
+}
+
+fn advance_replay_counter_v1(
+    counter: &Cell<usize>,
+) -> Result<(), RnsNativeSourcePackingSameOpeningErrorV1> {
+    counter.set(
+        counter
+            .get()
+            .checked_add(1)
+            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?,
+    );
+    Ok(())
+}
+
+impl<'owner, 'source, 'proof, S> RnsNativeSourcePackingAggregateReplayV1
+    for &'owner mut RnsNativeDirectGlobalMembershipHandoffV1<'source, 'proof, S>
+where
+    S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+{
+    fn authenticated_source_axes_v1(&self) -> RnsNativeSourcePackingAuthenticatedSourceAxesV1 {
+        self.authenticated_source_axes
+    }
+
+    fn canonical_replay_schedule_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.canonical_replay_schedule_digest
+    }
+
+    fn difference_low_commitment_v1(
+        &self,
+        group: usize,
+        digit: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1> {
+        if group >= RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_GROUP_COUNT_V1
+            || digit >= RNS_NATIVE_SOURCE_PACKING_RADIX_LOW_DIGITS_V1
+        {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+        }
+        let point = self
+            ._atomic_direct
+            .existing_radix()
+            .difference_low_commitment_v1(group, digit)
+            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::InvalidPoint)?;
+        advance_replay_counter_v1(&self.replay_state.difference_low_reads)?;
+        Ok(point)
+    }
+
+    fn difference_top_commitment_v1(
+        &self,
+        group: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1> {
+        if group >= RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_GROUP_COUNT_V1 {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+        }
+        let point = self
+            ._atomic_direct
+            .inventory()
+            .comparator_top_commitments(group)
+            .map(|(difference_top, _)| difference_top)
+            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::InvalidPoint)?;
+        advance_replay_counter_v1(&self.replay_state.difference_top_reads)?;
+        Ok(point)
+    }
+
+    fn signed_commitment_v1(
+        &self,
+        record: usize,
+        role: RnsNativeSignedSourceRoleV1,
+        plane: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1> {
+        if record >= RNS_NATIVE_SOURCE_PACKING_SIGNED_OWNER_COUNT_V1 / (3 * 8) || plane >= 8 {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+        }
+        let signed_unit = record
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(role as usize))
+            .and_then(|value| value.checked_mul(8))
+            .and_then(|value| value.checked_add(plane))
+            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+        if signed_unit >= RNS_NATIVE_SOURCE_PACKING_SIGNED_OWNER_COUNT_V1 {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+        }
+        let point = self
+            ._atomic_direct
+            .inventory()
+            .small_source_product_commitments(signed_unit)
+            .map(|commitments| commitments.signed)
+            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::InvalidPoint)?;
+        advance_replay_counter_v1(&self.replay_state.signed_reads)?;
+        Ok(point)
+    }
+
+    fn replay_tau_aggregate_v1(
+        &mut self,
+        tau: Scalar,
+        destination: &mut ZeroizingT256ScalarVecV1,
+    ) -> Result<RnsNativeSourcePackingReplayReceiptV1, RnsNativeSourcePackingSameOpeningErrorV1>
+    {
+        if self.replay_state.replayed
+            || tau.is_zero()
+            || destination.len() != RNS_NATIVE_SOURCE_PACKING_VECTOR_COORDINATES_V1
+        {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+        }
+        self.replay_state.replayed = true;
+        for value in destination.as_mut_slice() {
+            value.clear_secret();
+        }
+
+        let snapshot = self
+            ._atomic_direct
+            .inventory_mut()
+            .linked_mut()
+            .source_mut()
+            .snapshot_mut();
+        let arena = ZkAmsMkheRnsNativeSourceArenaV1::Main;
+        let mut power = Scalar::one();
+        for ordinal in 0..RNS_NATIVE_SOURCE_PACKING_OWNER_COUNT_V1 {
+            match owner_coordinate_v1(ordinal)? {
+                RnsNativeSourcePackingOwnerCoordinateV1::Difference { group } => {
+                    let group = usize::from(group);
+                    for block in 0..RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_BLOCKS_PER_GROUP_V1 {
+                        let first = difference_source_index_v1(group, block)?;
+                        let chunk = snapshot
+                            .read_slot(arena, u64::from(first.source_slot))
+                            .map_err(|_| {
+                                RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable
+                            })?;
+                        if chunk.arena() != arena
+                            || u64::try_from(chunk.as_slice().len()).ok()
+                                != Some(arena.plaintext_bytes())
+                        {
+                            return Err(
+                                RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable,
+                            );
+                        }
+                        for scalar_in_block in
+                            0..RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_SCALARS_PER_BLOCK_V1
+                        {
+                            let coordinate = scalar_in_block
+                                .checked_mul(
+                                    RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_BLOCKS_PER_GROUP_V1,
+                                )
+                                .and_then(|value| value.checked_add(block))
+                                .ok_or(
+                                    RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow,
+                                )?;
+                            let index = difference_source_index_v1(group, coordinate)?;
+                            if usize::from(index.owner_ordinal) != ordinal
+                                || index.source_slot != first.source_slot
+                            {
+                                return Err(
+                                    RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry,
+                                );
+                            }
+                            let start = usize::from(index.byte_offset);
+                            let end = start.checked_add(32).ok_or(
+                                RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow,
+                            )?;
+                            let mut encoded: [u8; 32] = chunk
+                                .as_slice()
+                                .get(start..end)
+                                .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)?
+                                .try_into()
+                                .map_err(|_| {
+                                    RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable
+                                })?;
+                            let decoded = difference_scalar_from_be_bytes_v1(encoded);
+                            encoded.fill(0);
+                            let value = ZeroizingReplayScalarV1::new_v1(decoded?);
+                            destination.as_mut_slice()[coordinate] += *value.as_ref_v1() * power;
+                        }
+                    }
+                }
+                RnsNativeSourcePackingOwnerCoordinateV1::Signed {
+                    record,
+                    role,
+                    plane,
+                } => {
+                    let signed_unit = usize::from(record)
+                        .checked_mul(3)
+                        .and_then(|value| value.checked_add(role as usize))
+                        .and_then(|value| value.checked_mul(8))
+                        .and_then(|value| value.checked_add(usize::from(plane)))
+                        .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+                    for local_block in 0..RNS_NATIVE_SOURCE_PACKING_SIGNED_BLOCKS_PER_PLANE_V1 {
+                        let first_coordinate = local_block
+                            .checked_mul(RNS_NATIVE_SOURCE_PACKING_SIGNED_SCALARS_PER_BLOCK_V1)
+                            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+                        let first = signed_source_index_v1(signed_unit, first_coordinate)?;
+                        let chunk = snapshot
+                            .read_slot(arena, u64::from(first.source_slot))
+                            .map_err(|_| {
+                                RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable
+                            })?;
+                        if chunk.arena() != arena
+                            || u64::try_from(chunk.as_slice().len()).ok()
+                                != Some(arena.plaintext_bytes())
+                        {
+                            return Err(
+                                RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable,
+                            );
+                        }
+                        for coefficient in 0..RNS_NATIVE_SOURCE_PACKING_SIGNED_SCALARS_PER_BLOCK_V1
+                        {
+                            let coordinate = first_coordinate.checked_add(coefficient).ok_or(
+                                RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow,
+                            )?;
+                            let index = signed_source_index_v1(signed_unit, coordinate)?;
+                            if usize::from(index.owner_ordinal) != ordinal
+                                || index.source_slot != first.source_slot
+                            {
+                                return Err(
+                                    RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry,
+                                );
+                            }
+                            let start = usize::from(index.byte_offset);
+                            let end = start.checked_add(8).ok_or(
+                                RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow,
+                            )?;
+                            let mut encoded: [u8; 8] = chunk
+                                .as_slice()
+                                .get(start..end)
+                                .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)?
+                                .try_into()
+                                .map_err(|_| {
+                                    RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable
+                                })?;
+                            let value = ZeroizingReplayScalarV1::new_v1(
+                                signed_scalar_from_twos_complement_be_i64_v1(encoded),
+                            );
+                            encoded.fill(0);
+                            destination.as_mut_slice()[coordinate] += *value.as_ref_v1() * power;
+                        }
+                    }
+                }
+            }
+            power *= tau;
+        }
+        Ok(RnsNativeSourcePackingReplayReceiptV1 {
+            source_binding_digest: self.authenticated_source_axes.source_binding_digest,
+            canonical_replay_schedule_digest: self.canonical_replay_schedule_digest,
+            owner_count: u16::try_from(RNS_NATIVE_SOURCE_PACKING_OWNER_COUNT_V1)
+                .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry)?,
+            coordinates: u16::try_from(RNS_NATIVE_SOURCE_PACKING_VECTOR_COORDINATES_V1)
+                .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry)?,
+        })
+    }
+
+    fn finish_v1(
+        self,
+    ) -> Result<RnsNativeSourcePackingReplayReceiptV1, RnsNativeSourcePackingSameOpeningErrorV1>
+    {
+        let refreshed_source_axes = authenticated_source_axes_v1(&self._atomic_direct)
+            .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)?;
+        let refreshed_schedule = canonical_replay_schedule_digest_v1(replay_context_v1(
+            refreshed_source_axes,
+            self.safe_core,
+        ))?;
+        if !self.replay_state.replayed
+            || refreshed_source_axes != self.authenticated_source_axes
+            || refreshed_schedule != self.canonical_replay_schedule_digest
+            || self.replay_state.difference_low_reads.get()
+                != RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_GROUP_COUNT_V1
+                    * RNS_NATIVE_SOURCE_PACKING_RADIX_LOW_DIGITS_V1
+            || self.replay_state.difference_top_reads.get()
+                != RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_GROUP_COUNT_V1
+            || self.replay_state.signed_reads.get()
+                != RNS_NATIVE_SOURCE_PACKING_SIGNED_OWNER_COUNT_V1
+        {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable);
+        }
+        Ok(RnsNativeSourcePackingReplayReceiptV1 {
+            source_binding_digest: self.authenticated_source_axes.source_binding_digest,
+            canonical_replay_schedule_digest: self.canonical_replay_schedule_digest,
+            owner_count: u16::try_from(RNS_NATIVE_SOURCE_PACKING_OWNER_COUNT_V1)
+                .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry)?,
+            coordinates: u16::try_from(RNS_NATIVE_SOURCE_PACKING_VECTOR_COORDINATES_V1)
+                .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry)?,
+        })
     }
 }
 
@@ -212,6 +606,12 @@ where
         .map_err(RnsNativeDirectGlobalMembershipHandoffErrorV1::Direct)?;
 
     let safe_core = source_packing_safe_core_v1(atomic_direct.direct().safe_core_projection_v1());
+    let authenticated_source_axes = authenticated_source_axes_v1(&atomic_direct)?;
+    let canonical_replay_schedule_digest = canonical_replay_schedule_digest_v1(replay_context_v1(
+        authenticated_source_axes,
+        safe_core,
+    ))
+    .map_err(|_| RnsNativeDirectGlobalMembershipHandoffErrorV1::SourceReplayContext)?;
     let inventory = atomic_direct.inventory();
     let direct_binding_digest = atomic_direct.direct().binding_digest();
     let linked_source = inventory.linked().source();
@@ -244,6 +644,9 @@ where
         _atomic_direct: atomic_direct,
         membership_residual,
         safe_core,
+        authenticated_source_axes,
+        canonical_replay_schedule_digest,
+        replay_state: RnsNativeDirectGlobalMembershipReplayStateV1::new_v1(),
         outer_bindings,
     })
 }

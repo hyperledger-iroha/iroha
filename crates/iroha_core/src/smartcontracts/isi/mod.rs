@@ -25,6 +25,7 @@ pub mod offline;
 pub mod oracle;
 /// Canonical first-release privacy governance and proof admission.
 pub mod privacy;
+mod privacy_query;
 pub mod query;
 pub mod ram_lfe;
 pub mod repo;

@@ -241,9 +241,13 @@ def validate(
             "source_commit": "a" * 40,
             "source_tree_dirty": False,
             "source_fingerprint_sha256": "b" * 64,
-            "cargo_lock_sha256": hashlib.sha256(
+            "workspace_cargo_lock_sha256": hashlib.sha256(
                 (self.root / "Cargo.lock").read_bytes()
             ).hexdigest(),
+            "build_cargo_lock_sha256": hashlib.sha256(
+                (self.root / "Cargo.lock").read_bytes()
+            ).hexdigest(),
+            "build_cargo_lock_authority": "workspace-v1",
             "bridge_header_sha256": hashlib.sha256(header).hexdigest(),
             "required_symbols": list(validator.EXPECTED_REQUIRED_SYMBOLS),
             "forbidden_symbols": list(validator.EXPECTED_FORBIDDEN_SYMBOLS),

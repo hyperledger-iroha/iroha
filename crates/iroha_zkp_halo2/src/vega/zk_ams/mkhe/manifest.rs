@@ -1063,12 +1063,12 @@ mod tests {
             .expect("receipt capability audit validates");
         let manifest = zk_ams_mkhe_release_manifest_v1().expect("release manifest");
         let readiness = zk_ams_mkhe_readiness_v1().expect("readiness");
-        assert_eq!(audit.blocker_mask, 0xf0);
+        assert_eq!(audit.blocker_mask, 0x1f0);
         assert!(!audit.release_available);
         assert_eq!(manifest.receipt_capability_audit_digest, audit.digest);
-        assert_eq!(manifest.receipt_capability_blocker_mask, 0xf0);
+        assert_eq!(manifest.receipt_capability_blocker_mask, 0x1f0);
         assert!(!manifest.receipt_capability_release_available);
-        assert_eq!(readiness.receipt_capability_blocker_mask, 0xf0);
+        assert_eq!(readiness.receipt_capability_blocker_mask, 0x1f0);
         assert!(!readiness.receipt_capability_gate);
         assert!(!readiness.is_ready());
         assert_eq!(

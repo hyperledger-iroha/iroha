@@ -27,7 +27,7 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_repository_inventory_is_exact(self) -> None:
         result = GUARD.audit_source(SOURCE)
-        self.assertEqual(94, result.pair_count)
+        self.assertEqual(136, result.pair_count)
         self.assertEqual(GUARD.EXPECTED_ABI_DIGEST, result.abi_digest)
         self.assertEqual(GUARD.EXPECTED_ATTRIBUTE_DIGEST, result.attribute_digest)
 
@@ -60,11 +60,34 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_rejects_macro_expansion_drift(self) -> None:
         mutated = SOURCE.replace(
-            ") -> $return_type $body\n            $(#[$android_attribute])*",
-            ") -> $return_type { $body }\n            $(#[$android_attribute])*",
+            ") $(-> $return_type)? $body\n            $(#[$android_attribute])*",
+            ") $(-> $return_type)? { $body }\n            $(#[$android_attribute])*",
             1,
         )
+        self.assertNotEqual(SOURCE, mutated)
         with self.assertRaisesRegex(GUARD.AuditError, "macro expansion contract changed"):
+            GUARD.audit_source(mutated)
+
+    def test_rejects_forwarder_macro_expansion_drift(self) -> None:
+        mutated = SOURCE.replace(
+            'pub unsafe extern "system" fn android(\n',
+            'pub unsafe extern "system" fn android_v2(\n',
+            1,
+        )
+        self.assertNotEqual(SOURCE, mutated)
+        with self.assertRaisesRegex(
+            GUARD.AuditError, "Kagemusha paired-forwarder macro expansion contract changed"
+        ):
+            GUARD.audit_source(mutated)
+
+    def test_rejects_generated_forwarder_argument_drift(self) -> None:
+        mutated = SOURCE.replace(
+            "nativeArtifactWriteV4 { handle long, chunk bytes }",
+            "nativeArtifactWriteV4 { chunk bytes, handle long }",
+            1,
+        )
+        self.assertNotEqual(SOURCE, mutated)
+        with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
             GUARD.audit_source(mutated)
 
 

@@ -1,8 +1,8 @@
 # Iroha peer transport V1
 
 This document defines the transport-neutral **Kagemusha Offline Peer V1** family:
-IPM1 messages, IQR1/IRQR QR, authenticated IPN1 Nearby, and the F049 NFC
-application. The envelope carries canonical
+IPM1 messages, IQR1/IRQR QR, authenticated IPN1 Nearby, and the canonical F050
+NFC application. The envelope carries canonical
 application bytes unchanged; QR, NFC, and Nearby are presentation or delivery
 layers around the same message.
 

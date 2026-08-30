@@ -92,6 +92,8 @@ use super::super::super::super::super::{
     rns_native_source_packing_same_opening::{
         RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1,
         RnsNativeSourcePackingCombinedOuterBindingsV1, RnsNativeSourcePackingSafeCoreV1,
+        RnsNativeSourcePackingSameOpeningErrorV1, RnsNativeSourcePackingSameOpeningPrerequisiteV1,
+        verify_rns_native_source_packing_same_opening_from_owned_replay_v1,
     },
     rns_native_terminal_cross_basis::RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
     rns_native_transcript::{
@@ -1034,6 +1036,29 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
     > {
         let Self { retained, stage } = self;
         let stage = verify_direct_global_membership_handoff_core_v2(stage)?;
+        Ok(RnsNativeClaimedQpcsOwnedStageV2 { retained, stage })
+    }
+}
+
+impl<'source, 'proof, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
+    RnsNativeClaimedQpcsOwnedStageV2<RnsNativeDirectGlobalMembershipHandoffV1<'source, 'proof, S>>
+{
+    /// Consume the embedded authenticated snapshot in place while preserving
+    /// the exact retained-publication owner and combined predecessor. No
+    /// detached source context or retryable replay owner crosses this handoff.
+    pub(in crate::vega::zk_ams::mkhe) fn verify_source_packing_same_opening_v2(
+        self,
+    ) -> Result<
+        RnsNativeClaimedQpcsOwnedStageV2<
+            RnsNativeSourcePackingSameOpeningPrerequisiteV1<
+                'proof,
+                RnsNativeDirectGlobalMembershipHandoffV1<'source, 'proof, S>,
+            >,
+        >,
+        RnsNativeSourcePackingSameOpeningErrorV1,
+    > {
+        let Self { retained, stage } = self;
+        let stage = verify_rns_native_source_packing_same_opening_from_owned_replay_v1(stage)?;
         Ok(RnsNativeClaimedQpcsOwnedStageV2 { retained, stage })
     }
 }

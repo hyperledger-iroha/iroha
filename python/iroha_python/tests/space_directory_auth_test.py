@@ -44,12 +44,32 @@ class _Session(requests.Session):
         self.calls: list[dict[str, Any]] = []
 
     def request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
-        self.calls.append({"method": method, "url": url, **kwargs})
+        raise AssertionError(
+            f"canonical request bypassed prepared transport: {method} {url}"
+        )
+
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": request.url,
+                "headers": request.headers,
+                "data": request.body,
+                "prepared": True,
+                **kwargs,
+            }
+        )
         response = requests.Response()
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"
         response._content = json.dumps(_draft()).encode("utf-8")
         response.encoding = "utf-8"
+        response.request = request
+        response.url = request.url
         return response
 
 
@@ -107,6 +127,7 @@ def test_publish_is_signed_once_over_exact_path_and_body() -> None:
     assert result["submitted"] is False
     assert len(session.calls) == 1
     call = session.calls[0]
+    assert call["prepared"] is True
     assert call["allow_redirects"] is False
     assert call["headers"]["X-Iroha-Account"] == AUTHORITY_HEADER
     assert captured == [

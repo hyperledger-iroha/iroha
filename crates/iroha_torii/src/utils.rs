@@ -2183,6 +2183,24 @@ pub mod extractors {
             OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES;
     }
     #[cfg(feature = "app_api")]
+    impl OfflineCanonicalNoritoSchema
+        for iroha_torii_shared::offline_api::OfflineDevicePolicyProofRequestV1
+    {
+        const MAX_BODY_BYTES: usize =
+            iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_REQUEST_MAX_BYTES;
+        const MAX_NESTING_DEPTH: usize = 8;
+    }
+    #[cfg(feature = "app_api")]
+    impl OfflineCanonicalNoritoSchema
+        for iroha_torii_shared::offline_api::OfflineDeviceEligibilityRequestV1
+    {
+        const MAX_BODY_BYTES: usize =
+            iroha_torii_shared::offline_api::OFFLINE_DEVICE_ELIGIBILITY_REQUEST_MAX_BYTES;
+        const MAX_NESTING_DEPTH: usize = 8;
+        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize =
+            OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES;
+    }
+    #[cfg(feature = "app_api")]
     impl OfflineCanonicalNoritoSchema for iroha_torii_shared::offline_api::OfflineTopUpRequest {
         const MAX_BODY_BYTES: usize =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4;

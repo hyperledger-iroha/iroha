@@ -1,9 +1,10 @@
 package org.hyperledger.iroha.sdk.crypto.keystore.attestation
 
 import java.security.cert.X509Certificate
+import org.hyperledger.iroha.sdk.offline.OfflineAndroidAttestedDevicePropertiesV2
 
 /** Result of a successfully verified Android key attestation bundle. */
-class AttestationResult(
+class AttestationResult @JvmOverloads constructor(
     /** Alias associated with the generated key. */
     @JvmField val alias: String,
     certificateChain: List<X509Certificate>,
@@ -19,6 +20,13 @@ class AttestationResult(
     @JvmField val teeAuthorisationsPresent: Boolean,
     /** Returns `true` when StrongBox-enforced authorisations were present. */
     @JvmField val strongBoxAuthorisationsPresent: Boolean,
+    /**
+     * Exact hardware-authenticated properties projected from this leaf KeyDescription.
+     *
+     * This is non-null only for [AttestationVerifier.verifyOfflineDeviceRegistration]; generic
+     * key-attestation verification intentionally does not claim the Offline V2 profile.
+     */
+    @JvmField val attestedDeviceProperties: OfflineAndroidAttestedDevicePropertiesV2? = null,
 ) {
     private val _certificateChain: List<X509Certificate> = certificateChain.toList()
     private val _attestationChallenge: ByteArray = attestationChallenge?.copyOf() ?: ByteArray(0)

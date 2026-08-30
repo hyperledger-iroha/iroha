@@ -52,6 +52,7 @@ pub use relation::{
     PRIVATE_PROGRAM_INSTRUCTION_COUNT_V1, PRIVATE_PROGRAM_REGISTER_COUNT_V1, PrivateInstructionV1,
     PrivateNotePlaintextV1, PrivateOpcodeV1, PrivateProgramV1, derive_note_authority_v1,
     derive_note_commitment_v1, derive_note_nullifier_v1, derive_private_program_id_v1,
+    preflight_ivm_private_note_wallet_request_v1,
 };
 pub use stark::IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1;
 pub(crate) use stark::{

@@ -12,8 +12,9 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import * as productionPrivacyCapabilities from "../src/privacyCapabilities.js";
+import { NetworkId } from "../src/networkId.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
-import { ToriiClient } from "../src/toriiClient.js";
+import { LocalSigningContext, ToriiClient } from "../src/toriiClient.js";
 
 const TEST_NATIVE_BINDING = Symbol.for("iroha.test.exact12.native-binding");
 const SUBJECT_ROOT = mkdtempSync(join(tmpdir(), "iroha-exact12-native-authority-"));
@@ -80,19 +81,27 @@ const {
 const ARCHIVE = Uint8Array.from([0x4e, 0x52, 0x54, 0x30, 1, 2, 3, 4]);
 const CATALOG = Uint8Array.from([0x4e, 0x52, 0x54, 0x30, 9, 8, 7, 6]);
 const ACTIVE_PROTOCOL = "anonymous-pgc-k-out-of-n-v1";
+const CANONICAL_AUTH = Object.freeze({
+  accountId: "alice-1@wonderland",
+  privateKey: Buffer.alloc(32, 0x31),
+});
+const TEST_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
 const OPERATION_TUPLES = Object.freeze([
-  ["zk_ace_authorization_action_v1", "authorization_action", 0],
-  ["anonymous_pgc_payment_action_v1", "payment_action", 6],
-  ["verange_range_proof_v1", "component", 1],
-  ["zk_ams_admission_and_provisioning_v1", "admission_action", 2],
-  ["vega_credential_presentation_v1", "presentation_action", 2],
-  ["zk_x509_identity_presentation_v1", "presentation_action", 2],
-  ["jindo_polynomial_evaluation_v1", "component", 0],
-  ["bootle_lantern_credential_presentation_v1", "presentation_action", 2],
-  ["orchard_note_action_v1", "note_action", 7],
-  ["fcmp_membership_payment_v1", "payment_action", 2],
-  ["ivm_private_note_action_v1", "note_action", 7],
-  ["pq_masp_note_action_v1", "note_action", 31],
+  [["zk_ace_authorization_action_v1"], "authorization_action", 0],
+  [["anonymous_pgc_payment_action_v1"], "payment_action", 6],
+  [["verange_range_proof_v1"], "component", 1],
+  [[
+    "zk_ams_batch_admission_action_v1",
+    "zk_ams_provision_account_action_v1",
+  ], "admission_action", 2],
+  [["vega_credential_presentation_v1"], "presentation_action", 2],
+  [["zk_x509_identity_presentation_v1"], "presentation_action", 2],
+  [["jindo_polynomial_evaluation_v1"], "component", 0],
+  [["bootle_lantern_credential_presentation_v1"], "presentation_action", 2],
+  [["orchard_note_action_v1"], "note_action", 7],
+  [["fcmp_membership_payment_v1"], "payment_action", 2],
+  [["ivm_private_note_action_v1"], "note_action", 7],
+  [["pq_masp_note_action_v1"], "note_action", 31],
 ]);
 
 function tagged(protocol) {
@@ -164,10 +173,15 @@ function manifestPayload() {
             assurance: { assurance: "experimental", value: null },
           }
         : null;
-      const [operationSchema, executionMode, featureMask] = OPERATION_TUPLES[index];
+      const [operationSchemas, executionMode, featureMask] = OPERATION_TUPLES[index];
       return {
         protocol_id: tagged(protocolId),
-        operation_schema: { operation_schema: operationSchema, value: null },
+        operation_schemas: {
+          primary: { operation_schema: operationSchemas[0], value: null },
+          secondary: operationSchemas.length === 2
+            ? { operation_schema: operationSchemas[1], value: null }
+            : null,
+        },
         execution_mode: { execution_mode: executionMode, value: null },
         privacy_feature_mask: featureMask,
         compiled_profile: compiledProfile,
@@ -298,7 +312,12 @@ test("canonical decoder preserves immutable bytes and the closed Exact12 mapping
     assert.deepEqual(
       manifest.protocols.map((row) => [
         row.protocol_id.protocol,
-        row.operation_schema.operation_schema,
+        [
+          row.operation_schemas.primary.operation_schema,
+          ...(row.operation_schemas.secondary === null
+            ? []
+            : [row.operation_schemas.secondary.operation_schema]),
+        ],
         row.execution_mode.execution_mode,
         row.privacy_feature_mask,
       ]),
@@ -336,7 +355,9 @@ test("native canonical status rejects truncation, suffixes, and text shells", as
 test("projection substitutions fail even behind a lying JSON projection helper", async () => {
   const cases = [
     (value) => { value.protocols.reverse(); },
-    (value) => { value.protocols[0].operation_schema.operation_schema = "pq_masp_note_action_v1"; },
+    (value) => {
+      value.protocols[0].operation_schemas.primary.operation_schema = "pq_masp_note_action_v1";
+    },
     (value) => { value.protocols[0].privacy_feature_mask = 31; },
     (value) => { value.protocols[0].readiness = { readiness: "available", detail: null }; },
     (value) => { value.protocols[6].limitation = null; },
@@ -363,7 +384,7 @@ test("admission requires active committed state and the native exact local tuple
       ACTIVE_PROTOCOL,
     );
     assert.equal(admitted.protocol_id, ACTIVE_PROTOCOL);
-    assert.equal(admitted.operation_schema, "anonymous_pgc_payment_action_v1");
+    assert.deepEqual(admitted.operation_schemas, ["anonymous_pgc_payment_action_v1"]);
     assert.equal(admitted.activation_state, "active");
     assert.equal(admitted.readiness, "available");
     assert.equal(Object.isFrozen(admitted), true);
@@ -431,6 +452,7 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
   await withNative(fakeNative(), async () => {
     const calls = [];
     const node = new ToriiClient("https://privacy.example.test", {
+      localSigningContext: new LocalSigningContext(TEST_NETWORK_ID),
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init });
         return new Response(ARCHIVE, {
@@ -439,7 +461,9 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
         });
       },
     });
-    const manifest = await getPrivacyExact12CapabilityManifestV1(node);
+    const manifest = await getPrivacyExact12CapabilityManifestV1(node, {
+      canonicalAuth: CANONICAL_AUTH,
+    });
     assert.equal(manifest.committed_height, 42n);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "https://privacy.example.test/v1/privacy/capabilities");

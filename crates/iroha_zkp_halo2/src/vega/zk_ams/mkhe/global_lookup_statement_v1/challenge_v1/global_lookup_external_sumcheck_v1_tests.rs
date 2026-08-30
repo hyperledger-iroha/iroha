@@ -310,14 +310,14 @@ fn final_bridge_message_has_exact_transcript_parity_kat_and_is_terminal() {
         transition.message_v1(),
         &gtilde_v1(REQUIRED_CUBIC_MESSAGES_V1 - 1)
     );
-    let GlobalLookupExternalSumcheckTransitionV1::Complete {
+    let GlobalLookupExternalSumcheckTransitionV1::Complete(completion) = transition else {
+        panic!("final round must be terminal");
+    };
+    let GlobalLookupExternalSumcheckCompleteV1 {
         mut transcript,
         oracle,
         ..
-    } = transition
-    else {
-        panic!("final round must be terminal");
-    };
+    } = *completion;
     let direct = sumcheck_after_v1(REQUIRED_CUBIC_MESSAGES_V1)
         .finish_sumcheck_v1()
         .unwrap();

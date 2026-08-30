@@ -114,7 +114,9 @@ final class OfflineDeviceAttestationCodec {
           value.publicKey().sec1Bytes(),
           value.recentBlockHeight(),
           value.recentBlockHash(),
-          value.expiresAtMs());
+          value.expiresAtMs(),
+          value.assertionScheme(),
+          value.assertionUsageCountLimit());
     }
     final Challenge valueToHash = new Challenge(value);
     return IrohaHash.prehash(
@@ -135,9 +137,11 @@ final class OfflineDeviceAttestationCodec {
       final byte[] publicKey,
       final long recentBlockHeight,
       final byte[] recentBlockHash,
-      final long expiresAtMs) {
+      final long expiresAtMs,
+      final String assertionScheme,
+      final Integer assertionUsageCountLimit) {
     if (version != DeviceAttestationRegistration.REGISTRATION_VERSION) {
-      throw new IllegalArgumentException("registration version must be exactly 1");
+      throw new IllegalArgumentException("registration version must be exactly 2");
     }
     final AndroidChallenge challenge =
         new AndroidChallenge(
@@ -149,7 +153,9 @@ final class OfflineDeviceAttestationCodec {
             KagemushaP256Codec.requireUncompressedPublicKey(publicKey),
             recentBlockHeight,
             recentBlockHash,
-            expiresAtMs);
+            expiresAtMs,
+            assertionScheme,
+            assertionUsageCountLimit);
     return IrohaHash.prehash(
         NoritoCodec.encode(
             challenge,
@@ -178,6 +184,11 @@ final class OfflineDeviceAttestationCodec {
       field(encoder, child -> optionString(child, value.iosEnvironment()));
       field(encoder, child -> optionString(child, value.androidPackageName()));
       field(encoder, child -> optionBytes(child, value.androidSigningCertificateSha256()));
+      field(
+          encoder,
+          child ->
+              optionAndroidAttestedDeviceProperties(
+                  child, value.androidAttestedDeviceProperties()));
       field(encoder, child -> p256PublicKey(child, value.publicKey().sec1Bytes()));
       field(encoder, child -> string(child, value.assertionScheme()));
       field(encoder, child -> string(child, value.assertionKeyAlgorithm()));
@@ -212,6 +223,9 @@ final class OfflineDeviceAttestationCodec {
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionBytes),
+          readField(
+              decoder,
+              OfflineDeviceAttestationCodec::readOptionAndroidAttestedDeviceProperties),
           new KagemushaDevicePublicKeyV2(
               readField(decoder, OfflineDeviceAttestationCodec::readP256PublicKey)),
           readField(decoder, OfflineDeviceAttestationCodec::readString),
@@ -322,9 +336,9 @@ final class OfflineDeviceAttestationCodec {
       field(encoder, child -> optionString(child, value.androidPackageName));
       field(encoder, child -> optionBytes(child, value.androidSigningCertificateSha256));
       field(encoder, child -> p256PublicKey(child, value.publicKey));
-      field(encoder, child -> string(child, DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME));
+      field(encoder, child -> string(child, value.assertionScheme));
       field(encoder, child -> string(child, DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM));
-      field(encoder, child -> optionU32(child, 1));
+      field(encoder, child -> optionU32(child, value.assertionUsageCountLimit));
       field(encoder, child -> child.writeByte(1));
       field(encoder, child -> child.writeUInt(value.recentBlockHeight, 64));
       field(encoder, child -> child.writeBytes(value.recentBlockHash));
@@ -355,6 +369,8 @@ final class OfflineDeviceAttestationCodec {
     private final long recentBlockHeight;
     private final byte[] recentBlockHash;
     private final long expiresAtMs;
+    private final String assertionScheme;
+    private final Integer assertionUsageCountLimit;
 
     private AndroidChallenge(
         final String deviceId,
@@ -365,7 +381,9 @@ final class OfflineDeviceAttestationCodec {
         final byte[] publicKey,
         final long recentBlockHeight,
         final byte[] recentBlockHash,
-        final long expiresAtMs) {
+        final long expiresAtMs,
+        final String assertionScheme,
+        final Integer assertionUsageCountLimit) {
       this.deviceId = exact(deviceId, "device_id");
       this.accountId = exact(accountId, "account_id");
       this.assetDefinitionId = assetDefinitionId;
@@ -376,6 +394,8 @@ final class OfflineDeviceAttestationCodec {
       this.recentBlockHeight = recentBlockHeight;
       this.recentBlockHash = Objects.requireNonNull(recentBlockHash, "recent_block_hash").clone();
       this.expiresAtMs = expiresAtMs;
+      this.assertionScheme = exact(assertionScheme, "assertion_scheme");
+      this.assertionUsageCountLimit = assertionUsageCountLimit;
       validateAccountId(this.accountId);
       if (assetDefinitionId != null) {
         AssetDefinitionIdEncoder.parseAddressBytes(assetDefinitionId);
@@ -384,6 +404,18 @@ final class OfflineDeviceAttestationCodec {
         throw new IllegalArgumentException("android_signing_certificate_sha256 must be 32 bytes");
       }
       KagemushaP256Codec.requireUncompressedPublicKey(this.publicKey);
+      final boolean hardwareUsageLimit =
+          DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME.equals(
+                  this.assertionScheme)
+              && Integer.valueOf(1).equals(this.assertionUsageCountLimit);
+      final boolean managedPre12ReceiptFirst =
+          DeviceAttestationRegistration.ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME.equals(
+                  this.assertionScheme)
+              && this.assertionUsageCountLimit == null;
+      if (!hardwareUsageLimit && !managedPre12ReceiptFirst) {
+        throw new IllegalArgumentException(
+            "Android pre-key challenge assertion profile is unsupported");
+      }
       if (recentBlockHeight <= 0 || expiresAtMs <= 0) {
         throw new IllegalArgumentException("challenge lifetime fields must be positive");
       }
@@ -488,6 +520,86 @@ final class OfflineDeviceAttestationCodec {
     return readField(decoder, OfflineDeviceAttestationCodec::readBytes);
   }
 
+  private static void optionAndroidAttestedDeviceProperties(
+      final NoritoEncoder encoder,
+      final OfflineAndroidAttestedDevicePropertiesV2 value) {
+    option(
+        encoder,
+        value,
+        child -> encodeAndroidAttestedDeviceProperties(child, value));
+  }
+
+  private static OfflineAndroidAttestedDevicePropertiesV2
+      readOptionAndroidAttestedDeviceProperties(final NoritoDecoder decoder) {
+    final int tag = decoder.readByte();
+    if (tag == 0) {
+      return null;
+    }
+    if (tag != 1) {
+      throw new IllegalArgumentException("invalid option tag");
+    }
+    return readField(
+        decoder, OfflineDeviceAttestationCodec::readAndroidAttestedDeviceProperties);
+  }
+
+  private static void encodeAndroidAttestedDeviceProperties(
+      final NoritoEncoder encoder,
+      final OfflineAndroidAttestedDevicePropertiesV2 value) {
+    field(encoder, child -> child.writeUInt(value.version(), 16));
+    field(encoder, child -> child.writeUInt(value.attestationVersion(), 32));
+    field(encoder, child -> child.writeUInt(value.keymintVersion(), 32));
+    field(
+        encoder,
+        child -> child.writeUInt(value.securityLevel().noritoDiscriminant(), 32));
+    field(encoder, child -> string(child, value.brand()));
+    field(encoder, child -> string(child, value.device()));
+    field(encoder, child -> string(child, value.product()));
+    field(encoder, child -> string(child, value.manufacturer()));
+    field(encoder, child -> string(child, value.model()));
+    field(encoder, child -> child.writeUInt(value.osVersion(), 32));
+    field(encoder, child -> child.writeUInt(value.osPatchLevel(), 32));
+    field(encoder, child -> child.writeUInt(value.vendorPatchLevel(), 32));
+    field(encoder, child -> child.writeUInt(value.bootPatchLevel(), 32));
+    field(encoder, child -> bytes(child, value.verifiedBootKey()));
+    field(encoder, child -> child.writeBytes(value.verifiedBootHash()));
+  }
+
+  private static OfflineAndroidAttestedDevicePropertiesV2
+      readAndroidAttestedDeviceProperties(final NoritoDecoder decoder) {
+    return new OfflineAndroidAttestedDevicePropertiesV2(
+        readField(decoder, child -> checkedU16(child.readUInt(16))),
+        readField(decoder, child -> checkedU32Long(child.readUInt(32))),
+        readField(decoder, child -> checkedU32Long(child.readUInt(32))),
+        readField(
+            decoder,
+            child ->
+                OfflineAndroidAttestedDevicePropertiesV2.SecurityLevel
+                    .fromNoritoDiscriminant(checkedU32Long(child.readUInt(32)))),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, child -> checkedU32Long(child.readUInt(32))),
+        readField(decoder, child -> checkedU32Long(child.readUInt(32))),
+        readField(decoder, child -> checkedU32Long(child.readUInt(32))),
+        readField(decoder, child -> checkedU32Long(child.readUInt(32))),
+        readField(decoder, OfflineDeviceAttestationCodec::readBytes),
+        readField(
+            decoder,
+            child -> {
+              if (child.remaining()
+                  != OfflineAndroidAttestedDevicePropertiesV2
+                      .VERIFIED_BOOT_HASH_BYTES_V2) {
+                throw new IllegalArgumentException(
+                    "verified_boot_hash must contain exactly 32 bytes");
+              }
+              return child.readBytes(
+                  OfflineAndroidAttestedDevicePropertiesV2
+                      .VERIFIED_BOOT_HASH_BYTES_V2);
+            }));
+  }
+
   private static void optionU32(final NoritoEncoder encoder, final Integer value) {
     option(encoder, value, child -> child.writeUInt(value, 32));
   }
@@ -577,6 +689,13 @@ final class OfflineDeviceAttestationCodec {
       throw new IllegalArgumentException("u32 exceeds supported JVM range");
     }
     return (int) value;
+  }
+
+  private static long checkedU32Long(final long value) {
+    if (value < 0 || value > 0xffff_ffffL) {
+      throw new IllegalArgumentException("u32 exceeds JVM range");
+    }
+    return value;
   }
 
   private static int checkedLength(final long value, final String field) {

@@ -98,6 +98,12 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
+    "connect_norito_kagemusha_eligibility_payment_prepare_v1",
+    "connect_norito_kagemusha_eligibility_payment_signing_bytes_v1",
+    "connect_norito_kagemusha_eligibility_payment_finalize_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_static_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
@@ -114,6 +120,16 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
     "connect_norito_kagemusha_secret_free_buffer",
+}
+OFFLINE_DEVICE_POLICY_EXPORTS = {
+    "connect_norito_offline_device_policy_proof_request_v1",
+    "connect_norito_offline_device_policy_proof_verify_v1",
+    "connect_norito_offline_device_eligibility_request_v1",
+    "connect_norito_offline_device_eligibility_response_verify_v1",
+    "connect_norito_offline_device_attestation_policy_view_verify_v1",
+    "connect_norito_offline_device_attestation_policy_view_claims_v1",
+    "connect_norito_offline_device_eligibility_credential_verify_v1",
+    "connect_norito_offline_device_eligibility_peer_certificate_verify_v1",
 }
 KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_candidate_lab_accepted_identity_v4",
@@ -146,6 +162,25 @@ required_privacy_ffi = (
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_inspect_signed_exact12_action_v1",
+    "iroha_privacy_authenticated_transaction_details_prepare_v1",
+    "iroha_privacy_authenticated_transaction_details_finalize_v1",
+    "iroha_privacy_authenticated_transaction_details_project_result_v1",
+    "iroha_privacy_authenticated_transaction_details_prepare_v2",
+    "iroha_privacy_authenticated_transaction_details_finalize_v2",
+    "iroha_privacy_authenticated_transaction_details_project_result_v2",
+    "iroha_privacy_authenticated_finality_proof_page_bind_v1",
+    "iroha_privacy_authenticated_finality_page_verify_v1",
+    "iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1",
+    "iroha_privacy_authenticated_finalized_action_rejection_project_v1",
+    "iroha_privacy_kagemusha_topup_finality_project_v4",
+    "iroha_privacy_authenticated_offline_device_registration_result_project_v1",
+    "iroha_privacy_authenticated_action_receipt_prepare_v1",
+    "iroha_privacy_authenticated_action_receipt_finalize_v1",
+    "iroha_privacy_authenticated_action_receipt_project_result_v1",
+    "iroha_privacy_authenticated_state_query_prepare_v1",
+    "iroha_privacy_authenticated_state_query_finalize_v1",
+    "iroha_privacy_authenticated_state_query_project_result_v1",
     "iroha_privacy_free_buffer",
 )
 PRIVACY_EXPORTS = set(required_privacy_ffi)
@@ -448,6 +483,16 @@ exact(
 )
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
 exact("C header privacy", PRIVACY_EXPORTS, header_exports("iroha_privacy_"))
+exact(
+    "Rust offline-device policy",
+    OFFLINE_DEVICE_POLICY_EXPORTS,
+    rust_exports("connect_norito_offline_device_"),
+)
+exact(
+    "C header offline-device policy",
+    OFFLINE_DEVICE_POLICY_EXPORTS,
+    header_exports("connect_norito_offline_device_"),
+)
 
 # Keep an explicit privacy-only declaration audit in addition to the generic
 # inventory checks above. This makes accidental header omissions and signature
@@ -470,6 +515,25 @@ expected_privacy_signatures = {
     "iroha_privacy_validate_compiled_profile_catalog_v1": 2,
     "iroha_privacy_exact12_fixture_bundle_v1": 2,
     "iroha_privacy_validate_exact12_fixture_bundle_v1": 2,
+    "iroha_privacy_inspect_signed_exact12_action_v1": 9,
+    "iroha_privacy_authenticated_transaction_details_prepare_v1": 13,
+    "iroha_privacy_authenticated_transaction_details_finalize_v1": 6,
+    "iroha_privacy_authenticated_transaction_details_project_result_v1": 6,
+    "iroha_privacy_authenticated_transaction_details_prepare_v2": 15,
+    "iroha_privacy_authenticated_transaction_details_finalize_v2": 6,
+    "iroha_privacy_authenticated_transaction_details_project_result_v2": 6,
+    "iroha_privacy_authenticated_finality_proof_page_bind_v1": 8,
+    "iroha_privacy_authenticated_finality_page_verify_v1": 8,
+    "iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1": 20,
+    "iroha_privacy_authenticated_finalized_action_rejection_project_v1": 18,
+    "iroha_privacy_kagemusha_topup_finality_project_v4": 8,
+    "iroha_privacy_authenticated_offline_device_registration_result_project_v1": 6,
+    "iroha_privacy_authenticated_action_receipt_prepare_v1": 17,
+    "iroha_privacy_authenticated_action_receipt_finalize_v1": 6,
+    "iroha_privacy_authenticated_action_receipt_project_result_v1": 6,
+    "iroha_privacy_authenticated_state_query_prepare_v1": 15,
+    "iroha_privacy_authenticated_state_query_finalize_v1": 6,
+    "iroha_privacy_authenticated_state_query_project_result_v1": 6,
     "iroha_privacy_free_buffer": 1,
 }
 for name, expected_parameter_count in expected_privacy_signatures.items():
@@ -578,6 +642,7 @@ require_signature_parity(
     KAGEMUSHA_EXPORTS
     | KAGEMUSHA_CANDIDATE_LAB_EXPORTS
     | PRIVACY_EXPORTS
+    | OFFLINE_DEVICE_POLICY_EXPORTS
     | SORAFS_REFERENCE_EXPORTS
     | DETACHED_EXPORTS
     | rust_transaction_signers
@@ -626,6 +691,20 @@ def swift_array(name: str) -> set[str]:
 
 swift_proof_exports = swift_array("requiredProofSymbols")
 swift_protocol_exports = swift_array("requiredProtocolSymbols")
+swift_protocol_match = re.search(r"requiredProtocolSymbols\s*=\s*\[(.*?)\n\s*\]", swift, re.S)
+if swift_protocol_match is None:
+    raise SystemExit("Swift requiredProtocolSymbols inventory is missing")
+swift_offline_device_policy_exports = set(
+    re.findall(
+        r'"(connect_norito_offline_device_[a-z0-9_]+)"',
+        swift_protocol_match.group(1),
+    )
+)
+exact(
+    "Swift offline-device policy",
+    OFFLINE_DEVICE_POLICY_EXPORTS,
+    swift_offline_device_policy_exports,
+)
 if swift_proof_exports & swift_protocol_exports:
     raise SystemExit("Swift proof and protocol symbol inventories must be disjoint")
 expected_protocol_count = len(KAGEMUSHA_EXPORTS) - 4
@@ -648,6 +727,7 @@ if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredP
 print(
     "bridge header contract passed: bridge ABI 22, "
     f"{len(KAGEMUSHA_EXPORTS)} Kagemusha exports, "
+    f"{len(OFFLINE_DEVICE_POLICY_EXPORTS)} offline-device-policy exports, "
     f"{len(PRIVACY_EXPORTS)} privacy exports, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, and "
     f"{len(DETACHED_EXPORTS)} detached-transaction exports"

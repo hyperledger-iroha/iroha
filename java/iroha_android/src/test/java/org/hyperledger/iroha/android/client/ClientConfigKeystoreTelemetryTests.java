@@ -161,7 +161,8 @@ public final class ClientConfigKeystoreTelemetryTests {
               new byte[] {0x02},
               true,
               true,
-              false);
+              false,
+              null);
       return Optional.of(result);
     }
 

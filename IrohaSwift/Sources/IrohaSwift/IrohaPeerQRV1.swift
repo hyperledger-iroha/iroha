@@ -232,6 +232,12 @@ public enum IrohaPeerQRCodecV1 {
         for message: IrohaPeerWireMessageV1,
         limits: IrohaPeerWireLimitsV1 = .peerV1
     ) throws -> String? {
+        guard message.schemaVersion == message.profile.requiredSchemaVersion else {
+            throw IrohaPeerQRErrorV1.unexpectedSchemaVersion(
+                expected: message.profile.requiredSchemaVersion,
+                actual: message.schemaVersion
+            )
+        }
         let messageByteCount = IrohaPeerWireMessageV1.headerBytes + message.encodedBody.count
         let maximumEncodedBytes = try limits.maximumEncodedBytes(for: message.profile)
         guard messageByteCount > IrohaPeerWireMessageV1.headerBytes,
@@ -264,6 +270,12 @@ public enum IrohaPeerQRCodecV1 {
         for message: IrohaPeerWireMessageV1,
         limits: IrohaPeerWireLimitsV1 = .peerV1
     ) throws -> [String] {
+        guard message.schemaVersion == message.profile.requiredSchemaVersion else {
+            throw IrohaPeerQRErrorV1.unexpectedSchemaVersion(
+                expected: message.profile.requiredSchemaVersion,
+                actual: message.schemaVersion
+            )
+        }
         let shardBytes = IrohaPeerWireMessageV1.qrDataShardBytes
         let dataCount = message.encodedBody.count.qrCeilingDivisor(shardBytes)
         guard dataCount > 0, dataCount <= Int(UInt16.max) else {

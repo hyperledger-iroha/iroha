@@ -47,6 +47,7 @@ CARGO_WRAPPER_ENTRY_PATH="$(
   cd "$(dirname "$0")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$0")"
 )"
 AUTHENTICATED_COMMAND_NAME=""
+AUTHENTICATED_APPLE_PROFILE="${IROHA_PRIVACY_AUTHENTICATED_APPLE_CARGO_PROFILE:-}"
 SELECTED_LOCKFILE="$(
   privacy_sdk_resolve_cargo_lockfile "${IROHA_PRIVACY_SDK_ROOT}" "${PYTHON_BIN}"
 )"
@@ -58,6 +59,112 @@ if [[ "${REAL_CARGO_PATH}" != "${IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH}" ]]; th
   echo "error: privacy SDK real Cargo does not match the authenticated toolchain" >&2
   exit 1
 fi
+
+privacy_sdk_expected_apple_target() {
+  case "$1" in
+    privacy-apple-ios-device-arm64)
+      printf '%s\n' aarch64-apple-ios
+      ;;
+    privacy-apple-ios-simulator-arm64)
+      printf '%s\n' aarch64-apple-ios-sim
+      ;;
+    privacy-apple-ios-simulator-x86_64)
+      printf '%s\n' x86_64-apple-ios
+      ;;
+    privacy-apple-macos-arm64)
+      printf '%s\n' aarch64-apple-darwin
+      ;;
+    privacy-apple-macos-x86_64)
+      printf '%s\n' x86_64-apple-darwin
+      ;;
+    *)
+      echo "error: unsupported authenticated Apple Cargo profile" >&2
+      return 1
+      ;;
+  esac
+}
+
+assert_authenticated_apple_profile_environment() {
+  local expected_target=""
+  local apple_state_present=0
+  local environment_name
+  for environment_name in \
+    IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH \
+    IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL \
+    IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGET \
+    IROHA_PRIVACY_AUTHENTICATED_DEVELOPER_DIR \
+    IROHA_PRIVACY_AUTHENTICATED_SDKROOT; do
+    if [[ -n "${!environment_name:-}" ]]; then
+      apple_state_present=1
+    fi
+  done
+  if [[ -z "${AUTHENTICATED_APPLE_PROFILE}" ]]; then
+    if [[ "${apple_state_present}" == "1" ]]; then
+      echo "error: authenticated Apple Cargo state has no exact profile" >&2
+      return 1
+    fi
+    return 0
+  fi
+  expected_target="$(
+    privacy_sdk_expected_apple_target "${AUTHENTICATED_APPLE_PROFILE}"
+  )" || return 1
+  if [[ "${AUTHENTICATED_COMMAND_NAME}" != "" && \
+    "${AUTHENTICATED_COMMAND_NAME}" != "build" ]]; then
+    echo "error: authenticated Apple Cargo profiles permit only build" >&2
+    return 1
+  fi
+  if [[ "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" != \
+      "1.93.1-aarch64-apple-darwin" || \
+    "${IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGET:-}" != "${expected_target}" || \
+    -z "${IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH:-}" || \
+    -z "${IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL:-}" || \
+    -z "${IROHA_PRIVACY_AUTHENTICATED_DEVELOPER_DIR:-}" || \
+    -z "${IROHA_PRIVACY_AUTHENTICATED_SDKROOT:-}" || \
+    "${CARGO:-}" != "${CARGO_WRAPPER_ENTRY_PATH}" || \
+    "${DEVELOPER_DIR:-}" != \
+      "${IROHA_PRIVACY_AUTHENTICATED_DEVELOPER_DIR:-}" || \
+    "${SDKROOT:-}" != "${IROHA_PRIVACY_AUTHENTICATED_SDKROOT:-}" ]]; then
+    echo "error: authenticated Apple Cargo profile descriptor is incomplete" >&2
+    return 1
+  fi
+  case "${AUTHENTICATED_APPLE_PROFILE}" in
+    privacy-apple-ios-device-arm64)
+      if [[ "${IPHONEOS_DEPLOYMENT_TARGET:-}" != "15.0" || \
+        -n "${IPHONESIMULATOR_DEPLOYMENT_TARGET:-}" || \
+        -n "${MACOSX_DEPLOYMENT_TARGET:-}" ]]; then
+        echo "error: authenticated Apple device deployment environment changed" >&2
+        return 1
+      fi
+      ;;
+    privacy-apple-ios-simulator-arm64|privacy-apple-ios-simulator-x86_64)
+      if [[ "${IPHONEOS_DEPLOYMENT_TARGET:-}" != "15.0" || \
+        "${IPHONESIMULATOR_DEPLOYMENT_TARGET:-}" != "15.0" || \
+        -n "${MACOSX_DEPLOYMENT_TARGET:-}" ]]; then
+        echo "error: authenticated Apple simulator deployment environment changed" >&2
+        return 1
+      fi
+      ;;
+    privacy-apple-macos-arm64|privacy-apple-macos-x86_64)
+      if [[ "${MACOSX_DEPLOYMENT_TARGET:-}" != "12.0" || \
+        -n "${IPHONEOS_DEPLOYMENT_TARGET:-}" || \
+        -n "${IPHONESIMULATOR_DEPLOYMENT_TARGET:-}" ]]; then
+        echo "error: authenticated Apple macOS deployment environment changed" >&2
+        return 1
+      fi
+      ;;
+  esac
+  "${PYTHON_BIN}" -I -S -B \
+    "${IROHA_PRIVACY_SDK_ROOT}/scripts/run_mobile_hermetic_command.py" \
+    verify-apple-targets \
+    --toolchain-cargo "${IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH}" \
+    --toolchain-selector \
+      "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" \
+    --manifest \
+      "${IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH}" \
+    --manifest-seal \
+      "${IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL}" \
+    --target "${expected_target}"
+}
 
 privacy_sdk_authenticated_host_triple() {
   case "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" in
@@ -209,6 +316,10 @@ assert_authenticated_python_build_policy() {
     PYTHON_SYS_EXECUTABLE \
     MACOSX_DEPLOYMENT_TARGET \
     IROHA_PYTHON_SKIP_RUNTIME_LINK; do
+    if [[ "${environment_name}" == "MACOSX_DEPLOYMENT_TARGET" && \
+      -n "${AUTHENTICATED_APPLE_PROFILE}" ]]; then
+      continue
+    fi
     if [[ -n "${!environment_name+x}" ]]; then
       python_surface_present=1
       break
@@ -252,10 +363,16 @@ assert_authenticated_python_command_environment() {
 
   if [[ -z "${IROHA_PRIVACY_AUTHENTICATED_PYTHON_BUILD_POLICY:-}" ]]; then
     if [[ -n "${CARGO+x}" ]]; then
-      echo \
-        "error: native Cargo invocation must not inherit the Cargo selector environment" \
-        >&2
-      return 1
+      if [[ -n "${AUTHENTICATED_APPLE_PROFILE}" && \
+        "${AUTHENTICATED_COMMAND_NAME}" == "build" && \
+        "${CARGO}" == "${CARGO_WRAPPER_ENTRY_PATH}" ]]; then
+        :
+      else
+        echo \
+          "error: native Cargo invocation must not inherit the Cargo selector environment" \
+          >&2
+        return 1
+      fi
     fi
     return 0
   fi
@@ -475,8 +592,57 @@ assert_no_cargo_policy_environment() {
           return 1
         fi
         ;;
+      DEVELOPER_DIR)
+        if [[ -z "${AUTHENTICATED_APPLE_PROFILE}" || \
+          "${environment_value}" != \
+            "${IROHA_PRIVACY_AUTHENTICATED_DEVELOPER_DIR:-}" ]]; then
+          echo "error: Xcode developer directory is not authenticated" >&2
+          return 1
+        fi
+        ;;
+      SDKROOT)
+        if [[ -z "${AUTHENTICATED_APPLE_PROFILE}" || \
+          "${environment_value}" != \
+            "${IROHA_PRIVACY_AUTHENTICATED_SDKROOT:-}" ]]; then
+          echo "error: Apple SDK root is not authenticated" >&2
+          return 1
+        fi
+        ;;
+      IPHONEOS_DEPLOYMENT_TARGET)
+        case "${AUTHENTICATED_APPLE_PROFILE}" in
+          privacy-apple-ios-device-arm64|privacy-apple-ios-simulator-arm64|privacy-apple-ios-simulator-x86_64)
+            [[ "${environment_value}" == "15.0" ]] || {
+              echo "error: iOS deployment target is not authenticated" >&2
+              return 1
+            }
+            ;;
+          *)
+            echo "error: iOS deployment target is not authenticated" >&2
+            return 1
+            ;;
+        esac
+        ;;
+      IPHONESIMULATOR_DEPLOYMENT_TARGET)
+        case "${AUTHENTICATED_APPLE_PROFILE}" in
+          privacy-apple-ios-simulator-arm64|privacy-apple-ios-simulator-x86_64)
+            [[ "${environment_value}" == "15.0" ]] || {
+              echo "error: iOS simulator deployment target is not authenticated" >&2
+              return 1
+            }
+            ;;
+          *)
+            echo "error: iOS simulator deployment target is not authenticated" >&2
+            return 1
+            ;;
+        esac
+        ;;
       MACOSX_DEPLOYMENT_TARGET)
-        if [[ "${AUTHENTICATED_COMMAND_NAME}" != "rustc" || \
+        if [[ "${AUTHENTICATED_APPLE_PROFILE}" == privacy-apple-macos-* ]]; then
+          if [[ "${environment_value}" != "12.0" ]]; then
+            echo "error: Apple bridge macOS deployment target is not authenticated" >&2
+            return 1
+          fi
+        elif [[ "${AUTHENTICATED_COMMAND_NAME}" != "rustc" || \
           "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" != \
             "1.93.1-aarch64-apple-darwin" || \
           "${IROHA_PRIVACY_AUTHENTICATED_MACOSX_DEPLOYMENT_TARGET:-}" != \
@@ -508,7 +674,7 @@ assert_no_cargo_policy_environment() {
       CARGO_ENCODED_RUSTDOCFLAGS|\
       IROHA_PYTHON_RUNTIME_PATH|\
       AR|CC|CFLAGS|CPATH|CPPFLAGS|CXX|CXXFLAGS|LD|LD_LIBRARY_PATH|LDFLAGS|\
-      LIBRARY_PATH|RANLIB|SDKROOT|\
+      LIBRARY_PATH|RANLIB|\
       RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER|\
       RUSTDOC|RUSTDOCFLAGS|RUSTFLAGS|RUSTUP_*)
         echo \
@@ -728,6 +894,7 @@ assert_authenticated_cargo_lock_state() {
     "${IROHA_PRIVACY_SDK_ROOT}" \
     "$(pwd -P)" \
     "${PYTHON_BIN}" || status=1
+  assert_authenticated_apple_profile_environment || status=1
   return "${status}"
 }
 
@@ -852,6 +1019,43 @@ assert_authenticated_target_dir_option() {
     "${value}" != "${IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR}" ]]; then
     reject_cargo_invocation \
       "rejected an unauthenticated or mismatched Cargo target-dir override"
+  fi
+}
+
+assert_authenticated_apple_target_option() {
+  local argument="$1"
+  local following_value="$2"
+  local has_following_value="$3"
+  local expected value
+
+  POLICY_OPTION_ARITY=1
+  if [[ -z "${AUTHENTICATED_APPLE_PROFILE}" ]]; then
+    reject_cargo_invocation \
+      "rejected a command-line target or compiler policy override outside an authenticated Apple profile"
+  fi
+  expected="$(
+    privacy_sdk_expected_apple_target "${AUTHENTICATED_APPLE_PROFILE}"
+  )" || exit 1
+  case "${argument}" in
+    --target)
+      if [[ "${has_following_value}" != "1" ]]; then
+        reject_cargo_invocation "rejected --target without its required value"
+      fi
+      value="${following_value}"
+      POLICY_OPTION_ARITY=2
+      ;;
+    --target=*)
+      reject_cargo_invocation \
+        "rejected an alternate authenticated Apple target option form"
+      ;;
+    *)
+      reject_cargo_invocation "rejected an unparseable Apple target option"
+      ;;
+  esac
+  if [[ "${value}" != "${expected}" || \
+    "${IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGET:-}" != "${expected}" ]]; then
+    reject_cargo_invocation \
+      "rejected a target that does not match the authenticated Apple profile"
   fi
 }
 
@@ -1033,6 +1237,7 @@ done
 assert_authenticated_maturin_arguments || exit 1
 
 has_locked=0
+authenticated_apple_target_count=0
 argument_index=0
 while [[ "${argument_index}" -lt "${cargo_argument_limit}" ]]; do
   argument="${original_arguments[${argument_index}]}"
@@ -1049,7 +1254,19 @@ while [[ "${argument_index}" -lt "${cargo_argument_limit}" ]]; do
       reject_cargo_invocation \
         "rejected an invocation that attempted to override the selected lockfile"
       ;;
-    --target|--target=*|\
+    --target|--target=*)
+      policy_following_available=0
+      if [[ $((argument_index + 1)) -lt "${cargo_argument_limit}" ]]; then
+        policy_following_available=1
+      fi
+      assert_authenticated_apple_target_option \
+        "${argument}" \
+        "${original_arguments[$((argument_index + 1))]-}" \
+        "${policy_following_available}"
+      authenticated_apple_target_count=$((authenticated_apple_target_count + 1))
+      argument_index=$((argument_index + POLICY_OPTION_ARITY))
+      continue
+      ;;
     --rustc|--rustc=*|--rustc-wrapper|--rustc-wrapper=*|\
     --rustc-workspace-wrapper|--rustc-workspace-wrapper=*|\
     --rustflags|--rustflags=*)
@@ -1125,6 +1342,12 @@ while [[ "${argument_index}" -lt "${cargo_argument_limit}" ]]; do
   argument_index=$((argument_index + 1))
 done
 
+if [[ -n "${AUTHENTICATED_APPLE_PROFILE}" && \
+  "${authenticated_apple_target_count}" -ne 1 ]]; then
+  reject_cargo_invocation \
+    "rejected an authenticated Apple build without exactly one target"
+fi
+
 # Maturin 1.14.1 needs one exact, authenticated install-name pair for this
 # abi3 module on Darwin. Every other post-`--` rustc surface stays closed.
 if [[ "${command_name}" == "rustc" ]]; then
@@ -1161,5 +1384,13 @@ while [[ "${argument_index}" -lt "${argument_count}" ]]; do
   argument_index=$((argument_index + 1))
 done
 
-printf '%s\n' "${command_name}" >>"${CARGO_AUDIT_PATH}"
+if [[ -n "${AUTHENTICATED_APPLE_PROFILE}" ]]; then
+  printf '%s\t%s\t%s\n' \
+    "${command_name}" \
+    "${AUTHENTICATED_APPLE_PROFILE}" \
+    "${IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGET}" \
+    >>"${CARGO_AUDIT_PATH}"
+else
+  printf '%s\n' "${command_name}" >>"${CARGO_AUDIT_PATH}"
+fi
 run_real_cargo_and_verify_locks -Z unstable-options "${arguments[@]}"

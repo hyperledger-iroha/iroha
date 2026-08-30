@@ -173,8 +173,14 @@ public enum KagemushaRecursiveSpend {
     }
 
     public static let requiredNativeBridgeAbiVersion: UInt32 = 22
+    /// Frozen recursive-proof/artifact ABI carried unchanged inside the ABI-22 bridge.
+    public static let requiredRecursiveProofArtifactABIVersion: UInt32 = 21
     /// Mandatory sender-final peer-cash contract advertised by Torii readiness.
     public static let cashHandoffCapabilityV1 = "cash_handoff_v1"
+    /// Eligibility-gated peer-cash contract. This is a distinct capability so
+    /// peers never reinterpret a legacy `cash_handoff_v1` payment in place.
+    public static let cashHandoffEligibilityCapabilityV1 =
+        "cash_handoff_eligibility_v1"
     public static let authorizationPreparationVersionV2: UInt16 = 2
     public static let wireVersionV4: UInt16 = 4
     public static let localWitnessVersionV4: UInt16 = 4
@@ -328,6 +334,10 @@ public enum KagemushaRecursiveSpend {
         wire("KagemushaRecursiveSpendSplitResultV4")
     public static let peerPaymentWireNameV4 =
         wire("KagemushaRecursiveSpendPeerPaymentV4")
+    public static let eligibilityPaymentPayloadWireNameV1 =
+        wire("KagemushaEligibilityPaymentEnvelopePayloadV1")
+    public static let eligibilityPaymentEnvelopeWireNameV1 =
+        wire("KagemushaEligibilityPaymentEnvelopeV1")
     public static let verifyRequestWireNameV4 =
         wire("KagemushaRecursiveSpendVerifyRequestV4")
     public static let verifyResultWireNameV4 =
@@ -367,6 +377,8 @@ public enum KagemushaRecursiveSpend {
              bundleSummaryWireNameV4,
              splitResultWireNameV4,
              peerPaymentWireNameV4,
+             eligibilityPaymentPayloadWireNameV1,
+             eligibilityPaymentEnvelopeWireNameV1,
              verifyRequestWireNameV4,
              verifyLocalRequestWireNameV4,
              verifyResultWireNameV4,
@@ -449,6 +461,27 @@ public enum KagemushaRecursiveSpend {
     /// Text and individual QR/APDU frames retain smaller independent bounds.
     public static let maximumPeerArchiveBytesV4 = 32 * 1024 * 1024
     public static let maximumPeerArchiveBytes = maximumPeerArchiveBytesV4
+    public static let maximumEligibilityCredentialArchiveBytesV1 = 64 * 1024
+    public static let maximumEligibilityPaymentEnvelopeArchiveBytesV1 =
+        maximumPeerArchiveBytesV4 + maximumEligibilityCredentialArchiveBytesV1
+            + 64 * 1024
+    public static let maximumDeviceAttestationPolicyViewArchiveBytesV1 =
+        8 * 1024 * 1024 + 256 * 1024 + 64 * 1024
+    public static let maximumDevicePolicyProofPageArchiveBytesV1 =
+        maximumDeviceAttestationPolicyViewArchiveBytesV1 + 3 * 1024 * 1024 + 64 * 1024
+    public static let maximumDevicePolicyVerifiedPageBytesV1 =
+        maximumDeviceAttestationPolicyViewArchiveBytesV1 + 56
+    public static let maximumDeviceEligibilityRequestArchiveBytesV1 = 8 * 1024
+    public static let maximumDeviceEligibilityResponseArchiveBytesV1 =
+        maximumDeviceAttestationPolicyViewArchiveBytesV1
+            + maximumEligibilityCredentialArchiveBytesV1 + 64 * 1024
+    public static let maximumDeviceEligibilityVerifiedResponseBytesV1 =
+        maximumDeviceEligibilityResponseArchiveBytesV1 + 64 * 1024
+    public static let maximumDeviceEligibilityCredentialTtlMillisecondsV1: UInt64 =
+        24 * 60 * 60 * 1_000
+    public static let maximumDeviceEligibilityDeviceIdBytesV1 = 128
+    public static let maximumDeviceEligibilityAttestationKeyIdBytesV1 = 64
+    public static let maximumEligibilityIssuerArchiveBytesV1 = 4 * 1024
     /// Maximum canonical ABI-21 promoted-release marker accepted by native install.
     public static let maximumPromotionRecordBytesV4 = 1_024 * 1_024
     /// Exact Rust `KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4`.
@@ -508,6 +541,20 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
         "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
         "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
+        "connect_norito_offline_device_policy_proof_request_v1",
+        "connect_norito_offline_device_policy_proof_verify_v1",
+        "connect_norito_offline_device_eligibility_request_v1",
+        "connect_norito_offline_device_eligibility_response_verify_v1",
+        "connect_norito_offline_device_attestation_policy_view_verify_v1",
+        "connect_norito_offline_device_attestation_policy_view_claims_v1",
+        "connect_norito_offline_device_eligibility_credential_verify_v1",
+        "connect_norito_offline_device_eligibility_peer_certificate_verify_v1",
+        "connect_norito_kagemusha_eligibility_payment_prepare_v1",
+        "connect_norito_kagemusha_eligibility_payment_signing_bytes_v1",
+        "connect_norito_kagemusha_eligibility_payment_finalize_v1",
+        "connect_norito_kagemusha_eligibility_payment_validate_static_v1",
+        "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1",
+        "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1",
         "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
         "connect_norito_kagemusha_output_membership_frontier_build_v4",
         "connect_norito_kagemusha_output_membership_paths_derive_v4",

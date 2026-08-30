@@ -451,6 +451,100 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         }
     }
 
+    func testEligibilityPaymentHasDistinctCapabilitySchemaAndCanonicalType() throws {
+        XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion, 22)
+        XCTAssertEqual(
+            KagemushaRecursiveSpend.requiredRecursiveProofArtifactABIVersion,
+            21
+        )
+        XCTAssertEqual(KagemushaRecursiveSpend.artifactManifestVersionV4, 4)
+        XCTAssertEqual(
+            IrohaPeerKagemushaEligibilityAdapterV1.capability,
+            "cash_handoff_eligibility_v1"
+        )
+        XCTAssertNotEqual(
+            IrohaPeerKagemushaEligibilityAdapterV1.capability,
+            KagemushaRecursiveSpend.cashHandoffCapabilityV1
+        )
+
+        let canonical = irohaPeerKagemushaStructuralArchiveV1(
+            kind: .payment,
+            schemaVersion: IrohaPeerWireMessageV1.kagemushaEligibilityPaymentSchemaVersion,
+            payload: Data("eligibility-envelope".utf8)
+        )
+        let envelope = try IrohaPeerKagemushaEligibilityPaymentEnvelopeV1(
+            canonicalArchive: canonical
+        )
+        let message = try IrohaPeerKagemushaEligibilityAdapterV1.wrap(envelope)
+        XCTAssertEqual(message.kind, .payment)
+        XCTAssertEqual(message.schemaVersion, 0x0103)
+        XCTAssertEqual(
+            try IrohaPeerWireMessageV1.decode(message.encoded),
+            message
+        )
+        XCTAssertEqual(
+            try IrohaPeerKagemushaEligibilityAdapterV1.decode(message),
+            envelope
+        )
+
+        let legacyPayment = irohaPeerKagemushaStructuralArchiveV1(
+            kind: .payment,
+            payload: Data([0x51])
+        )
+        XCTAssertNoThrow(try IrohaPeerWireMessageV1(
+            profile: .kagemusha,
+            kind: .payment,
+            schemaVersion: 0x0102,
+            canonicalPayload: legacyPayment
+        ))
+        XCTAssertThrowsError(try IrohaPeerWireMessageV1(
+            profile: .kagemusha,
+            kind: .payment,
+            schemaVersion: 0x0103,
+            canonicalPayload: legacyPayment
+        )) { error in
+            XCTAssertEqual(
+                error as? IrohaPeerWireMessageErrorV1,
+                .invalidCanonicalPayload(profile: .kagemusha, kind: .payment)
+            )
+        }
+        XCTAssertThrowsError(try IrohaPeerWireMessageV1(
+            profile: .kagemusha,
+            kind: .payment,
+            schemaVersion: 0x0102,
+            canonicalPayload: canonical
+        )) { error in
+            XCTAssertEqual(
+                error as? IrohaPeerWireMessageErrorV1,
+                .invalidCanonicalPayload(profile: .kagemusha, kind: .payment)
+            )
+        }
+
+        for kind in [IrohaPeerWireKindV1.receiveRequest, .acknowledgement] {
+            XCTAssertThrowsError(try IrohaPeerWireMessageV1(
+                profile: .kagemusha,
+                kind: kind,
+                schemaVersion: 0x0103,
+                canonicalPayload: canonical
+            )) { error in
+                XCTAssertEqual(
+                    error as? IrohaPeerWireMessageErrorV1,
+                    .schemaVersionMismatch(
+                        profile: .kagemusha,
+                        expected: 0x0102,
+                        actual: 0x0103
+                    )
+                )
+            }
+        }
+
+        var wrongSchema = canonical
+        wrongSchema[6] ^= 1
+        XCTAssertThrowsError(try IrohaPeerKagemushaEligibilityPaymentEnvelopeV1(
+            canonicalArchive: wrongSchema
+        ))
+    }
+
     private func makeMessage(bytes: Data) throws -> IrohaPeerWireMessageV1 {
         try IrohaPeerWireMessageV1(
             profile: .kagemusha,

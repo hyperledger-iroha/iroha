@@ -349,13 +349,15 @@ fn owner_is_move_only_source_bound_and_all_stronger_gates_remain_false() {
     assert_eq!(EXISTING_RADIX_CANDIDATE_SEMANTIC_BYTES_V1, 760_240);
     assert_eq!(EXISTING_RADIX_CANDIDATE_NEW_FILE_BYTES_V1, 0);
     assert_eq!(EXISTING_RADIX_CANDIDATE_NEW_IO_BYTES_V1, 0);
-    assert!(EXISTING_RADIX_CANDIDATE_OWNER_MATERIALIZED_V1);
-    assert!(!LIVE_PHASE23_EXISTING_RADIX_SOURCE_INTEGRATED_V1);
-    assert!(!DIRECT_QUOTIENT_OPENING_OWNERS_INTEGRATED_V1);
-    assert!(!RESOURCE_EVIDENCE_ACCEPTED_V1);
-    assert!(!READINESS_ACCEPTED_V1);
-    assert!(!RELEASE_READY_V1);
-    assert!(!RELEASE_COMPLETE_V1);
+    const {
+        assert!(EXISTING_RADIX_CANDIDATE_OWNER_MATERIALIZED_V1);
+        assert!(!LIVE_PHASE23_EXISTING_RADIX_SOURCE_INTEGRATED_V1);
+        assert!(!DIRECT_QUOTIENT_OPENING_OWNERS_INTEGRATED_V1);
+        assert!(!RESOURCE_EVIDENCE_ACCEPTED_V1);
+        assert!(!READINESS_ACCEPTED_V1);
+        assert!(!RELEASE_READY_V1);
+        assert!(!RELEASE_COMPLETE_V1);
+    };
 
     for required in [
         "session: GlobalLookupCommitmentSessionV1<ExistingRadixCandidateCompleteStageV1>",

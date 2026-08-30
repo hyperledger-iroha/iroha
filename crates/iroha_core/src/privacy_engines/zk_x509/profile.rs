@@ -288,9 +288,8 @@ pub(crate) use readiness_certificates::{
     canonical_resource_environment_v1, canonical_resource_process_limits_v1,
     resource_certificate_matches_source_v1, validate_resource_certificate_payload_v1,
 };
-use readiness_certificates::{
+pub(crate) use readiness_certificates::{
     ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1,
-    resource_certificate_is_pinned_v1, soundness_certificate_is_pinned_v1,
 };
 use readiness_certificates::{
     ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1,
@@ -298,6 +297,9 @@ use readiness_certificates::{
     ZK_X509_RESOURCE_MAXIMUM_PEAK_RSS_BYTES_V1, ZK_X509_RESOURCE_POSITIVE_ELAPSED_MILLIS_V1,
     ZK_X509_RESOURCE_POSITIVE_PEAK_ADDRESS_SPACE_BYTES_V1,
     ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1,
+};
+use readiness_certificates::{
+    resource_certificate_is_pinned_v1, soundness_certificate_is_pinned_v1,
 };
 const fn digest_is_nonzero_v1(digest: [u8; 32]) -> bool {
     let mut index = 0;
@@ -388,6 +390,19 @@ const fn native_release_capture_pins_complete_v1(pins: ZkX509ReleaseCapturePinsV
         && pins.maximum_elapsed_millis > 0
         && pins.maximum_peak_rss_bytes > 0
         && pins.maximum_peak_address_space_bytes > 0
+}
+/// Whether every immutable pin required before the expensive activation
+/// certificate checks is populated.
+///
+/// This is deliberately only a prerequisite gate. A `true` result does not
+/// establish activation readiness; callers must still run
+/// [`zk_x509_activation_readiness_v1`] and [`require_activation_readiness_v1`].
+/// A `false` result does prove that activation is unavailable, allowing common
+/// capability-catalog paths to fail closed without deriving the large fixed
+/// algebraic profile solely to rediscover a missing resource capture.
+pub(crate) const fn zk_x509_activation_prerequisite_pins_complete_v1() -> bool {
+    native_release_capture_pins_complete_v1(source_release_capture_pins_v1())
+        && digest_is_nonzero_v1(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn native_release_expectation_digests_match_with_pins_v1(
@@ -834,6 +849,7 @@ mod tests {
         match source_release_pin_state_v1(source_release_capture_pins_v1()) {
             SourceReleasePinStateV1::BootstrapOpen => {
                 assert_eq!(ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, [0; 32]);
+                assert!(!zk_x509_activation_prerequisite_pins_complete_v1());
                 assert!(!readiness.resource_benchmarks);
                 assert!(!readiness.is_complete());
                 assert_eq!(
@@ -843,6 +859,7 @@ mod tests {
             }
             SourceReleasePinStateV1::FullyPinned => {
                 assert_ne!(ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, [0; 32]);
+                assert!(zk_x509_activation_prerequisite_pins_complete_v1());
                 assert!(readiness.resource_benchmarks);
                 assert!(readiness.is_complete());
                 assert_eq!(require_activation_readiness_v1(readiness), Ok(()));

@@ -144,6 +144,10 @@ object IrohaPeerQRCodecV1 {
 
     @JvmStatic
     fun encode(message: IrohaPeerWireMessageV1): List<String> {
+        require(
+            message.canonicalPayload.schemaVersion ==
+                message.canonicalPayload.profile.requiredSchemaVersion,
+        ) { "IQR1 carries only the legacy profile schema" }
         val complete = staticCompleteTextCandidate(message)
         return if (complete == null) animatedFrameTexts(message) else listOf(complete)
     }
@@ -151,6 +155,10 @@ object IrohaPeerQRCodecV1 {
     /** Character-bounded static candidate; the renderer must also enforce QR version 17-M. */
     @JvmStatic
     fun staticCompleteTextCandidate(message: IrohaPeerWireMessageV1): String? {
+        require(
+            message.canonicalPayload.schemaVersion ==
+                message.canonicalPayload.profile.requiredSchemaVersion,
+        ) { "IQR1 carries only the legacy profile schema" }
         val encodedMessage = message.encode()
         return try {
             val frame = IrohaPeerQRFrameV1(
@@ -173,6 +181,10 @@ object IrohaPeerQRCodecV1 {
     /** Header,D0,D1,P0,... with the identical header repeated every 12 non-header frames. */
     @JvmStatic
     fun animatedFrameTexts(message: IrohaPeerWireMessageV1): List<String> {
+        require(
+            message.canonicalPayload.schemaVersion ==
+                message.canonicalPayload.profile.requiredSchemaVersion,
+        ) { "IQR1 carries only the legacy profile schema" }
         val body = message.encodedBody
         val encodedMessage = message.encode()
         try {

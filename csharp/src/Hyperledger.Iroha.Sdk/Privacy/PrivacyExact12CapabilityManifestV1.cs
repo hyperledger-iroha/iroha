@@ -14,15 +14,16 @@ public enum PrivacyOperationSchemaV1 : uint
     ZkAceAuthorizationActionV1 = 0,
     AnonymousPgcPaymentActionV1 = 1,
     VeRangeRangeProofV1 = 2,
-    ZkAmsAdmissionAndProvisioningV1 = 3,
-    VegaCredentialPresentationV1 = 4,
-    ZkX509IdentityPresentationV1 = 5,
-    JindoPolynomialEvaluationV1 = 6,
-    BootleLanternCredentialPresentationV1 = 7,
-    OrchardNoteActionV1 = 8,
-    FcmpMembershipPaymentV1 = 9,
-    IvmPrivateNoteActionV1 = 10,
-    PqMaspNoteActionV1 = 11,
+    ZkAmsBatchAdmissionActionV1 = 3,
+    ZkAmsProvisionAccountActionV1 = 4,
+    VegaCredentialPresentationV1 = 5,
+    ZkX509IdentityPresentationV1 = 6,
+    JindoPolynomialEvaluationV1 = 7,
+    BootleLanternCredentialPresentationV1 = 8,
+    OrchardNoteActionV1 = 9,
+    FcmpMembershipPaymentV1 = 10,
+    IvmPrivateNoteActionV1 = 11,
+    PqMaspNoteActionV1 = 12,
 }
 
 /// <summary>Closed execution classification carried by an Exact12 capability row.</summary>
@@ -88,7 +89,7 @@ public sealed class PrivacyExact12CapabilityRowV1
 
     internal PrivacyExact12CapabilityRowV1(
         PrivacyProtocolIdV1 protocolId,
-        PrivacyOperationSchemaV1 operationSchema,
+        IReadOnlyList<PrivacyOperationSchemaV1> operationSchemas,
         PrivacyExecutionModeV1 executionMode,
         byte privacyFeatureMask,
         PrivacyCapabilityReadinessV1 readiness,
@@ -99,7 +100,8 @@ public sealed class PrivacyExact12CapabilityRowV1
         bool localCompiledTupleMatches)
     {
         ProtocolId = protocolId;
-        OperationSchema = operationSchema;
+        OperationSchemas = new ReadOnlyCollection<PrivacyOperationSchemaV1>(
+            operationSchemas.ToArray());
         ExecutionMode = executionMode;
         PrivacyFeatureMask = privacyFeatureMask;
         Readiness = readiness;
@@ -112,7 +114,8 @@ public sealed class PrivacyExact12CapabilityRowV1
 
     public PrivacyProtocolIdV1 ProtocolId { get; }
 
-    public PrivacyOperationSchemaV1 OperationSchema { get; }
+    /// <summary>One exact action, or ZK-AMS's ordered admission/provisioning pair.</summary>
+    public IReadOnlyList<PrivacyOperationSchemaV1> OperationSchemas { get; }
 
     public PrivacyExecutionModeV1 ExecutionMode { get; }
 
@@ -336,7 +339,8 @@ public sealed class PrivacyExact12CapabilityTupleAdmissionV1
 
     internal static PrivacyExact12CapabilityTupleAdmissionV1 IssueValidated(
         PrivacyExact12CapabilityManifestV1 manifest,
-        PrivacyProtocolIdV1 protocol)
+        PrivacyProtocolIdV1 protocol,
+        PrivacyOperationSchemaV1 operationSchema)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         var row = manifest.RowFor(protocol);
@@ -350,16 +354,25 @@ public sealed class PrivacyExact12CapabilityTupleAdmissionV1
             throw new InvalidOperationException(
                 "Exact12 committed profile differs from CompiledProfileCatalogV1.");
         }
+        if (!row.OperationSchemas.Contains(operationSchema))
+        {
+            throw new InvalidOperationException(
+                "Exact12 operation schema is not exposed by the selected protocol.");
+        }
         return new PrivacyExact12CapabilityTupleAdmissionV1(
             row.ProtocolId,
             manifest.CommittedHeight,
             manifest.ManifestDigest,
-            row.OperationSchema);
+            operationSchema);
     }
 
-    internal void RequireAuthentic(PrivacyProtocolIdV1 protocol)
+    internal void RequireAuthentic(
+        PrivacyProtocolIdV1 protocol,
+        PrivacyOperationSchemaV1 operationSchema)
     {
-        if (!ReferenceEquals(seal, AdmissionSeal) || ProtocolId != protocol)
+        if (!ReferenceEquals(seal, AdmissionSeal)
+            || ProtocolId != protocol
+            || OperationSchema != operationSchema)
         {
             throw new InvalidOperationException(
                 "Exact12 capability admission is absent, invalid, or protocol-substituted.");
@@ -373,18 +386,23 @@ public static class PrivacyExact12CapabilityAdmissionV1
     /// <summary>Require active committed readiness and the exact local native tuple.</summary>
     public static PrivacyExact12CapabilityTupleAdmissionV1 RequireExact12CapabilityTupleV1(
         PrivacyExact12CapabilityManifestV1 manifest,
-        PrivacyProtocolIdV1 protocol)
+        PrivacyProtocolIdV1 protocol,
+        PrivacyOperationSchemaV1 operationSchema)
     {
-        return PrivacyExact12CapabilityTupleAdmissionV1.IssueValidated(manifest, protocol);
+        return PrivacyExact12CapabilityTupleAdmissionV1.IssueValidated(
+            manifest,
+            protocol,
+            operationSchema);
     }
 
     /// <summary>Verify a sealed token immediately before retained privacy construction.</summary>
     public static void RequireForConstruction(
         PrivacyExact12CapabilityTupleAdmissionV1 admission,
-        PrivacyProtocolIdV1 protocol)
+        PrivacyProtocolIdV1 protocol,
+        PrivacyOperationSchemaV1 operationSchema)
     {
         ArgumentNullException.ThrowIfNull(admission);
-        admission.RequireAuthentic(protocol);
+        admission.RequireAuthentic(protocol, operationSchema);
     }
 }
 
@@ -401,6 +419,25 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
 
     private static readonly byte[] DigestDomain =
         Encoding.UTF8.GetBytes("iroha:privacy:exact12-capability-manifest:v1");
+
+    private static readonly PrivacyOperationSchemaV1[][] ExpectedOperationSchemas =
+    [
+        [PrivacyOperationSchemaV1.ZkAceAuthorizationActionV1],
+        [PrivacyOperationSchemaV1.AnonymousPgcPaymentActionV1],
+        [PrivacyOperationSchemaV1.VeRangeRangeProofV1],
+        [
+            PrivacyOperationSchemaV1.ZkAmsBatchAdmissionActionV1,
+            PrivacyOperationSchemaV1.ZkAmsProvisionAccountActionV1,
+        ],
+        [PrivacyOperationSchemaV1.VegaCredentialPresentationV1],
+        [PrivacyOperationSchemaV1.ZkX509IdentityPresentationV1],
+        [PrivacyOperationSchemaV1.JindoPolynomialEvaluationV1],
+        [PrivacyOperationSchemaV1.BootleLanternCredentialPresentationV1],
+        [PrivacyOperationSchemaV1.OrchardNoteActionV1],
+        [PrivacyOperationSchemaV1.FcmpMembershipPaymentV1],
+        [PrivacyOperationSchemaV1.IvmPrivateNoteActionV1],
+        [PrivacyOperationSchemaV1.PqMaspNoteActionV1],
+    ];
 
     private static readonly PrivacyExecutionModeV1[] ExpectedExecutionModes =
     [
@@ -558,13 +595,9 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
             checked((uint)index),
             $"row[{index}].protocol_id");
 
-        var operationSchema = (PrivacyOperationSchemaV1)ReadUnitEnum(
-            reader.ReadField($"row[{index}].operation_schema", out _),
-            $"row[{index}].operation_schema");
-        if ((uint)operationSchema != (uint)index)
-        {
-            throw Invalid($"Exact12 row {index} operation schema is not canonical.");
-        }
+        var operationSchemas = ParseOperationSchemas(
+            reader.ReadField($"row[{index}].operation_schemas", out _),
+            index);
 
         var executionMode = (PrivacyExecutionModeV1)ReadUnitEnum(
             reader.ReadField($"row[{index}].execution_mode", out _),
@@ -625,7 +658,7 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
 
         return new PrivacyExact12CapabilityRowV1(
             protocol,
-            operationSchema,
+            operationSchemas,
             executionMode,
             featureMask,
             readiness,
@@ -634,6 +667,50 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
             compiledProfile,
             activation,
             localCompiledTupleMatches: true);
+    }
+
+    private static IReadOnlyList<PrivacyOperationSchemaV1> ParseOperationSchemas(
+        ReadOnlySpan<byte> encoded,
+        int index)
+    {
+        var reader = new FrameReader(encoded);
+        var primary = (PrivacyOperationSchemaV1)ReadUnitEnum(
+            reader.ReadField($"row[{index}].operation_schemas.primary", out _),
+            $"row[{index}].operation_schemas.primary");
+        var secondaryOption = reader.ReadField(
+            $"row[{index}].operation_schemas.secondary",
+            out _);
+        reader.RequireEnd($"row[{index}].operation_schemas");
+
+        var optionReader = new FrameReader(secondaryOption);
+        var optionTag = optionReader.ReadByteRaw(
+            $"row[{index}].operation_schemas.secondary.option");
+        PrivacyOperationSchemaV1[] actual;
+        if (optionTag == 0)
+        {
+            optionReader.RequireEnd($"row[{index}].operation_schemas.secondary");
+            actual = [primary];
+        }
+        else if (optionTag == 1)
+        {
+            var secondary = (PrivacyOperationSchemaV1)ReadUnitEnum(
+                optionReader.ReadField(
+                    $"row[{index}].operation_schemas.secondary.value",
+                    out _),
+                $"row[{index}].operation_schemas.secondary.value");
+            optionReader.RequireEnd($"row[{index}].operation_schemas.secondary");
+            actual = [primary, secondary];
+        }
+        else
+        {
+            throw Invalid($"Exact12 row {index} operation-schema option is unknown.");
+        }
+
+        if (!actual.SequenceEqual(ExpectedOperationSchemas[index]))
+        {
+            throw Invalid($"Exact12 row {index} operation-schema set is not canonical.");
+        }
+        return new ReadOnlyCollection<PrivacyOperationSchemaV1>(actual);
     }
 
     private static CompiledResult ParseCompiledResult(

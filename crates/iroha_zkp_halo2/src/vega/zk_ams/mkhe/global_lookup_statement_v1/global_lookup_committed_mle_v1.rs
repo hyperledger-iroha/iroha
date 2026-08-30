@@ -240,10 +240,10 @@ fn validate_static_profile_v1() -> Result<(), CommittedMleErrorV1> {
         {
             return Err(CommittedMleErrorV1::Shape);
         }
-        if let CommittedMleProofRoleV1::Coefficient(role) = shape.role {
-            if ipa_tag_v1(role) != ordinal as u8 + 1 {
-                return Err(CommittedMleErrorV1::Order);
-            }
+        if let CommittedMleProofRoleV1::Coefficient(role) = shape.role
+            && ipa_tag_v1(role) != ordinal as u8 + 1
+        {
+            return Err(CommittedMleErrorV1::Order);
         }
         accounted = accounted
             .checked_add(shape.wire_bytes_v1()?)

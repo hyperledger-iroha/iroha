@@ -31,6 +31,35 @@ import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 
 class KagemushaRecursiveSpendProverTest {
     @Test
+    fun operationReferenceProjectionKeepsExactPendingReferenceAndDefensiveHashes() {
+        val operationId = ByteArray(32) { 0x11 }
+        val transactionHash = ByteArray(32) { 0x22 }
+        val operationIdHex = operationId.joinToString("") { "%02x".format(it) }
+        val projection = KagemushaRecursiveSpendProver.OperationReferenceProjection(
+            state = KagemushaRecursiveSpendProver.OperationState.PENDING,
+            kind = KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId = operationId,
+            transactionHash = transactionHash,
+            statusUri = "/v1/offline/operations/$operationIdHex",
+            submittedAtMilliseconds = 1_900_000_000_000,
+        )
+        operationId.fill(0)
+        transactionHash.fill(0)
+        assertContentEquals(ByteArray(32) { 0x11 }, projection.operationId())
+        assertContentEquals(ByteArray(32) { 0x22 }, projection.transactionHash())
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.OperationReferenceProjection(
+                state = KagemushaRecursiveSpendProver.OperationState.PENDING,
+                kind = KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                operationId = ByteArray(32) { 0x11 },
+                transactionHash = ByteArray(32) { 0x22 },
+                statusUri = "/v1/offline/operations/${"33".repeat(32)}",
+                submittedAtMilliseconds = 1_900_000_000_000,
+            )
+        }
+    }
+
+    @Test
     fun heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -816,6 +845,7 @@ class KagemushaRecursiveSpendProverTest {
                 "prepareRecipientPaymentRequest",
                 "prepareRequestAuthorization",
                 "prepareTopUp",
+                "projectOperationReference",
                 "projectOperationStatus",
                 "projectPeerPayment",
                 "projectInitResultV4",
@@ -838,6 +868,25 @@ class KagemushaRecursiveSpendProverTest {
                 "verifyRecipientRegistrationLineageV2",
                 "verifySpendV4",
                 "validateTopUpProvenanceV4",
+                "buildDrainOnlyRedeemInstructionV4",
+                "createDrainOnlySameAccountRedemptionAuthorizationV1",
+                "decodeDeviceAttestationPolicyViewV1",
+                "decodeEligibilityCredentialV1",
+                "decodeEligibilityIssuerPublicKeyV1",
+                "decodeEligibilityPaymentEnvelopeV1",
+                "eligibilityPaymentSigningBytesV1",
+                "finalizeEligibilityPaymentV1",
+                "makeOfflineDeviceEligibilityRequestV1",
+                "makeOfflineDevicePolicyProofRequestV1",
+                "prepareEligibilityPaymentV1",
+                "projectDeviceAttestationPolicyViewClaimsV1",
+                "validateEligibilityPaymentFirstDeliveryV1",
+                "validateEligibilityPaymentStaticV1",
+                "verifyDeviceAttestationPolicyViewV1",
+                "verifyEligibilityCredentialV1",
+                "verifyEligibilityPeerCertificateV1",
+                "verifyOfflineDeviceEligibilityResponseV1",
+                "verifyOfflineDevicePolicyProofPageV1",
             ),
             methods,
         )
@@ -1333,6 +1382,8 @@ class KagemushaRecursiveSpendProverTest {
         )
         fun readiness(
             cashHandoffCapability: String = KagemushaRecursiveSpendProver.CASH_HANDOFF_CAPABILITY_V1,
+            eligibilityCashHandoffCapability: String =
+                KagemushaRecursiveSpendProver.CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1,
             transferVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = transfer,
             unshieldVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = unshield,
             recursiveStepEqVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = stepEq,
@@ -1340,6 +1391,7 @@ class KagemushaRecursiveSpendProverTest {
             proofBackendAvailable: Boolean = true,
         ) = KagemushaRecursiveSpendProver.ReadinessProjection(
             cashHandoffCapability,
+            eligibilityCashHandoffCapability,
             21,
             8,
             "xor#sora",
@@ -1366,6 +1418,9 @@ class KagemushaRecursiveSpendProverTest {
         }
         assertFailsWith<IllegalArgumentException> {
             readiness(cashHandoffCapability = "cash_handoff_v2")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            readiness(eligibilityCashHandoffCapability = "cash_handoff_v1")
         }
         assertFalse(readiness(transferVerifier = null).allVerifiersActive)
         assertTrue(readiness(transferVerifier = null).chainArtifactSetReady)
@@ -1786,7 +1841,7 @@ class KagemushaRecursiveSpendProverTest {
                             )
                             .setBody(
                                 if (capability) {
-                                    """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"""
+                                    """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"""
                                         .toByteArray(StandardCharsets.UTF_8)
                                 } else {
                                     archive(
@@ -1818,6 +1873,10 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertFalse(status.mandatory)
         assertEquals("cash_handoff_v1", status.cashHandoffCapability)
+        assertEquals(
+            "cash_handoff_eligibility_v1",
+            status.eligibilityCashHandoffCapability,
+        )
         assertEquals(22, status.requiredBridgeAbiVersion)
         assertEquals(8, status.maximumHops)
         assertTrue(status.ready)
@@ -1905,14 +1964,15 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun offlineCapabilityRejectsBackendReadinessClaims() {
         val invalidPayloads = listOf(
-            """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}""",
+            """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}""",
         )
         invalidPayloads.forEach { payload ->
             assertFailsWith<RuntimeException> {

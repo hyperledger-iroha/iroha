@@ -9,7 +9,7 @@ use super::{
     SOURCE_VERSION_V1, ZkAmsMkheErrorV1,
 };
 use crate::vega::sponge::Keccak256;
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
@@ -43,7 +43,9 @@ fn layout_frame_v1(layout: ConfidentialSpoolLayoutV1) -> [u8; 32] {
     hash.update(&layout.file_len_v1().to_be_bytes());
     hash.finalize()
 }
-fn map_spool_error_v1(_: iroha_confidential_spool::ConfidentialSpoolErrorV1) -> ZkAmsMkheErrorV1 {
+fn map_spool_error_v1(
+    _: iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1,
+) -> ZkAmsMkheErrorV1 {
     ZkAmsMkheErrorV1::InvalidPhase23Fold
 }
 /// Move-only dual writer.  Every write takes both owners before leaf preflight

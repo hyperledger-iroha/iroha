@@ -6724,6 +6724,10 @@ def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
     assert isinstance(capability, OfflineStatus)
     assert capability.mandatory is False
     assert capability.cash_handoff_capability == "cash_handoff_v1"
+    assert (
+        capability.eligibility_cash_handoff_capability
+        == "cash_handoff_eligibility_v1"
+    )
     assert capability.required_bridge_abi_version == 22
     assert capability.max_hops == 8
     assert capability.ready is True
@@ -6741,6 +6745,9 @@ def test_get_offline_capability_rejects_non_universal_claims() -> None:
     payloads = [
         _offline_capability_payload(mandatory=True),
         _offline_capability_payload(cash_handoff_capability="cash_handoff_v2"),
+        _offline_capability_payload(
+            eligibility_cash_handoff_capability="cash_handoff_v1"
+        ),
         _offline_capability_payload(required_bridge_abi_version=20),
         _offline_capability_payload(max_hops=7),
         _offline_capability_payload(ready=False),
@@ -6751,7 +6758,7 @@ def test_get_offline_capability_rejects_non_universal_claims() -> None:
         _offline_capability_payload(unexpected_field=True),
     ]
     missing_field = _offline_capability_payload()
-    missing_field.pop("cash_handoff_capability")
+    missing_field.pop("eligibility_cash_handoff_capability")
     payloads.append(missing_field)
 
     for payload in payloads:

@@ -68,6 +68,9 @@ const SIGNABLE_AUTHORITY_PAYLOAD_MISMATCH_MESSAGE = "signable.authority does not
 const UINT16_MAX = 0xffffn;
 const UINT32_MAX = 0xffff_ffffn;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
+// Keep the browser-only builder byte-for-byte aligned with
+// TransactionBuilder::new when callers omit an explicit lifetime.
+const DEFAULT_TRANSACTION_TTL_MS = 100_000n;
 const MAX_METADATA_JSON_BYTES = 64 * 1024;
 const MAX_METADATA_ENTRIES = 64;
 const MAX_METADATA_DEPTH = 32;
@@ -906,9 +909,15 @@ function rustPlainJsonString(value) {
       case "\t":
         output += "\\t";
         break;
+      case "\b":
+        output += "\\b";
+        break;
+      case "\f":
+        output += "\\f";
+        break;
       default:
         if (codePoint < 0x20) {
-          output += `\\u00${codePoint.toString(16).toUpperCase().padStart(2, "0")}`;
+          output += `\\u00${codePoint.toString(16).padStart(2, "0")}`;
         } else {
           output += character;
         }
@@ -1174,8 +1183,12 @@ function normalizeTransactionInputTail(
     UINT64_MAX,
     "creationTimeMs",
   );
-  let ttlMs = normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs");
-  if (ttlMs === 0n) ttlMs = 1n;
+  const ttlMs =
+    input.ttlMs === undefined || input.ttlMs === null
+      ? DEFAULT_TRANSACTION_TTL_MS
+      : normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs", {
+          nonZero: true,
+        });
   const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
     nonZero: true,
   });
@@ -1783,6 +1796,15 @@ function validateTransactionAdmissionIntentArchive(payload, expectedTag, context
   const reader = new Reader(payload, context);
   const tag = reader.readU32("intent");
   reader.assertEof();
+  if (expectedTag === null) {
+    if (tag > TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG) {
+      fail(
+        UNSUPPORTED_PAYLOAD,
+        `${context} uses unsupported TransactionAdmissionIntent tag ${tag}`,
+      );
+    }
+    return;
+  }
   if (tag !== expectedTag) {
     fail(
       UNSUPPORTED_PAYLOAD,
@@ -2158,6 +2180,7 @@ function validateTransactionPayload(
   payload,
   authorityLiteral,
   expectedNetworkId = null,
+  expectedAdmissionIntentTag = TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
 ) {
   return validateTransactionPayloadEnvelope(
     payload,
@@ -2175,6 +2198,8 @@ function validateTransactionPayload(
         );
       }
     },
+    undefined,
+    expectedAdmissionIntentTag,
   );
 }
 
@@ -2182,6 +2207,7 @@ function validateInstructionTransactionPayload(
   payload,
   authorityLiteral,
   expectedNetworkId = null,
+  expectedAdmissionIntentTag = TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
 ) {
   return validateTransactionPayloadEnvelope(
     payload,
@@ -2211,6 +2237,7 @@ function validateInstructionTransactionPayload(
         );
       }
     },
+    expectedAdmissionIntentTag,
   );
 }
 
@@ -2220,6 +2247,7 @@ function validateTransactionPayloadEnvelope(
   expectedNetworkId,
   validateExecutable,
   validateFeePayment,
+  expectedAdmissionIntentTag,
 ) {
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
     fail(BOUNDS_EXCEEDED, `payloadBytes must contain 1..=${MAX_PAYLOAD_BYTES} bytes`);
@@ -2259,9 +2287,12 @@ function validateTransactionPayloadEnvelope(
     reader.readField("executable"),
     authorityPublicKey,
   );
-  validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
+  const ttlMs = validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
     nonZero: true,
   });
+  if (ttlMs === null) {
+    fail(MALFORMED_PAYLOAD, "transaction payload.ttlMs is required");
+  }
   validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
     nonZero: true,
   });
@@ -2272,7 +2303,7 @@ function validateTransactionPayloadEnvelope(
   validateFeePayment?.(executableValidation, feePayment);
   validateTransactionAdmissionIntentArchive(
     reader.readField("admissionIntent"),
-    TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
+    expectedAdmissionIntentTag,
     "transaction payload.admissionIntent",
   );
   rejectLegacyFeeMetadata(
@@ -2612,6 +2643,87 @@ export function browserTransactionPayloadHashHex(payloadBytes) {
 }
 
 /**
+ * Compute the canonical marked Iroha hash of one authorized instruction batch.
+ *
+ * This is the browser-safe equivalent of Rust's
+ * `HashOf::<Vec<InstructionBox>>::new(&instructions)`. Wallets use it to bind
+ * an untrusted Torii multisig draft to the exact instruction batch the user
+ * approved before producing a detached signature.
+ *
+ * @param {Array<object>} instructions
+ * @returns {string}
+ */
+export function browserInstructionBatchHashHex(instructions) {
+  if (
+    !Array.isArray(instructions) ||
+    instructions.length === 0 ||
+    instructions.length > MAX_BROWSER_INSTRUCTIONS
+  ) {
+    fail(
+      BOUNDS_EXCEEDED,
+      `instructions must contain 1..=${MAX_BROWSER_INSTRUCTIONS} items`,
+    );
+  }
+  const encoded = instructions.map((instruction, index) =>
+    encodeCanonicalInstructionBox(instruction, `instructions[${index}]`),
+  );
+  return irohaHash(vector(encoded)).toString(HEX_ENCODING);
+}
+
+/**
+ * Compute the canonical marked Iroha hash of exact `InstructionBox` archives.
+ *
+ * This variant is for signing boundaries that receive an already-encoded
+ * native instruction vector from an untrusted peer. Every archive is decoded
+ * and re-encoded byte-for-byte before hashing, so alternate Norito encodings
+ * cannot be smuggled into the batch that the wallet authorizes.
+ *
+ * @param {Array<ArrayBufferView | ArrayBuffer | Buffer>} instructionArchives
+ * @returns {string}
+ */
+export function browserInstructionArchiveBatchHashHex(instructionArchives) {
+  if (
+    !Array.isArray(instructionArchives) ||
+    instructionArchives.length === 0 ||
+    instructionArchives.length > MAX_BROWSER_INSTRUCTIONS
+  ) {
+    fail(
+      BOUNDS_EXCEEDED,
+      `instructionArchives must contain 1..=${MAX_BROWSER_INSTRUCTIONS} items`,
+    );
+  }
+  const canonicalArchives = instructionArchives.map((archive, index) => {
+    const snapshot = bytes(archive, `instructionArchives[${index}]`, {
+      maxBytes: MAX_PAYLOAD_BYTES,
+    });
+    if (snapshot.length === 0) {
+      fail(INVALID_BYTES, `instructionArchives[${index}] must not be empty`);
+    }
+    let decoded;
+    try {
+      decoded = noritoDecodeInstructionBoxArchive(snapshot);
+    } catch (error) {
+      fail(
+        MALFORMED_INSTRUCTION,
+        `instructionArchives[${index}] is not canonical: ${error.message}`,
+      );
+    }
+    const canonical = encodeCanonicalInstructionBox(
+      decoded,
+      `instructionArchives[${index}]`,
+    );
+    if (!snapshot.equals(canonical)) {
+      fail(
+        MALFORMED_INSTRUCTION,
+        `instructionArchives[${index}] is not canonical`,
+      );
+    }
+    return snapshot;
+  });
+  return irohaHash(vector(canonicalArchives)).toString(HEX_ENCODING);
+}
+
+/**
  * Snapshot and validate one exact canonical Transfer::Asset signable.
  *
  * This is intended for wallet and hardware-signer trust boundaries: the
@@ -2902,17 +3014,30 @@ export function browserSignedTransactionHashHex(signedTransaction) {
     );
   }
   const bare = versioned.subarray(1);
-  const reader = new Reader(bare, "signed transaction");
-  const signatureValue = new Reader(reader.readField("signature"), "signed transaction.signature");
-  const rawSignature = validateConstVecBytes(
-    signatureValue.readField("payload"),
-    "signed transaction.signature.payload",
-    64,
-  );
-  signatureValue.assertEof();
-  const payload = reader.readField("payload");
-  const multisig = reader.readField("multisigSignatures");
-  reader.assertEof();
+  let rawSignature;
+  let payload;
+  let multisig;
+  try {
+    const reader = new Reader(bare, "signed transaction");
+    const signatureValue = new Reader(
+      reader.readField("signature"),
+      "signed transaction.signature",
+    );
+    rawSignature = validateConstVecBytes(
+      signatureValue.readField("payload"),
+      "signed transaction.signature.payload",
+      64,
+    );
+    signatureValue.assertEof();
+    payload = reader.readField("payload");
+    multisig = reader.readField("multisigSignatures");
+    reader.assertEof();
+  } catch (error) {
+    fail(
+      MALFORMED_SIGNED_TRANSACTION,
+      `signedTransaction has a malformed external envelope (${error.message})`,
+    );
+  }
   if (
     rawSignature.length !== 64 ||
     !multisig.equals(Buffer.of(0)) ||
@@ -2926,11 +3051,11 @@ export function browserSignedTransactionHashHex(signedTransaction) {
   }
   let transferError;
   try {
-    validateTransactionPayload(payload, null);
+    validateTransactionPayload(payload, null, null, null);
   } catch (error) {
     transferError = error;
     try {
-      validateInstructionTransactionPayload(payload, null);
+      validateInstructionTransactionPayload(payload, null, null, null);
     } catch (instructionError) {
       const boundsError = [transferError, instructionError].find(
         (error) =>
@@ -2955,6 +3080,8 @@ export const browserTransactionCodec = Object.freeze({
   buildInstructionPayload: buildBrowserInstructionTransactionPayload,
   buildExecutableBatchPayload: buildBrowserExecutableBatchPayload,
   payloadHashHex: browserTransactionPayloadHashHex,
+  instructionBatchHashHex: browserInstructionBatchHashHex,
+  instructionArchiveBatchHashHex: browserInstructionArchiveBatchHashHex,
   finalizeSignedTransaction: finalizeBrowserSignedTransaction,
   finalizeInstructionTransaction: finalizeBrowserInstructionTransaction,
   finalizeExecutableBatchTransaction:

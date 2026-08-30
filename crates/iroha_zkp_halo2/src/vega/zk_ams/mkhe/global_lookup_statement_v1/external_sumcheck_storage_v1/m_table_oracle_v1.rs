@@ -113,10 +113,8 @@ fn m_valid_lanes_v1(descriptor: &MDescriptorV1, slot: u64) -> Result<usize, MOra
     let first = slot
         .checked_mul(SCALARS_PER_SLOT_V1)
         .ok_or(MOracleErrorV1::Arithmetic)?;
-    Ok(
-        usize::try_from((descriptor.value_count - first).min(SCALARS_PER_SLOT_V1))
-            .map_err(|_| MOracleErrorV1::Arithmetic)?,
-    )
+    usize::try_from((descriptor.value_count - first).min(SCALARS_PER_SLOT_V1))
+        .map_err(|_| MOracleErrorV1::Arithmetic)
 }
 fn m_mapping_digest_v1(descriptor: &MDescriptorV1) -> Result<[u8; 32], MOracleErrorV1> {
     let mut hash = Keccak256::new();
@@ -395,7 +393,7 @@ impl ColumnCursorV1<'_> {
         if self.next_index >= self.column.descriptor.value_count {
             return Err(MOracleErrorV1::Order);
         }
-        if self.next_index % SCALARS_PER_SLOT_V1 == 0 {
+        if self.next_index.is_multiple_of(SCALARS_PER_SLOT_V1) {
             drop(self.chunk.take());
             self.chunk = Some(
                 self.column
@@ -424,7 +422,7 @@ impl MCursorV1<'_> {
         if self.next_index >= self.table.descriptor.value_count {
             return Err(MOracleErrorV1::Order);
         }
-        if self.next_index % SCALARS_PER_SLOT_V1 == 0 {
+        if self.next_index.is_multiple_of(SCALARS_PER_SLOT_V1) {
             drop(self.chunk.take());
             self.chunk = Some(
                 self.table
@@ -443,12 +441,29 @@ impl MCursorV1<'_> {
     }
 }
 #[derive(Clone, Copy)]
-struct OracleAxesV1 {
+pub(in super::super) struct OracleAxesV1 {
     z: Scalar,
     rho: [Scalar; 29],
     alpha: Scalar,
     lambda: Scalar,
     mu: Scalar,
+}
+impl OracleAxesV1 {
+    pub(in super::super) fn new_v1(
+        z: Scalar,
+        rho: [Scalar; 29],
+        alpha: Scalar,
+        lambda: Scalar,
+        mu: Scalar,
+    ) -> Self {
+        Self {
+            z,
+            rho,
+            alpha,
+            lambda,
+            mu,
+        }
+    }
 }
 struct MaskCoefficientsV1([[Scalar; 3]; MASK_ROUNDS_V1]);
 impl Drop for MaskCoefficientsV1 {
@@ -734,11 +749,7 @@ impl GlobalCubicOracleV1 {
     pub(in super::super) fn matches_transcript_v1(
         &self,
         public_context: &[u8; 32],
-        z: &Scalar,
-        rho: &[Scalar; 29],
-        alpha: &Scalar,
-        lambda: &Scalar,
-        mu: &Scalar,
+        axes: &OracleAxesV1,
         prefix: &[Scalar],
     ) -> bool {
         let Some(live) = self.live.as_ref() else {
@@ -747,11 +758,11 @@ impl GlobalCubicOracleV1 {
         let round = usize::from(self.next_round);
         live.pair.public_context == *public_context
             && live.multiplicity.public_context == *public_context
-            && self.axes.z == *z
-            && self.axes.rho == *rho
-            && self.axes.alpha == *alpha
-            && self.axes.lambda == *lambda
-            && self.axes.mu == *mu
+            && self.axes.z == axes.z
+            && self.axes.rho == axes.rho
+            && self.axes.alpha == axes.alpha
+            && self.axes.lambda == axes.lambda
+            && self.axes.mu == axes.mu
             && prefix.len() == round
             && &self.point[..round] == prefix
             && self.point[round..].iter().all(|scalar| scalar.is_zero())
@@ -822,8 +833,8 @@ impl GlobalCubicOracleV1 {
     }
 }
 pub(in super::super) enum OracleTransitionV1 {
-    Continue(GlobalCubicOracleV1),
-    Complete(GlobalCubicCompleteV1),
+    Continue(Box<GlobalCubicOracleV1>),
+    Complete(Box<GlobalCubicCompleteV1>),
 }
 pub(in super::super) struct GlobalCubicCompleteV1 {
     live: OracleLiveV1,
@@ -888,18 +899,20 @@ impl EvaluatedGlobalRoundV1 {
             if endpoint.get() != oracle.base_claim {
                 return Err(MOracleErrorV1::Relation);
             }
-            return Ok(OracleTransitionV1::Complete(GlobalCubicCompleteV1 {
-                live,
-                point: oracle.point,
-                candidate: candidate.get(),
-                inverse: inverse.get(),
-                multiplicity: multiplicity.get(),
-                relation: oracle.base_claim,
-                mask_carry: oracle.mask_carry,
-            }));
+            return Ok(OracleTransitionV1::Complete(Box::new(
+                GlobalCubicCompleteV1 {
+                    live,
+                    point: oracle.point,
+                    candidate: candidate.get(),
+                    inverse: inverse.get(),
+                    multiplicity: multiplicity.get(),
+                    relation: oracle.base_claim,
+                    mask_carry: oracle.mask_carry,
+                },
+            )));
         }
         oracle.live = Some(live);
-        Ok(OracleTransitionV1::Continue(oracle))
+        Ok(OracleTransitionV1::Continue(Box::new(oracle)))
     }
 }
 fn fold_pair_real_v1(

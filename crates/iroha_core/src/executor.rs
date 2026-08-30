@@ -307,7 +307,16 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindMusubiAliasHistoryV1(_)
         | SingularQueryBox::FindMusubiOrderedPrefixV1(_)
         | SingularQueryBox::FindAccountByAlias(_)
-        | SingularQueryBox::FindDomainById(_) => NativeQueryAccess::Registered,
+        | SingularQueryBox::FindDomainById(_)
+        | SingularQueryBox::FindPrivacyZkAceReplayNullifierV1(_)
+        | SingularQueryBox::FindPrivacyProofManagedPoolStateV1(_)
+        | SingularQueryBox::FindPrivacyOrchardPoolStateV1(_)
+        | SingularQueryBox::FindPrivacyOrchardNullifierV1(_)
+        | SingularQueryBox::FindPrivacyAnonymousPgcPoolStateV1(_)
+        | SingularQueryBox::FindPrivacyZkAmsAdmissionV1(_)
+        | SingularQueryBox::FindPrivacyZkAmsProvisionV1(_)
+        | SingularQueryBox::FindPrivacyZkX509CertificateNullifierV1(_)
+        | SingularQueryBox::FindPrivacyActionExecutionReceiptV1(_) => NativeQueryAccess::Registered,
         SingularQueryBox::FindProofRecordById(_)
         | SingularQueryBox::FindAssetEscrowById(_)
         | SingularQueryBox::FindTriggerById(_)
@@ -11084,6 +11093,74 @@ mod tests {
     }
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
+    }
+    #[test]
+    fn exact12_public_status_queries_require_authentication_without_global_read_root() {
+        use iroha_data_model::{
+            privacy::{
+                PrivacyIssuerIdV1, PrivacyNullifierV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+                PrivacyProtocolIdV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
+                PrivacyZkAmsRegistryIdV1,
+            },
+            query::privacy::prelude::{
+                FindPrivacyActionExecutionReceiptV1, FindPrivacyAnonymousPgcPoolStateV1,
+                FindPrivacyOrchardNullifierV1, FindPrivacyOrchardPoolStateV1,
+                FindPrivacyProofManagedPoolStateV1, FindPrivacyZkAceReplayNullifierV1,
+                FindPrivacyZkAmsAdmissionV1, FindPrivacyZkAmsProvisionV1,
+                FindPrivacyZkX509CertificateNullifierV1,
+            },
+        };
+        let issuer_id = PrivacyIssuerIdV1::new([0xA1; 32]);
+        let registry_id = PrivacyZkAmsRegistryIdV1::new([0xA2; 32]);
+        let policy_id = PrivacyPolicyIdV1::new([0xA3; 32]);
+        let queries = [
+            SingularQueryBox::from(FindPrivacyZkAceReplayNullifierV1::new(
+                policy_id,
+                PrivacyNullifierV1::new([0xA0; 32]),
+            )),
+            SingularQueryBox::from(FindPrivacyProofManagedPoolStateV1::new(
+                PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+                PrivacyPoolIdV1::new([0xA1; 32]),
+            )),
+            SingularQueryBox::from(FindPrivacyOrchardPoolStateV1::new(PrivacyPoolIdV1::new(
+                [0xA2; 32],
+            ))),
+            SingularQueryBox::from(FindPrivacyOrchardNullifierV1::new(
+                PrivacyPoolIdV1::new([0xA3; 32]),
+                [0xA4; 32],
+            )),
+            SingularQueryBox::from(FindPrivacyAnonymousPgcPoolStateV1::new(
+                PrivacyPoolIdV1::new([0xA5; 32]),
+            )),
+            SingularQueryBox::from(FindPrivacyZkAmsAdmissionV1::new(
+                issuer_id,
+                registry_id,
+                policy_id,
+                PrivacyZkAmsPhcHashV1::new([0xA6; 32]),
+            )),
+            SingularQueryBox::from(FindPrivacyZkAmsProvisionV1::new(
+                issuer_id,
+                registry_id,
+                policy_id,
+                PrivacyZkAmsKeyImageV1::new([0xA7; 32]),
+            )),
+            SingularQueryBox::from(FindPrivacyZkX509CertificateNullifierV1::new(
+                issuer_id,
+                policy_id,
+                PrivacyNullifierV1::new([0xA8; 32]),
+            )),
+            SingularQueryBox::from(FindPrivacyActionExecutionReceiptV1::new(
+                PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                [0xA9; 32],
+                0,
+            )),
+        ];
+        for query in queries {
+            assert_eq!(
+                native_singular_query_access(&query),
+                NativeQueryAccess::Registered
+            );
+        }
     }
     #[test]
     fn native_escrow_query_authorization_uses_query_specific_tags() {

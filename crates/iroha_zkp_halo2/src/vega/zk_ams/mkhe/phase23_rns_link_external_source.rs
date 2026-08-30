@@ -25,7 +25,7 @@ use super::{
     derive_zk_ams_phase23_rns_link_release_geometry_v1,
 };
 use crate::vega::sponge::Keccak256;
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use iroha_crypto::confidential_spool::ConfidentialSpoolChunkV1;
 use std::path::Path;
 #[path = "phase23_rns_link_external_spool.rs"]
 mod confidential_spool;

@@ -138,10 +138,97 @@ and malformed nested policy or profile data.
 The eleven generic privacy protocols are constructed only by the admitted
 Rust `iroha_privacy_wallet_worker`. `PrivacyWalletWorkerControllerV1` is the
 top-level Python controller: it sends an owner-only credential path to Rust,
-then uses only an opaque handle plus canonical public intent and execution-plan
-bytes. Python and PyO3 expose no generic owner-bundle, witness, polynomial,
+along with the exact canonical public intent already authenticated by its
+binding, then uses only an opaque handle plus canonical public intent and
+execution-plan bytes. Python and PyO3 expose no generic owner-bundle, witness, polynomial,
 blinding, or secret constructor. ZK-X509 retains its separate authenticated
-profile-owned transport.
+profile-owned transport. IPWW wire version 2 adds the lease's exact
+domain-separated public-action digest and requires the bound canonical intent
+on import; the historical pre-intent import shape and version 1 frames are never
+accepted by the v2 controller or worker.
+
+The worker admits an imported owner-bundle handle for at most fifteen minutes;
+deployments may choose a narrower window and BOI uses two minutes. Execution
+consumes that handle before proving. Because the signed transaction creation
+time is bound before proving begins, its separately validated lifetime may be
+at most fifteen minutes. Deployments must choose their narrower operational
+window from measured maximum-shape proving time and their submission/finality
+policy; the worker enforces the closed upper bound but does not itself establish
+that deployment evidence.
+
+Import fully decodes the selected typed witness before it advertises a lease,
+then compares the decoded wallet, protocol, distinct operation, and exact
+domain-separated public-action digest with the caller-bound canonical intent
+before inserting a handle. Therefore malformed material and valid material for
+another action cannot make readiness appear true. The public lease carries the
+wallet, authority, protocol, operation, and exact canonical public-action
+digest; no witness byte crosses the native boundary.
+
+Release operators build the Generic11 worker through
+`scripts/package_privacy_wallet_worker.py build`. The corridor accepts only a
+raw-clean SSH-signed source tree, binds the exact Cargo lock, whole-workspace
+and critical-source manifests, closed 11-protocol/12-operation registry,
+frozen build command, every effective environment value, resolved Cargo and
+`cargo-iroha-fast` bytes, the exact rustc/Rust-component closures, Cargo
+configuration, sccache, C linker driver/linker/archiver, and wrapper helper
+tools. It re-captures that complete provenance after compilation, authenticates
+an IPWW ping, then writes an owner-controlled package named by the worker
+SHA-256. `package` can retain a reviewable prebuilt candidate, but such a
+package can never claim `release_ready`; `verify --require-release-ready`
+fails closed on it. The content-addressed package contains only the executable
+and public manifest—no owner bundle or signer material.
+
+Runtime and package smoke-test launch use the already authenticated executable
+inode on Linux through `/proc/self/fd`. Darwin has no executable `fexecve` or
+`execveat` and rejects `/dev/fd`, so it uses a byte-for-byte copy in a random
+owner-only directory that is sealed `0500` before spawn and removed immediately
+after successful exec. The stage's complete ancestor chain must be owner/root
+controlled (a root-owned sticky temporary root is also accepted); a non-sticky
+writable `TMPDIR` fails closed. As with owner bundles themselves, a malicious
+same-UID process is outside this process-isolation boundary.
+
+The same authenticated native executable is also the sole Generic11 bundle
+writer. Its `write-bundle-v1` subcommand accepts only public labels and
+absolute file paths; it reads the raw 32-byte Ed25519 signer seed and typed
+protocol witness from owner-only regular files, validates the complete native
+operation and authority/key relationship, then creates a new `0600` bundle in
+an existing `0700` owner directory. It never replaces an output and never
+prints secret bytes:
+
+```text
+iroha_privacy_wallet_worker write-bundle-v1 \
+  --wallet-id wallet-retail-adult-001 \
+  --authority <canonical-account-id> \
+  --protocol-id iroha-jindo-polynomial-commitment-v0 \
+  --operation-schema jindo_polynomial_evaluation_v1 \
+  --public-action /absolute/private/public-action.json \
+  --signer-seed /absolute/private/signer-seed.bin \
+  --protocol-witness /absolute/private/protocol-witness.json \
+  --output /absolute/private/execution.ipwb
+```
+
+The three inputs must be stable, regular, owned by the effective user, and not
+group/world writable; the seed and witness additionally permit no group/world
+access. Bundle bytes stay in the native process and owner-only file. The normal
+no-argument invocation remains the authenticated IPWW pipe session used by
+`PrivacyWalletWorkerControllerV1`.
+
+### zk-X509 prover worker packaging
+
+Release operators build the isolated zk-X509 worker through
+`scripts/package_zk_x509_prover_worker.py build`. Its authenticated build
+corridor exports the exact signed commit into a held, read-only source
+descriptor; creates fresh owner-private HOME, Cargo-home, target, sccache, and
+temporary roots; and invokes the authenticated Cargo executable directly from
+`/` with the descriptor-spelled manifest. It records every effective
+environment value, requires an exactly empty effective Cargo-config inventory,
+cryptographically seals the descriptor-held registry/git cache trees before
+and after compilation, and binds Cargo, rustc, sccache, linker driver, linker,
+archiver, host-probe tools, and Rust component closures. These inputs supplement
+the existing protocol profile, KAT, expectation, resource, isolation,
+signed-source, and artifact pins; they do not replace or relax any cryptographic
+readiness gate. A supplied prebuilt remains candidate-only and cannot carry
+authenticated build provenance or claim `release_ready`.
 
 Reserve-backed ZK-ACE, Orchard, and private-IVM actions always bind one exact
 transparent balance bucket. Their worker-owned public action requires
@@ -177,6 +264,63 @@ or opaque native proof. At release and test boundaries, call
 `PrivacyExact12FixtureCodecV1.require_trusted_canonical(candidate, trusted)`
 with an independently supplied Rust-derived archive; it validates both inputs
 and then requires constant-time byte identity.
+
+### Exact12 authenticated submission and finality
+
+`submit_signed_privacy_action_v1` accepts the closed thirteen-operation union,
+fresh-gates the selected protocol against the finalized capability manifest,
+and submits the exact inspected signed transaction with canonical Torii
+authentication. A pipeline `Committed` response is only a progress hint. The
+returned view becomes successfully terminal only at `Applied`, after an
+authenticated committed-transaction details query and signed typed query 105
+return the exact native execution receipt with matching NetworkId, protocol,
+operation, transaction, action index, intent, statement, proof envelope,
+execution manifest, admission height, and finalized block.
+
+```python
+from iroha_python import PrivacyExact12ActionRequestV1
+
+envelope, operation = client.submit_signed_privacy_action_v1(
+    PrivacyExact12ActionRequestV1(
+        "anonymous_pgc_payment_action_v1",
+        signed_transaction_versioned,
+    ),
+    canonical_auth=canonical_auth,
+    network_id=iroha_network_id,
+    timeout=30.0,
+)
+assert operation.terminal_chain_state == "Applied"
+assert operation.execution_receipt_finalized_height is not None
+```
+
+Both transaction-details and receipt queries sign fresh native query payloads
+through `canonical_auth.signer`; private key bytes are never exported to the
+client. An ID105 `404` after `Applied` is treated as bounded projection lag and
+retried. A cache-only `Expired` is likewise nonterminal; only state-backed
+expiry is terminal. Rejected transactions require an authenticated committed
+reason and must have no execution receipt. Re-reading an applied action may
+advance its receipt finality height, but cannot change any action binding,
+regress finality, or change the block hash at the same height.
+
+The same signer-only boundary exposes finalized native state queries 97–104:
+ZK-ACE replay provenance, proof-managed pool state, Orchard pool/nullifier
+state, Anonymous PGC public pool state, both ZK-AMS effect records, and ZK-X509
+certificate-nullifier provenance. Each helper builds the typed query in Rust,
+posts it once to `/v1/query`, and natively validates the exact NetworkId,
+request key, result variant, and finalized height/block binding. Only a `404`
+returns `None`; permission, routing, media-type, decoding, and binding failures
+remain errors. Returned `PrivacyFinalizedStateViewV1` projections are deeply
+immutable.
+
+```python
+state = client.get_privacy_anonymous_pgc_pool_state_v1(
+    pool_id,
+    canonical_auth=canonical_auth,
+)
+if state is not None:
+    assert state.query_id == 101
+    print(state.finalized_height, state["current_root"])
+```
 
 ## Account addresses
 

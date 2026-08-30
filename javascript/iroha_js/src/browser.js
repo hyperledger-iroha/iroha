@@ -43,6 +43,17 @@ export {
 } from "./numericV1.js";
 
 export { NetworkId } from "./networkId.js";
+export {
+  PRIVACY_EXACT12_ACTION_OPERATIONS_V1,
+  PRIVACY_EXACT12_SIGNED_TRANSACTION_MAX_BYTES_V1,
+  PRIVACY_LEDGER_EFFECT_KINDS_V1,
+  PrivacyActionOperationViewV1,
+  PrivacyExact12ActionContractV1,
+  PrivacyExact12ActionModelErrorV1,
+  PrivacyExact12ActionRequestV1,
+  privacyExact12LedgerEffectKindV1,
+  privacyExact12ProtocolIdV1,
+} from "./privacyExact12ActionModels.js";
 export { OperatorSigningContext } from "./operatorRequest.browser.js";
 
 export {
@@ -54,6 +65,8 @@ export {
 export {
   BrowserTransactionCodecError,
   browserSignedTransactionHashHex,
+  browserInstructionBatchHashHex,
+  browserInstructionArchiveBatchHashHex,
   browserTransactionCodec,
   browserTransactionPayloadHashHex,
   buildBrowserExecutableBatchPayload,
@@ -88,6 +101,7 @@ export {
   encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,
   noritoDecodeInstruction,
+  noritoDecodeInstructionBoxArchive,
   inspectSubscriptionTriggerAction,
   noritoEncodeInstruction,
   noritoEncodeMultisigContractCallApproveRequest,
@@ -125,6 +139,7 @@ export {
 
 export {
   KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
+  KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY,
   KAGEMUSHA_MANIFEST_VERSION,
   KAGEMUSHA_MAX_HOPS,
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,

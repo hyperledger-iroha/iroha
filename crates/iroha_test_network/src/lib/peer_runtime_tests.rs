@@ -337,12 +337,13 @@ mod sora_profile_tests {
         );
     }
     #[test]
-    fn sora_profile_detection_pop_survives_trusted_peers_pop_override() {
+    fn sora_profile_detection_isolates_its_synthetic_pop_from_caller_layers() {
         let other =
             checked_key_pair_from_seed(b"sora-profile-pop-merge".to_vec(), Algorithm::BlsNormal);
         let other_pop =
             iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("BLS PoP generation");
-        let other_pk = other.public_key().to_string();
+        let other_public_key = other.public_key().clone();
+        let other_pk = other_public_key.to_string();
         let mut pop_entry = Table::new();
         pop_entry.insert("public_key".into(), Value::String(other_pk.clone()));
         pop_entry.insert(
@@ -355,27 +356,22 @@ mod sora_profile_tests {
             Value::Array(vec![Value::Table(pop_entry)]),
         );
         let merged = merged_sora_profile_detection_config(&[layer]);
-        let entries = merged
-            .get("trusted_peers_pop")
-            .and_then(Value::as_array)
-            .expect("trusted_peers_pop array");
-        let mut has_default = false;
-        let mut has_other = false;
-        for entry in entries {
-            let Some(table) = entry.as_table() else {
-                continue;
-            };
-            if let Some(pk) = table.get("public_key").and_then(Value::as_str) {
-                if pk == SORA_PROFILE_BLS_PUBLIC_KEY {
-                    has_default = true;
-                }
-                if pk == other_pk {
-                    has_other = true;
-                }
-            }
-        }
-        assert!(has_default, "sora profile PoP should be retained");
-        assert!(has_other, "caller-supplied PoP should be retained");
+        let config =
+            iroha_config::parameters::actual::Root::from_toml_source(TomlSource::inline(merged))
+                .expect("synthetic Sora profile detector config should parse");
+        let trusted = config.common.trusted_peers.value();
+        let myself = trusted.myself.id().public_key();
+        assert_eq!(myself.to_string(), SORA_PROFILE_BLS_PUBLIC_KEY);
+        assert_eq!(
+            trusted.pops.len(),
+            1,
+            "synthetic detection must retain exactly its own PoP"
+        );
+        assert!(trusted.pops.contains_key(myself));
+        assert!(
+            !trusted.pops.contains_key(&other_public_key),
+            "a caller PoP whose real base roster is absent cannot enter the synthetic detector"
+        );
     }
     #[test]
     fn sora_profile_detection_is_false_for_defaults() {

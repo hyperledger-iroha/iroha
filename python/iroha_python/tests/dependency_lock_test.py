@@ -282,7 +282,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         source = block.group(1)
         assert source.count("Install and verify the frozen workspace Cargo lock") == 1
         assert source.count("cargo fetch --locked") == 1
-        assert "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" in source
+        assert "31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d" in source
         assert "provision-ci" not in source
     for workflow_path in (
         ".gitignore",

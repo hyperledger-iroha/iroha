@@ -30,6 +30,10 @@ extern "C" {
 #define CONNECT_NORITO_ERR_VALIDATION_FEE_POLICY_PROOF -504
 #define CONNECT_NORITO_ERR_CONNECT_IDENTITY -410
 #define CONNECT_NORITO_ERR_CONNECT_APPROVAL -411
+#define CONNECT_NORITO_ERR_AUTHENTICATED_TRANSACTION_DETAILS -412
+#define CONNECT_NORITO_ERR_PRIVACY_EXACT12_ACTION -413
+#define CONNECT_NORITO_ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT -414
+#define CONNECT_NORITO_ERR_AUTHENTICATED_PRIVACY_STATE_QUERY -415
 
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL 2
@@ -665,6 +669,196 @@ int32_t connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4(
     uint8_t** out_payment_ptr,
     unsigned long* out_payment_len);
 
+// Encode one canonical POST /v1/offline/device-attestation-policy/proof body.
+// The marked context id is validated but remains caller-owned and is not
+// serialized in the frozen V1 request.
+int32_t connect_norito_offline_device_policy_proof_request_v1(
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id_ptr,
+    unsigned long trusted_checkpoint_context_id_len,
+    uint8_t** out_request_ptr,
+    unsigned long* out_request_len);
+
+// Verify a bounded canonical proof page against the exact NetworkId, durable
+// checkpoint, and evaluation time. The output is the canonical ABI-22 IDPPV1
+// projection containing the evaluated checkpoint, pagination flag, and the
+// terminal canonical policy-view archive when the page reaches ledger tip.
+int32_t connect_norito_offline_device_policy_proof_verify_v1(
+    const uint8_t* proof_norito_ptr,
+    unsigned long proof_norito_len,
+    const uint8_t* expected_network_id_ptr,
+    unsigned long expected_network_id_len,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id_ptr,
+    unsigned long trusted_checkpoint_context_id_len,
+    uint64_t evaluation_time_ms,
+    uint8_t** out_verified_page_ptr,
+    unsigned long* out_verified_page_len);
+
+// Encode one canonical authenticated POST /v1/offline/device-eligibility
+// body. The account is supplied only by Torii canonical request auth and is
+// intentionally absent from this selector.
+int32_t connect_norito_offline_device_eligibility_request_v1(
+    const uint8_t* registration_hash_ptr,
+    unsigned long registration_hash_len,
+    const uint8_t* device_id_ptr,
+    unsigned long device_id_len,
+    const uint8_t* attestation_key_id_ptr,
+    unsigned long attestation_key_id_len,
+    uint64_t requested_ttl_ms,
+    uint8_t** out_request_ptr,
+    unsigned long* out_request_len);
+
+// Canonically decode and authenticate one bounded device-eligibility response
+// against the exact request registration, independently pinned issuer,
+// NetworkId, caller-pinned finality context, and wall-clock evaluation time.
+// The IDERSP1 output contains only
+// public typed decision, credential/policy archives, and admission provenance.
+int32_t connect_norito_offline_device_eligibility_response_verify_v1(
+    const uint8_t* response_norito_ptr,
+    unsigned long response_norito_len,
+    const uint8_t* expected_registration_hash_ptr,
+    unsigned long expected_registration_hash_len,
+    const uint8_t* expected_issuer_norito_ptr,
+    unsigned long expected_issuer_norito_len,
+    const uint8_t* expected_network_id_ptr,
+    unsigned long expected_network_id_len,
+    const uint8_t* trusted_context_id_ptr,
+    unsigned long trusted_context_id_len,
+    uint64_t evaluation_time_ms,
+    uint8_t** out_verified_response_ptr,
+    unsigned long* out_verified_response_len);
+
+// A policy view becomes trusted only after native canonical decoding, policy
+// validation, and BridgeFinalityProof verification against both exact network
+// identity and a caller-pinned Sumeragi-v2 height-context id. The trust anchor
+// must come from durable application configuration, never from the response.
+int32_t connect_norito_offline_device_attestation_policy_view_verify_v1(
+    const uint8_t* policy_view_norito_ptr,
+    unsigned long policy_view_norito_len,
+    const uint8_t* expected_network_id_ptr,
+    unsigned long expected_network_id_len,
+    const uint8_t* trusted_context_id_ptr,
+    unsigned long trusted_context_id_len,
+    uint64_t evaluation_time_ms,
+    uint8_t** out_policy_view_ptr,
+    unsigned long* out_policy_view_len);
+
+// Verify the same canonical finalized policy view and return the fixed-size
+// IDPVCL1 ABI-22 projection: policy epoch/hash/freshness followed by the exact
+// finalized block height/hash/timestamp and finality-evidence hash.
+int32_t connect_norito_offline_device_attestation_policy_view_claims_v1(
+    const uint8_t* policy_view_norito_ptr,
+    unsigned long policy_view_norito_len,
+    const uint8_t* expected_network_id_ptr,
+    unsigned long expected_network_id_len,
+    const uint8_t* trusted_context_id_ptr,
+    unsigned long trusted_context_id_len,
+    uint64_t evaluation_time_ms,
+    uint8_t** out_claims_ptr,
+    unsigned long* out_claims_len);
+
+int32_t connect_norito_offline_device_eligibility_credential_verify_v1(
+    const uint8_t* credential_norito_ptr,
+    unsigned long credential_norito_len,
+    const uint8_t* expected_issuer_norito_ptr,
+    unsigned long expected_issuer_norito_len,
+    const uint8_t* policy_view_norito_ptr,
+    unsigned long policy_view_norito_len,
+    const uint8_t* expected_network_id_ptr,
+    unsigned long expected_network_id_len,
+    const uint8_t* trusted_context_id_ptr,
+    unsigned long trusted_context_id_len,
+    uint64_t evaluation_time_ms,
+    uint8_t** out_credential_ptr,
+    unsigned long* out_credential_len);
+
+// Treat the issuer-signed eligibility credential as the IPN1 peer
+// certificate. After the same finalized-policy verification as above, return
+// its exact registered uncompressed P-256 device-authority key (65 bytes).
+// Raw or self-asserted public keys are not authenticated certificates.
+int32_t connect_norito_offline_device_eligibility_peer_certificate_verify_v1(
+    const uint8_t* credential_norito_ptr,
+    unsigned long credential_norito_len,
+    const uint8_t* expected_issuer_norito_ptr,
+    unsigned long expected_issuer_norito_len,
+    const uint8_t* policy_view_norito_ptr,
+    unsigned long policy_view_norito_len,
+    const uint8_t* expected_network_id_ptr,
+    unsigned long expected_network_id_len,
+    const uint8_t* trusted_context_id_ptr,
+    unsigned long trusted_context_id_len,
+    uint64_t evaluation_time_ms,
+    uint8_t** out_device_public_key_ptr,
+    unsigned long* out_device_public_key_len);
+
+// Eligibility-gated cash handoff is a distinct ABI-22 envelope around the
+// unchanged ABI-21/V4 payment. The signature input is canonical raw-low-S P-256
+// r||s. Static validation is for retransmission identity only; first delivery
+// additionally requires the signed <=15-minute request and current finalized policy.
+int32_t connect_norito_kagemusha_eligibility_payment_prepare_v1(
+    const uint8_t* payment_norito_ptr,
+    unsigned long payment_norito_len,
+    const uint8_t* credential_norito_ptr,
+    unsigned long credential_norito_len,
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_payload_ptr,
+    unsigned long* out_payload_len);
+
+int32_t connect_norito_kagemusha_eligibility_payment_signing_bytes_v1(
+    const uint8_t* payload_norito_ptr,
+    unsigned long payload_norito_len,
+    uint8_t** out_signing_bytes_ptr,
+    unsigned long* out_signing_bytes_len);
+
+int32_t connect_norito_kagemusha_eligibility_payment_finalize_v1(
+    const uint8_t* payload_norito_ptr,
+    unsigned long payload_norito_len,
+    const uint8_t* signature_ptr,
+    unsigned long signature_len,
+    uint8_t** out_envelope_ptr,
+    unsigned long* out_envelope_len);
+
+int32_t connect_norito_kagemusha_eligibility_payment_validate_static_v1(
+    const uint8_t* envelope_norito_ptr,
+    unsigned long envelope_norito_len,
+    uint8_t** out_envelope_ptr,
+    unsigned long* out_envelope_len);
+
+int32_t connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1(
+    const uint8_t* envelope_norito_ptr,
+    unsigned long envelope_norito_len,
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* expected_issuer_norito_ptr,
+    unsigned long expected_issuer_norito_len,
+    const uint8_t* policy_view_norito_ptr,
+    unsigned long policy_view_norito_len,
+    uint64_t received_at_ms,
+    uint8_t** out_payment_ptr,
+    unsigned long* out_payment_len);
+
+// Production first-delivery gate. This is the finalized counterpart of the
+// legacy typed-binding helper above and additionally authenticates the exact
+// BridgeFinalityProof using caller-owned network/context trust.
+int32_t connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1(
+    const uint8_t* envelope_norito_ptr,
+    unsigned long envelope_norito_len,
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* expected_issuer_norito_ptr,
+    unsigned long expected_issuer_norito_len,
+    const uint8_t* policy_view_norito_ptr,
+    unsigned long policy_view_norito_len,
+    const uint8_t* expected_network_id_ptr,
+    unsigned long expected_network_id_len,
+    const uint8_t* trusted_context_id_ptr,
+    unsigned long trusted_context_id_len,
+    uint64_t received_at_ms,
+    uint8_t** out_payment_ptr,
+    unsigned long* out_payment_len);
+
 // Proof/accumulator internals remain opaque to the SDK; this helper returns the
 // validated wallet-safe `KagemushaRecursiveSpendBundleSummaryV4` archive.
 int32_t connect_norito_kagemusha_recursive_spend_bundle_summary_v4(
@@ -784,10 +978,10 @@ int32_t connect_norito_kagemusha_recursive_spend_topup_v4(
 // recipient insertion paths, optional sender-change opening and insertion
 // paths, active transfer verifier binding, operation id, and block height.
 // Parent provenance is mandatory, canonicalized under one exact authenticated
-// roster, and fully verified before proving. Secrets are zeroized before return. The entrypoint
-// remains unavailable until recursive append can atomically return both the
-// split result and proof-output-bound recipient/change membership witnesses;
-// a bundle without those witnesses is not spendable cash.
+// roster, and fully verified before proving. Secrets are zeroized before return.
+// A successful call atomically returns the split result and proof-output-bound
+// recipient/change membership witnesses; a bundle without those witnesses is
+// not spendable cash.
 int32_t connect_norito_kagemusha_recursive_spend_append_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -824,9 +1018,9 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4(
 // the owned opening, exact membership/dummy paths, exact scaled public amount,
 // optional private change opening plus mandatory change insertion paths, and
 // active unshield-v3 verifier binding. Native derives the unshield proof
-// attachment and redemption intent; callers cannot supply either. This
-// remains unavailable until partial redemption can atomically return the
-// proof-bound offline-change membership witness.
+// attachment and redemption intent; callers cannot supply either. A successful
+// partial redemption atomically returns its proof-bound offline-change
+// membership witness in the canonical build result.
 int32_t connect_norito_kagemusha_recursive_spend_redeem_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -890,6 +1084,296 @@ int32_t iroha_privacy_exact12_fixture_bundle_v1(
 int32_t iroha_privacy_validate_exact12_fixture_bundle_v1(
     const uint8_t* archive_ptr,
     unsigned long archive_len);
+
+// Authenticates one canonical versioned SignedTransaction, verifies its exact
+// NetworkId, exact canonical authority account, and closed Exact12 operation
+// discriminant, and returns exactly 128 bytes: transaction hash,
+// transaction-intent digest, statement digest, and proof-envelope hash. Local
+// inspection is not ledger acceptance.
+int32_t iroha_privacy_inspect_signed_exact12_action_v1(
+    const uint8_t* signed_transaction_ptr,
+    unsigned long signed_transaction_len,
+    const uint8_t* network_id_ptr,
+    unsigned long network_id_len,
+    const uint8_t* authority_ptr,
+    unsigned long authority_len,
+    int32_t operation_index,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Builds a fresh authority-bound exact-hash FindTransactions request. Success
+// returns a native preparation archive and exactly 32 signing-digest bytes.
+int32_t iroha_privacy_authenticated_transaction_details_prepare_v1(
+    const uint8_t* network_id_ptr,
+    unsigned long network_id_len,
+    const uint8_t* authority_ptr,
+    unsigned long authority_len,
+    const uint8_t* transaction_hash_hex_ptr,
+    unsigned long transaction_hash_hex_len,
+    uint64_t creation_time_ms,
+    const uint8_t* nonce_ptr,
+    unsigned long nonce_len,
+    uint8_t** out_preparation_ptr,
+    unsigned long* out_preparation_len,
+    uint8_t** out_signing_digest_ptr,
+    unsigned long* out_signing_digest_len);
+
+// Verifies the detached authority signature over the native preparation and
+// returns canonical versioned SignedQuery bytes for
+// /v1/pipeline/transactions/details.
+int32_t iroha_privacy_authenticated_transaction_details_finalize_v1(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* signature_ptr,
+    unsigned long signature_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Verifies the exact committed transaction response bound to the preparation
+// and returns canonical compact JSON with the exact keys version (1),
+// transaction_hash_hex, transaction_authority, block_hash_hex,
+// result_hash_hex, result_ok, rejection_message (null|string), and
+// committed_block_height (decimal string). The endpoint's response is
+// authenticated by Torii TLS; independent finality requires the caller to
+// verify the projected exact block separately.
+int32_t iroha_privacy_authenticated_transaction_details_project_result_v1(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* response_ptr,
+    unsigned long response_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Authority-split ABI-22 variant. The query authority signs the returned
+// digest while the separately pinned transaction authority must have signed
+// the returned external transaction.
+int32_t iroha_privacy_authenticated_transaction_details_prepare_v2(
+    const uint8_t* network_id_ptr,
+    unsigned long network_id_len,
+    const uint8_t* query_authority_ptr,
+    unsigned long query_authority_len,
+    const uint8_t* expected_transaction_authority_ptr,
+    unsigned long expected_transaction_authority_len,
+    const uint8_t* transaction_hash_hex_ptr,
+    unsigned long transaction_hash_hex_len,
+    uint64_t creation_time_ms,
+    const uint8_t* nonce_ptr,
+    unsigned long nonce_len,
+    uint8_t** out_preparation_ptr,
+    unsigned long* out_preparation_len,
+    uint8_t** out_signing_digest_ptr,
+    unsigned long* out_signing_digest_len);
+
+int32_t iroha_privacy_authenticated_transaction_details_finalize_v2(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* signature_ptr,
+    unsigned long signature_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Returns strict canonical JSON carrying only structurally native-verified
+// routing hints. Applied/rejected are not independently final until the
+// finalized Kagemusha outcome projector below succeeds.
+int32_t iroha_privacy_authenticated_transaction_details_project_result_v2(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* response_ptr,
+    unsigned long response_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Binds 1..64 exact proof response bodies. proofs_ptr is their exact
+// concatenation and proof_lengths_ptr contains proof_count native unsigned-long
+// lengths. Returns a canonical page archive and its lowercase marked hash.
+int32_t iroha_privacy_authenticated_finality_proof_page_bind_v1(
+    const uint8_t* proofs_ptr,
+    unsigned long proofs_len,
+    const unsigned long* proof_lengths_ptr,
+    unsigned long proof_count,
+    uint8_t** out_page_ptr,
+    unsigned long* out_page_len,
+    uint8_t** out_hash_hex_ptr,
+    unsigned long* out_hash_hex_len);
+
+// Verifies one bounded contiguous page from the exact 40-byte checkpoint
+// (positive u63 big-endian height || marked 32-byte HeightContextId) and returns
+// the advanced checkpoint in the same persistence format.
+int32_t iroha_privacy_authenticated_finality_page_verify_v1(
+    const uint8_t* network_id_ptr,
+    unsigned long network_id_len,
+    const uint8_t* trusted_checkpoint_ptr,
+    unsigned long trusted_checkpoint_len,
+    const uint8_t* page_ptr,
+    unsigned long page_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Sole ABI-22 iOS authority for terminal Kagemusha issuer outcomes. Returns
+// strict canonical JSON only after verifying the signed V2 query preparation,
+// exact request/operation/kind/NetworkId, checkpoint-pinned finality, canonical
+// executed block, entry/result inclusion, and merge-sidecar absence.
+int32_t iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* response_ptr,
+    unsigned long response_len,
+    const uint8_t* expected_operation_id_ptr,
+    unsigned long expected_operation_id_len,
+    const uint8_t* expected_kind_ptr,
+    unsigned long expected_kind_len,
+    const uint8_t* expected_request_ptr,
+    unsigned long expected_request_len,
+    const uint8_t* network_id_ptr,
+    unsigned long network_id_len,
+    const uint8_t* trusted_checkpoint_ptr,
+    unsigned long trusted_checkpoint_len,
+    const uint8_t* finality_page_ptr,
+    unsigned long finality_page_len,
+    const uint8_t* executed_block_wire_ptr,
+    unsigned long executed_block_wire_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Additive Exact12 rejection authority. The V2 preparation binds distinct
+// query/transaction authorities; the 96-byte action tuple binds transaction
+// intent, statement, and proof-envelope hashes. Returns strict canonical JSON
+// only after verifying the closed rejection code, canonical message, exact
+// result-bearing block, entry/result inclusion, and checkpoint-pinned QC chain.
+int32_t iroha_privacy_authenticated_finalized_action_rejection_project_v1(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* response_ptr,
+    unsigned long response_len,
+    int32_t operation_index,
+    uint32_t action_index,
+    const uint8_t* requested_action_binding_ptr,
+    unsigned long requested_action_binding_len,
+    const uint8_t* network_id_ptr,
+    unsigned long network_id_len,
+    const uint8_t* trusted_checkpoint_ptr,
+    unsigned long trusted_checkpoint_len,
+    const uint8_t* finality_page_ptr,
+    unsigned long finality_page_len,
+    const uint8_t* executed_block_wire_ptr,
+    unsigned long executed_block_wire_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Projects the existing specialized ABI-21/V4 top-up proof only after the
+// installed immutable release, roster, anchor, Commit-QC, and exact anchor path
+// verify. Swift compares this strict JSON identity with the uniform outcome.
+int32_t iroha_privacy_kagemusha_topup_finality_project_v4(
+    const uint8_t* anchor_ptr,
+    unsigned long anchor_len,
+    const uint8_t* proof_ptr,
+    unsigned long proof_len,
+    const uint8_t* roster_ptr,
+    unsigned long roster_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Verifies the same authenticated transaction-details response while requiring
+// exactly one RegisterOfflineDeviceAttestation instruction. Returns canonical
+// compact JSON distinguishing applied, typed eligibility rejection, and other
+// rejection terminals without changing the generic V1 result contract.
+int32_t iroha_privacy_authenticated_offline_device_registration_result_project_v1(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* response_ptr,
+    unsigned long response_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Builds a fresh authority-bound ID105 query and binds its opaque preparation
+// to the exact operation, transaction, action index, and 96-byte local action
+// inspection tuple. Success returns the preparation and exactly 32
+// signing-digest bytes.
+int32_t iroha_privacy_authenticated_action_receipt_prepare_v1(
+    const uint8_t* network_id_ptr,
+    unsigned long network_id_len,
+    const uint8_t* authority_ptr,
+    unsigned long authority_len,
+    int32_t operation_index,
+    const uint8_t* transaction_hash_hex_ptr,
+    unsigned long transaction_hash_hex_len,
+    uint32_t action_index,
+    const uint8_t* requested_action_binding_ptr,
+    unsigned long requested_action_binding_len,
+    uint64_t creation_time_ms,
+    const uint8_t* nonce_ptr,
+    unsigned long nonce_len,
+    uint8_t** out_preparation_ptr,
+    unsigned long* out_preparation_len,
+    uint8_t** out_signing_digest_ptr,
+    unsigned long* out_signing_digest_len);
+
+// Verifies the detached authority signature over the native ID105
+// preparation and returns canonical versioned SignedQuery bytes for /v1/query.
+int32_t iroha_privacy_authenticated_action_receipt_finalize_v1(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* signature_ptr,
+    unsigned long signature_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Accepts only the exact canonical typed ID105 response bound to the native
+// preparation and returns strict compact JSON containing the receipt's full
+// action, capability, admission, and finalized-block bindings.
+int32_t iroha_privacy_authenticated_action_receipt_project_result_v1(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* response_ptr,
+    unsigned long response_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Builds one fresh authority-bound query for ordinary-memory IDs 97 through
+// 104. query_id is the actual ordinary-memory ID. protocol_index is zero
+// except for ID 98, where 0/1/2 select FCMP++/private-IVM/PQ-MASP. The request
+// binding is the exact concatenation of non-zero 32-byte query keys in native
+// constructor order. Success returns an opaque preparation and exactly 32
+// signing-digest bytes.
+int32_t iroha_privacy_authenticated_state_query_prepare_v1(
+    const uint8_t* network_id_ptr,
+    unsigned long network_id_len,
+    const uint8_t* authority_ptr,
+    unsigned long authority_len,
+    uint32_t query_id,
+    uint32_t protocol_index,
+    const uint8_t* request_binding_ptr,
+    unsigned long request_binding_len,
+    uint64_t creation_time_ms,
+    const uint8_t* nonce_ptr,
+    unsigned long nonce_len,
+    uint8_t** out_preparation_ptr,
+    unsigned long* out_preparation_len,
+    uint8_t** out_signing_digest_ptr,
+    unsigned long* out_signing_digest_len);
+
+// Verifies the detached authority signature over an ID97-104 preparation and
+// returns canonical versioned SignedQuery bytes for POST /v1/query.
+int32_t iroha_privacy_authenticated_state_query_finalize_v1(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* signature_ptr,
+    unsigned long signature_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+// Accepts only the exact canonical typed response bound to the native
+// preparation and returns compact JSON for that public finalized view. Every
+// structured numeric leaf is a canonical decimal string; fixed-byte arrays
+// retain their historical JSON byte-array representation. NetworkId and
+// finalized block hashes retain canonical hash:<64 UPPER HEX>#<CRC16> literals.
+int32_t iroha_privacy_authenticated_state_query_project_result_v1(
+    const uint8_t* preparation_ptr,
+    unsigned long preparation_len,
+    const uint8_t* response_ptr,
+    unsigned long response_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
 
 void iroha_privacy_free_buffer(uint8_t* ptr);
 

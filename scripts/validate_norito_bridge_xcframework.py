@@ -44,7 +44,9 @@ EXPECTED_MANIFEST_FIELDS = {
     "source_commit",
     "source_tree_dirty",
     "source_fingerprint_sha256",
-    "cargo_lock_sha256",
+    "workspace_cargo_lock_sha256",
+    "build_cargo_lock_sha256",
+    "build_cargo_lock_authority",
     "bridge_header_sha256",
     "required_symbols",
     "forbidden_symbols",
@@ -82,6 +84,9 @@ EXPECTED_BUILD_ENVIRONMENT_FIELDS = {
     "iphonesimulator_deployment_target",
     "macosx_deployment_target",
 }
+PRIVACY_SDK_RELEASE_V2_LOCK_SHA256 = (
+    "31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d"
+)
 COMMON_BUILD_ENVIRONMENT = {
     "CARGO",
     "CARGO_BUILD_JOBS",
@@ -100,7 +105,7 @@ COMMON_BUILD_ENVIRONMENT = {
     "RUSTUP_HOME",
     "TMPDIR",
 }
-EXPECTED_ENVIRONMENT_PROFILES = {
+EXPECTED_WORKSPACE_ENVIRONMENT_PROFILES = {
     "apple-ios-device": sorted(
         COMMON_BUILD_ENVIRONMENT
         | {"DEVELOPER_DIR", "IPHONEOS_DEPLOYMENT_TARGET", "SDKROOT"}
@@ -119,6 +124,78 @@ EXPECTED_ENVIRONMENT_PROFILES = {
         | {"DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT"}
     ),
 }
+# Backwards-compatible test-fixture name for the workspace-lock corridor.
+EXPECTED_ENVIRONMENT_PROFILES = EXPECTED_WORKSPACE_ENVIRONMENT_PROFILES
+PRIVACY_BUILD_ENVIRONMENT = {
+    "CARGO",
+    "CARGO_BUILD_JOBS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_HOME",
+    "CARGO_INCREMENTAL",
+    "CARGO_NET_OFFLINE",
+    "CARGO_TARGET_DIR",
+    "DEVELOPER_DIR",
+    "HOME",
+    "IROHA_PRIVACY_AUTHENTICATED_APPLE_CARGO_PROFILE",
+    "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGET",
+    "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_GIT_LINK_STATE",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_REGISTRY_LINK_STATE",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE",
+    "IROHA_PRIVACY_AUTHENTICATED_DEVELOPER_DIR",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR",
+    "IROHA_PRIVACY_AUTHENTICATED_SDKROOT",
+    "IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE",
+    "IROHA_PRIVACY_CARGO_AUDIT_PATH",
+    "IROHA_PRIVACY_CARGO_LOCKFILE_PATH",
+    "IROHA_PRIVACY_LOCKFILE_PYTHON_BIN",
+    "IROHA_PRIVACY_REAL_CARGO",
+    "IROHA_PRIVACY_SDK_ROOT",
+    "LANG",
+    "LC_ALL",
+    "NORITO_SKIP_BINDINGS_SYNC",
+    "PATH",
+    "RUSTC_BOOTSTRAP",
+    "SDKROOT",
+    "TMPDIR",
+}
+EXPECTED_PRIVACY_ENVIRONMENT_PROFILES = {
+    "privacy-apple-ios-device-arm64": sorted(
+        PRIVACY_BUILD_ENVIRONMENT | {"IPHONEOS_DEPLOYMENT_TARGET"}
+    ),
+    "privacy-apple-ios-simulator-arm64": sorted(
+        PRIVACY_BUILD_ENVIRONMENT
+        | {"IPHONEOS_DEPLOYMENT_TARGET", "IPHONESIMULATOR_DEPLOYMENT_TARGET"}
+    ),
+    "privacy-apple-ios-simulator-x86_64": sorted(
+        PRIVACY_BUILD_ENVIRONMENT
+        | {"IPHONEOS_DEPLOYMENT_TARGET", "IPHONESIMULATOR_DEPLOYMENT_TARGET"}
+    ),
+    "privacy-apple-macos-arm64": sorted(
+        PRIVACY_BUILD_ENVIRONMENT | {"MACOSX_DEPLOYMENT_TARGET"}
+    ),
+    "privacy-apple-macos-x86_64": sorted(
+        PRIVACY_BUILD_ENVIRONMENT | {"MACOSX_DEPLOYMENT_TARGET"}
+    ),
+}
 EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
@@ -135,6 +212,25 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_inspect_signed_exact12_action_v1",
+    "iroha_privacy_authenticated_transaction_details_prepare_v1",
+    "iroha_privacy_authenticated_transaction_details_finalize_v1",
+    "iroha_privacy_authenticated_transaction_details_project_result_v1",
+    "iroha_privacy_authenticated_transaction_details_prepare_v2",
+    "iroha_privacy_authenticated_transaction_details_finalize_v2",
+    "iroha_privacy_authenticated_transaction_details_project_result_v2",
+    "iroha_privacy_authenticated_finality_proof_page_bind_v1",
+    "iroha_privacy_authenticated_finality_page_verify_v1",
+    "iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1",
+    "iroha_privacy_authenticated_finalized_action_rejection_project_v1",
+    "iroha_privacy_kagemusha_topup_finality_project_v4",
+    "iroha_privacy_authenticated_offline_device_registration_result_project_v1",
+    "iroha_privacy_authenticated_action_receipt_prepare_v1",
+    "iroha_privacy_authenticated_action_receipt_finalize_v1",
+    "iroha_privacy_authenticated_action_receipt_project_result_v1",
+    "iroha_privacy_authenticated_state_query_prepare_v1",
+    "iroha_privacy_authenticated_state_query_finalize_v1",
+    "iroha_privacy_authenticated_state_query_project_result_v1",
     "iroha_privacy_free_buffer",
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
@@ -142,6 +238,13 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
+    "connect_norito_offline_device_policy_proof_request_v1",
+    "connect_norito_offline_device_policy_proof_verify_v1",
+    "connect_norito_offline_device_eligibility_request_v1",
+    "connect_norito_offline_device_eligibility_response_verify_v1",
+    "connect_norito_offline_device_attestation_policy_view_verify_v1",
+    "connect_norito_offline_device_eligibility_credential_verify_v1",
+    "connect_norito_offline_device_eligibility_peer_certificate_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",
@@ -190,6 +293,12 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
+    "connect_norito_kagemusha_eligibility_payment_prepare_v1",
+    "connect_norito_kagemusha_eligibility_payment_signing_bytes_v1",
+    "connect_norito_kagemusha_eligibility_payment_finalize_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_static_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
 ]
 EXPECTED_FORBIDDEN_SYMBOLS = [
@@ -386,6 +495,28 @@ def _duplicates_rejected(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
+def _matches_exact_json_types(actual: object, expected: object) -> bool:
+    """Compare JSON values without Python's bool/int or int/float coercions."""
+
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return False
+        return set(actual) == set(expected) and all(
+            _matches_exact_json_types(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        if not isinstance(actual, list):
+            return False
+        return len(actual) == len(expected) and all(
+            _matches_exact_json_types(actual_value, expected_value)
+            for actual_value, expected_value in zip(actual, expected)
+        )
+    return actual == expected
+
+
 def _regular_file(path: Path, label: str) -> None:
     try:
         metadata = path.lstat()
@@ -401,6 +532,32 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _selected_lockfile(root: Path, configured: Path | None) -> Path:
+    candidate = configured if configured is not None else root / "Cargo.lock"
+    if not candidate.is_absolute() or candidate != Path(os.path.abspath(candidate)):
+        raise ValidationError("selected Cargo.lock path must be absolute and canonical")
+    try:
+        metadata = candidate.lstat()
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise ValidationError(f"selected Cargo.lock is unavailable: {candidate}") from error
+    if (
+        resolved != candidate
+        or candidate.name != "Cargo.lock"
+        or not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_mode & 0o111
+        or metadata.st_size <= 0
+        or metadata.st_size > 16 * 1024 * 1024
+    ):
+        raise ValidationError(
+            "selected Cargo.lock must be one bounded, singly linked, "
+            "non-executable regular file"
+        )
+    return candidate
 
 
 def _exact_entries(path: Path, expected: set[str], label: str) -> None:
@@ -423,7 +580,9 @@ def _reject_internal_symlinks(xcframework: Path) -> None:
                 raise ValidationError(f"XCFramework contains a symlink: {child}")
 
 
-def _validate_build_environment(root: Path, environment: object) -> None:
+def _validate_build_environment(
+    root: Path, environment: object, build_lock_authority: object
+) -> None:
     if not isinstance(environment, dict) or set(environment) != (
         EXPECTED_BUILD_ENVIRONMENT_FIELDS
     ):
@@ -433,12 +592,21 @@ def _validate_build_environment(root: Path, environment: object) -> None:
             f"(missing={sorted(EXPECTED_BUILD_ENVIRONMENT_FIELDS - actual)}, "
             f"unexpected={sorted(actual - EXPECTED_BUILD_ENVIRONMENT_FIELDS)})"
         )
-    if environment["environment_profiles"] != EXPECTED_ENVIRONMENT_PROFILES:
+    if build_lock_authority == "workspace-v1":
+        expected_profiles = EXPECTED_WORKSPACE_ENVIRONMENT_PROFILES
+        expected_schema = "iroha.mobile-native-build-environment.v1"
+        expected_runner_schema = "iroha.mobile-hermetic-command.v1"
+    elif build_lock_authority == "privacy-sdk-release-v2":
+        expected_profiles = EXPECTED_PRIVACY_ENVIRONMENT_PROFILES
+        expected_schema = "iroha.mobile-native-build-environment.v2"
+        expected_runner_schema = "iroha.mobile-hermetic-command.v2"
+    else:
+        raise ValidationError("artifact build Cargo.lock authority is not canonical")
+    if environment["environment_profiles"] != expected_profiles:
         raise ValidationError("artifact build environment allowlists are not exact")
     if (
-        environment["schema"] != "iroha.mobile-native-build-environment.v1"
-        or environment["hermetic_runner_schema"]
-        != "iroha.mobile-hermetic-command.v1"
+        environment["schema"] != expected_schema
+        or environment["hermetic_runner_schema"] != expected_runner_schema
         or type(environment["cargo_build_jobs"]) is not int
         or environment["cargo_build_jobs"] != 1
         or environment["rust_toolchain_channel"] != "1.93.1"
@@ -504,11 +672,29 @@ def _validate_build_environment(root: Path, environment: object) -> None:
         raise ValidationError("artifact hermetic runner digest does not match source")
 
 
-def _validate_root_identity(root: Path, payload: dict[str, object]) -> None:
-    lockfile = root / "Cargo.lock"
-    _regular_file(lockfile, "selected root Cargo.lock")
-    if _sha256(lockfile) != payload["cargo_lock_sha256"]:
-        raise ValidationError("artifact Cargo.lock digest does not match source")
+def _validate_root_identity(
+    root: Path, payload: dict[str, object], lockfile: Path
+) -> None:
+    workspace_lock = root / "Cargo.lock"
+    _regular_file(workspace_lock, "tracked workspace Cargo.lock")
+    _regular_file(lockfile, "selected build Cargo.lock")
+    workspace_digest = _sha256(workspace_lock)
+    build_digest = _sha256(lockfile)
+    if workspace_digest != payload["workspace_cargo_lock_sha256"]:
+        raise ValidationError(
+            "artifact workspace Cargo.lock digest does not match source"
+        )
+    if build_digest != payload["build_cargo_lock_sha256"]:
+        raise ValidationError("artifact build Cargo.lock digest does not match source")
+    authority = payload["build_cargo_lock_authority"]
+    if lockfile == workspace_lock:
+        if authority != "workspace-v1" or build_digest != workspace_digest:
+            raise ValidationError("artifact workspace build-lock authority is invalid")
+    elif (
+        authority != "privacy-sdk-release-v2"
+        or build_digest != PRIVACY_SDK_RELEASE_V2_LOCK_SHA256
+    ):
+        raise ValidationError("artifact privacy build-lock authority is invalid")
 
     header = root / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
     _regular_file(header, "authoritative NoritoBridge header")
@@ -545,7 +731,9 @@ def _validate_root_identity(root: Path, payload: dict[str, object]) -> None:
         raise ValidationError("authoritative privacy bridge ABI is not exact 22")
 
 
-def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
+def _load_manifest(
+    manifest_path: Path, root: Path, lockfile: Path
+) -> dict[str, object]:
     _regular_file(manifest_path, "embedded artifact manifest")
     try:
         payload = json.loads(
@@ -566,7 +754,10 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
         or SEMVER.fullmatch(payload["version"]) is None
     ):
         raise ValidationError("artifact version is not canonical")
-    if payload["native_bridge_abi_version"] != 22:
+    if (
+        type(payload["native_bridge_abi_version"]) is not int
+        or payload["native_bridge_abi_version"] != 22
+    ):
         raise ValidationError("artifact does not bind exact native bridge ABI 22")
     production = payload["privacy_production_enabled"]
     if type(production) is not bool:
@@ -574,7 +765,10 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
     expected_features = ["privacy-production-enabled"] if production else []
     if payload["cargo_features"] != expected_features:
         raise ValidationError("artifact Cargo feature inventory is not exact")
-    _validate_build_environment(root, payload["build_environment"])
+    authority = payload["build_cargo_lock_authority"]
+    if authority not in {"workspace-v1", "privacy-sdk-release-v2"}:
+        raise ValidationError("artifact build Cargo.lock authority is not canonical")
+    _validate_build_environment(root, payload["build_environment"], authority)
     if not isinstance(payload["source_commit"], str) or COMMIT.fullmatch(
         payload["source_commit"]
     ) is None:
@@ -583,7 +777,8 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
         raise ValidationError("artifact source_tree_dirty must be boolean")
     for field in (
         "source_fingerprint_sha256",
-        "cargo_lock_sha256",
+        "workspace_cargo_lock_sha256",
+        "build_cargo_lock_sha256",
         "bridge_header_sha256",
     ):
         if not isinstance(payload[field], str) or SHA256.fullmatch(payload[field]) is None:
@@ -593,14 +788,17 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
     if payload["forbidden_symbols"] != EXPECTED_FORBIDDEN_SYMBOLS:
         raise ValidationError("artifact forbidden symbol inventory is not exact")
     roles = payload["kagemusha_mobile_artifact_roles"]
-    if roles != expected_kagemusha_roles(production):
+    expected_roles = expected_kagemusha_roles(production)
+    if roles != expected_roles or not _matches_exact_json_types(
+        roles, expected_roles
+    ):
         raise ValidationError("artifact Kagemusha role registry is not exact")
     hashes = payload["hashes"]
     if not isinstance(hashes, dict) or set(hashes) != set(EXPECTED_SLICES):
         raise ValidationError("artifact slice hash registry is not exact")
     if any(not isinstance(value, str) or SHA256.fullmatch(value) is None for value in hashes.values()):
         raise ValidationError("artifact slice hash is not canonical")
-    _validate_root_identity(root, payload)
+    _validate_root_identity(root, payload, lockfile)
     return payload
 
 
@@ -791,6 +989,7 @@ def _validate_tool_provenance(
 def _validate_repository_provenance(
     root: Path,
     payload: dict[str, object],
+    lockfile: Path | None = None,
 ) -> None:
     """Recompute the selected source closure for a standalone archive owner."""
 
@@ -804,7 +1003,7 @@ def _validate_repository_provenance(
         "check_mobile_sdk_artifact_pin_commit.py",
         "norito_bridge_pin_commit_for_provenance_validation",
     )
-    lockfile = root / "Cargo.lock"
+    lockfile = _selected_lockfile(root, lockfile)
     try:
         _validate_tool_provenance(payload, source_seal)
         inputs = source_seal.seal_inputs(root, "apple", lockfile)
@@ -851,14 +1050,16 @@ def validate(
     expected_link_target: str,
     swift_loader: Path | None = None,
     verify_repository_provenance: bool = False,
+    lockfile_path: Path | None = None,
 ) -> dict[str, object]:
     root = root.resolve(strict=True)
+    lockfile = _selected_lockfile(root, lockfile_path)
     if xcframework.is_symlink() or not xcframework.is_dir():
         raise ValidationError("XCFramework root is not a non-symbolic directory")
     if manifest_path != xcframework / MANIFEST_NAME:
         raise ValidationError("embedded artifact manifest has a non-canonical location")
     _reject_internal_symlinks(xcframework)
-    payload = _load_manifest(manifest_path, root)
+    payload = _load_manifest(manifest_path, root, lockfile)
 
     expected_top_level = {"Info.plist", MANIFEST_NAME, *EXPECTED_SLICES}
     if payload["privacy_production_enabled"] is True:
@@ -989,7 +1190,10 @@ def validate(
     if swift_loader is not None:
         _validate_swift_pins(root, swift_loader, hashes)
     if verify_repository_provenance:
-        _validate_repository_provenance(root, payload)
+        if lockfile == root / "Cargo.lock":
+            _validate_repository_provenance(root, payload)
+        else:
+            _validate_repository_provenance(root, payload, lockfile)
     return payload
 
 
@@ -1001,6 +1205,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest-link", required=True, type=Path)
     parser.add_argument("--expected-link-target", required=True)
     parser.add_argument("--swift-loader", type=Path)
+    parser.add_argument("--lockfile-path", type=Path)
     return parser
 
 
@@ -1014,6 +1219,7 @@ def main() -> int:
             manifest_link=arguments.manifest_link,
             expected_link_target=arguments.expected_link_target,
             swift_loader=arguments.swift_loader,
+            lockfile_path=arguments.lockfile_path,
         )
     except (OSError, UnicodeError, ValidationError) as error:
         print(f"[-] {error}", file=sys.stderr)

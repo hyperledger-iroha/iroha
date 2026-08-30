@@ -42,6 +42,11 @@ import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionLocalStateV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionOperationViewV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyOperationSchemaV1
+import org.hyperledger.iroha.sdk.privacy.ledgerEffectKind
+import org.hyperledger.iroha.sdk.privacy.protocolId
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -68,6 +73,156 @@ class HttpClientTransportTest {
     private fun testAccountId(seed: Int): String =
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(seed), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+
+    @Test
+    fun bridgeFinalityProofUsesExactBoundedRouteAndFailsClosed() {
+        val canonical = byteArrayOf(0x4e, 0x52, 0x54, 0x30)
+        val executor = ExactResponseExecutor(
+            TransportResponse(
+                200,
+                canonical,
+                "ok",
+                mapOf(
+                    "Content-Type" to listOf("application/x-norito"),
+                    "Content-Length" to listOf(canonical.size.toString()),
+                ),
+            ),
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+
+        assertTrue(
+            canonical.contentEquals(
+                transport.getBridgeFinalityProofV1(BigInteger("18446744073709551615")).join(),
+            ),
+        )
+        assertEquals("GET", executor.lastRequest.method)
+        assertEquals(
+            "/v1/bridge/finality/18446744073709551615",
+            executor.lastRequest.uri.rawPath,
+        )
+        assertEquals(listOf("application/x-norito"), executor.lastRequest.headers["Accept"])
+        assertEquals(9L * 1024L * 1024L, executor.lastRequest.maximumResponseBytes)
+
+        listOf(BigInteger.ZERO, BigInteger.valueOf(-1), BigInteger.ONE.shiftLeft(64)).forEach {
+            assertFailsWith<IllegalArgumentException> {
+                transport.getBridgeFinalityProofV1(it)
+            }
+        }
+        assertEquals(1, executor.requestCount)
+
+        listOf(201, 404, 409, 500).forEach { status ->
+            val hostile = HttpClientTransport.withExecutor(
+                ExactResponseExecutor(
+                    TransportResponse(
+                        status,
+                        canonical,
+                        "",
+                        mapOf("Content-Type" to listOf("application/x-norito")),
+                    ),
+                ),
+                ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+            )
+            assertFailsWith<CompletionException> {
+                hostile.getBridgeFinalityProofV1(1L).join()
+            }
+        }
+    }
+
+    @Test
+    fun exactNoritoTypedAbsenceRecognizesOnlyHttp404() {
+        val request = TransportRequest.builder()
+            .setMethod("POST")
+            .setUri(URI.create("https://torii.example/v1/pipeline/transactions/details"))
+            .addHeader("Accept", "application/x-norito")
+            .setBody(byteArrayOf(0x01))
+            .setMaximumResponseBytes(1024)
+            .build()
+        val config = ClientConfig.builder()
+            .setBaseUri(URI.create("https://torii.example"))
+            .build()
+        val missing = HttpClientTransport.withExecutor(
+            ExactResponseExecutor(TransportResponse(404, byteArrayOf(0x01), "", emptyMap())),
+            config,
+        )
+        assertNull(
+            missing.fetchExactNoritoBytesAllowingNotFound(
+                request,
+                "authenticated carrier test",
+            ).join(),
+        )
+
+        listOf(400, 401, 403, 410, 429, 500).forEach { status ->
+            val hostile = HttpClientTransport.withExecutor(
+                ExactResponseExecutor(TransportResponse(status, byteArrayOf(), "", emptyMap())),
+                config,
+            )
+            assertFailsWith<CompletionException> {
+                hostile.fetchExactNoritoBytesAllowingNotFound(
+                    request,
+                    "authenticated carrier test",
+                ).join()
+            }
+        }
+
+        val canonical = byteArrayOf(0x4e, 0x52, 0x54, 0x30)
+        val present = HttpClientTransport.withExecutor(
+            ExactResponseExecutor(
+                TransportResponse(
+                    200,
+                    canonical,
+                    "",
+                    mapOf(
+                        "Content-Type" to listOf("application/x-norito"),
+                        "Content-Length" to listOf(canonical.size.toString()),
+                    ),
+                ),
+            ),
+            config,
+        ).fetchExactNoritoBytesAllowingNotFound(
+            request,
+            "authenticated carrier test",
+        ).join()
+        assertTrue(canonical.contentEquals(assertNotNull(present)))
+    }
+
+    @Test
+    fun exact12StatusRejectsDetachedOperationViewBeforeDispatch() {
+        val executor = CapturingExecutor()
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = signedClientConfig("https://torii.example"),
+        )
+        val operation = PrivacyOperationSchemaV1.ORCHARD_NOTE_ACTION_V1
+        val detached = PrivacyActionOperationViewV1(
+            protocolId = operation.protocolId,
+            operationSchema = operation,
+            transactionHash = ByteArray(32) { 0x11 },
+            transactionIntentDigest = ByteArray(32) { 0x22 },
+            statementDigest = ByteArray(32) { 0x33 },
+            proofEnvelopeHash = ByteArray(32) { 0x44 },
+            localState = PrivacyActionLocalStateV1.SUBMITTED,
+            terminalChainState = null,
+            committedHeight = null,
+            rejectionReason = null,
+            ledgerEffectKind = operation.ledgerEffectKind,
+            capabilityManifestDigest = ByteArray(32) { 0x55 },
+            capabilityCommittedHeight = BigInteger.valueOf(7),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+
+        val error = assertFailsWith<IllegalStateException> {
+            transport.getPrivacyActionStatusV1(
+                detached,
+                ToriiCanonicalRequestAuth("alice@universal", keyPair.private),
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("authenticated submission"))
+        assertEquals(0, executor.requestCount)
+    }
 
     @Test
     fun issueIdentifierClaimReceiptBindsCanonicalPathAccount() {
@@ -1865,7 +2020,7 @@ class HttpClientTransportTest {
                 "kind" to "network",
                 "value" to verifyingKeyNetworkId.literal,
             ),
-            "authority" to "alice",
+            "authority" to auth.accountId,
             "fee_payment" to testFeePayment(9_000L).toJsonMap(),
         )
 
@@ -1919,7 +2074,7 @@ class HttpClientTransportTest {
                 "kind" to "network",
                 "value" to verifyingKeyNetworkId.literal,
             ),
-            "authority" to "alice",
+            "authority" to auth.accountId,
             "fee_payment" to testFeePayment(9_000L).toJsonMap(),
         )
 
@@ -1989,7 +2144,7 @@ class HttpClientTransportTest {
                             "kind" to "network",
                             "value" to verifyingKeyNetworkId.literal,
                         ),
-                        "authority" to "alice",
+                        "authority" to auth.accountId,
                         "fee_payment" to requested.toJsonMap(),
                     ),
                     auth,
@@ -4503,6 +4658,19 @@ class HttpClientTransportTest {
             return CompletableFuture.completedFuture(
                 TransportResponse.builder().setStatusCode(404).setBody(byteArrayOf()).build(),
             )
+        }
+    }
+
+    private class ExactResponseExecutor(
+        private val response: TransportResponse,
+    ) : HttpTransportExecutor {
+        lateinit var lastRequest: TransportRequest
+        var requestCount: Int = 0
+
+        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            requestCount += 1
+            lastRequest = request
+            return CompletableFuture.completedFuture(response)
         }
     }
 

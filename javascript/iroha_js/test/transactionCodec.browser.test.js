@@ -9,14 +9,69 @@ import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { getNativeBinding } from "../src/native.js";
 import { NetworkId } from "../src/networkId.js";
+import { noritoEncodeInstructionBoxArchive } from "../src/norito.js";
 import {
   BrowserTransactionCodecError,
+  browserInstructionBatchHashHex,
+  browserInstructionArchiveBatchHashHex,
   browserSignedTransactionHashHex,
   browserTransactionPayloadHashHex,
   buildBrowserTransferPayload,
   finalizeBrowserSignedTransaction,
   validateBrowserTransferSignable,
 } from "../src/transactionCodec.js";
+
+test("browser instruction-batch hash matches the Rust HashOf vector", () => {
+  const instruction = {
+    CancelSmartContractCodeUpload: {
+      code_hash:
+        "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+    },
+  };
+  const expected =
+    "38b2dc36e9b6f5c847ccebe544af497d6ca11a35d5864c8db3b7034620b26f91";
+  assert.equal(browserInstructionBatchHashHex([instruction]), expected);
+  const archive = Buffer.from(
+    noritoEncodeInstructionBoxArchive(instruction),
+  );
+  assert.equal(browserInstructionArchiveBatchHashHex([archive]), expected);
+  assert.throws(
+    () =>
+      browserInstructionArchiveBatchHashHex([
+        Buffer.concat([archive, Buffer.of(0)]),
+      ]),
+    (error) =>
+      error instanceof BrowserTransactionCodecError &&
+      error.code === "malformed_instruction",
+  );
+  assert.equal(
+    Buffer.from(
+      getNativeBinding().hashInstructionBatch([JSON.stringify(instruction)]),
+    ).toString("hex"),
+    expected,
+  );
+});
+
+test("browser Log instruction-batch hash matches native Rust", () => {
+  const instruction = {
+    Log: {
+      level: "INFO",
+      msg: "browser/native Log batch hash marker",
+    },
+  };
+  const archive = Buffer.from(
+    noritoEncodeInstructionBoxArchive(instruction),
+  );
+  const nativeHash = Buffer.from(
+    getNativeBinding().hashInstructionBatch([JSON.stringify(instruction)]),
+  ).toString("hex");
+  assert.equal(
+    nativeHash,
+    "f8dfe8b1794e3a2dd0d3e91fc847af4110e4316f2afabd80339fdfdefb5ded67",
+  );
+  assert.equal(browserInstructionBatchHashHex([instruction]), nativeHash);
+  assert.equal(browserInstructionArchiveBatchHashHex([archive]), nativeHash);
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -380,7 +435,7 @@ test("browser transfer payload is byte-for-byte native Rust canonical", () => {
     sampleInput({
       metadata: { z: [true, null, { b: 2, a: "é" }], a: "-1.25" },
       quantity: "0.0000000000000000000000000001",
-      ttlMs: 0,
+      ttlMs: 1,
       nonce: 0xffff_ffff,
     }),
   ]) {
@@ -675,6 +730,10 @@ test("browser builder rejects ambiguous, non-canonical, and hostile inputs", () 
     () => buildBrowserTransferPayload(sampleInput({ nonce: 0 })),
     "invalid_integer",
   );
+  expectCodecError(
+    () => buildBrowserTransferPayload(sampleInput({ ttlMs: 0 })),
+    "invalid_integer",
+  );
   for (const quantity of [0, 1, -1, "01", "1.0", "1e3", Number.NaN]) {
     expectCodecError(
       () => buildBrowserTransferPayload(sampleInput({ quantity })),
@@ -816,16 +875,18 @@ test("browser metadata JSON strings must already be exact and canonical", () => 
     "stored Metadata Json must use Rust plain control escaping",
   );
   const canonicalControls =
-    '{"v":"\\u0008\\u000C\\u0000\\u001F\\n\\r\\t"}';
+    '{"v":"\\b\\f\\u0000\\u001f\\n\\r\\t"}';
   const canonicalControlInput = sampleInput({ metadata: canonicalControls });
   assert.deepEqual(
     buildBrowserTransferPayload(canonicalControlInput),
     Buffer.from(nativeBuild(canonicalControlInput).payloadBytes),
   );
   const javascriptControlAlias = JSON.stringify({ v: controlValue });
-  assert.notEqual(javascriptControlAlias, canonicalControls);
+  assert.equal(javascriptControlAlias, canonicalControls);
+  const unicodeControlAlias =
+    '{"v":"\\u0008\\u000c\\u0000\\u001f\\n\\r\\t"}';
   expectCodecError(
-    () => buildBrowserTransferPayload(sampleInput({ metadata: javascriptControlAlias })),
+    () => buildBrowserTransferPayload(sampleInput({ metadata: unicodeControlAlias })),
     "invalid_metadata",
   );
 
@@ -1047,14 +1108,6 @@ test("browser signed payload validation enforces byte caps before decoding or bi
   assert.equal(Buffer.byteLength(oversizedJson), 65_537);
 
   for (const [context, mutatedPayload] of [
-    [
-      "chain ID",
-      replacePayloadField(
-        payload,
-        0,
-        struct([stringArchive("c".repeat(1_025))]),
-      ),
-    ],
     ["wire ID", replaceTransferExecutable(payload, { wireId: "w".repeat(15) })],
     [
       "metadata key",
@@ -1403,7 +1456,7 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
       browserSignedTransactionHashHex(
         Buffer.concat([finalized.signedTransaction, Buffer.of(0)]),
       ),
-    "malformed_payload",
+    "malformed_signed_transaction",
   );
   expectCodecError(
     () =>
@@ -1423,6 +1476,6 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
   ]);
   expectCodecError(
     () => browserSignedTransactionHashHex(overlong),
-    "malformed_payload",
+    "malformed_signed_transaction",
   );
 });

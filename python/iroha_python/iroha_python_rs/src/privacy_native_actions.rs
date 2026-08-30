@@ -182,10 +182,12 @@ pub struct PrivacyNativeActionCapabilityV1 {
 }
 /// Complete retained native-adapter registry.
 ///
-/// Every exact-v1 protocol appears exactly once. ZK-X509 uses its dedicated
-/// fixed-capacity profile-owned worker request rather than the generic secret
-/// wallet bundle, but it is still a first-class typed action here.
-pub const PRIVACY_NATIVE_ACTION_CAPABILITIES_V1: [PrivacyNativeActionCapabilityV1; 12] = [
+/// Every exact-v1 protocol appears at least once and every exact action schema
+/// appears exactly once. ZK-AMS has separate admission and provisioning rows,
+/// so the twelve protocols expose thirteen closed actions. ZK-X509 uses its
+/// dedicated fixed-capacity profile-owned worker request rather than the
+/// generic secret wallet bundle, but it is still a first-class typed action.
+pub const PRIVACY_NATIVE_ACTION_CAPABILITIES_V1: [PrivacyNativeActionCapabilityV1; 13] = [
     PrivacyNativeActionCapabilityV1 {
         protocol_id: PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
         operation_schema: "zk_ace_authorization_action_v1",
@@ -206,7 +208,13 @@ pub const PRIVACY_NATIVE_ACTION_CAPABILITIES_V1: [PrivacyNativeActionCapabilityV
     },
     PrivacyNativeActionCapabilityV1 {
         protocol_id: PrivacyProtocolIdV1::IrohaZkAmsV1,
-        operation_schema: "zk_ams_admission_and_provisioning_v1",
+        operation_schema: "zk_ams_batch_admission_action_v1",
+        execution_mode: "admission_action",
+        privacy_feature_mask: 2,
+    },
+    PrivacyNativeActionCapabilityV1 {
+        protocol_id: PrivacyProtocolIdV1::IrohaZkAmsV1,
+        operation_schema: "zk_ams_provision_account_action_v1",
         execution_mode: "admission_action",
         privacy_feature_mask: 2,
     },
@@ -268,14 +276,22 @@ pub fn privacy_native_action_capability_for_schema_v1(
         .iter()
         .find(|capability| capability.operation_schema == operation_schema)
 }
-/// Resolve one retained adapter by exact consensus protocol.
+/// Resolve one retained adapter by its exact protocol and operation schema.
 #[must_use]
-pub fn privacy_native_action_capability_for_protocol_v1(
+pub fn privacy_native_action_capability_for_protocol_and_schema_v1(
     protocol_id: PrivacyProtocolIdV1,
+    operation_schema: &str,
 ) -> Option<&'static PrivacyNativeActionCapabilityV1> {
+    privacy_native_action_capability_for_schema_v1(operation_schema)
+        .filter(|capability| capability.protocol_id == protocol_id)
+}
+/// Iterate over the one or two exact actions exposed by a consensus protocol.
+pub fn privacy_native_action_capabilities_for_protocol_v1(
+    protocol_id: PrivacyProtocolIdV1,
+) -> impl Iterator<Item = &'static PrivacyNativeActionCapabilityV1> {
     PRIVACY_NATIVE_ACTION_CAPABILITIES_V1
         .iter()
-        .find(|capability| capability.protocol_id == protocol_id)
+        .filter(move |capability| capability.protocol_id == protocol_id)
 }
 /// Exact signature-bound transaction fields for one direct native action.
 #[derive(Clone)]
@@ -323,7 +339,7 @@ pub struct VeRangeActionRequestV1 {
     /// Sole 32- or 64-bit native relation.
     pub bit_length: VeRangeBitLengthV1,
     /// One to eight private values.
-    pub values: Vec<u64>,
+    pub values: Zeroizing<Vec<u64>>,
     /// Canonical nonzero openings aligned with `values`.
     pub blindings: Vec<SecretScalarV1>,
 }
@@ -368,6 +384,27 @@ pub enum ZkAmsActionRequestV1 {
     BatchAdmission(ZkAmsBatchAdmissionActionRequestV1),
     /// Anonymous account provisioning.
     ProvisionAccount(ZkAmsProvisionAccountActionRequestV1),
+}
+impl ZkAmsActionRequestV1 {
+    /// Exact consensus protocol shared by both closed ZK-AMS operations.
+    pub const PROTOCOL_ID: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
+
+    /// Exact consensus protocol selected by this typed ZK-AMS request.
+    #[must_use]
+    pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
+        match self {
+            Self::BatchAdmission(_) | Self::ProvisionAccount(_) => Self::PROTOCOL_ID,
+        }
+    }
+
+    /// Exact public operation selected by this typed ZK-AMS request.
+    #[must_use]
+    pub const fn operation_schema(&self) -> &'static str {
+        match self {
+            Self::BatchAdmission(_) => "zk_ams_batch_admission_action_v1",
+            Self::ProvisionAccount(_) => "zk_ams_provision_account_action_v1",
+        }
+    }
 }
 /// One canonical Vega mDL predicate presentation.
 pub struct VegaCredentialPresentationActionRequestV1 {
@@ -443,7 +480,7 @@ pub struct AnonymousPgcPaymentActionRequestV1 {
     /// Complete authoritative account table in strict public-key order.
     pub current_accounts: Vec<PrivacyPgcAccountV1>,
     /// Signed transfer values aligned with the complete table.
-    pub transfer_values: Vec<i64>,
+    pub transfer_values: Zeroizing<Vec<i64>>,
     /// Secret transfer openings aligned with the complete table.
     pub transfer_randomness: Vec<SecretScalarV1>,
     /// Hidden sender index.
@@ -583,7 +620,7 @@ impl PrivacyNativeActionRequestV1 {
             Self::ZkAce(_) => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
             Self::AnonymousPgc(_) => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             Self::VeRange(_) => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            Self::ZkAms(_) => PrivacyProtocolIdV1::IrohaZkAmsV1,
+            Self::ZkAms(request) => request.protocol_id(),
             Self::Vega(_) => PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
             Self::ZkX509(_) => PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
             Self::Jindo(_) => PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
@@ -593,6 +630,45 @@ impl PrivacyNativeActionRequestV1 {
             Self::IvmPrivateNote(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             Self::PqMasp(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
         }
+    }
+    /// Exact public operation selected by this closed typed variant.
+    #[must_use]
+    pub const fn operation_schema(&self) -> &'static str {
+        match self {
+            Self::ZkAce(_) => "zk_ace_authorization_action_v1",
+            Self::AnonymousPgc(_) => "anonymous_pgc_payment_action_v1",
+            Self::VeRange(_) => "verange_range_proof_v1",
+            Self::ZkAms(request) => request.operation_schema(),
+            Self::Vega(_) => "vega_credential_presentation_v1",
+            Self::ZkX509(_) => "zk_x509_identity_presentation_v1",
+            Self::Jindo(_) => "jindo_polynomial_evaluation_v1",
+            Self::BootleLantern(_) => "bootle_lantern_credential_presentation_v1",
+            Self::Orchard(_) => "orchard_note_action_v1",
+            Self::FcmpPlusPlus(_) => "fcmp_membership_payment_v1",
+            Self::IvmPrivateNote(_) => "ivm_private_note_action_v1",
+            Self::PqMasp(_) => "pq_masp_note_action_v1",
+        }
+    }
+}
+fn operation_schema_for_statement_v1(statement: &PrivacyStatementV1) -> &'static str {
+    match statement {
+        PrivacyStatementV1::ZkAcePqAuthorizationV0(_) => "zk_ace_authorization_action_v1",
+        PrivacyStatementV1::AnonymousPgcKOutOfNV1(_) => "anonymous_pgc_payment_action_v1",
+        PrivacyStatementV1::VeRangeTransparentRangeV1(_) => "verange_range_proof_v1",
+        PrivacyStatementV1::IrohaZkAmsV1(statement) => match &statement.action {
+            PrivacyZkAmsActionV1::BatchAdmission(_) => "zk_ams_batch_admission_action_v1",
+            PrivacyZkAmsActionV1::ProvisionAccount(_) => "zk_ams_provision_account_action_v1",
+        },
+        PrivacyStatementV1::VegaExistingCredentialZkV0(_) => "vega_credential_presentation_v1",
+        PrivacyStatementV1::IrohaZkX509StarkP256V0(_) => "zk_x509_identity_presentation_v1",
+        PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(_) => "jindo_polynomial_evaluation_v1",
+        PrivacyStatementV1::IrohaBootleLanternAnoncredV1(_) => {
+            "bootle_lantern_credential_presentation_v1"
+        }
+        PrivacyStatementV1::OrchardHalo2ActionsV1(_) => "orchard_note_action_v1",
+        PrivacyStatementV1::MoneroFcmpPlusPlusV1(_) => "fcmp_membership_payment_v1",
+        PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(_) => "ivm_private_note_action_v1",
+        PrivacyStatementV1::PqMaspStarkV0(_) => "pq_masp_note_action_v1",
     }
 }
 /// Closed, non-secret failure returned by native action construction.
@@ -620,6 +696,7 @@ impl std::error::Error for PrivacyNativeActionErrorV1 {}
 pub struct SignedPrivacyActionV1 {
     signed_transaction: SignedTransaction,
     protocol_id: PrivacyProtocolIdV1,
+    operation_schema: &'static str,
     transaction_hash: [u8; 32],
     transaction_intent_digest: [u8; 32],
     statement_digest: [u8; 32],
@@ -635,6 +712,7 @@ impl fmt::Debug for SignedPrivacyActionV1 {
         formatter
             .debug_struct("SignedPrivacyActionV1")
             .field("protocol_id", &self.protocol_id)
+            .field("operation_schema", &self.operation_schema)
             .field("transaction_hash", &self.transaction_hash)
             .field("transaction_intent_digest", &self.transaction_intent_digest)
             .field("statement_digest", &self.statement_digest)
@@ -681,6 +759,11 @@ impl SignedPrivacyActionV1 {
     #[must_use]
     pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
         self.protocol_id
+    }
+    /// Exact public operation authenticated by the signed typed statement.
+    #[must_use]
+    pub const fn operation_schema(&self) -> &'static str {
+        self.operation_schema
     }
     /// Canonical transaction hash.
     #[must_use]
@@ -731,6 +814,7 @@ impl SignedPrivacyActionV1 {
 /// Authenticated public inspection of one signed native action.
 pub struct InspectedPrivacyActionV1 {
     protocol_id: PrivacyProtocolIdV1,
+    operation_schema: &'static str,
     transaction_hash: [u8; 32],
     transaction_intent_digest: [u8; 32],
     statement_digest: [u8; 32],
@@ -746,6 +830,7 @@ impl fmt::Debug for InspectedPrivacyActionV1 {
         formatter
             .debug_struct("InspectedPrivacyActionV1")
             .field("protocol_id", &self.protocol_id)
+            .field("operation_schema", &self.operation_schema)
             .field("transaction_hash", &self.transaction_hash)
             .field("transaction_intent_digest", &self.transaction_intent_digest)
             .field("statement_digest", &self.statement_digest)
@@ -768,6 +853,11 @@ impl InspectedPrivacyActionV1 {
     #[must_use]
     pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
         self.protocol_id
+    }
+    /// Exact public operation authenticated by the signed typed statement.
+    #[must_use]
+    pub const fn operation_schema(&self) -> &'static str {
+        self.operation_schema
     }
     /// Borrow the authenticated typed public statement.
     #[must_use]
@@ -928,6 +1018,12 @@ fn finalize(
     private_key: &PrivateKey,
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
     validate_signing_authority(&context.authority, private_key)?;
+    let operation_schema = operation_schema_for_statement_v1(&statement);
+    privacy_native_action_capability_for_protocol_and_schema_v1(
+        profile.protocol_id,
+        operation_schema,
+    )
+    .ok_or_else(|| PrivacyNativeActionErrorV1::at("statement-operation-schema"))?;
     let statement_digest = statement
         .digest()
         .map_err(|_| PrivacyNativeActionErrorV1::at("statement-digest"))?;
@@ -989,6 +1085,7 @@ fn finalize(
         transaction_hash: *signed_transaction.hash().as_ref(),
         signed_transaction,
         protocol_id: profile.protocol_id,
+        operation_schema,
         transaction_intent_digest: *intent.as_bytes(),
         statement_digest: *statement_digest.as_bytes(),
         proof_envelope_hash,
@@ -1043,6 +1140,7 @@ fn wrap_canonical_signed_transaction_v1(
     }
     Ok(SignedPrivacyActionV1 {
         protocol_id: inspected.protocol_id,
+        operation_schema: inspected.operation_schema,
         transaction_hash: inspected.transaction_hash,
         transaction_intent_digest: inspected.transaction_intent_digest,
         statement_digest: inspected.statement_digest,
@@ -1274,7 +1372,7 @@ pub fn build_signed_verange_action_v1(
     private_key: &PrivateKey,
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
-    let values = Zeroizing::new(request.values);
+    let values = request.values;
     if values.is_empty() || values.len() > 8 || values.len() != request.blindings.len() {
         return Err(PrivacyNativeActionErrorV1::at("verange-witness-shape"));
     }
@@ -1611,6 +1709,11 @@ pub fn build_signed_zk_ams_action_v1(
     canonical_genesis_hash: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
+    privacy_native_action_capability_for_protocol_and_schema_v1(
+        request.protocol_id(),
+        request.operation_schema(),
+    )
+    .ok_or_else(|| PrivacyNativeActionErrorV1::at("dispatch-operation-schema"))?;
     match request {
         ZkAmsActionRequestV1::BatchAdmission(request) => {
             build_signed_zk_ams_batch_admission_action_v1(
@@ -1672,7 +1775,7 @@ pub fn build_signed_anonymous_pgc_payment_action_v1(
     private_key: &PrivateKey,
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
-    let transfer_values = Zeroizing::new(request.transfer_values);
+    let transfer_values = request.transfer_values;
     let profile = compiled_profile(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)?;
     let namespace = PrivacyNamespaceV1::new(
         PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
@@ -2376,6 +2479,12 @@ fn inspect_signed(
             "inspect-protocol-variant-drift",
         ));
     }
+    let operation_schema = operation_schema_for_statement_v1(&envelope.statement);
+    privacy_native_action_capability_for_protocol_and_schema_v1(
+        expected_protocol,
+        operation_schema,
+    )
+    .ok_or_else(|| PrivacyNativeActionErrorV1::at("inspect-operation-schema"))?;
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| PrivacyNativeActionErrorV1::at("inspect-envelope"))?;
@@ -2385,6 +2494,7 @@ fn inspect_signed(
         .map_err(|_| PrivacyNativeActionErrorV1::at("inspect-envelope-encoding"))?;
     Ok(InspectedPrivacyActionV1 {
         protocol_id: expected_protocol,
+        operation_schema,
         transaction_hash: *signed.hash().as_ref(),
         transaction_intent_digest: *intent.as_bytes(),
         statement_digest: *envelope.statement_digest.as_bytes(),
@@ -2414,8 +2524,6 @@ pub fn inspect_signed_privacy_native_action_v1(
         .map_err(|_| PrivacyNativeActionErrorV1::at("inspect-intent"))?
         .ok_or_else(|| PrivacyNativeActionErrorV1::at("inspect-missing-action"))?;
     let protocol_id = submission.envelope.protocol_id;
-    privacy_native_action_capability_for_protocol_v1(protocol_id)
-        .ok_or_else(|| PrivacyNativeActionErrorV1::at("inspect-unsupported-protocol"))?;
     inspect_signed(signed, protocol_id)
 }
 /// Authenticate and inspect one exact governed ZK-ACE authorization action.
@@ -2621,11 +2729,12 @@ mod tests {
     use super::*;
     use iroha_data_model::privacy::{
         PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1, PrivacyChallengeV1,
-        PrivacyIssuerIdV1, PrivacyNullifierV1, PrivacyX509ExtendedKeyUsageV1,
-        PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1,
-        PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CrlRecordDigestV1,
-        PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509TrustAnchorRecordDigestV1,
-        ZK_X509_HASH_FRAME_DOMAIN_V1,
+        PrivacyIssuerIdV1, PrivacyNullifierV1, PrivacyPolicyDigestV1,
+        PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1,
+        PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsRegistryIdV1,
+        PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
+        PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509DisclosedAttributeV1,
+        PrivacyZkX509TrustAnchorRecordDigestV1, ZK_X509_HASH_FRAME_DOMAIN_V1,
     };
     use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
@@ -2650,6 +2759,22 @@ mod tests {
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
         }
+    }
+    fn zk_ams_governance() -> ZkAmsPrivacyActionGovernanceV1 {
+        ZkAmsPrivacyActionGovernanceV1 {
+            issuer_id: PrivacyIssuerIdV1::new([0x31; 32]),
+            issuer_public_key: PrivacyP256PointV1::new([0x32; 33]),
+            issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1::new([0x33; 32]),
+            registry_id: PrivacyZkAmsRegistryIdV1::new([0x34; 32]),
+            registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1::new([0x35; 32]),
+            policy_id: PrivacyPolicyIdV1::new([0x36; 32]),
+            policy_digest: PrivacyPolicyDigestV1::new([0x37; 32]),
+        }
+    }
+    fn zk_ams_seed_secret() -> ZkAmsSeedSecretV1 {
+        let mut bytes = [0_u8; 32];
+        bytes[0] = 1;
+        ZkAmsSeedSecretV1::from_bytes(bytes).expect("canonical nonzero ZK-AMS seed")
     }
     fn x509_draft_statement(
         context: &PrivacyActionTransactionContextV1,
@@ -2797,7 +2922,7 @@ mod tests {
         assert_eq!(parse_canonical_public_balance_scope_v1(&oversized), None);
     }
     #[test]
-    fn retained_capability_table_is_the_exact_reviewed_twelve() {
+    fn retained_capability_table_is_the_exact_reviewed_thirteen_actions() {
         let expected = [
             (
                 "zk-ace-pq-authorization-v0",
@@ -2819,7 +2944,13 @@ mod tests {
             ),
             (
                 "iroha-zk-ams-v1",
-                "zk_ams_admission_and_provisioning_v1",
+                "zk_ams_batch_admission_action_v1",
+                "admission_action",
+                2,
+            ),
+            (
+                "iroha-zk-ams-v1",
+                "zk_ams_provision_account_action_v1",
                 "admission_action",
                 2,
             ),
@@ -2883,7 +3014,10 @@ mod tests {
                 Some(actual)
             );
             assert_eq!(
-                privacy_native_action_capability_for_protocol_v1(actual.protocol_id),
+                privacy_native_action_capability_for_protocol_and_schema_v1(
+                    actual.protocol_id,
+                    actual.operation_schema,
+                ),
                 Some(actual)
             );
         }
@@ -2898,17 +3032,81 @@ mod tests {
             .iter()
             .map(|row| row.operation_schema)
             .collect::<BTreeSet<_>>();
-        assert_eq!(protocols.len(), PRIVACY_NATIVE_ACTION_CAPABILITIES_V1.len());
+        assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(protocols.len(), 12);
         assert_eq!(schemas.len(), PRIVACY_NATIVE_ACTION_CAPABILITIES_V1.len());
-        let x509 = privacy_native_action_capability_for_protocol_v1(
+        assert_eq!(schemas.len(), 13);
+        let zk_ams_schemas =
+            privacy_native_action_capabilities_for_protocol_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
+                .map(|capability| capability.operation_schema)
+                .collect::<Vec<_>>();
+        assert_eq!(
+            zk_ams_schemas,
+            [
+                "zk_ams_batch_admission_action_v1",
+                "zk_ams_provision_account_action_v1",
+            ]
+        );
+        let x509 = privacy_native_action_capability_for_protocol_and_schema_v1(
             PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            "zk_x509_identity_presentation_v1",
         )
-        .expect("X509 is one of the exact twelve retained actions");
+        .expect("X509 is one of the exact thirteen retained actions");
         assert_eq!(x509.operation_schema, "zk_x509_identity_presentation_v1");
         assert_eq!(
             privacy_native_action_capability_for_schema_v1("zk_x509_identity_presentation_v1"),
             Some(x509)
         );
+        assert!(
+            privacy_native_action_capability_for_protocol_and_schema_v1(
+                PrivacyProtocolIdV1::IrohaZkAmsV1,
+                "vega_credential_presentation_v1",
+            )
+            .is_none(),
+            "a valid schema from another protocol must not pass exact-pair lookup"
+        );
+    }
+    #[test]
+    fn zk_ams_admission_and_provisioning_dispatch_share_the_typed_protocol() {
+        let cases = [
+            (
+                ZkAmsActionRequestV1::BatchAdmission(ZkAmsBatchAdmissionActionRequestV1 {
+                    governance: zk_ams_governance(),
+                    account_registry_root: PrivacyRootV1::new([0x41; 32]),
+                    account_registry_root_epoch: 7,
+                    credentials: Vec::new(),
+                }),
+                "zk_ams_batch_admission_action_v1",
+            ),
+            (
+                ZkAmsActionRequestV1::ProvisionAccount(ZkAmsProvisionAccountActionRequestV1 {
+                    governance: zk_ams_governance(),
+                    account_registry_root: PrivacyRootV1::new([0x42; 32]),
+                    account_registry_root_epoch: 8,
+                    admitted_seed_key_ring: Vec::new(),
+                    account_id: action_context().authority,
+                    seed_secret: zk_ams_seed_secret(),
+                }),
+                "zk_ams_provision_account_action_v1",
+            ),
+        ];
+
+        for (request, expected_schema) in cases {
+            assert_eq!(request.protocol_id(), ZkAmsActionRequestV1::PROTOCOL_ID);
+            assert_eq!(request.operation_schema(), expected_schema);
+            assert!(
+                privacy_native_action_capability_for_protocol_and_schema_v1(
+                    request.protocol_id(),
+                    request.operation_schema(),
+                )
+                .is_some(),
+                "typed ZK-AMS dispatch must resolve {expected_schema}",
+            );
+
+            let dispatcher = PrivacyNativeActionRequestV1::ZkAms(request);
+            assert_eq!(dispatcher.protocol_id(), PrivacyProtocolIdV1::IrohaZkAmsV1);
+            assert_eq!(dispatcher.operation_schema(), expected_schema);
+        }
     }
     #[test]
     fn capability_schema_lookup_rejects_every_alias_form() {
@@ -3104,11 +3302,19 @@ mod tests {
             signed.protocol_id(),
             PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
         );
+        assert_eq!(
+            signed.operation_schema(),
+            "zk_x509_identity_presentation_v1"
+        );
         let inspected = inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
             signed.signed_transaction(),
             genesis,
         )
         .expect("exact X509 inspector");
+        assert_eq!(
+            inspected.operation_schema(),
+            "zk_x509_identity_presentation_v1"
+        );
         assert_eq!(inspected.transaction_intent_digest(), *intent.as_bytes());
         assert!(matches!(
             inspected.statement(),

@@ -116,28 +116,33 @@ public enum KagemushaNearbyError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
-enum KagemushaNearbyMessageKind: String, Codable, Sendable {
+public enum KagemushaNearbyMessageKind: String, Codable, Sendable {
     case receiveRequest = "receive_request"
     case payment
     case acknowledgement
     case rejected
 }
 
-enum KagemushaNearbyEnvelopeCodec {
+public enum KagemushaNearbyEnvelopeCodec {
     /// Canonical authenticated Nearby plaintext. The exact IPM1 message is
     /// carried once (without a text/base64 expansion), leaving ample room for
     /// the 24,576-byte Kagemusha body below the 32 KiB Nearby record ceiling.
-    static let maximumEnvelopeBytes = 32_704
+    /// Frozen PKNB1 ceiling for legacy `0x0102` messages.
+    public static let maximumEnvelopeBytes = 32_704
+    /// Exact PKNB1 ceiling reserved solely for eligibility PAYMENT `0x0103`.
+    public static let maximumEligibilityPaymentEnvelopeBytes =
+        12 + IrohaPeerWireMessageV1.headerBytes
+            + IrohaPeerWireLimitsV1.maximumKagemushaEligibilityEnvelopeBytes
     private static let magic = Data("PKNB1".utf8)
     private static let headerBytes = 12
 
-    struct Decoded: Equatable, Sendable {
-        let messageKind: KagemushaNearbyMessageKind
-        let payload: KagemushaPeerPayload?
-        let pairingChallenge: KagemushaNearbyPairingChallenge?
+    public struct Decoded: Equatable, Sendable {
+        public let messageKind: KagemushaNearbyMessageKind
+        public let payload: KagemushaPeerPayload?
+        public let pairingChallenge: KagemushaNearbyPairingChallenge?
     }
 
-    static func encode(
+    public static func encode(
         _ payload: KagemushaPeerPayload,
         pairingChallenge: KagemushaNearbyPairingChallenge? = nil
     ) throws -> Data {
@@ -160,11 +165,60 @@ enum KagemushaNearbyEnvelopeCodec {
         )
     }
 
-    static func encodeRejection() throws -> Data {
+    public static func encodeRejection() throws -> Data {
         try encode(kind: .rejected, pairingChallenge: nil, ipmMessage: Data())
     }
 
-    static func decode(
+    public static func encodeEligibilityPayment(
+        _ envelope: IrohaPeerKagemushaEligibilityPaymentEnvelopeV1
+    ) throws -> Data {
+        let message: IrohaPeerWireMessageV1
+        do {
+            message = try IrohaPeerKagemushaEligibilityAdapterV1.wrap(envelope)
+        } catch {
+            throw KagemushaNearbyError.invalidMessage
+        }
+        return try encode(
+            kind: .payment,
+            pairingChallenge: nil,
+            ipmMessage: message.encoded,
+            maximumEnvelopeBytes: maximumEligibilityPaymentEnvelopeBytes
+        )
+    }
+
+    public static func decodeEligibilityPayment(
+        _ data: Data
+    ) throws -> IrohaPeerKagemushaEligibilityPaymentEnvelopeV1 {
+        guard data.count >= headerBytes,
+              data.count <= maximumEligibilityPaymentEnvelopeBytes,
+              data.prefix(magic.count) == magic,
+              data[5] == 2,
+              data[6] == 0,
+              data[7] == 0 else {
+            throw KagemushaNearbyError.invalidMessage
+        }
+        let payloadLength = Int(
+            (UInt32(data[8]) << 24)
+                | (UInt32(data[9]) << 16)
+                | (UInt32(data[10]) << 8)
+                | UInt32(data[11])
+        )
+        guard payloadLength > 0, payloadLength == data.count - headerBytes else {
+            throw KagemushaNearbyError.invalidMessage
+        }
+        do {
+            let message = try IrohaPeerWireMessageV1.decode(
+                data.subdata(in: headerBytes..<data.count),
+                expectedProfile: .kagemusha,
+                expectedKind: .payment
+            )
+            return try IrohaPeerKagemushaEligibilityAdapterV1.decode(message)
+        } catch {
+            throw KagemushaNearbyError.invalidMessage
+        }
+    }
+
+    public static func decode(
         _ data: Data,
         chainDiscriminant: UInt16
     ) throws -> Decoded {
@@ -232,7 +286,8 @@ enum KagemushaNearbyEnvelopeCodec {
     private static func encode(
         kind: KagemushaNearbyMessageKind,
         pairingChallenge: KagemushaNearbyPairingChallenge?,
-        ipmMessage: Data
+        ipmMessage: Data,
+        maximumEnvelopeBytes: Int = KagemushaNearbyEnvelopeCodec.maximumEnvelopeBytes
     ) throws -> Data {
         guard ipmMessage.count <= Int(UInt32.max),
               headerBytes + ipmMessage.count <= maximumEnvelopeBytes,

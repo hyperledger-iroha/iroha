@@ -11,9 +11,11 @@
 # authenticated selection, never aliases or fallback inputs.
 
 readonly PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=\
-"cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+"31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d"
 readonly PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=\
-"c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+"179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7"
+readonly PRIVACY_SDK_RELEASE_CARGO_LOCK_SOURCE_RELATIVE=\
+"ci/privacy_sdk_release_lock_v2.toml"
 
 privacy_sdk_resolve_cargo_lockfile() {
   local repository_root="$1"
@@ -184,8 +186,14 @@ except OSError as error:
     raise SystemExit(f"error: unable to seal {path}: {error}")
 try:
     before = os.fstat(descriptor)
-    if not stat.S_ISREG(before.st_mode):
-        raise SystemExit(f"error: {path} is not a regular file")
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_mode & 0o111
+    ):
+        raise SystemExit(
+            f"error: {path} must be a singly linked, non-executable regular file"
+        )
     if before.st_size < 0 or before.st_size > MAX_BYTES:
         raise SystemExit(f"error: {path} exceeds the file-seal size limit")
     digest = hashlib.sha256()
@@ -1281,6 +1289,7 @@ privacy_sdk_provision_ci_cargo_lock() {
   local python_bin="${7:-python3}"
   local canonical_repository_root canonical_corridor_root
   local workspace_lock workspace_lock_state lock_directory lock_path
+  local release_lock_source release_lock_source_seal
   local resolved_lock resolved_lock_seal
   local real_cargo real_cargo_seal real_rustc real_rustc_seal
   local real_rustdoc real_rustdoc_seal rustup_seal toolchain_bin_directory
@@ -1358,6 +1367,21 @@ privacy_sdk_provision_ci_cargo_lock() {
     "present:${PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256}:"*) ;;
     *)
       echo "error: privacy SDK CI requires the tracked root Cargo.lock" >&2
+      return 1
+      ;;
+  esac
+  release_lock_source="${canonical_repository_root}/${PRIVACY_SDK_RELEASE_CARGO_LOCK_SOURCE_RELATIVE}"
+  if ! release_lock_source_seal="$(
+    privacy_sdk_file_seal "${release_lock_source}" "${python_bin}"
+  )"; then
+    return 1
+  fi
+  case "${release_lock_source_seal}" in
+    "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}:"*":0o644") ;;
+    *)
+      echo \
+        "error: committed privacy release Cargo.lock authority has the wrong bytes or mode" \
+        >&2
       return 1
       ;;
   esac
@@ -1504,30 +1528,62 @@ privacy_sdk_provision_ci_cargo_lock() {
     return 1
   fi
 
+  install -m 400 "${release_lock_source}" "${lock_path}" || return 1
+  privacy_sdk_assert_file_seal \
+    "${release_lock_source}" \
+    "${release_lock_source_seal}" \
+    "committed privacy release Cargo.lock authority" \
+    "${python_bin}" || return 1
+  if ! resolved_lock_seal="$(
+    privacy_sdk_file_seal "${lock_path}" "${python_bin}"
+  )"; then
+    return 1
+  fi
+  case "${resolved_lock_seal}" in
+    "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}:"*":0o400") ;;
+    *)
+      echo \
+        "error: materialized privacy Cargo.lock does not match the committed release authority" \
+        >&2
+      return 1
+      ;;
+  esac
+
   if ! (
     cd "${canonical_repository_root}" || exit 1
     CARGO_HOME="${private_cargo_home}" \
-    CARGO_NET_OFFLINE=false \
+    CARGO_NET_OFFLINE=true \
     RUSTC="${real_rustc}" \
     RUSTDOC="${real_rustdoc}" \
     RUSTC_BOOTSTRAP=1 \
-      "${real_cargo}" -Z unstable-options generate-lockfile \
+      "${real_cargo}" -Z unstable-options metadata \
+        --locked \
+        --offline \
+        --format-version 1 \
         --manifest-path "${canonical_repository_root}/Cargo.toml" \
-        --lockfile-path "${lock_path}"
+        --lockfile-path "${lock_path}" \
+        >/dev/null
   ); then
-    echo "error: Cargo failed to generate the required external Cargo.lock" >&2
+    echo \
+      "error: committed privacy release Cargo.lock is incompatible with the current workspace" \
+      >&2
     return 1
   fi
   if ! privacy_sdk_assert_optional_file_state \
     "${workspace_lock}" "${workspace_lock_state}" \
     "tracked root Cargo.lock" "${python_bin}"; then
-    echo "error: external lock generation changed the tracked root Cargo.lock" >&2
+    echo "error: privacy lock compatibility validation changed the tracked root Cargo.lock" >&2
     return 1
   fi
   if [[ ! -f "${lock_path}" || -L "${lock_path}" ]]; then
-    echo "error: Cargo did not generate the required external Cargo.lock" >&2
+    echo "error: materialized privacy Cargo.lock became unavailable" >&2
     return 1
   fi
+  privacy_sdk_assert_file_seal \
+    "${release_lock_source}" \
+    "${release_lock_source_seal}" \
+    "committed privacy release Cargo.lock authority" \
+    "${python_bin}" || return 1
   privacy_sdk_validate_repository_cargo_configuration \
     "${canonical_repository_root}" \
     "${canonical_repository_root}" \
@@ -1553,7 +1609,6 @@ privacy_sdk_provision_ci_cargo_lock() {
       "${canonical_repository_root}" \
       "${python_bin}" || return 1
 
-  chmod 400 "${lock_path}" || return 1
   if ! lock_path="$(
     cd "$(dirname "${lock_path}")" && printf '%s/Cargo.lock\n' "$(pwd -P)"
   )"; then
@@ -1575,7 +1630,7 @@ privacy_sdk_provision_ci_cargo_lock() {
     "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}:"*) ;;
     *)
       echo \
-        "error: generated privacy Cargo.lock candidate does not match the distinct immutable cd9e release authority; external release-artifact requalification is required" \
+        "error: materialized privacy Cargo.lock does not match the immutable v2 release authority" \
         >&2
       return 1
       ;;

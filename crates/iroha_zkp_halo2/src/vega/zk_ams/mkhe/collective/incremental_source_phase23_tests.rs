@@ -338,16 +338,18 @@ fn exact_word_count_v1(source: &str, word: &str, expected: usize) -> bool {
     })
 }
 
+type AssociatedFunctionPartsV1 = (
+    core::ops::Range<usize>,
+    core::ops::Range<usize>,
+    core::ops::Range<usize>,
+    core::ops::Range<usize>,
+    core::ops::Range<usize>,
+);
+
 fn associated_function_parts_v1(
     tokens: &[RustTokenV1<'_>],
     function: usize,
-) -> Option<(
-    core::ops::Range<usize>,
-    core::ops::Range<usize>,
-    core::ops::Range<usize>,
-    core::ops::Range<usize>,
-    core::ops::Range<usize>,
-)> {
+) -> Option<AssociatedFunctionPartsV1> {
     use RustTokenV1::{Punct, Word};
     matches!(tokens.get(function), Some(Word("fn"))).then_some(())?;
     matches!(tokens.get(function + 1), Some(Word(_))).then_some(())?;
@@ -822,14 +824,14 @@ fn function_body_has_no_context_mint_v1(
             cursor = end;
             continue;
         }
-        if tokens.get(cursor) == Some(&Punct(b'!')) {
-            if let Some(group) = macro_group_v1(tokens, cursor) {
-                if has_dangerous_context_word_v1(&tokens[group.clone()], context, self_is_context) {
-                    return false;
-                }
-                cursor = group.end + 1;
-                continue;
+        if tokens.get(cursor) == Some(&Punct(b'!'))
+            && let Some(group) = macro_group_v1(tokens, cursor)
+        {
+            if has_dangerous_context_word_v1(&tokens[group.clone()], context, self_is_context) {
+                return false;
             }
+            cursor = group.end + 1;
+            continue;
         }
         if tokens.get(cursor) == Some(&Word("fn"))
             && matches!(tokens.get(cursor + 1), Some(Word(_)))
@@ -902,11 +904,7 @@ fn context_impl_has_no_production_mint_v1(
         return false;
     };
     let self_is_context = tokens[header.clone()] == [Word(context)];
-    if tokens[header.clone()]
-        .iter()
-        .any(|token| *token == Word(context))
-        && !self_is_context
-    {
+    if tokens[header.clone()].contains(&Word(context)) && !self_is_context {
         return false;
     }
     let Some(items) = top_level_item_ranges_v1(&tokens[body.clone()]) else {
@@ -965,7 +963,7 @@ fn whole_module_context_mint_inventory_v1(source: &str) -> bool {
     let mut context_struct = false;
     for item in items {
         let item = &tokens[item];
-        if !item.iter().any(|token| *token == Word(CONTEXT)) {
+        if !item.contains(&Word(CONTEXT)) {
             continue;
         }
         if item_is_exact_cfg_test_v1(item) {
@@ -1090,10 +1088,9 @@ fn exact_production_child_modules_v1(source: &str, expected: &[(&str, &str)]) ->
         let Some((attributes, attributes_end)) = leading_outer_attributes_v1(item) else {
             return false;
         };
-        let default_would_mint_context = item.iter().any(|token| *token == Word(CONTEXT))
+        let default_would_mint_context = item.contains(&Word(CONTEXT))
             && attributes.iter().any(|attribute| {
-                attribute.first() == Some(&Word("derive"))
-                    && attribute.iter().any(|token| *token == Word("Default"))
+                attribute.first() == Some(&Word("derive")) && attribute.contains(&Word("Default"))
             });
         if !production_outer_attributes_are_inert_v1(&attributes)
             || default_would_mint_context
@@ -1145,7 +1142,7 @@ fn descendant_module_has_no_context_mint_v1(source: &str) -> bool {
     };
     for item in items {
         let item = &tokens[item];
-        if item_is_exact_cfg_test_v1(item) || !item.iter().any(|token| *token == Word(CONTEXT)) {
+        if item_is_exact_cfg_test_v1(item) || !item.contains(&Word(CONTEXT)) {
             continue;
         }
         if let Some(implementation) = top_level_word_v1(item, "impl") {
@@ -1163,16 +1160,17 @@ fn descendant_module_has_no_context_mint_v1(source: &str) -> bool {
     true
 }
 
-fn exact_pinned_context_descendant_tree_v1(
-    root: &str,
-    cross_field: &str,
-    cross_field_joint_z: &str,
-    q_pcs: &str,
-    q_pcs_soundness: &str,
-    q_pcs_fri_rounds: &str,
-    q_pcs_canonical: &str,
-    q_pcs_verifier: &str,
-) -> bool {
+fn exact_pinned_context_descendant_tree_v1(sources: [&str; 8]) -> bool {
+    let [
+        root,
+        cross_field,
+        cross_field_joint_z,
+        q_pcs,
+        q_pcs_soundness,
+        q_pcs_fri_rounds,
+        q_pcs_canonical,
+        q_pcs_verifier,
+    ] = sources;
     const ROOT_CHILDREN: &[(&str, &str)] = &[
         ("cross_field_v2", "phase23_rns_link_cross_field_v2.rs"),
         ("q_pcs", "phase23_rns_link_q_pcs.rs"),
@@ -1281,13 +1279,172 @@ fn exact_pinned_context_descendant_tree_v1(
             &[][..],
         ),
     ];
-    exact_test_only_context_constructor_v1(root)
-        && exact_production_child_modules_v1(root, ROOT_CHILDREN)
+    exact_production_child_modules_v1(root, ROOT_CHILDREN)
         && descendants.iter().all(|(source, pin, children)| {
             source_pin_v1(source) == *pin
                 && exact_production_child_modules_v1(source, children)
                 && descendant_module_has_no_context_mint_v1(source)
         })
+}
+
+fn exact_live_context_owner_authority_v1(source: &str) -> bool {
+    const OWNER: &str = "ZkAmsPhase23RnsLinkContextOwnerV1";
+    const CONTEXT: &str = "ZkAmsPhase23RnsLinkContextV1";
+    const CONTEXT_AXIS_MAPPINGS: [&str; 9] = [
+        "profile_digest: ContextAxisDigestV1(profile_digest)",
+        "algorithm_manifest_digest: ContextAxisDigestV1(\n                immutable_algorithm_manifest_digest_v1()?\n            )",
+        "network_context_digest: ContextAxisDigestV1(network_context_digest)",
+        "statement_context_digest: ContextAxisDigestV1(proof_context.statement_digest)",
+        "transcript_digest: ContextAxisDigestV1(terminal_context.transcript_digest)",
+        "batch_digest: ContextAxisDigestV1(governed_batch.digest)",
+        "roster_digest: ContextAxisDigestV1(terminal_context.roster_digest)",
+        "direct_key_admission_digest: ContextAxisDigestV1(direct_key_admission_digest)",
+        "canonical_map_set_digest: ContextAxisDigestV1(canonical_map_set_digest)",
+    ];
+    const RETURN_BINDINGS: [&str; 9] = [
+        "profile_digest != terminal_context.profile_digest",
+        "roster_digest != terminal_context.roster_digest",
+        "epoch != terminal_context.epoch",
+        "transcript_digest != terminal_context.transcript_digest",
+        "batch_id != terminal_context.batch_id",
+        "ordered_batch_input_digest != terminal_context.ordered_batch_input_digest",
+        "fold_count != governed_fold_count",
+        "collective_public_key_digest != direct_collective_public_key_digest",
+        "key_material_digest != direct_key_material_digest",
+    ];
+    let Some(context_frame) = source.find("context_frame(proof_context)") else {
+        return false;
+    };
+    let Some(network_hash) =
+        source.find("let network_context_digest = keccak256(&generic_context_frame);")
+    else {
+        return false;
+    };
+    let Some(batch_validation) = source.find("terminal_composition_context_frame(") else {
+        return false;
+    };
+    let Some(direct_validation) =
+        source.find("direct_key_admission.validated_phase23_context_axes_v1(")
+    else {
+        return false;
+    };
+    let Some(context_mint) = source.find("let context = ZkAmsPhase23RnsLinkContextV1 {") else {
+        return false;
+    };
+    let Some(context_return) =
+        source.find("pub(in super::super) fn into_context_for_materialization_v1(")
+    else {
+        return false;
+    };
+    let Some(test_context_impl) = source.find("#[cfg(test)]\nimpl ZkAmsPhase23RnsLinkContextV1")
+    else {
+        return false;
+    };
+    let Some(test_context_constructor) = source.find("pub(in super::super) fn new(") else {
+        return false;
+    };
+    let production_context_mint = &source[context_mint..context_return];
+    context_frame < network_hash
+        && network_hash < batch_validation
+        && batch_validation < direct_validation
+        && direct_validation < context_mint
+        && context_mint < context_return
+        && context_return < test_context_impl
+        && test_context_impl < test_context_constructor
+        && source
+            .matches(&format!("pub(in super::super) struct {OWNER}"))
+            .count()
+            == 1
+        && source
+            .matches("pub(in super::super) fn from_native_sources_v1(")
+            .count()
+            == 1
+        && source
+            .matches("pub(in super::super) fn into_context_for_materialization_v1(")
+            .count()
+            == 1
+        && source.matches("pub(in super::super) fn new(").count() == 1
+        && source.matches("fn new(").count() == 1
+        && source.matches("Ok(Self {").count() == 1
+        && source
+            .matches("let context = ZkAmsPhase23RnsLinkContextV1 {")
+            .count()
+            == 1
+        && CONTEXT_AXIS_MAPPINGS
+            .iter()
+            .all(|mapping| production_context_mint.matches(*mapping).count() == 1)
+        && source.contains("terminal_context.profile_digest != profile_digest")
+        && source.contains(
+            "terminal_context.nifs_verifier_digest != zk_ams_phase3_nifs_verifier_digest_v1()?",
+        )
+        && source.contains("governed_batch.context_digest != terminal_context.digest")
+        && source.contains(
+            "direct_key_admission.validated_phase23_context_axes_v1(\n            terminal_context.profile_digest,\n            terminal_context.roster_digest,\n            terminal_context.epoch,\n            terminal_context.transcript_digest,\n        )?",
+        )
+        && RETURN_BINDINGS
+            .iter()
+            .all(|binding| source.matches(*binding).count() == 1)
+        && source.contains("context.validated_release_binding_digests_v1()?;")
+        && !source.contains(&format!("impl Clone for {OWNER}"))
+        && !source.contains(&format!("impl Copy for {OWNER}"))
+        && !source.contains(&format!("impl Default for {OWNER}"))
+        && !source.contains(&format!("impl Serialize for {OWNER}"))
+        && !source.contains(&format!("impl Deserialize for {OWNER}"))
+        && !source.contains(&format!("impl Encode for {OWNER}"))
+        && !source.contains(&format!("impl Decode for {OWNER}"))
+        && !source.contains(&format!("impl NoritoSerialize for {OWNER}"))
+        && !source.contains(&format!("impl NoritoDeserialize for {OWNER}"))
+        && !source.contains(&format!("impl Deref for {OWNER}"))
+        && !source.contains(&format!("impl AsRef<{CONTEXT}> for {OWNER}"))
+        && !source.contains(&format!("impl Borrow<{CONTEXT}> for {OWNER}"))
+        && !source.contains("fn context(&self)")
+        && !source.contains("fn context_mut(&mut self)")
+        && !source.contains("fn as_context(&self)")
+        && !source.contains("fn into_context(self)")
+        && !source.contains("pub fn from_native_sources_v1")
+        && !source.contains("pub fn into_context_for_materialization_v1")
+        && source.contains(&format!("context: {CONTEXT},"))
+}
+
+fn exact_live_context_owner_consumer_v1(source: &str) -> bool {
+    const CONTEXT_RETURN_CALL: &str = "let context = context_owner.into_context_for_materialization_v1(\n        profile_digest,\n        roster_digest,\n        authority.epoch(),\n        transcript_digest,\n        batch_id,\n        ordered_batch_input_digest,\n        fold_count,\n        authority.key_digest(),\n        authority.key_material_digest(),\n    )?;";
+    let Some(consumer) = source.find("fn materialize_encrypt_and_publish_phase23_source_v1") else {
+        return false;
+    };
+    let Some(owner_parameter) = source[consumer..]
+        .find("context_owner: ZkAmsPhase23RnsLinkContextOwnerV1,")
+        .map(|offset| consumer + offset)
+    else {
+        return false;
+    };
+    let Some(context_return) = source[consumer..]
+        .find("let context = context_owner.into_context_for_materialization_v1(")
+        .map(|offset| consumer + offset)
+    else {
+        return false;
+    };
+    let Some(source_begin) = source[consumer..]
+        .find("ZkAmsPhase23RnsLinkExternalSourceAssemblyV1::begin_v1(context, directory)?")
+        .map(|offset| consumer + offset)
+    else {
+        return false;
+    };
+    consumer < owner_parameter
+        && owner_parameter < context_return
+        && context_return < source_begin
+        && source
+            .matches("context_owner: ZkAmsPhase23RnsLinkContextOwnerV1,")
+            .count()
+            == 1
+        && source
+            .matches("context_owner.into_context_for_materialization_v1(")
+            .count()
+            == 1
+        && source.matches(CONTEXT_RETURN_CALL).count() == 1
+        && source.contains("authority.validate_release_v1()?;")
+        && source.contains("authority.transcript_digest() != transcript_digest")
+        && !source.contains("Phase23ContextCorrespondenceSealV1")
+        && !source.contains("context: ZkAmsPhase23RnsLinkContextV1,")
 }
 
 fn exact_test_only_context_constructor_v1(source: &str) -> bool {
@@ -1338,10 +1495,7 @@ fn exact_test_only_context_constructor_v1(source: &str) -> bool {
                 }
                 cursor += 1;
             };
-            if tokens[index + 1..open]
-                .iter()
-                .any(|token| *token == Word(CONTEXT))
-            {
+            if tokens[index + 1..open].contains(&Word(CONTEXT)) {
                 if impl_body.is_some() || tokens[index..open] != [Word("impl"), Word(CONTEXT)] {
                     return false;
                 }
@@ -1487,7 +1641,9 @@ fn exact_test_only_context_constructor_v1(source: &str) -> bool {
             _ => {}
         }
     }
-    found && whole_module_context_mint_inventory_v1(source)
+    found
+        && (whole_module_context_mint_inventory_v1(source)
+            || exact_live_context_owner_authority_v1(source))
 }
 
 fn exact_test_only_correspondence_seal_v1(source: &str) -> bool {
@@ -1592,6 +1748,7 @@ fn test_digest_axes_v1() -> Phase23BundleDigestAxesV1 {
         key_authority_digest: [9; 32],
         key_epoch: 10,
         source_receipt_digest: [11; 32],
+        native_bgv_opening_receipt_set_digest: [12; 32],
         public_artifact_manifest_bound: true,
     }
 }
@@ -1660,8 +1817,11 @@ fn hostile_schedule_coordinates_fail_before_the_encryption_core() {
 #[test]
 fn named_peak_includes_the_preallocated_secret_chunk_pool() {
     assert_eq!(PHASE23_SECRET_CHUNK_POOL_PAYLOAD_BYTES_V1, 7_340_064);
-    assert!(PHASE23_SECRET_CHUNK_POOL_METADATA_BYTES_V1 > 0);
-    assert!(PHASE23_NAMED_HEAP_PEAK_BYTES_V1 < 160 * 1_048_576);
+    const {
+        assert!(PHASE23_SECRET_CHUNK_POOL_METADATA_BYTES_V1 > 0);
+        assert!(PHASE23_NAMED_HEAP_PEAK_BYTES_V1 < 160 * 1_048_576);
+        assert!(PHASE23_NATIVE_BGV_OPENING_RECEIPT_OWNER_BYTES_V1 > 0);
+    };
     assert_eq!(PHASE23_ONE_PACKED_CHUNK_BYTES_V1, 4 * 1_048_576);
     assert_eq!(PHASE23_DECODER_WORKSPACE_BYTES_V1, 8 * 1_048_576);
     assert_eq!(PHASE23_COMPACT_MANIFEST_OWNER_BYTES_V1, 4_718_592);
@@ -1673,12 +1833,18 @@ fn bundle_digest_has_an_independent_exact_kat_and_changes_every_bound_axis() {
     let digest = phase23_bundle_digest_from_frames_v1(axes, &manifests).unwrap();
     assert_eq!(
         hex::encode(digest),
-        "99c927f9cf6b3772d28ae3776026266a17a8a9ea73082f7e551fc86a0ca4b1b6"
+        "ce852dbf2d39f23dfe59eb559fa8ebf166a7f514e42b15761fa4251713528c3a"
     );
     let mut changed_axes = axes;
     changed_axes.source_receipt_digest[0] ^= 1;
     assert_ne!(
         phase23_bundle_digest_from_frames_v1(changed_axes, &manifests).unwrap(),
+        digest
+    );
+    let mut changed_native_opening_receipts = axes;
+    changed_native_opening_receipts.native_bgv_opening_receipt_set_digest[0] ^= 1;
+    assert_ne!(
+        phase23_bundle_digest_from_frames_v1(changed_native_opening_receipts, &manifests).unwrap(),
         digest
     );
     let mut changed_shape = axes;
@@ -1694,6 +1860,45 @@ fn bundle_digest_has_an_independent_exact_kat_and_changes_every_bound_axis() {
     unbound.public_artifact_manifest_bound = false;
     assert!(phase23_bundle_digest_from_frames_v1(unbound, &manifests).is_err());
 }
+
+#[test]
+fn native_bgv_opening_receipts_are_retained_validated_and_bundle_bound() {
+    let parent = include_str!("incremental_source.rs");
+    let source = include_str!("incremental_source_phase23.rs");
+    let owner = source
+        .split("struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1")
+        .nth(1)
+        .expect("Phase23 owner")
+        .split("struct Phase23MaterializeEncryptChunkStreamV1")
+        .next()
+        .expect("Phase23 owner boundary");
+    assert!(
+        owner.contains(
+            "native_bgv_opening_receipts: Vec<VerifiedStreamingNativeBgvOpeningReceiptV1>"
+        )
+    );
+    assert!(owner.contains("native_bgv_opening_receipt.validate_for_manifest_v1(manifest)?"));
+    assert!(owner.contains("phase23_native_bgv_opening_receipt_set_digest_v1"));
+
+    let stream = source
+        .split("impl<I, R, K, P> Iterator for Phase23MaterializeEncryptChunkStreamV1")
+        .nth(1)
+        .expect("Phase23 stream")
+        .split("fn materialize_encrypt_and_publish_phase23_source_v1")
+        .next()
+        .expect("Phase23 stream boundary");
+    let split = stream.find("product.into_verified_parts_v1()").unwrap();
+    let manifest_push = stream.find("self.manifests.push(manifest)").unwrap();
+    let receipt_push = stream.find(".push(native_bgv_opening_receipt)").unwrap();
+    assert!(
+        parent.contains("fn into_verified_parts_v1(")
+            && parent.contains("native_bgv_opening_receipt.validate_for_manifest_v1(&manifest)?;")
+    );
+    assert!(split < manifest_push);
+    assert!(manifest_push < receipt_push);
+    assert!(source.contains("hash.update(&axes.native_bgv_opening_receipt_set_digest);"));
+}
+
 #[test]
 fn structural_gate_preserves_validation_entropy_source_and_output_order() {
     let parent = include_str!("incremental_source.rs");
@@ -1754,7 +1959,7 @@ fn structural_gate_is_fail_closed_and_returns_one_move_only_owner_only_on_succes
     let source = include_str!("incremental_source_phase23.rs");
     let external = include_str!("../phase23_rns_link_external_source.rs");
     let encrypted = include_str!("../phase23_encrypted.rs");
-    let leaf = include_str!("../../../../../../iroha_confidential_spool/src/lib.rs");
+    let leaf = include_str!("../../../../../../iroha_crypto/src/confidential_spool.rs");
     assert!(source.contains("let next = self.chunks.next()?;"));
     assert!(source.contains(">= PHASE23_RECORD_COUNT_V1"));
     assert!(source.contains("Err(error) => return Some(Err(error))"));
@@ -1785,12 +1990,13 @@ fn structural_gate_is_fail_closed_and_returns_one_move_only_owner_only_on_succes
     assert!(!source.contains("mem::forget"));
 }
 #[test]
-fn module_graph_and_context_authority_remain_private_and_fail_closed() {
+fn module_graph_and_context_authority_use_exact_live_owner_and_remain_private() {
     let incremental = include_str!("incremental_source.rs");
     let collective = include_str!("../collective.rs");
     let mkhe = include_str!("../../mkhe.rs");
     let source = include_str!("incremental_source_phase23.rs");
     let rns_link = include_str!("../phase23_rns_link.rs");
+    let context_authority = include_str!("../phase23_rns_link_context_authority_v1.rs");
     let cross_field = include_str!("../phase23_rns_link_cross_field_v2.rs");
     let cross_field_joint_z =
         include_str!("../phase23_rns_link_cross_field_v2/joint_z_binding_v3.rs");
@@ -1847,9 +2053,8 @@ fn module_graph_and_context_authority_remain_private_and_fail_closed() {
             ]
         ));
     }
-    assert!(exact_test_only_context_constructor_v1(rns_link));
-    assert!(whole_module_context_mint_inventory_v1(rns_link));
-    assert!(exact_pinned_context_descendant_tree_v1(
+    assert!(exact_live_context_owner_authority_v1(context_authority));
+    assert!(exact_pinned_context_descendant_tree_v1([
         rns_link,
         cross_field,
         cross_field_joint_z,
@@ -1858,8 +2063,205 @@ fn module_graph_and_context_authority_remain_private_and_fail_closed() {
         q_pcs_fri_rounds,
         q_pcs_canonical,
         q_pcs_verifier,
-    ));
-    assert!(exact_test_only_correspondence_seal_v1(source));
+    ]));
+    assert!(exact_live_context_owner_consumer_v1(source));
+}
+
+#[test]
+fn live_context_owner_source_contract_rejects_axis_and_return_path_mutations() {
+    const AUTHORITY: &str = include_str!("../phase23_rns_link_context_authority_v1.rs");
+    const CONSUMER: &str = include_str!("incremental_source_phase23.rs");
+    assert!(exact_live_context_owner_authority_v1(AUTHORITY));
+    assert!(exact_live_context_owner_consumer_v1(CONSUMER));
+
+    for mutated in [
+        AUTHORITY.replacen("context_frame(proof_context)", "proof_context.chain_id", 1),
+        AUTHORITY.replacen(
+            "let network_context_digest = keccak256(&generic_context_frame);",
+            "let network_context_digest = proof_context.genesis_hash;",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "terminal_composition_context_frame(",
+            "Vec::<u8>::with_capacity(",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "governed_batch.context_digest != terminal_context.digest",
+            "governed_batch.context_digest == terminal_context.digest",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "direct_key_admission.validated_phase23_context_axes_v1(",
+            "direct_key_admission.digest(",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "statement_context_digest: ContextAxisDigestV1(proof_context.statement_digest)",
+            "statement_context_digest: ContextAxisDigestV1(terminal_context.digest)",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "batch_digest: ContextAxisDigestV1(governed_batch.digest)",
+            "batch_digest: ContextAxisDigestV1(terminal_context.batch_id)",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "profile_digest: ContextAxisDigestV1(profile_digest)",
+            "profile_digest: ContextAxisDigestV1(terminal_context.digest)",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "immutable_algorithm_manifest_digest_v1()?\n            )",
+            "profile_digest\n            )",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "network_context_digest: ContextAxisDigestV1(network_context_digest)",
+            "network_context_digest: ContextAxisDigestV1(proof_context.genesis_hash)",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "transcript_digest: ContextAxisDigestV1(terminal_context.transcript_digest)",
+            "transcript_digest: ContextAxisDigestV1(terminal_context.digest)",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "roster_digest: ContextAxisDigestV1(terminal_context.roster_digest)",
+            "roster_digest: ContextAxisDigestV1(terminal_context.digest)",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "direct_key_admission_digest: ContextAxisDigestV1(direct_key_admission_digest)",
+            "direct_key_admission_digest: ContextAxisDigestV1(direct_key_material_digest)",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "canonical_map_set_digest: ContextAxisDigestV1(canonical_map_set_digest)",
+            "canonical_map_set_digest: ContextAxisDigestV1(profile_digest)",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "terminal_context.profile_digest != profile_digest",
+            "terminal_context.profile_digest == profile_digest",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "terminal_context.nifs_verifier_digest != zk_ams_phase3_nifs_verifier_digest_v1()?",
+            "terminal_context.nifs_verifier_digest == zk_ams_phase3_nifs_verifier_digest_v1()?",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "terminal_context.profile_digest,\n            terminal_context.roster_digest,\n            terminal_context.epoch,\n            terminal_context.transcript_digest,",
+            "[0; 32],\n            terminal_context.roster_digest,\n            terminal_context.epoch,\n            terminal_context.transcript_digest,",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "terminal_context.profile_digest,\n            terminal_context.roster_digest,\n            terminal_context.epoch,\n            terminal_context.transcript_digest,",
+            "terminal_context.profile_digest,\n            [0; 32],\n            terminal_context.epoch,\n            terminal_context.transcript_digest,",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "terminal_context.profile_digest,\n            terminal_context.roster_digest,\n            terminal_context.epoch,\n            terminal_context.transcript_digest,",
+            "terminal_context.profile_digest,\n            terminal_context.roster_digest,\n            0,\n            terminal_context.transcript_digest,",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "terminal_context.profile_digest,\n            terminal_context.roster_digest,\n            terminal_context.epoch,\n            terminal_context.transcript_digest,",
+            "terminal_context.profile_digest,\n            terminal_context.roster_digest,\n            terminal_context.epoch,\n            [0; 32],",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "collective_public_key_digest != direct_collective_public_key_digest",
+            "collective_public_key_digest == direct_collective_public_key_digest",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "key_material_digest != direct_key_material_digest",
+            "key_material_digest == direct_key_material_digest",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "profile_digest != terminal_context.profile_digest",
+            "profile_digest == terminal_context.profile_digest",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "roster_digest != terminal_context.roster_digest",
+            "roster_digest == terminal_context.roster_digest",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "epoch != terminal_context.epoch",
+            "epoch == terminal_context.epoch",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "transcript_digest != terminal_context.transcript_digest",
+            "transcript_digest == terminal_context.transcript_digest",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "batch_id != terminal_context.batch_id",
+            "batch_id == terminal_context.batch_id",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "ordered_batch_input_digest != terminal_context.ordered_batch_input_digest",
+            "ordered_batch_input_digest == terminal_context.ordered_batch_input_digest",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "fold_count != governed_fold_count",
+            "fold_count == governed_fold_count",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "pub(in super::super) fn from_native_sources_v1(",
+            "pub(crate) fn from_native_sources_v1(",
+            1,
+        ),
+        AUTHORITY.replacen(
+            "#[cfg(test)]\nimpl ZkAmsPhase23RnsLinkContextV1",
+            "impl ZkAmsPhase23RnsLinkContextV1",
+            1,
+        ),
+        format!(
+            "{AUTHORITY}\nimpl ZkAmsPhase23RnsLinkContextOwnerV1 {{ fn context(&self) -> &ZkAmsPhase23RnsLinkContextV1 {{ &self.context }} }}"
+        ),
+        format!("{AUTHORITY}\nimpl Clone for ZkAmsPhase23RnsLinkContextOwnerV1 {{}}"),
+        format!("{AUTHORITY}\nimpl Decode for ZkAmsPhase23RnsLinkContextOwnerV1 {{}}"),
+    ] {
+        assert!(!exact_live_context_owner_authority_v1(&mutated));
+    }
+
+    for mutated in [
+        CONSUMER.replacen(
+            "context_owner: ZkAmsPhase23RnsLinkContextOwnerV1,",
+            "context: ZkAmsPhase23RnsLinkContextV1,",
+            1,
+        ),
+        CONSUMER.replacen("authority.validate_release_v1()?;", "", 1),
+        CONSUMER.replacen(
+            "authority.transcript_digest() != transcript_digest",
+            "authority.transcript_digest() == transcript_digest",
+            1,
+        ),
+        CONSUMER.replacen(
+            "        authority.epoch(),\n        transcript_digest,",
+            "        0,\n        transcript_digest,",
+            1,
+        ),
+        CONSUMER.replacen(
+            "        authority.key_digest(),\n        authority.key_material_digest(),",
+            "        [0; 32],\n        authority.key_material_digest(),",
+            1,
+        ),
+        CONSUMER.replacen("authority.key_material_digest(),", "[0; 32],", 1),
+        format!("{CONSUMER}\nenum Phase23ContextCorrespondenceSealV1 {{ Escape }}"),
+    ] {
+        assert!(!exact_live_context_owner_consumer_v1(&mutated));
+    }
 }
 
 #[test]
@@ -2387,6 +2789,6 @@ fn source_files_remain_below_the_global_budget_without_exceptions() {
         include_str!("incremental_source_phase23_tests.rs")
             .lines()
             .count()
-            <= 2_400
+            <= 2_850
     );
 }

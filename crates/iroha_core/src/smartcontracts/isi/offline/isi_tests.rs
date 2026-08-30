@@ -430,12 +430,8 @@ mod tests {
         let redeem_start = source
             .find("impl Execute for RedeemKagemushaRecursiveV4")
             .expect("V4 redemption executor");
-        let tests_start = redeem_start
-            + source[redeem_start..]
-                .find("#[cfg(test)]")
-                .expect("offline executor test module");
         let topup = &source[topup_start..redeem_start];
-        let redeem = &source[redeem_start..tests_start];
+        let redeem = &source[redeem_start..];
         for (name, executor) in [("top-up", topup), ("redemption", redeem)] {
             assert!(
                 !executor.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"),
@@ -501,10 +497,6 @@ mod tests {
         let redeem_execute_start = source
             .find("impl Execute for RedeemKagemushaRecursiveV4")
             .expect("redemption executor");
-        let tests_start = redeem_execute_start
-            + source[redeem_execute_start..]
-                .find("#[cfg(test)]")
-                .expect("offline executor test module");
         assert_ordered(
             "top-up executor",
             &source[topup_execute_start..redeem_execute_start],
@@ -517,7 +509,7 @@ mod tests {
         );
         assert_ordered(
             "redemption executor",
-            &source[redeem_execute_start..tests_start],
+            &source[redeem_execute_start..],
             &[
                 "validate_authorization_at",
                 "kagemusha_release_lifecycle::redemption_policy",
@@ -563,7 +555,7 @@ mod tests {
             .find("validate_offline_attestation_policy_transition_from_state")
             .expect("activation anti-rollback policy transition validation");
         let first_mutation = body
-            .find("state_transaction.world.smart_contract_state.insert")
+            .find(".insert(release_key, release_record_bytes)")
             .expect("activation state publication");
         let promotion_consumption_commit = body
             .find("commit_v4_promotion_binding")
@@ -628,6 +620,13 @@ mod tests {
     fn canary_consensus_digest(label: &[u8]) -> KagemushaExactBytesDigestV1 {
         KagemushaExactBytesDigestV1::from_bytes(label).expect("non-empty canary test identity")
     }
+    fn canary_consensus_release_record() -> &'static [u8] {
+        b"canary staged release record"
+    }
+    fn canary_consensus_device_policy() -> OfflineDeviceAttestationPolicy {
+        default_offline_device_attestation_policy()
+            .expect("the canary fixture uses the canonical built-in device policy")
+    }
     fn canary_consensus_fixture(
         state_transaction: &StateTransaction<'_, '_>,
         nonce: u32,
@@ -648,9 +647,13 @@ mod tests {
             network_id: state_transaction.network_id().clone(),
             reviewed_source_closure_descriptor_sha256: [0xC6; 32],
             manifest_sha256: [0xC7; 32],
-            release_record_sha256: [0xC8; 32],
+            release_record_sha256: canary_consensus_digest(canary_consensus_release_record())
+                .sha256,
             release_policy_source: canary_consensus_digest(b"canary release policy"),
-            device_attestation_policy_norito: canary_consensus_digest(b"canary device policy"),
+            device_attestation_policy_norito: canary_consensus_digest(
+                &norito::encode_canonical(&canary_consensus_device_policy())
+                    .expect("the canary device policy has canonical bytes"),
+            ),
             signed_genesis: canary_consensus_digest(b"canary signed genesis"),
             catalog_consensus_policy_digest: [0xC9; 32],
             execution_policy_hash: Hash::new(b"canary execution policy"),
@@ -745,9 +748,95 @@ mod tests {
         binding: &KagemushaV4PromotionBindingV1,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) {
-        let (promotion, binding) = plan_v4_promotion_binding(binding, state_transaction)
+        let (promotion, binding_marker) = plan_v4_promotion_binding(binding, state_transaction)
             .expect("fresh canary activation binding");
-        commit_v4_promotion_binding(promotion, binding, state_transaction);
+        commit_v4_promotion_binding(promotion, binding_marker, state_transaction);
+
+        let artifact_binding =
+            iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+                version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+                generation: "canary-test-release-v4".to_owned(),
+                manifest_sha256: binding.manifest_sha256,
+            };
+        let release_record = canary_consensus_release_record();
+        let mut lifecycle =
+            staged_lifecycle_for_test([0xD1; 32], state_transaction.network_id().clone());
+        lifecycle.promotion_binding = binding.clone();
+        lifecycle.artifact_binding = artifact_binding.clone();
+        lifecycle.release_record_norito = canary_consensus_digest(release_record);
+        lifecycle.device_attestation_policy = canary_consensus_device_policy();
+        lifecycle.step_eq_verifier_key_id =
+            iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+                binding.manifest_sha256,
+            );
+        lifecycle.step_ep_verifier_key_id =
+            iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+                binding.manifest_sha256,
+            );
+        let verifier_version = 1;
+        lifecycle.verifier_version = verifier_version;
+        lifecycle
+            .validate()
+            .expect("the canary fixture installs a valid staged lifecycle");
+
+        let lifecycle_key: iroha_data_model::state_path::StatePath =
+            iroha_data_model::offline::kagemusha_v4_release_lifecycle_state_key(
+                &binding.manifest_sha256,
+            )
+            .expect("the canary lifecycle key is canonical")
+            .parse()
+            .expect("the canary lifecycle key is a valid state path");
+        state_transaction.world.smart_contract_state.insert(
+            lifecycle_key,
+            norito::encode_canonical(&lifecycle)
+                .expect("the staged canary lifecycle has canonical bytes"),
+        );
+        let release_key = kagemusha_terminal_registry_v4::release_state_key(&artifact_binding)
+            .expect("the canary release key is canonical");
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(release_key, release_record.to_vec());
+
+        let owner = kagemusha_terminal_registry_v4::verifier_owner_manifest_id(&artifact_binding)
+            .expect("the canary verifier owner is canonical");
+        for (parity, curve, schema_hash, commitment) in [
+            (
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+                "vesta",
+                [0xE1; 32],
+                [0xE2; 32],
+            ),
+            (
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+                "pallas",
+                [0xF1; 32],
+                [0xF2; 32],
+            ),
+        ] {
+            let id = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+                parity,
+                binding.manifest_sha256,
+            );
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                verifier_version,
+                kagemusha_v4_circuit_id(parity),
+                Some(owner.clone()),
+                crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                BackendTag::Halo2IpaPasta,
+                curve,
+                schema_hash,
+                commitment,
+            );
+            record.status = ConfidentialStatus::Active;
+            state_transaction
+                .world
+                .verifying_keys_by_circuit
+                .insert((record.circuit_id.clone(), record.version), id.clone());
+            state_transaction.world.verifying_keys.insert(id, record);
+        }
     }
     #[test]
     fn taira_canary_requires_activation_before_exact_authorization() {
@@ -1120,10 +1209,12 @@ mod tests {
     fn offline_test_state() -> State {
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob = Account::new(BOB_ID.clone()).build(&BOB_ID);
-        State::new_for_testing(
+        State::new_with_chain_and_network_id_for_testing(
             World::with([], [alice, bob], []),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
+            ChainId::from("offline-isi-test"),
+            test_network_id(b"offline-isi-test-network"),
         )
     }
     fn offline_holding_limit_test_state(
@@ -1365,30 +1456,24 @@ mod tests {
     }
     #[test]
     fn every_offline_executor_is_independent_of_local_service_switch() {
-        let source = include_str!("../offline.rs");
-        let executor_names = [
-            "RegisterOfflineDeviceAttestation",
-            "SetOfflineDeviceAttestationPolicy",
-            "ActivateKagemushaRecursiveReleaseV4",
-            "TopUpKagemushaRecursiveV4",
-            "RedeemKagemushaRecursiveV4",
+        let offline_source = include_str!("../offline.rs");
+        let activation_source = include_str!("kagemusha_activation.rs");
+        let executors = [
+            ("RegisterOfflineDeviceAttestation", offline_source),
+            ("SetOfflineDeviceAttestationPolicy", offline_source),
+            ("ActivateKagemushaRecursiveReleaseV4", activation_source),
+            ("TopUpKagemushaRecursiveV4", offline_source),
+            ("RedeemKagemushaRecursiveV4", offline_source),
         ];
-        let starts = executor_names
-            .iter()
-            .map(|name| {
-                source
-                    .find(&format!("impl Execute for {name}"))
-                    .unwrap_or_else(|| panic!("missing offline executor {name}"))
-            })
-            .collect::<Vec<_>>();
-        let last_start = *starts.last().expect("offline executor list is non-empty");
-        let tests_start = last_start
-            + source[last_start..]
-                .find("#[cfg(test)]")
-                .expect("offline executor test module");
-        for (index, name) in executor_names.iter().enumerate() {
-            let end = starts.get(index + 1).copied().unwrap_or(tests_start);
-            let executor = &source[starts[index]..end];
+        for (name, source) in executors {
+            let start = source
+                .find(&format!("impl Execute for {name}"))
+                .unwrap_or_else(|| panic!("missing offline executor {name}"));
+            let after_header = start + "impl Execute for ".len();
+            let end = source[after_header..]
+                .find("impl Execute for ")
+                .map_or(source.len(), |offset| after_header + offset);
+            let executor = &source[start..end];
             assert!(
                 !executor.contains("settlement.offline.enabled")
                     && !executor.contains("ensure_offline_enabled"),
@@ -1526,10 +1611,17 @@ mod tests {
             .expect("canonical low-S online assertion fixture")
     }
     fn test_der_tlv(tag: &[u8], value: &[u8]) -> Vec<u8> {
-        assert!(value.len() < 128, "test DER fixture uses one-byte lengths");
-        let mut encoded = Vec::with_capacity(tag.len() + 1 + value.len());
+        assert!(
+            value.len() < 256,
+            "test DER fixture uses at most two length bytes"
+        );
+        let mut encoded = Vec::with_capacity(tag.len() + 2 + value.len());
         encoded.extend_from_slice(tag);
-        encoded.push(value.len() as u8);
+        if value.len() < 128 {
+            encoded.push(value.len() as u8);
+        } else {
+            encoded.extend_from_slice(&[0x81, value.len() as u8]);
+        }
         encoded.extend_from_slice(value);
         encoded
     }
@@ -1552,6 +1644,18 @@ mod tests {
         hardware_root_of_trust: bool,
     ) -> Vec<u8> {
         fn authorization_list(with_usage_count_limit: bool, with_root: bool) -> Vec<u8> {
+            fn positive_integer(value: u32) -> Vec<u8> {
+                let bytes = value.to_be_bytes();
+                let first = bytes
+                    .iter()
+                    .position(|byte| *byte != 0)
+                    .unwrap_or(bytes.len() - 1);
+                let mut encoded = bytes[first..].to_vec();
+                if encoded[0] & 0x80 != 0 {
+                    encoded.insert(0, 0);
+                }
+                test_der_tlv(&[0x02], &encoded)
+            }
             let mut body = if with_usage_count_limit {
                 let one = test_der_tlv(&[0x02], &[1]);
                 // Context-specific constructed high tag [405].
@@ -1563,6 +1667,22 @@ mod tests {
                 let root = android_root_of_trust_fixture(&[0xA5], 0xFF, 0, &[0x5A; 32]);
                 // Context-specific constructed high tag [704].
                 body.extend_from_slice(&test_der_tlv(&[0xBF, 0x85, 0x40], &root));
+                for (tag, value) in [
+                    (
+                        &[0xBF, 0x85, 0x41][..],
+                        positive_integer(OFFLINE_ANDROID_12_OS_VERSION_FLOOR_V2),
+                    ),
+                    (&[0xBF, 0x85, 0x42][..], positive_integer(202_607)),
+                    (&[0xBF, 0x85, 0x46][..], test_der_tlv(&[0x04], b"b")),
+                    (&[0xBF, 0x85, 0x47][..], test_der_tlv(&[0x04], b"d")),
+                    (&[0xBF, 0x85, 0x48][..], test_der_tlv(&[0x04], b"p")),
+                    (&[0xBF, 0x85, 0x4C][..], test_der_tlv(&[0x04], b"m")),
+                    (&[0xBF, 0x85, 0x4D][..], test_der_tlv(&[0x04], b"x")),
+                    (&[0xBF, 0x85, 0x4E][..], positive_integer(20_260_701)),
+                    (&[0xBF, 0x85, 0x4F][..], positive_integer(20_260_701)),
+                ] {
+                    body.extend_from_slice(&test_der_tlv(tag, &value));
+                }
             }
             test_der_tlv(&[0x30], &body)
         }
@@ -1587,6 +1707,9 @@ mod tests {
         ))
         .expect("hardware-enforced usageCountLimit is admitted");
         assert_eq!(hardware.usage_count_limit, Some(1));
+        assert!(hardware.device_properties.is_complete_v2());
+        assert_eq!(hardware.device_properties.manufacturer, "m");
+        assert_eq!(hardware.device_properties.model, "x");
         let mut zero_keymint_version =
             android_key_description_usage_count_fixture(false, true, true);
         let version_offset = zero_keymint_version
@@ -1699,6 +1822,7 @@ mod tests {
             ios_environment: None,
             android_package_name: Some("com.pk.retailwallet".to_owned()),
             android_signing_certificate_sha256: Some(vec![0x55; 32]),
+            android_attested_device_properties: None,
             public_key,
             assertion_scheme: OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME.to_owned(),
             assertion_key_algorithm: OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM.to_owned(),
@@ -1714,6 +1838,196 @@ mod tests {
             recent_block_hash: Hash::new(b"admitted-android-registration-block"),
             expires_at_ms,
         }
+    }
+    fn assert_typed_device_eligibility_rejection(
+        error: InstructionExecutionError,
+        expected_reason: OfflineDeviceEligibilityReasonV1,
+    ) {
+        let InstructionExecutionError::OfflineDeviceEligibility(rejection) = error else {
+            panic!("expected typed device-eligibility rejection, got {error}");
+        };
+        rejection
+            .validate_v1()
+            .expect("typed rejection must retain a valid decision");
+        assert_eq!(
+            rejection.decision.outcome,
+            OfflineDeviceEligibilityOutcomeV1::DrainOnly
+        );
+        assert_eq!(rejection.decision.reason, expected_reason);
+        assert!(rejection.decision.matched_rule_ids.is_empty());
+    }
+    #[test]
+    fn registration_crypto_and_policy_freshness_boundaries_are_typed_without_state() {
+        let cryptographic = classify_offline_attestation_report_rejection(invalid_attestation(
+            "verified boot state is not verified",
+        ));
+        let InstructionExecutionError::OfflineDeviceEligibility(cryptographic) = cryptographic
+        else {
+            panic!("cryptographic report rejection must be typed");
+        };
+        assert_eq!(
+            cryptographic.decision,
+            OfflineDeviceAttestationPolicy::cryptographic_rejection_v1()
+        );
+
+        let revoked = classify_offline_attestation_report_rejection(labeled_invariant(
+            "revoked_attestation",
+            "certificate serial is governed non-valid",
+        ));
+        let InstructionExecutionError::OfflineDeviceEligibility(revoked) = revoked else {
+            panic!("revoked certificate rejection must be typed");
+        };
+        assert_eq!(
+            revoked.decision.reason,
+            OfflineDeviceEligibilityReasonV1::CryptographicAttestationRejected
+        );
+
+        let malformed_policy = labeled_invariant(
+            "invalid_attestation_policy",
+            "policy structure is malformed",
+        );
+        assert!(matches!(
+            classify_offline_attestation_report_rejection(malformed_policy),
+            InstructionExecutionError::InvariantViolation(_)
+        ));
+
+        let mut policy = default_offline_device_attestation_policy()
+            .expect("built-in device-attestation policy");
+        let mut snapshot = android_status_snapshot();
+        snapshot.cache_max_age_seconds = 60;
+        policy.android_status_snapshot = Some(snapshot);
+        let error = validate_offline_attestation_policy_freshness_for_registration(
+            &policy,
+            POLICY_TEST_TIME_MS + 60_000,
+            POLICY_TEST_TIME_MS + 61_000,
+        )
+        .expect_err("the freshness deadline is exclusive");
+        assert_typed_device_eligibility_rejection(
+            error,
+            OfflineDeviceEligibilityReasonV1::PolicyNotFresh,
+        );
+    }
+    #[test]
+    fn android_assertion_profiles_truthfully_separate_hardware_one_use_from_managed_pre12() {
+        let asset = offline_test_asset(&ALICE_ID).definition().clone();
+        let assertion_key = online_assertion_signing_key(0x5A);
+        let mut registration = android_online_registration(
+            &ALICE_ID,
+            &asset,
+            &assertion_key,
+            POLICY_TEST_TIME_MS + 60_000,
+        );
+        registration.version = 2;
+        registration.assertion_scheme =
+            OFFLINE_ATTESTATION_ANDROID_MANAGED_PRE12_ASSERTION_SCHEME.to_owned();
+        registration.assertion_usage_count_limit = None;
+        registration.android_attested_device_properties = Some(
+            OfflineAndroidAttestedDevicePropertiesV2 {
+                version:
+                    iroha_data_model::offline::OFFLINE_ANDROID_ATTESTED_DEVICE_PROPERTIES_VERSION_V2,
+                attestation_version: 300,
+                keymint_version: 300,
+                security_level: OfflineAndroidDeviceSecurityLevelV2::StrongBox,
+                brand: "google".to_owned(),
+                device: "crosshatch".to_owned(),
+                product: "crosshatch".to_owned(),
+                manufacturer: "Google".to_owned(),
+                model: "Pixel 3 XL".to_owned(),
+                os_version: OFFLINE_ANDROID_12_OS_VERSION_FLOOR_V2 - 1,
+                os_patch_level: 202108,
+                vendor_patch_level: 20_210_801,
+                boot_patch_level: 20_210_801,
+                verified_boot_key: vec![0x81; 32],
+                verified_boot_hash: [0x82; 32],
+            },
+        );
+
+        validate_offline_attestation_platform_profile(&registration)
+            .expect("complete managed pre-12 StrongBox evidence without tag 405 must pass");
+
+        let mut false_usage_limit = registration.clone();
+        false_usage_limit.assertion_usage_count_limit = Some(1);
+        assert!(validate_offline_attestation_platform_profile(&false_usage_limit).is_err());
+
+        let mut tee = registration.clone();
+        tee.android_attested_device_properties
+            .as_mut()
+            .expect("properties")
+            .security_level = OfflineAndroidDeviceSecurityLevelV2::TrustedEnvironment;
+        let tee_error = validate_offline_attestation_platform_profile(&tee)
+            .expect_err("pre-Android-12 TEE must enter drain-only mode");
+        assert_typed_device_eligibility_rejection(
+            tee_error,
+            OfflineDeviceEligibilityReasonV1::UnsupportedPreAndroid12Tee,
+        );
+
+        let mut android_12 = registration.clone();
+        android_12
+            .android_attested_device_properties
+            .as_mut()
+            .expect("properties")
+            .os_version = OFFLINE_ANDROID_12_OS_VERSION_FLOOR_V2;
+        assert!(validate_offline_attestation_platform_profile(&android_12).is_err());
+
+        let mut incomplete = registration.clone();
+        incomplete
+            .android_attested_device_properties
+            .as_mut()
+            .expect("properties")
+            .model
+            .clear();
+        let incomplete_error = validate_offline_attestation_platform_profile(&incomplete)
+            .expect_err("incomplete managed evidence must enter drain-only mode");
+        assert_typed_device_eligibility_rejection(
+            incomplete_error,
+            OfflineDeviceEligibilityReasonV1::IncompleteAttestedProperties,
+        );
+
+        let mut missing = registration.clone();
+        missing.android_attested_device_properties = None;
+        let missing_error = validate_offline_attestation_platform_profile(&missing)
+            .expect_err("missing managed evidence must enter drain-only mode");
+        assert_typed_device_eligibility_rejection(
+            missing_error,
+            OfflineDeviceEligibilityReasonV1::IncompleteAttestedProperties,
+        );
+
+        let mut hardware_usage_limit = registration.clone();
+        hardware_usage_limit.assertion_scheme =
+            OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME.to_owned();
+        hardware_usage_limit.assertion_usage_count_limit = Some(1);
+        let properties = hardware_usage_limit
+            .android_attested_device_properties
+            .as_mut()
+            .expect("properties");
+        properties.os_version = OFFLINE_ANDROID_12_OS_VERSION_FLOOR_V2;
+        properties.security_level = OfflineAndroidDeviceSecurityLevelV2::TrustedEnvironment;
+        validate_offline_attestation_platform_profile(&hardware_usage_limit)
+            .expect("Android 12+ TEE hardware tag 405 profile must remain supported");
+
+        let mut missing_hardware_properties = hardware_usage_limit.clone();
+        missing_hardware_properties.android_attested_device_properties = None;
+        let missing_hardware_error =
+            validate_offline_attestation_platform_profile(&missing_hardware_properties)
+                .expect_err("new Android 12+ admission requires complete device evidence");
+        assert_typed_device_eligibility_rejection(
+            missing_hardware_error,
+            OfflineDeviceEligibilityReasonV1::IncompleteAttestedProperties,
+        );
+
+        missing_hardware_properties.version = 1;
+        validate_offline_attestation_platform_profile(&missing_hardware_properties)
+            .expect("bounded historical V1 state remains structurally readable");
+
+        hardware_usage_limit
+            .android_attested_device_properties
+            .as_mut()
+            .expect("properties")
+            .os_version = OFFLINE_ANDROID_12_OS_VERSION_FLOOR_V2 - 1;
+        assert!(
+            validate_offline_attestation_platform_profile(&hardware_usage_limit).is_err(),
+            "the generic hardware usage-limit profile must not admit pre-12 evidence",
+        );
     }
     fn android_online_authorization(
         registration: &OfflineDeviceAttestationRegistration,
@@ -1952,6 +2266,127 @@ mod tests {
         );
     }
     #[test]
+    fn drain_only_redemption_rejects_topup_cross_account_and_policy_mutation_before_replay() {
+        offline_test_transaction!(state_transaction);
+        let asset = offline_test_asset(&ALICE_ID);
+        let mut policy =
+            default_offline_device_attestation_policy().expect("built-in attestation roots");
+        policy.require_android_app_policy = true;
+        policy.android_status_snapshot = Some(android_status_snapshot());
+        policy.android_apps = vec![OfflineAndroidAppAttestationPolicy {
+            package_name: "com.pk.retailwallet".to_owned(),
+            signing_certificate_sha256: vec![vec![0x55; 32]],
+        }];
+        state_transaction.world.smart_contract_state.insert(
+            (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
+            norito::to_bytes(&policy).expect("canonical test policy"),
+        );
+        let policy_hash = canonical_offline_device_attestation_policy_hash(&policy)
+            .expect("canonical policy hash");
+        let freshness_deadline_ms = POLICY_TEST_TIME_MS + 86_400_000;
+        let authorization = KagemushaRequestAuthorizationV2 {
+            authority: ALICE_ID.clone(),
+            device_id: "drain-only-device".to_owned(),
+            asset_definition_id: asset.definition().clone(),
+            operation_id: [0x91; 32],
+            issued_at_ms: POLICY_TEST_TIME_MS,
+            expires_at_ms: POLICY_TEST_TIME_MS + 30_000,
+            nonce: [0x92; 32],
+            payload_digest: [0x93; 32],
+            registration_hash: [0; 32],
+            hardware_assertion: KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(
+                KagemushaDrainOnlyRedemptionPolicyBindingV1 {
+                    policy_epoch: policy.policy_epoch,
+                    policy_hash,
+                    freshness_deadline_ms,
+                    finalized_block_height: 1,
+                    finalized_block_hash: [0x94; 32],
+                    finalized_block_timestamp_ms: POLICY_TEST_TIME_MS,
+                    finality_evidence_hash: [0x95; 32],
+                },
+            ),
+        };
+        authorization
+            .validate_for_payload_at(authorization.payload_digest, POLICY_TEST_TIME_MS)
+            .expect("drain-only authorization structure");
+
+        let topup = authenticate_kagemusha_v4_topup_submission_before_replay(
+            &asset,
+            &ALICE_ID,
+            &authorization,
+            &state_transaction,
+        );
+        let Err(topup) = topup else {
+            panic!("drain-only authorization must never enter top-up")
+        };
+        assert!(topup.to_string().contains("drain-only"));
+        let release_policy = effective_offline_device_attestation_policy(&state_transaction)
+            .expect("installed release policy");
+        let cross_account = authenticate_kagemusha_v4_redeem_submission_before_replay(
+            &ALICE_ID,
+            asset.definition(),
+            &BOB_ID,
+            &authorization,
+            &release_policy,
+            &state_transaction,
+        );
+        let Err(cross_account) = cross_account else {
+            panic!("drain-only redemption must be same-account")
+        };
+        assert!(
+            cross_account
+                .to_string()
+                .contains("unauthorized_controller")
+        );
+        let mut wrong_policy = authorization.clone();
+        let KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(binding) =
+            &mut wrong_policy.hardware_assertion
+        else {
+            unreachable!()
+        };
+        binding.policy_hash = [0x96; 32];
+        let wrong_policy = authenticate_kagemusha_v4_redeem_submission_before_replay(
+            &ALICE_ID,
+            asset.definition(),
+            &ALICE_ID,
+            &wrong_policy,
+            &release_policy,
+            &state_transaction,
+        );
+        let Err(wrong_policy) = wrong_policy else {
+            panic!("changed synchronized policy hash must fail before replay lookup")
+        };
+        assert!(
+            wrong_policy
+                .to_string()
+                .contains("attestation_policy_changed")
+        );
+
+        let fresh = kagemusha_v4_replay_status(&authorization, &state_transaction)
+            .expect("fresh drain-only replay markers");
+        let KagemushaV4ReplayStatus::Fresh(markers) = fresh else {
+            panic!("first drain-only authorization must be fresh")
+        };
+        commit_kagemusha_v4_replay_markers(markers, &mut state_transaction);
+        assert!(matches!(
+            kagemusha_v4_replay_status(&authorization, &state_transaction)
+                .expect("exact drain-only retry"),
+            KagemushaV4ReplayStatus::Committed,
+        ));
+        let mut conflicting = authorization.clone();
+        let KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(binding) =
+            &mut conflicting.hardware_assertion
+        else {
+            unreachable!()
+        };
+        binding.finality_evidence_hash = [0x97; 32];
+        let conflict = kagemusha_v4_replay_status(&conflicting, &state_transaction);
+        let Err(conflict) = conflict else {
+            panic!("mutated drain-only retry must conflict with committed markers")
+        };
+        assert!(conflict.to_string().contains("authorization_replay"));
+    }
+    #[test]
     fn active_receiver_snapshot_routes_one_native_registration_and_rejects_ambiguity() {
         offline_test_transaction!(state_transaction);
         let asset = offline_test_asset(&ALICE_ID).definition().clone();
@@ -2029,6 +2464,234 @@ mod tests {
         assert!(
             ambiguous.active_membership(&key).is_err(),
             "multiple native registrations for one tuple must fail closed"
+        );
+    }
+    #[test]
+    fn eligibility_resolution_binds_exact_protected_claims_and_current_policy() {
+        offline_test_transaction!(state_transaction);
+        let asset = offline_test_asset(&ALICE_ID).definition().clone();
+        state_transaction.world.asset_definitions.insert(
+            asset.clone(),
+            AssetDefinition::numeric(
+                asset.clone(),
+                "cash".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&ALICE_ID),
+        );
+        let assertion_key = online_assertion_signing_key(0x63);
+        let mut registration = android_online_registration(
+            &ALICE_ID,
+            &asset,
+            &assertion_key,
+            POLICY_TEST_TIME_MS + 60_000,
+        );
+        registration.version = 2;
+        registration.android_attested_device_properties = Some(
+            OfflineAndroidAttestedDevicePropertiesV2 {
+                version:
+                    iroha_data_model::offline::OFFLINE_ANDROID_ATTESTED_DEVICE_PROPERTIES_VERSION_V2,
+                attestation_version: 4,
+                keymint_version: 4,
+                security_level: OfflineAndroidDeviceSecurityLevelV2::TrustedEnvironment,
+                brand: "Fixture".to_owned(),
+                device: "device-1".to_owned(),
+                product: "product-1".to_owned(),
+                manufacturer: "Fixture".to_owned(),
+                model: "MODEL-1".to_owned(),
+                os_version: 120_000,
+                os_patch_level: 202607,
+                vendor_patch_level: 20_260_701,
+                boot_patch_level: 20_260_701,
+                verified_boot_key: vec![0x81; 32],
+                verified_boot_hash: [0x82; 32],
+            },
+        );
+        registration.challenge_hash = registration
+            .canonical_challenge_hash()
+            .expect("canonical V2 Android challenge");
+        let registration_hash = canonical_registration_hash(&registration)
+            .map(|hash| exact_hash_bytes(&hash))
+            .expect("canonical original registration hash");
+        install_android_online_registration(&mut state_transaction, registration.clone());
+
+        let eligible = resolve_kagemusha_offline_device_eligibility_v1(
+            &state_transaction.world,
+            KagemushaOfflineDeviceEligibilityRequestV1 {
+                authenticated_account: &ALICE_ID,
+                original_registration_hash: registration_hash,
+                expected_device_id: &registration.device_id,
+                expected_attestation_key_id: &registration.key_id,
+                evaluated_height: state_transaction.block_height(),
+                evaluated_at_ms: POLICY_TEST_TIME_MS,
+            },
+        )
+        .expect("exact admitted registration resolves");
+        assert_eq!(
+            eligible.decision.outcome,
+            OfflineDeviceEligibilityOutcomeV1::Eligible
+        );
+        assert_eq!(
+            eligible.decision.reason,
+            OfflineDeviceEligibilityReasonV1::PolicySatisfied
+        );
+        assert_eq!(eligible.account_id, ALICE_ID.clone());
+        assert_eq!(eligible.device_id, registration.device_id);
+        assert_eq!(eligible.attestation_key_id, registration.key_id);
+        assert_eq!(eligible.device_public_key, registration.public_key);
+        assert_eq!(
+            eligible.assertion_public_key,
+            registration.assertion_public_key
+        );
+        assert_eq!(eligible.registration_hash, registration_hash);
+        assert_eq!(eligible.admission_policy_hash, eligible.current_policy_hash);
+        assert!(eligible.policy_freshness_deadline_ms > POLICY_TEST_TIME_MS);
+
+        let policy_archive = state_transaction
+            .world
+            .smart_contract_state
+            .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY)
+            .cloned()
+            .expect("installed eligibility policy");
+        let mut rotated: OfflineDeviceAttestationPolicy =
+            norito::decode_canonical(&policy_archive).expect("decode eligibility policy");
+        let mut incomplete = registration.clone();
+        incomplete.android_attested_device_properties = None;
+        assert_eq!(
+            evaluate_protected_registration_against_current_policy_v1(
+                &incomplete,
+                &rotated,
+                true,
+                true,
+            )
+            .expect("authenticated incomplete properties produce a typed decision")
+            .reason,
+            OfflineDeviceEligibilityReasonV1::IncompleteAttestedProperties
+        );
+        let mut pre_android_12_tee = registration.clone();
+        pre_android_12_tee
+            .android_attested_device_properties
+            .as_mut()
+            .expect("complete Android fixture properties")
+            .os_version = 119_999;
+        assert_eq!(
+            evaluate_protected_registration_against_current_policy_v1(
+                &pre_android_12_tee,
+                &rotated,
+                true,
+                true,
+            )
+            .expect("authenticated pre-Android-12 TEE produces a typed decision")
+            .reason,
+            OfflineDeviceEligibilityReasonV1::UnsupportedPreAndroid12Tee
+        );
+        assert_eq!(
+            evaluate_protected_registration_against_current_policy_v1(
+                &registration,
+                &rotated,
+                false,
+                true,
+            )
+            .expect("stale authenticated policy produces a typed decision")
+            .reason,
+            OfflineDeviceEligibilityReasonV1::PolicyNotFresh
+        );
+        rotated.policy_epoch += 1;
+        rotated.android_vulnerability_rules = vec![OfflineAndroidDeviceVulnerabilityRuleV2 {
+            rule_id: "fixture-keymint-floor".to_owned(),
+            manufacturer: "fixture".to_owned(),
+            model: Some("model-1".to_owned()),
+            model_prefix: None,
+            brand: None,
+            device: None,
+            product: None,
+            verified_boot_key_sha256: None,
+            verified_boot_hash: None,
+            affected_os_version_min: Some(120_000),
+            affected_os_version_max: Some(129_999),
+            minimum_safe_keymint_version: Some(5),
+            minimum_safe_os_version: None,
+            minimum_safe_os_patch_level: None,
+            minimum_safe_vendor_patch_level: None,
+            minimum_safe_boot_patch_level: None,
+            permanently_blocked: false,
+            source_ids: vec!["https://security.example.test/fixture".to_owned()],
+            cve_ids: vec!["CVE-2026-21046".to_owned()],
+        }];
+        state_transaction.world.smart_contract_state.insert(
+            (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
+            norito::encode_canonical(&rotated).expect("canonical rotated policy"),
+        );
+        let vulnerable = resolve_kagemusha_offline_device_eligibility_v1(
+            &state_transaction.world,
+            KagemushaOfflineDeviceEligibilityRequestV1 {
+                authenticated_account: &ALICE_ID,
+                original_registration_hash: registration_hash,
+                expected_device_id: &registration.device_id,
+                expected_attestation_key_id: &registration.key_id,
+                evaluated_height: state_transaction.block_height(),
+                evaluated_at_ms: POLICY_TEST_TIME_MS,
+            },
+        )
+        .expect("persistent attested properties are re-evaluated after rotation");
+        assert_eq!(
+            vulnerable.decision.outcome,
+            OfflineDeviceEligibilityOutcomeV1::DrainOnly
+        );
+        assert_eq!(
+            vulnerable.decision.reason,
+            OfflineDeviceEligibilityReasonV1::VulnerableFirmware
+        );
+        assert_eq!(
+            vulnerable.decision.matched_rule_ids,
+            vec!["fixture-keymint-floor".to_owned()]
+        );
+        assert_ne!(
+            vulnerable.admission_policy_hash,
+            vulnerable.current_policy_hash
+        );
+
+        rotated.policy_epoch += 1;
+        rotated.android_vulnerability_rules.clear();
+        state_transaction.world.smart_contract_state.insert(
+            (*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY).clone(),
+            norito::encode_canonical(&rotated).expect("canonical second rotated policy"),
+        );
+        let superseded = resolve_kagemusha_offline_device_eligibility_v1(
+            &state_transaction.world,
+            KagemushaOfflineDeviceEligibilityRequestV1 {
+                authenticated_account: &ALICE_ID,
+                original_registration_hash: registration_hash,
+                expected_device_id: &registration.device_id,
+                expected_attestation_key_id: &registration.key_id,
+                evaluated_height: state_transaction.block_height(),
+                evaluated_at_ms: POLICY_TEST_TIME_MS,
+            },
+        )
+        .expect("superseded admitted state returns a typed decision");
+        assert_eq!(
+            superseded.decision,
+            OfflineDeviceEligibilityDecisionV1 {
+                outcome: OfflineDeviceEligibilityOutcomeV1::DrainOnly,
+                reason: OfflineDeviceEligibilityReasonV1::PolicyNotFresh,
+                matched_rule_ids: Vec::new(),
+            }
+        );
+        assert!(
+            resolve_kagemusha_offline_device_eligibility_v1(
+                &state_transaction.world,
+                KagemushaOfflineDeviceEligibilityRequestV1 {
+                    authenticated_account: &ALICE_ID,
+                    original_registration_hash: [0x99; 32],
+                    expected_device_id: &registration.device_id,
+                    expected_attestation_key_id: &registration.key_id,
+                    evaluated_height: state_transaction.block_height(),
+                    evaluated_at_ms: POLICY_TEST_TIME_MS,
+                },
+            )
+            .is_err(),
+            "absence is not fabricated into a cryptographic-rejection decision"
         );
     }
     #[test]
@@ -2198,6 +2861,9 @@ mod tests {
                         assertion.signature
                     }
                     KagemushaOnlineHardwareAssertionV1::IosAppAttest(_) => unreachable!(),
+                    KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_) => {
+                        unreachable!()
+                    }
                 },
             },
         );
@@ -2321,6 +2987,7 @@ mod tests {
             ios_environment: None,
             android_package_name: None,
             android_signing_certificate_sha256: None,
+            android_attested_device_properties: None,
             public_key,
             assertion_scheme: "android-keymint".to_owned(),
             assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
@@ -2710,6 +3377,7 @@ mod tests {
         baseline.android_status_snapshot = Some(android_status_snapshot());
         let baseline_bytes = norito::to_bytes(&baseline).expect("baseline policy must encode");
         let mut candidate = baseline.clone();
+        candidate.policy_epoch += 1;
         candidate.android_status_snapshot = None;
 
         offline_test_transaction!(state_transaction);
@@ -2808,7 +3476,7 @@ mod tests {
                         GrantSource::Direct,
                         offline_permission(CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION),
                     );
-                    candidate.version = 2;
+                    candidate.version = 3;
                     "invalid_attestation_policy"
                 }
                 RejectedPolicyUpdate::MissingTrustedRoots => {

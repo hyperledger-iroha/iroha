@@ -10,6 +10,25 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class PrivacyExact12CapabilityManifestV1Tests
 {
+    private static readonly PrivacyOperationSchemaV1[][] OperationSchemas =
+    [
+        [PrivacyOperationSchemaV1.ZkAceAuthorizationActionV1],
+        [PrivacyOperationSchemaV1.AnonymousPgcPaymentActionV1],
+        [PrivacyOperationSchemaV1.VeRangeRangeProofV1],
+        [
+            PrivacyOperationSchemaV1.ZkAmsBatchAdmissionActionV1,
+            PrivacyOperationSchemaV1.ZkAmsProvisionAccountActionV1,
+        ],
+        [PrivacyOperationSchemaV1.VegaCredentialPresentationV1],
+        [PrivacyOperationSchemaV1.ZkX509IdentityPresentationV1],
+        [PrivacyOperationSchemaV1.JindoPolynomialEvaluationV1],
+        [PrivacyOperationSchemaV1.BootleLanternCredentialPresentationV1],
+        [PrivacyOperationSchemaV1.OrchardNoteActionV1],
+        [PrivacyOperationSchemaV1.FcmpMembershipPaymentV1],
+        [PrivacyOperationSchemaV1.IvmPrivateNoteActionV1],
+        [PrivacyOperationSchemaV1.PqMaspNoteActionV1],
+    ];
+
     private static readonly PrivacyExecutionModeV1[] ExecutionModes =
     [
         PrivacyExecutionModeV1.AuthorizationAction,
@@ -40,6 +59,10 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         Assert.Equal(1U, decoded.Version);
         Assert.Equal(2UL, decoded.CommittedHeight);
         Assert.Equal(12, decoded.Protocols.Count);
+        Assert.Equal(13, decoded.Protocols.Sum(row => row.OperationSchemas.Count));
+        Assert.Equal(
+            OperationSchemas[(int)PrivacyProtocolIdV1.IrohaZkAmsV1],
+            decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaZkAmsV1].OperationSchemas);
         Assert.True(decoded.Protocols[0].IsNetworkAvailable);
         Assert.All(decoded.Protocols, row => Assert.True(row.LocalCompiledTupleMatches));
         Assert.Equal(
@@ -203,7 +226,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                 : Option(Array.Empty<byte>(), present: false);
             rows[index] = Struct(
                 EnumValue(checked((uint)index)),
-                EnumValue(checked((uint)index)),
+                OperationSchemaSet(OperationSchemas[index]),
                 EnumValue((uint)ExecutionModes[index]),
                 Struct(new[] { FeatureMasks[index] }),
                 profiles[index],
@@ -353,6 +376,17 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             writer.WriteField(field);
         }
         return writer.ToArray();
+    }
+
+    private static byte[] OperationSchemaSet(
+        IReadOnlyList<PrivacyOperationSchemaV1> operations)
+    {
+        Assert.True(operations.Count is 1 or 2);
+        return Struct(
+            EnumValue((uint)operations[0]),
+            operations.Count == 2
+                ? Option(EnumValue((uint)operations[1]), present: true)
+                : Option(Array.Empty<byte>(), present: false));
     }
 
     private static byte[] Option(byte[] value, bool present)

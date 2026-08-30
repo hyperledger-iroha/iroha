@@ -100,6 +100,7 @@ mod device_authority_p256_tests {
                 signing_bytes.as_slice(),
             ]
             .concat(),
+            KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_) => unreachable!(),
         };
         authorization.set_hardware_signature(sign(assertion_key, &signed_message));
         authorization
@@ -736,6 +737,64 @@ mod device_authority_p256_tests {
         );
     }
     #[test]
+    fn drain_only_authorization_is_closed_registration_free_and_policy_bound() {
+        let issued_at_ms = 1_800_000_000_000;
+        let expires_at_ms = issued_at_ms + 30_000;
+        let binding = KagemushaDrainOnlyRedemptionPolicyBindingV1 {
+            policy_epoch: 7,
+            policy_hash: [0x31; 32],
+            freshness_deadline_ms: issued_at_ms + 60_000,
+            finalized_block_height: 41,
+            finalized_block_hash: [0x32; 32],
+            finalized_block_timestamp_ms: issued_at_ms - 1_000,
+            finality_evidence_hash: [0x33; 32],
+        };
+        let authorization = KagemushaRequestAuthorizationV2 {
+            authority: account(21),
+            device_id: "drain-only-device-21".to_owned(),
+            asset_definition_id: asset("cash"),
+            operation_id: [0x21; 32],
+            issued_at_ms,
+            expires_at_ms,
+            nonce: [0x22; 32],
+            payload_digest: [0x23; 32],
+            registration_hash: [0; 32],
+            hardware_assertion: KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(
+                binding,
+            ),
+        };
+        authorization
+            .validate_for_payload(authorization.payload_digest)
+            .expect("exact drain-only policy binding is structurally valid");
+        assert!(authorization.signing_bytes().is_err());
+        assert!(
+            authorization
+                .verify_hardware_signature(
+                    signing_key(21)
+                        .verifying_key()
+                        .to_encoded_point(false)
+                        .as_bytes(),
+                )
+                .is_err(),
+        );
+
+        let mut registered = authorization.clone();
+        registered.registration_hash = [0x44; 32];
+        assert!(
+            registered
+                .validate_for_payload(registered.payload_digest)
+                .is_err()
+        );
+        let mut stale = authorization.clone();
+        let KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(binding) =
+            &mut stale.hardware_assertion
+        else {
+            unreachable!()
+        };
+        binding.freshness_deadline_ms = issued_at_ms;
+        assert!(stale.validate_for_payload(stale.payload_digest).is_err());
+    }
+    #[test]
     fn online_android_assertion_binds_every_authorization_coordinate_and_key() {
         let key = signing_key(31);
         let wrong_key = signing_key(32);
@@ -797,6 +856,9 @@ mod device_authority_p256_tests {
                         assertion.signature
                     }
                     KagemushaOnlineHardwareAssertionV1::IosAppAttest(_) => unreachable!(),
+                    KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_) => {
+                        unreachable!()
+                    }
                 },
             },
         );

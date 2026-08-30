@@ -264,6 +264,13 @@ impl<'a, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         &self.source
     }
 
+    /// Lend the retained authenticated source only to the next purpose-bound
+    /// verifier replay. The enclosing prerequisite remains owned and no
+    /// snapshot, raw parts, or retryable capability is returned.
+    pub(super) fn source_mut(&mut self) -> &mut RnsNativeRlweSourceStatementStageV1<'a, S> {
+        &mut self.source
+    }
+
     pub(super) const fn terminal(&self) -> &RnsNativeTerminalCrossBasisKernelPrerequisiteV1 {
         &self.terminal
     }

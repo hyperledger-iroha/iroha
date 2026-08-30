@@ -2372,6 +2372,11 @@ pub mod error {
             ///
             /// i.e. you can't burn last key
             InvariantViolation(Box<str>),
+            /// Offline device eligibility rejected
+            ///
+            /// Appended after all pre-existing variants so historical committed
+            /// result discriminants remain byte-compatible.
+            OfflineDeviceEligibility(#[source] crate::offline::OfflineDeviceEligibilityRejectionV1),
         }
         /// Typed asset-transfer policy failure.
         ///

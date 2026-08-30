@@ -13,7 +13,12 @@ enum class IrohaPeerPayloadProfile(
     val code: Int,
     val requiredSchemaVersion: Int,
 ) {
-    KAGEMUSHA_RECURSIVE_SPEND(2, 0x0102);
+    KAGEMUSHA_RECURSIVE_SPEND(2, IrohaPeerWireMessageV1.KAGEMUSHA_LEGACY_SCHEMA_VERSION);
+
+    fun admits(schemaVersion: Int, kind: IrohaPeerPayloadKind): Boolean =
+        schemaVersion == IrohaPeerWireMessageV1.KAGEMUSHA_LEGACY_SCHEMA_VERSION ||
+            kind == IrohaPeerPayloadKind.PAYMENT &&
+            schemaVersion == IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION
 
     companion object {
         @JvmStatic fun fromCode(code: Int): IrohaPeerPayloadProfile? =
@@ -53,14 +58,44 @@ enum class IrohaPeerWireCompressionPolicyV1 {
 class IrohaPeerWireLimitsV1 @JvmOverloads constructor(
     val maximumCanonicalBytes: Int = 32 * 1024,
     val maximumKagemushaEncodedBytes: Int = 24_576,
+    val maximumKagemushaEligibilityCanonicalBytes: Int =
+        IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ELIGIBILITY_ENVELOPE_BYTES,
+    val maximumKagemushaEligibilityEncodedBytes: Int =
+        IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ELIGIBILITY_ENVELOPE_BYTES,
 ) {
     init {
         require(maximumCanonicalBytes in 1..(32 * 1_024))
         require(maximumKagemushaEncodedBytes in 1..24_576)
+        require(maximumKagemushaEligibilityCanonicalBytes in
+            1..IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ELIGIBILITY_ENVELOPE_BYTES)
+        require(maximumKagemushaEligibilityEncodedBytes in
+            1..IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ELIGIBILITY_ENVELOPE_BYTES)
     }
 
     fun maximumEncodedBytes(@Suppress("UNUSED_PARAMETER") profile: IrohaPeerPayloadProfile): Int =
         maximumKagemushaEncodedBytes
+
+    fun maximumCanonicalBytes(
+        profile: IrohaPeerPayloadProfile,
+        kind: IrohaPeerPayloadKind,
+        schemaVersion: Int,
+    ): Int {
+        require(profile.admits(schemaVersion, kind)) { "Invalid peer payload schema" }
+        return if (kind == IrohaPeerPayloadKind.PAYMENT &&
+            schemaVersion == IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION
+        ) maximumKagemushaEligibilityCanonicalBytes else maximumCanonicalBytes
+    }
+
+    fun maximumEncodedBytes(
+        profile: IrohaPeerPayloadProfile,
+        kind: IrohaPeerPayloadKind,
+        schemaVersion: Int,
+    ): Int {
+        require(profile.admits(schemaVersion, kind)) { "Invalid peer payload schema" }
+        return if (kind == IrohaPeerPayloadKind.PAYMENT &&
+            schemaVersion == IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION
+        ) maximumKagemushaEligibilityEncodedBytes else maximumEncodedBytes(profile)
+    }
 
     companion object {
         @JvmField val PEER_V1 = IrohaPeerWireLimitsV1()
@@ -80,15 +115,22 @@ class IrohaPeerCanonicalPayload(
 
     init {
         require(schemaVersion in 1..0xffff) { "Peer payload schema version is invalid" }
-        require(schemaVersion == profile.requiredSchemaVersion) {
+        require(profile.admits(schemaVersion, kind)) {
             "Peer payload profile ${profile.name} requires schema " +
                 "${profile.requiredSchemaVersion}, received $schemaVersion"
         }
         require(canonicalBytes.isNotEmpty()) { "Peer payload is empty" }
-        require(canonicalBytes.size <= IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES) {
+        val maximum = if (kind == IrohaPeerPayloadKind.PAYMENT &&
+            schemaVersion == IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION
+        ) {
+            IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ELIGIBILITY_ENVELOPE_BYTES
+        } else {
+            IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES
+        }
+        require(canonicalBytes.size <= maximum) {
             "Peer payload exceeds its bound"
         }
-        validateTypedCanonicalPayload(profile, kind, canonicalBytes)
+        validateTypedCanonicalPayload(profile, kind, schemaVersion, canonicalBytes)
     }
 
     override fun equals(other: Any?): Boolean = other is IrohaPeerCanonicalPayload &&
@@ -107,19 +149,27 @@ class IrohaPeerCanonicalPayload(
 private fun validateTypedCanonicalPayload(
     profile: IrohaPeerPayloadProfile,
     kind: IrohaPeerPayloadKind,
+    schemaVersion: Int,
     bytes: ByteArray,
 ) {
     if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND) return
-    val schema = when (kind) {
-        IrohaPeerPayloadKind.RECEIVE_REQUEST ->
+    val schema = when {
+        kind == IrohaPeerPayloadKind.PAYMENT &&
+            schemaVersion == IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION ->
+            "iroha_data_model::offline::model::KagemushaEligibilityPaymentEnvelopeV1"
+        schemaVersion != IrohaPeerWireMessageV1.KAGEMUSHA_LEGACY_SCHEMA_VERSION ->
+            throw IllegalArgumentException("Invalid Kagemusha peer schema version")
+        kind == IrohaPeerPayloadKind.RECEIVE_REQUEST ->
             "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2"
-        IrohaPeerPayloadKind.PAYMENT ->
+        kind == IrohaPeerPayloadKind.PAYMENT ->
             "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"
-        IrohaPeerPayloadKind.ACKNOWLEDGEMENT ->
+        else ->
             "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2"
     }
     val requiredPadding = when (kind) {
-        IrohaPeerPayloadKind.RECEIVE_REQUEST, IrohaPeerPayloadKind.PAYMENT -> 8
+        IrohaPeerPayloadKind.RECEIVE_REQUEST ->
+            8
+        IrohaPeerPayloadKind.PAYMENT -> 8
         IrohaPeerPayloadKind.ACKNOWLEDGEMENT -> 0
     }
     try {
@@ -230,8 +280,12 @@ class IrohaPeerWireMessageV1 private constructor(
     companion object {
         const val VERSION = 1
         const val HEADER_LENGTH = 84
+        const val KAGEMUSHA_LEGACY_SCHEMA_VERSION = 0x0102
+        const val KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION = 0x0103
         const val MAXIMUM_CANONICAL_BYTES = 32 * 1024
         const val MAXIMUM_KAGEMUSHA_ENCODED_BYTES = 24_576
+        const val MAXIMUM_KAGEMUSHA_ELIGIBILITY_ENVELOPE_BYTES =
+            32 * 1024 * 1024 + 128 * 1024
         private val MAGIC = "IPM1".toByteArray(Charsets.US_ASCII)
         private val CANONICAL_DOMAIN = "IROHA-PEER-PAYLOAD-V1\u0000".toByteArray(Charsets.UTF_8)
         private val MESSAGE_DOMAIN = "IROHA-PEER-MESSAGE-V1\u0000".toByteArray(Charsets.UTF_8)
@@ -257,14 +311,17 @@ class IrohaPeerWireMessageV1 private constructor(
             require(data[9].toInt() == 0) { "Invalid peer message flags" }
             val schemaVersion = data.readU16(10)
             require(schemaVersion != 0) { "Invalid peer schema version" }
-            require(schemaVersion == profile.requiredSchemaVersion) {
+            require(profile.admits(schemaVersion, kind)) {
                 "Peer payload profile ${profile.name} requires schema " +
                     "${profile.requiredSchemaVersion}, received $schemaVersion"
             }
-            val canonicalLength = checkedLength(data.readU32(12), limits.maximumCanonicalBytes)
+            val canonicalLength = checkedLength(
+                data.readU32(12),
+                limits.maximumCanonicalBytes(profile, kind, schemaVersion),
+            )
             val encodedLength = checkedLength(
                 data.readU32(16),
-                limits.maximumEncodedBytes(profile),
+                limits.maximumEncodedBytes(profile, kind, schemaVersion),
             )
             require(data.size == HEADER_LENGTH + encodedLength) { "Peer message length mismatch" }
             require(encoding != IrohaPeerContentEncodingV1.ZLIB ||
@@ -320,14 +377,17 @@ class IrohaPeerWireMessageV1 private constructor(
                 ?: throw IllegalArgumentException("Malformed IPM1 header")
             require(data[9].toInt() == 0 && data.readU16(10) != 0) { "Malformed IPM1 header" }
             val schemaVersion = data.readU16(10)
-            require(schemaVersion == profile.requiredSchemaVersion) {
+            require(profile.admits(schemaVersion, kind)) {
                 "Peer payload profile ${profile.name} requires schema " +
                     "${profile.requiredSchemaVersion}, received $schemaVersion"
             }
-            val canonicalLength = checkedLength(data.readU32(12), limits.maximumCanonicalBytes)
+            val canonicalLength = checkedLength(
+                data.readU32(12),
+                limits.maximumCanonicalBytes(profile, kind, schemaVersion),
+            )
             val encodedLength = checkedLength(
                 data.readU32(16),
-                limits.maximumEncodedBytes(profile),
+                limits.maximumEncodedBytes(profile, kind, schemaVersion),
             )
             require(encoding != IrohaPeerContentEncodingV1.NONE || canonicalLength == encodedLength) {
                 "Malformed IPM1 header"
@@ -366,10 +426,18 @@ class IrohaPeerWireMessageV1 private constructor(
             policy: IrohaPeerWireCompressionPolicyV1,
             limits: IrohaPeerWireLimitsV1,
         ): EncodedParts {
-            require(payload.byteCount <= limits.maximumCanonicalBytes) {
+            require(payload.byteCount <= limits.maximumCanonicalBytes(
+                payload.profile,
+                payload.kind,
+                payload.schemaVersion,
+            )) {
                 "Peer canonical payload exceeds its bound"
             }
-            val maximumEncoded = limits.maximumEncodedBytes(payload.profile)
+            val maximumEncoded = limits.maximumEncodedBytes(
+                payload.profile,
+                payload.kind,
+                payload.schemaVersion,
+            )
             val digest = canonicalHash(payload)
             val canonical = payload.bytes
             val compressed = if (policy == IrohaPeerWireCompressionPolicyV1.PEER_OPTIMIZED) {
@@ -498,9 +566,91 @@ class IrohaPeerWireMessageV1 private constructor(
     )
 }
 
+/**
+ * Opaque canonical archive for an eligibility-gated Kagemusha payment.
+ *
+ * IPM1 authenticates the exact Norito type, compact framing, checksum, and
+ * allocation bounds. A wallet must still invoke the ABI-22 native semantic
+ * validator before accepting or persisting spendable value.
+ */
+class IrohaPeerKagemushaEligibilityPaymentEnvelopeV1(canonicalArchive: ByteArray) {
+    private val value = canonicalArchive.copyOf()
+
+    init {
+        IrohaPeerCanonicalPayload(
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+            IrohaPeerPayloadKind.PAYMENT,
+            IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION,
+            value,
+        )
+    }
+
+    fun archive(): ByteArray = value.copyOf()
+
+    override fun equals(other: Any?): Boolean =
+        other is IrohaPeerKagemushaEligibilityPaymentEnvelopeV1 &&
+            value.contentEquals(other.value)
+
+    override fun hashCode(): Int = value.contentHashCode()
+}
+
+/** Adapter for the separately advertised `cash_handoff_eligibility_v1` capability. */
+object IrohaPeerKagemushaEligibilityAdapterV1 {
+    const val NATIVE_ARCHIVE_SCHEMA_VERSION =
+        IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION
+    const val CAPABILITY =
+        KagemushaRecursiveSpendProver.CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1
+
+    @JvmStatic
+    @JvmOverloads
+    fun wrap(
+        envelope: IrohaPeerKagemushaEligibilityPaymentEnvelopeV1,
+        compressionPolicy: IrohaPeerWireCompressionPolicyV1 =
+            IrohaPeerWireCompressionPolicyV1.DISABLED,
+        limits: IrohaPeerWireLimitsV1 = IrohaPeerWireLimitsV1.PEER_V1,
+    ): IrohaPeerWireMessageV1 {
+        val bytes = envelope.archive()
+        return try {
+            IrohaPeerWireMessageV1(
+                IrohaPeerCanonicalPayload(
+                    IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+                    IrohaPeerPayloadKind.PAYMENT,
+                    NATIVE_ARCHIVE_SCHEMA_VERSION,
+                    bytes,
+                ),
+                compressionPolicy,
+                limits,
+            )
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    @JvmStatic
+    fun decode(message: IrohaPeerWireMessageV1): IrohaPeerKagemushaEligibilityPaymentEnvelopeV1 {
+        val payload = message.canonicalPayload
+        require(payload.profile == IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND) {
+            "Unexpected peer payload profile"
+        }
+        require(payload.kind == IrohaPeerPayloadKind.PAYMENT) {
+            "Unexpected peer payload kind"
+        }
+        require(payload.schemaVersion == NATIVE_ARCHIVE_SCHEMA_VERSION) {
+            "Unsupported Kagemusha eligibility archive schema"
+        }
+        val bytes = payload.bytes
+        return try {
+            IrohaPeerKagemushaEligibilityPaymentEnvelopeV1(bytes)
+        } finally {
+            bytes.fill(0)
+        }
+    }
+}
+
 /** Bounded small-handoff adapter to the existing native-canonical Kagemusha API. */
 object IrohaPeerKagemushaAdapterV1 {
-    const val NATIVE_ARCHIVE_SCHEMA_VERSION = 0x0102
+    const val NATIVE_ARCHIVE_SCHEMA_VERSION =
+        IrohaPeerWireMessageV1.KAGEMUSHA_LEGACY_SCHEMA_VERSION
 
     @JvmStatic
     @JvmOverloads

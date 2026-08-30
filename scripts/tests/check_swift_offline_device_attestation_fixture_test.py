@@ -217,4 +217,4 @@ def test_workflow_watches_and_executes_the_fixture_contract() -> None:
         "offline_device_attestation_abi21.json"
     ) in workflow
     assert "OfflineDeviceAttestationABI21ParityTests.swift" in swift_gate
-    assert "--filter OfflineDeviceAttestationABI21ParityTests" in swift_gate
+    assert "--filter OfflineDeviceAttestationV2ParityTests" in swift_gate

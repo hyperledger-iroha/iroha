@@ -3,6 +3,7 @@ mod bounded_async_response;
 mod moderation;
 #[cfg(test)]
 mod operator_auth_tests;
+pub mod privacy_exact12_action;
 mod public_musubi;
 mod repair;
 mod reputation_journal;
@@ -7070,6 +7071,13 @@ impl Client {
                 "offline capability response does not advertise cash_handoff_v1"
             ));
         }
+        if status.eligibility_cash_handoff_capability
+            != iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1
+        {
+            return Err(eyre!(
+                "offline capability response does not advertise cash_handoff_eligibility_v1"
+            ));
+        }
         if status.required_bridge_abi_version
             != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
         {
@@ -7685,6 +7693,9 @@ mod offline_client_tests {
             mandatory: false,
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
+            eligibility_cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1
+                    .to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
@@ -7708,6 +7719,10 @@ mod offline_client_tests {
         .expect("offline capability response");
         assert!(!result.mandatory);
         assert_eq!(result.cash_handoff_capability, "cash_handoff_v1");
+        assert_eq!(
+            result.eligibility_cash_handoff_capability,
+            "cash_handoff_eligibility_v1"
+        );
         assert_eq!(result.required_bridge_abi_version, 22);
         assert_eq!(result.max_hops, 8);
         assert!(result.ready);
@@ -7730,6 +7745,10 @@ mod offline_client_tests {
         let mut wrong_capability = universal_offline_capability();
         wrong_capability.cash_handoff_capability = "cash_handoff_v2".to_owned();
         cases.push(wrong_capability);
+        let mut wrong_eligibility_capability = universal_offline_capability();
+        wrong_eligibility_capability.eligibility_cash_handoff_capability =
+            "cash_handoff_v1".to_owned();
+        cases.push(wrong_eligibility_capability);
         let mut wrong_abi = universal_offline_capability();
         wrong_abi.required_bridge_abi_version = 20;
         cases.push(wrong_abi);

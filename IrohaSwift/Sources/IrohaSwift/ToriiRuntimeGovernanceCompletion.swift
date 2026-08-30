@@ -5,9 +5,12 @@ import Foundation
 extension ToriiClient {
     @discardableResult
     public func getOfflineCapability(
+        canonicalAuth: ToriiCanonicalRequestAuth,
         completion: @escaping (Result<ToriiOfflineStatus, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineCapability() }
+        runTask(completion) {
+            try await self.getOfflineCapability(canonicalAuth: canonicalAuth)
+        }
     }
 
     @discardableResult

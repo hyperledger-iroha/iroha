@@ -34,7 +34,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 #[cfg(test)]
 use iroha_crypto::KeyPair;
 use iroha_crypto::{
-    Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key,
+    Algorithm, Hash, PrivateKey, PublicKey, Signature, SignatureOf,
+    derive_non_signing_ed25519_public_key,
 };
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -60,6 +61,11 @@ pub const OFFLINE_REJECTION_REASON_PREFIX: &str = "offline_reason::";
 /// receiver-capable transport. Receiver acknowledgement is delivery evidence
 /// only: it is never an acceptance, commit, rollback, or clawback gate.
 pub const KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1: &str = "cash_handoff_v1";
+/// Eligibility-gated peer-cash capability carried by IPM1 PAYMENT schema `0x0103`.
+///
+/// This capability wraps, but never changes or relabels, the ABI-21/V4 payment
+/// advertised by [`KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1`].
+pub const KAGEMUSHA_CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1: &str = "cash_handoff_eligibility_v1";
 /// Domain-separation tag for deterministic offline escrow derivation.
 pub const OFFLINE_ESCROW_ACCOUNT_DOMAIN: &str = "iroha.offline.escrow.v1";
 /// Stable public Norito schema name for the first-release Torii top-up request.
@@ -155,6 +161,29 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V2: usize =
 pub const KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2: usize = 65;
 /// Exact byte length of the canonical raw low-S P-256 signature (`r || s`).
 pub const KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2: usize = 64;
+/// Current eligibility-gated peer-payment envelope layout.
+pub const KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_VERSION_V1: u16 = 1;
+/// Maximum lifetime of a receiver request used for a first eligibility handoff.
+pub const KAGEMUSHA_PEER_RECEIVE_REQUEST_MAX_TTL_MS_V1: u64 = 15 * 60 * 1_000;
+/// Maximum canonical bytes accepted for one sender eligibility credential.
+pub const KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1: usize = 64 * 1024;
+/// Maximum canonical bytes accepted for the ABI-22 eligibility wrapper.
+///
+/// The inner allowance is the unchanged ABI-21/V4 payment ceiling. The fixed
+/// addition covers the bounded credential, signature, and canonical framing.
+pub const KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1: usize =
+    KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        + KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1
+        + 64 * 1024;
+/// Domain separator for the sender's operation-bound one-use signature.
+pub const KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_SIGNING_DOMAIN_V1: &str =
+    "iroha:kagemusha:eligibility-payment-envelope-signing:v1";
+/// Domain separator for the persisted one-use replay key.
+pub const KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_ONE_USE_KEY_DOMAIN_V1: &str =
+    "iroha:kagemusha:eligibility-payment-envelope-one-use-key:v1";
+/// Domain separator for exact envelope identity used by retransmission recovery.
+pub const KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_IDENTITY_DOMAIN_V1: &str =
+    "iroha:kagemusha:eligibility-payment-envelope-identity:v1";
 /// Maximum lifetime of a signed online top-up or redemption authorization.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2: u64 = 5 * 60 * 1_000;
 /// Domain separator for nonce-bound recipient payment request digests.
@@ -205,6 +234,8 @@ pub const KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2: &str =
 /// Domain separator for the hardware assertion authorizing one exact online operation.
 pub const KAGEMUSHA_ONLINE_HARDWARE_ASSERTION_DOMAIN_V1: &str =
     "iroha:kagemusha:v1:online-hardware-assertion";
+/// Closed authorization label for current-policy, same-account online redemption.
+pub const KAGEMUSHA_ACCOUNT_AUTHORITY_DRAIN_ONLY_PLATFORM_V1: &str = "account_authority_drain_only";
 /// Domain separator for receiver acknowledgement signing payloads.
 pub const KAGEMUSHA_RECEIVER_ACKNOWLEDGEMENT_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:receiver-acknowledgement";
@@ -226,10 +257,13 @@ pub const KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V2: &str =
 /// Domain separator for canonical unshield-v3 public-input words.
 pub const KAGEMUSHA_UNSHIELD_PUBLIC_INPUTS_DIGEST_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:unshield-public-inputs";
-/// Native bridge ABI for the degree-parameterized recursive-spend V4 contract.
+/// Unchanged recursive proof/artifact ABI carried by the V4 payment protocol.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_ABI_V4: u32 = 21;
+/// Native Connect/privacy bridge ABI for the degree-parameterized V4 contract.
 ///
-/// V4 is deliberately not an alias for ABI 19: its public accumulator layout, fold transcripts, key
-/// parsing parameters, and artifact framing all depend on an authenticated IPA degree.
+/// The bridge ABI is intentionally distinct from the unchanged ABI-21 proof/artifact protocol.
+/// Its eligibility-credential envelope and device-signature operations must never relabel the
+/// underlying V4 payment proof.
 pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 22;
 /// Exact schema identifier for the degree-parameterized artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
@@ -887,6 +921,12 @@ pub struct OfflineDeviceAttestationRegistration {
     pub android_package_name: Option<String>,
     /// Android signing certificate SHA-256 expected in the `KeyMint` attestation application id.
     pub android_signing_certificate_sha256: Option<Vec<u8>>,
+    /// Complete hardware-authenticated Android build and verified-boot properties.
+    ///
+    /// This is absent for iOS. Android learns these values from the returned
+    /// `KeyDescription`, so they are deliberately excluded from the challenge
+    /// preimage and are instead compared byte-for-byte during native admission.
+    pub android_attested_device_properties: Option<OfflineAndroidAttestedDevicePropertiesV2>,
     /// Fixed P-256 device authority authenticated by this registration.
     pub public_key: KagemushaDevicePublicKeyV2,
     /// Hardware assertion scheme bound to this note key.
@@ -896,8 +936,17 @@ pub struct OfflineDeviceAttestationRegistration {
     /// Hardware assertion public key bytes, for example SEC1 P-256.
     pub assertion_public_key: Vec<u8>,
     /// Hardware one-use limit when the platform exposes it.
+    ///
+    /// Android 12+ registrations use the hardware usage-limit assertion
+    /// profile and must carry `Some(1)`. Managed pre-Android-12 `StrongBox`
+    /// registrations use the receipt-first assertion profile and must carry
+    /// `None`, because those releases cannot truthfully attest `KeyMint` tag 405.
     pub assertion_usage_count_limit: Option<u32>,
-    /// True when the submitted evidence claims hardware one-use semantics.
+    /// True when this registration has one-operation lifecycle semantics.
+    ///
+    /// Android 12+ enforces that lifecycle in `KeyMint` hardware. The explicit
+    /// managed pre-Android-12 profile instead uses receipt-first local
+    /// consumption, immediate key deletion, and consensus one-use state.
     pub one_use: bool,
     /// Canonical challenge hash signed or embedded by the platform attestation.
     pub challenge_hash: Hash,
@@ -949,8 +998,11 @@ pub struct OfflineAndroidKeyMintChallenge {
     /// Hardware assertion key algorithm.
     pub assertion_key_algorithm: String,
     /// Hardware one-use limit exposed by `KeyMint`.
+    ///
+    /// This is `None` only for the explicit managed pre-Android-12 `StrongBox`
+    /// receipt-first assertion profile.
     pub assertion_usage_count_limit: Option<u32>,
-    /// True when the submitted evidence claims hardware one-use semantics.
+    /// True when this challenge selects one-operation lifecycle semantics.
     pub one_use: bool,
     /// Recent committed block height bound into the challenge.
     pub recent_block_height: u64,
@@ -1864,8 +1916,7 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
         }
         if self.issued_at_ms == 0
             || self.expires_at_ms <= self.issued_at_ms
-            || self.expires_at_ms - self.issued_at_ms
-                > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2
+            || self.expires_at_ms - self.issued_at_ms > KAGEMUSHA_PEER_RECEIVE_REQUEST_MAX_TTL_MS_V1
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "expires_at_ms",
@@ -2036,13 +2087,46 @@ impl KagemushaRecipientPaymentRequestV2 {
     }
 }
 impl KagemushaOnlineHardwareAssertionV1 {
-    /// Canonical registration platform selected by this typed assertion.
+    /// Canonical authorization kind selected by this typed proof.
     #[must_use]
     pub const fn platform(&self) -> &'static str {
         match self {
             Self::AndroidKeyMint(_) => OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM,
             Self::IosAppAttest(_) => OFFLINE_DEVICE_ATTESTATION_IOS_APP_ATTEST_PLATFORM,
+            Self::AccountAuthorityDrainOnly(_) => {
+                KAGEMUSHA_ACCOUNT_AUTHORITY_DRAIN_ONLY_PLATFORM_V1
+            }
         }
+    }
+}
+impl KagemushaDrainOnlyRedemptionPolicyBindingV1 {
+    /// Validate the public finalized-policy binding carried by drain-only redemption.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when the finalized policy or
+    /// redemption lifetime binding is incomplete or inconsistent.
+    pub fn validate(
+        &self,
+        issued_at_ms: u64,
+        expires_at_ms: u64,
+    ) -> Result<(), KagemushaValidationError> {
+        if self.policy_epoch == 0
+            || self.policy_hash == [0; 32]
+            || self.freshness_deadline_ms <= self.finalized_block_timestamp_ms
+            || self.finalized_block_height == 0
+            || self.finalized_block_hash == [0; 32]
+            || self.finalized_block_timestamp_ms == 0
+            || self.finality_evidence_hash == [0; 32]
+            || issued_at_ms < self.finalized_block_timestamp_ms
+            || issued_at_ms >= self.freshness_deadline_ms
+            || expires_at_ms > self.freshness_deadline_ms
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "authorization.account_authority_drain_only",
+            });
+        }
+        Ok(())
     }
 }
 impl KagemushaRequestAuthorizationV2 {
@@ -2164,6 +2248,11 @@ impl KagemushaRequestAuthorizationV2 {
                 signed.extend_from_slice(&signing_bytes);
                 assertion.signature.verify(&public_key, &signed)
             }
+            KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_) => {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "authorization.account_authority_drain_only.signature",
+                });
+            }
         }
         .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
             field: "authorization.hardware_assertion.signature",
@@ -2178,6 +2267,7 @@ impl KagemushaRequestAuthorizationV2 {
             KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) => {
                 assertion.signature = signature;
             }
+            KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_) => {}
         }
     }
     /// Verify structure and exact unsigned-payload binding.
@@ -2198,7 +2288,6 @@ impl KagemushaRequestAuthorizationV2 {
             || self.device_id.chars().any(char::is_control)
             || self.operation_id == [0; 32]
             || self.nonce == [0; 32]
-            || self.registration_hash == [0; 32]
             || self.payload_digest != expected_payload_digest
             || self.issued_at_ms == 0
             || self.expires_at_ms <= self.issued_at_ms
@@ -2210,26 +2299,49 @@ impl KagemushaRequestAuthorizationV2 {
             });
         }
         match &self.hardware_assertion {
-            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(assertion) => {
-                assertion.signature.validate()
+            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(assertion)
+                if self.registration_hash != [0; 32] =>
+            {
+                assertion.signature.validate().map_err(|_| {
+                    KagemushaValidationError::InvalidRecursiveSpendProof {
+                        field: "authorization.hardware_assertion.signature",
+                    }
+                })
             }
             KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion)
-                if (KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1
-                    ..=KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1)
-                    .contains(&assertion.authenticator_data.len())
+                if self.registration_hash != [0; 32]
+                    && (KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1
+                        ..=KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1)
+                        .contains(&assertion.authenticator_data.len())
                     && assertion.authenticator_data[32] == 0x80 =>
             {
-                assertion.signature.validate()
+                assertion.signature.validate().map_err(|_| {
+                    KagemushaValidationError::InvalidRecursiveSpendProof {
+                        field: "authorization.hardware_assertion.signature",
+                    }
+                })
             }
             KagemushaOnlineHardwareAssertionV1::IosAppAttest(_) => {
                 Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                     field: "authorization.hardware_assertion.authenticator_data",
                 })
             }
+            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(_) => {
+                Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "authorization.registration_hash",
+                })
+            }
+            KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(binding)
+                if self.registration_hash == [0; 32] =>
+            {
+                binding.validate(self.issued_at_ms, self.expires_at_ms)
+            }
+            KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_) => {
+                Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "authorization.account_authority_drain_only.registration_hash",
+                })
+            }
         }
-        .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
-            field: "authorization.hardware_assertion.signature",
-        })
     }
     /// Verify the signed request is live at the authoritative Torii time.
     ///
@@ -4460,7 +4572,7 @@ mod kagemusha_v4_artifact_contract_tests {
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> Vec<u8> {
         norito::encode_canonical(
-            &kagemusha_internal_validation_receipt::tests::signed_receipt_for_v4_candidate(
+            &kagemusha_internal_validation_receipt::internal_validation_receipt_test_support::signed_receipt_for_v4_candidate(
                 candidate,
                 finalized_manifest,
             ),
@@ -4916,7 +5028,8 @@ mod kagemusha_v4_artifact_contract_tests {
     }
     fn device_attestation_policy_wire_fixture() -> OfflineDeviceAttestationPolicy {
         OfflineDeviceAttestationPolicy {
-            version: 1,
+            version: OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2,
+            policy_epoch: 7,
             trusted_roots: vec![OfflineDeviceAttestationTrustedRoot {
                 platform: OFFLINE_DEVICE_ATTESTATION_IOS_APP_ATTEST_PLATFORM.to_owned(),
                 der: vec![0x30, 0x01, 0x42],
@@ -4943,6 +5056,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 cache_max_age_seconds: 3_600,
                 non_valid_serials: vec!["1ab".to_owned(), "fe10".to_owned()],
             }),
+            android_vulnerability_rules: Vec::new(),
             require_ios_app_policy: true,
             require_android_app_policy: true,
         }
@@ -5307,7 +5421,7 @@ mod kagemusha_v4_artifact_contract_tests {
             Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt)
         );
         let mismatched_lock_receipt = norito::encode_canonical(
-            &kagemusha_internal_validation_receipt::tests::
+            &kagemusha_internal_validation_receipt::internal_validation_receipt_test_support::
                 signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
                     &candidate,
                     &manifest,
@@ -6198,6 +6312,14 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
         )?;
         let unsigned = self.unsigned_payload();
         unsigned.validate_public_binding()?;
+        if matches!(
+            &self.authorization.hardware_assertion,
+            KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_)
+        ) {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "authorization.account_authority_drain_only.topup",
+            });
+        }
         if self.asset.account() != &self.authorization.authority
             || self.asset.definition() != &self.authorization.asset_definition_id
             || self.authorization.operation_id != self.operation_id
@@ -7366,6 +7488,327 @@ impl KagemushaRecursiveSpendPeerPaymentV4 {
             });
         }
         Ok(())
+    }
+}
+#[derive(Debug, Clone, Decode, Encode)]
+struct KagemushaEligibilityPaymentEnvelopeSigningPreimageV1 {
+    domain: String,
+    version: u16,
+    network_id: NetworkId,
+    operation_id: [u8; 32],
+    recipient_request_digest: [u8; 32],
+    payment_sha256: [u8; 32],
+    credential_sha256: [u8; 32],
+    sender_device_public_key: KagemushaDevicePublicKeyV2,
+}
+#[derive(Debug, Clone, Decode, Encode)]
+struct KagemushaEligibilityPaymentEnvelopeOneUseKeyPreimageV1 {
+    domain: String,
+    version: u16,
+    network_id: NetworkId,
+    operation_id: [u8; 32],
+    recipient_request_digest: [u8; 32],
+    sender_device_public_key: KagemushaDevicePublicKeyV2,
+}
+impl KagemushaEligibilityPaymentEnvelopePayloadV1 {
+    fn invalid(field: &'static str) -> KagemushaValidationError {
+        KagemushaValidationError::InvalidRecursiveSpendProof { field }
+    }
+
+    fn decode_payment_v4(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendPeerPaymentV4, KagemushaValidationError> {
+        if self.payment_v4_norito.is_empty()
+            || self.payment_v4_norito.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        {
+            return Err(KagemushaValidationError::EncodedSizeExceeded {
+                actual: self.payment_v4_norito.len(),
+                max: KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
+            });
+        }
+        let payment: KagemushaRecursiveSpendPeerPaymentV4 =
+            norito::decode_canonical(&self.payment_v4_norito)
+                .map_err(|_| Self::invalid("eligibility_envelope.payment_v4_norito"))?;
+        let canonical = norito::encode_canonical(&payment)?;
+        if canonical != self.payment_v4_norito {
+            return Err(Self::invalid("eligibility_envelope.payment_v4_norito"));
+        }
+        payment.validate_public_binding()?;
+        Ok(payment)
+    }
+
+    fn canonical_credential_bytes_v1(&self) -> Result<Vec<u8>, KagemushaValidationError> {
+        let canonical = norito::encode_canonical(&self.sender_eligibility_credential)?;
+        ensure_kagemusha_encoded_size_at_most(
+            canonical.len(),
+            KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1,
+        )?;
+        Ok(canonical)
+    }
+
+    fn signing_bytes_from_validated_v1(&self) -> Result<Vec<u8>, KagemushaValidationError> {
+        let payment_sha256: [u8; 32] = Sha256::digest(&self.payment_v4_norito).into();
+        let credential_sha256: [u8; 32] =
+            Sha256::digest(self.canonical_credential_bytes_v1()?).into();
+        Ok(norito::encode_canonical(
+            &KagemushaEligibilityPaymentEnvelopeSigningPreimageV1 {
+                domain: KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_SIGNING_DOMAIN_V1.to_owned(),
+                version: self.version,
+                network_id: self.network_id,
+                operation_id: self.operation_id,
+                recipient_request_digest: self.recipient_request_digest,
+                payment_sha256,
+                credential_sha256,
+                sender_device_public_key: self.sender_device_public_key,
+            },
+        )?)
+    }
+
+    fn validate_request_binding_v1(
+        &self,
+        request: &KagemushaRecipientPaymentRequestV2,
+    ) -> Result<KagemushaRecursiveSpendPeerPaymentV4, KagemushaValidationError> {
+        request.validate_public_binding()?;
+        let payment = self.decode_payment_v4()?;
+        if request.network_id() != &self.network_id
+            || request.digest()? != self.recipient_request_digest
+            || payment.recipient_bundle.statement.network_id != self.network_id
+            || payment.recipient_bundle.statement.asset != *request.asset()
+            || payment.recipient_bundle.statement.current_note != *request.recipient_output()
+        {
+            return Err(Self::invalid("eligibility_envelope.recipient_request"));
+        }
+        Ok(payment)
+    }
+
+    /// Construct the unsigned envelope around an unchanged canonical ABI-21/V4 payment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payment, request, credential, network, operation,
+    /// wallet device key, or canonical archive binding is invalid or oversized.
+    pub fn prepare_v1(
+        payment_v4_norito: Vec<u8>,
+        sender_eligibility_credential: OfflineDeviceEligibilityCredentialV1,
+        recipient_request: &KagemushaRecipientPaymentRequestV2,
+    ) -> Result<Self, KagemushaValidationError> {
+        let provisional = Self {
+            version: KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_VERSION_V1,
+            network_id: *recipient_request.network_id(),
+            operation_id: [0; 32],
+            recipient_request_digest: [0; 32],
+            payment_v4_norito,
+            sender_device_public_key: sender_eligibility_credential.payload.device_public_key,
+            sender_eligibility_credential,
+        };
+        let payment = provisional.decode_payment_v4()?;
+        let payload = Self {
+            operation_id: payment.operation_id()?,
+            recipient_request_digest: payment.recipient_request_digest()?,
+            ..provisional
+        };
+        payload.validate_static_binding_v1()?;
+        payload.validate_request_binding_v1(recipient_request)?;
+        Ok(payload)
+    }
+
+    /// Validate every policy-independent envelope coordinate.
+    ///
+    /// This deliberately does not compare the credential with a current policy
+    /// view. Persisted exact retransmissions and acknowledgements must remain
+    /// identifiable after policy rotation. New value admission must additionally
+    /// call [`KagemushaEligibilityPaymentEnvelopeV1::validate_for_first_delivery_v1`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed version, payment, credential signature,
+    /// network, operation, request digest, wallet device key, or size bound.
+    pub fn validate_static_binding_v1(&self) -> Result<(), KagemushaValidationError> {
+        if self.version != KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_VERSION_V1
+            || self.operation_id == [0; 32]
+            || self.recipient_request_digest == [0; 32]
+        {
+            return Err(Self::invalid("eligibility_envelope.binding"));
+        }
+        let payment = self.decode_payment_v4()?;
+        let credential = &self.sender_eligibility_credential;
+        credential
+            .payload
+            .validate_shape_v1()
+            .map_err(|_| Self::invalid("eligibility_envelope.eligibility_credential"))?;
+        credential
+            .verify_signature_v1()
+            .map_err(|_| Self::invalid("eligibility_envelope.eligibility_credential"))?;
+        self.canonical_credential_bytes_v1()?;
+        let credential_device_key = credential.payload.device_public_key;
+        if credential.payload.network_id != self.network_id
+            || credential_device_key != self.sender_device_public_key
+            || payment.recipient_bundle.statement.network_id != self.network_id
+            || payment.operation_id()? != self.operation_id
+            || payment.recipient_request_digest()? != self.recipient_request_digest
+        {
+            return Err(Self::invalid("eligibility_envelope.binding"));
+        }
+        let encoded_len = norito::encode_canonical(self)?.len();
+        ensure_kagemusha_encoded_size_at_most(
+            encoded_len,
+            KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1,
+        )
+    }
+
+    /// Return the exact domain-separated bytes covered by the one-use device signature.
+    ///
+    /// The signed preimage binds the network, operation, recipient request,
+    /// SHA-256 of the unchanged payment archive, SHA-256 of the complete current
+    /// credential, and the credential's exact wallet device key. The platform
+    /// assertion key remains separately issuer-bound inside the credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any static binding or canonical encoding is invalid.
+    pub fn signing_bytes_v1(&self) -> Result<Vec<u8>, KagemushaValidationError> {
+        self.validate_static_binding_v1()?;
+        self.signing_bytes_from_validated_v1()
+    }
+}
+impl KagemushaEligibilityPaymentEnvelopeV1 {
+    /// Finalize an unsigned payload with its operation-bound hardware signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the signature verifies under the wallet device
+    /// key carried by the current issuer-signed eligibility credential.
+    pub fn finalize_v1(
+        payload: KagemushaEligibilityPaymentEnvelopePayloadV1,
+        sender_device_signature: KagemushaDeviceSignatureV2,
+    ) -> Result<Self, KagemushaValidationError> {
+        payload.validate_static_binding_v1()?;
+        sender_device_signature
+            .verify(
+                &payload.sender_device_public_key,
+                &payload.signing_bytes_from_validated_v1()?,
+            )
+            .map_err(|_| {
+                KagemushaEligibilityPaymentEnvelopePayloadV1::invalid(
+                    "eligibility_envelope.sender_device_signature",
+                )
+            })?;
+        let envelope = Self {
+            payload,
+            sender_device_signature,
+        };
+        envelope.validate_static_binding_v1()?;
+        Ok(envelope)
+    }
+
+    /// Validate the canonical envelope without consulting mutable policy state.
+    ///
+    /// This is the correct gate for exact retransmission comparison and recovery
+    /// of already-consumed payloads. It is not sufficient for a first delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any static binding or device signature is invalid.
+    pub fn validate_static_binding_v1(&self) -> Result<(), KagemushaValidationError> {
+        self.payload.validate_static_binding_v1()?;
+        self.sender_device_signature
+            .verify(
+                &self.payload.sender_device_public_key,
+                &self.payload.signing_bytes_from_validated_v1()?,
+            )
+            .map_err(|_| {
+                KagemushaEligibilityPaymentEnvelopePayloadV1::invalid(
+                    "eligibility_envelope.sender_device_signature",
+                )
+            })?;
+        let encoded_len = norito::encode_canonical(self)?.len();
+        ensure_kagemusha_encoded_size_at_most(
+            encoded_len,
+            KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1,
+        )
+    }
+
+    /// Validate a first delivery against the receiver's current finalized policy view.
+    ///
+    /// The request lifetime is `[issued_at_ms, expires_at_ms)` and is bounded to
+    /// fifteen minutes. Callers must persist the returned envelope identity and
+    /// one-use key atomically with value admission. Later exact retransmissions
+    /// compare those persisted values and do not re-run current-policy admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request is expired or mismatched, the policy is
+    /// stale/rolled back, the issuer or credential is not current, or any static
+    /// payment/device binding is invalid.
+    pub fn validate_for_first_delivery_v1(
+        &self,
+        recipient_request: &KagemushaRecipientPaymentRequestV2,
+        expected_credential_issuer: &PublicKey,
+        current_policy_view: &OfflineDeviceAttestationPolicyViewV1,
+        received_at_ms: u64,
+    ) -> Result<KagemushaRecursiveSpendPeerPaymentV4, KagemushaValidationError> {
+        self.validate_static_binding_v1()?;
+        recipient_request.validate_at(received_at_ms)?;
+        let payment = self
+            .payload
+            .validate_request_binding_v1(recipient_request)?;
+        self.payload
+            .sender_eligibility_credential
+            .verify_against_policy_view_v1(
+                expected_credential_issuer,
+                current_policy_view,
+                received_at_ms,
+            )
+            .map_err(|_| {
+                KagemushaEligibilityPaymentEnvelopePayloadV1::invalid(
+                    "eligibility_envelope.current_policy",
+                )
+            })?;
+        Ok(payment)
+    }
+
+    /// Stable replay key for the one-use wallet device operation.
+    ///
+    /// Store this key beside [`Self::identity_sha256_v1`]. Reusing the key with
+    /// a different identity is a conflict; the same key and identity is an exact
+    /// retransmission even after policy rotation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the envelope or canonical replay preimage is invalid.
+    pub fn one_use_key_sha256_v1(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_static_binding_v1()?;
+        let canonical =
+            norito::encode_canonical(&KagemushaEligibilityPaymentEnvelopeOneUseKeyPreimageV1 {
+                domain: KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_ONE_USE_KEY_DOMAIN_V1.to_owned(),
+                version: self.payload.version,
+                network_id: self.payload.network_id,
+                operation_id: self.payload.operation_id,
+                recipient_request_digest: self.payload.recipient_request_digest,
+                sender_device_public_key: self.payload.sender_device_public_key,
+            })?;
+        Ok(Sha256::digest(canonical).into())
+    }
+
+    /// Domain-separated identity of the exact canonical envelope bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the envelope is invalid or cannot be encoded canonically.
+    pub fn identity_sha256_v1(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_static_binding_v1()?;
+        let canonical = norito::encode_canonical(self)?;
+        let mut hasher = Sha256::new();
+        hasher.update(KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_IDENTITY_DOMAIN_V1.as_bytes());
+        hasher.update([0]);
+        hasher.update(canonical);
+        Ok(hasher.finalize().into())
+    }
+
+    /// Borrow the unchanged canonical ABI-21/V4 payment archive.
+    #[must_use]
+    pub fn payment_v4_norito(&self) -> &[u8] {
+        &self.payload.payment_v4_norito
     }
 }
 impl KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {

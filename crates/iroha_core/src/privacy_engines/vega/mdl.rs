@@ -307,6 +307,61 @@ impl fmt::Debug for VegaMdlValidatedWitnessV1 {
             .finish()
     }
 }
+
+/// Validate the issuer-authenticated document fields available before the
+/// transaction-bound holder signature is constructed.
+pub(super) fn preflight_vega_action_material_v1(
+    issuer_public_key: PrivacyP256PointV1,
+    presentation_date: PrivacyVegaMdlDateV1,
+    minimum_age_years: u8,
+    issuer_authentication_sig_structure: &[u8],
+    mobile_security_object_payload: &[u8],
+    birth_date_issuer_signed_item: &[u8],
+    issuer_signature: &[u8; 64],
+    expected_device_public_key: &[u8],
+) -> Result<(), VegaMdlError> {
+    validate_vega_mdl_figure9_encoding_v1(
+        issuer_authentication_sig_structure,
+        birth_date_issuer_signed_item,
+    )?;
+    validate_issuer_signature_structure(
+        issuer_authentication_sig_structure,
+        mobile_security_object_payload,
+    )?;
+    let birth = parse_birth_item(birth_date_issuer_signed_item)?;
+    let parsed_mso = parse_mso_payload(mobile_security_object_payload, birth.digest_id)?;
+    if parsed_mso.birth_date_digest != birth.digest {
+        return Err(VegaMdlError::BirthDateDigestMismatch);
+    }
+    if parsed_mso.signed > parsed_mso.valid_from {
+        return Err(VegaMdlError::CredentialSignedAfterValidFrom);
+    }
+    if parsed_mso.valid_from.date > presentation_date {
+        return Err(VegaMdlError::CredentialNotYetValid);
+    }
+    if parsed_mso.valid_until <= presentation_date {
+        return Err(VegaMdlError::CredentialExpired);
+    }
+    validate_age(birth.date, presentation_date, minimum_age_years)?;
+    let issuer_key = VerifyingKey::from_sec1_bytes(issuer_public_key.as_bytes()).map_err(|_| {
+        VegaMdlError::InvalidP256PublicKey {
+            field: "issuer_public_key",
+        }
+    })?;
+    let issuer_authentication_digest: [u8; 32] =
+        Sha256::digest(issuer_authentication_sig_structure).into();
+    validate_signature(
+        issuer_signature,
+        issuer_authentication_digest,
+        &issuer_key,
+        VegaSignatureRoleV1::Issuer,
+    )?;
+    if parsed_mso.device_public_key.as_bytes() != expected_device_public_key {
+        return Err(VegaMdlError::DeviceSigningKeyMismatch);
+    }
+    Ok(())
+}
+
 /// Parse and preflight the complete Figure 9 witness.
 ///
 /// This validates strict deterministic CBOR, exact COSE payload binding, Figure 8

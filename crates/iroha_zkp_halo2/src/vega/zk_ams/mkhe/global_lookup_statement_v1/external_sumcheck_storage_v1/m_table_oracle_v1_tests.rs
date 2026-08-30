@@ -122,8 +122,10 @@ fn release_geometry_accounting_and_false_gates_are_exact() {
     assert_eq!(M_SCALAR_FOLDS_V1, 32_767);
     assert_eq!(COMBINED_AU_M_PEAK_FILE_BYTES_V1, 5_380_245_504);
     assert_eq!(M_NAMED_CHUNK_HEAP_BYTES_V1, 24_576);
-    assert!(AUTHENTICATED_M_TABLE_COMPLETE_V1);
-    assert!(REAL_GLOBAL_CUBIC_ORACLE_COMPLETE_V1);
+    const {
+        assert!(AUTHENTICATED_M_TABLE_COMPLETE_V1);
+        assert!(REAL_GLOBAL_CUBIC_ORACLE_COMPLETE_V1);
+    };
     for gate in [
         PREFIX_THREE_ROUNDS_WIRED_V1,
         SHARED_TRANSCRIPT_WIRED_V1,
@@ -231,7 +233,7 @@ fn continue_oracle_v1(
         )
         .unwrap()
     {
-        OracleTransitionV1::Continue(oracle) => oracle,
+        OracleTransitionV1::Continue(oracle) => *oracle,
         OracleTransitionV1::Complete(_) => panic!("unexpected early completion"),
     }
 }

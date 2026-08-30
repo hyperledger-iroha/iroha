@@ -3160,9 +3160,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         arguments[: arguments.index("--")] if "--" in arguments else arguments
     )
     if "--report" in option_prefix:
-        # TODO: Restore generic acceptance supervision only after it uses the
-        # same scoped 250 ms max(RSS, physical-footprint) enforcement as the
-        # strict candidate path. The retired RSS-only path caused host Jetsam.
+        # Generic acceptance supervision is intentionally retired: it lacks the
+        # strict candidate path's scoped 250 ms max(RSS, physical-footprint)
+        # enforcement, and the former RSS-only implementation caused host Jetsam.
         print(
             "Kagemusha V4 --report mode is retired because its RSS-only "
             "supervisor cannot bound Darwin physical footprint; use the "

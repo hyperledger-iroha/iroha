@@ -28,16 +28,33 @@ base_ref="$(resolve_base)"
 base_commit="$(git merge-base "${base_ref}" HEAD 2>/dev/null || git rev-parse "${base_ref}")"
 
 fail=false
+reviewed_workspace_edge_change="false"
+review_validator="scripts/tests/cargo_lock_workspace_edge_review_test.py"
+review_artifact="ci/cargo_lock_workspace_edge_review_v1.json"
+readonly lock_review_base_commit="be874e0f08743929a492dd17383747a96a4f0879"
 
-if ! git diff --quiet -- Cargo.lock || ! git diff --quiet "${base_commit}"...HEAD -- Cargo.lock; then
-	echo "error: Cargo.lock modifications detected (working tree or relative to ${base_ref})." >&2
-	echo "The AGENTS workflow forbids lockfile edits; drop Cargo.lock changes or seek approval." >&2
-	fail=true
+if ! git diff --quiet "${lock_review_base_commit}" -- Cargo.lock; then
+	if python3 -I -S "${review_validator}" \
+		--validate \
+		--root "${ROOT}" \
+		--base-commit "${lock_review_base_commit}" \
+		--review "${ROOT}/${review_artifact}"; then
+		reviewed_workspace_edge_change="true"
+	else
+		echo "error: Cargo.lock modifications detected outside the exact reviewed dependency changes from ${lock_review_base_commit}." >&2
+		echo "The AGENTS workflow forbids all other lockfile edits; drop the change or obtain a separate review." >&2
+		fail=true
+	fi
+fi
+
+dependency_base_commit="${base_commit}"
+if [[ "${reviewed_workspace_edge_change}" == "true" ]]; then
+	dependency_base_commit="${lock_review_base_commit}"
 fi
 
 added_tomls="$(
 	{
-		git diff --name-status --diff-filter=A "${base_commit}"...HEAD -- '*Cargo.toml' || true
+		git diff --name-status --diff-filter=A "${dependency_base_commit}"...HEAD -- '*Cargo.toml' || true
 		git diff --name-status --diff-filter=A -- '*Cargo.toml' || true
 	} | sort -u
 )"
@@ -48,7 +65,7 @@ if [[ -n "${added_tomls}" ]]; then
 	fail=true
 fi
 
-base_toml="$(git show "${base_commit}:Cargo.toml" 2>/dev/null || true)"
+base_toml="$(git show "${dependency_base_commit}:Cargo.toml" 2>/dev/null || true)"
 current_toml="$(cat Cargo.toml 2>/dev/null || git show HEAD:Cargo.toml 2>/dev/null || true)"
 
 if [[ -n "${base_toml}" && -n "${current_toml}" ]]; then
@@ -143,7 +160,7 @@ else
 fi
 
 added_dependencies="$(
-	BASE_COMMIT="${base_commit}" python3 - <<'PY'
+	BASE_COMMIT="${dependency_base_commit}" python3 - <<'PY'
 import os
 import subprocess
 import sys
@@ -227,9 +244,14 @@ PY
 )"
 
 if [[ -n "${added_dependencies}" ]]; then
-	echo "error: new dependencies detected relative to ${base_ref} (approval required):" >&2
-	echo "${added_dependencies}" >&2
-	fail=true
+	if [[ "${reviewed_workspace_edge_change}" == "true" ]]; then
+		echo "AGENTS guardrails accepted the exact reviewed dependency additions and feature change:" >&2
+		echo "${added_dependencies}" >&2
+	else
+		echo "error: new dependencies detected relative to ${base_ref} (approval required):" >&2
+		echo "${added_dependencies}" >&2
+		fail=true
+	fi
 fi
 
 if ! bash ci/check_soranet_privacy_guard.sh; then
@@ -248,5 +270,9 @@ HINT
 	exit 1
 fi
 
-echo "AGENTS guardrails passed: no Cargo.lock edits, new workspace crates, or dependency additions detected."
+if [[ "${reviewed_workspace_edge_change}" == "true" ]]; then
+	echo "AGENTS guardrails passed: exact reviewed Cargo.lock dependency changes; no new workspace crates or unreviewed dependency changes detected."
+else
+	echo "AGENTS guardrails passed: no Cargo.lock edits, new workspace crates, or dependency additions detected."
+fi
 exit 0

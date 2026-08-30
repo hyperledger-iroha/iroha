@@ -43,6 +43,11 @@ use iroha_zkp_halo2::vega::{
     ZkAmsAdmissionRelationWitnessV1, ZkAmsProofContextV1, prove_zk_ams_admission_relation_v1,
     verify_zk_ams_admission_relation_v1,
 };
+#[cfg(feature = "privacy-release-evidence")]
+use iroha_zkp_halo2::vega::{
+    prove_zk_ams_release_candidate_admission_relation_v1,
+    verify_zk_ams_release_candidate_admission_relation_v1,
+};
 #[cfg(test)]
 fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
     NetworkId::from_genesis_hash(
@@ -150,6 +155,12 @@ pub enum ZkAmsPrivacyActionEffectV1 {
     /// Atomically create one account and consume one anonymous key image.
     ProvisionAccount,
 }
+#[derive(Clone, Copy)]
+enum ZkAmsAdmissionRelationModeV1 {
+    Production,
+    #[cfg(feature = "privacy-release-evidence")]
+    ReleaseCandidate,
+}
 /// Pure ZK-AMS proving output ready for transaction signing.
 ///
 /// The payload and canonical genesis binding are private. This type deliberately implements neither
@@ -159,6 +170,7 @@ pub struct ZkAmsPreparedPrivacyActionV1 {
     payload: TransactionPayload,
     canonical_genesis_hash: [u8; 32],
     effect: ZkAmsPrivacyActionEffectV1,
+    admission_relation_mode: ZkAmsAdmissionRelationModeV1,
     transaction_intent_digest: [u8; 32],
     statement_digest: [u8; 32],
     proof_envelope_hash: [u8; 32],
@@ -725,6 +737,29 @@ pub fn prepare_zk_ams_provision_account_transaction_intent_v1(
         PrivacyZkAmsActionV1::ProvisionAccount(action),
     )
 }
+/// Construct a canonical ZK-AMS account-provisioning statement against the
+/// immutable release-candidate profile without making that profile available
+/// to production transaction construction.
+///
+/// # Errors
+///
+/// Returns a closed error for an invalid transaction context, missing
+/// release-candidate material, invalid typed action, or final binding drift.
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn prepare_zk_ams_provision_account_release_candidate_transaction_intent_v1(
+    context: &ZkAmsPrivacyActionTransactionContextV1,
+    governance: ZkAmsPrivacyActionGovernanceV1,
+    action: PrivacyZkAmsProvisionAccountV1,
+) -> Result<IrohaZkAmsStatementV1, ZkAmsPrivacyActionIntentErrorV1> {
+    let profile = crate::privacy_profiles::zk_ams_release_candidate_profile_material_v1()
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    prepare_zk_ams_privacy_action_transaction_intent_with_profile_v1(
+        context,
+        governance,
+        PrivacyZkAmsActionV1::ProvisionAccount(action),
+        profile,
+    )
+}
 /// Validate a prepared ZK-AMS statement against its exact single-action
 /// transaction context and return the canonical transaction-intent digest.
 ///
@@ -742,6 +777,22 @@ pub fn validate_zk_ams_privacy_action_transaction_intent_v1(
     let profile =
         crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
             .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    validate_zk_ams_privacy_action_transaction_intent_with_profile_v1(context, statement, profile)
+}
+/// Validate a ZK-AMS transaction intent against the immutable release-candidate
+/// profile without changing the production profile's availability.
+///
+/// # Errors
+///
+/// Returns a closed error for missing candidate material, an invalid context or
+/// statement, canonical encoding failure, or final intent/digest drift.
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn validate_zk_ams_release_candidate_privacy_action_transaction_intent_v1(
+    context: &ZkAmsPrivacyActionTransactionContextV1,
+    statement: &IrohaZkAmsStatementV1,
+) -> Result<PrivacyTransactionIntentDigestV1, ZkAmsPrivacyActionIntentErrorV1> {
+    let profile = crate::privacy_profiles::zk_ams_release_candidate_profile_material_v1()
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
     validate_zk_ams_privacy_action_transaction_intent_with_profile_v1(context, statement, profile)
 }
 fn validate_zk_ams_privacy_action_transaction_intent_with_profile_v1(
@@ -779,6 +830,7 @@ fn validate_zk_ams_privacy_action_transaction_intent_with_profile_v1(
 struct ZkAmsPrivacyActionIntegrityV1 {
     canonical_genesis_hash: [u8; 32],
     effect: ZkAmsPrivacyActionEffectV1,
+    admission_relation_mode: ZkAmsAdmissionRelationModeV1,
     transaction_intent_digest: [u8; 32],
     statement_digest: [u8; 32],
     proof_envelope_hash: [u8; 32],
@@ -791,6 +843,7 @@ impl ZkAmsPreparedPrivacyActionV1 {
         ZkAmsPrivacyActionIntegrityV1 {
             canonical_genesis_hash: self.canonical_genesis_hash,
             effect: self.effect,
+            admission_relation_mode: self.admission_relation_mode,
             transaction_intent_digest: self.transaction_intent_digest,
             statement_digest: self.statement_digest,
             proof_envelope_hash: self.proof_envelope_hash,
@@ -907,7 +960,13 @@ fn validate_zk_ams_payload_integrity_v1(
         zk_ams_action_binding_v1(statement, expected.canonical_genesis_hash, statement_digest);
     match expected.effect {
         ZkAmsPrivacyActionEffectV1::BatchAdmission => {
-            verify_zk_ams_batch_admission_v1(statement, &binding, proof_bytes).map_err(|_| ())?;
+            verify_zk_ams_batch_admission_with_mode_v1(
+                statement,
+                &binding,
+                proof_bytes,
+                expected.admission_relation_mode,
+            )
+            .map_err(|_| ())?;
         }
         ZkAmsPrivacyActionEffectV1::ProvisionAccount => {
             verify_zk_ams_provision_statement_v1(statement, &binding, proof_bytes)
@@ -930,6 +989,7 @@ fn finalize_zk_ams_prepared_action_v1(
     proof: IrohaZkAmsProofV1,
     canonical_genesis_hash: [u8; 32],
     effect: ZkAmsPrivacyActionEffectV1,
+    admission_relation_mode: ZkAmsAdmissionRelationModeV1,
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
 ) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1> {
     let proof_bytes = match &proof {
@@ -985,6 +1045,7 @@ fn finalize_zk_ams_prepared_action_v1(
         payload: final_payload,
         canonical_genesis_hash,
         effect,
+        admission_relation_mode,
         transaction_intent_digest: *transaction_intent_digest.as_bytes(),
         statement_digest: *statement_digest.as_bytes(),
         proof_envelope_hash,
@@ -1027,6 +1088,72 @@ where
     let profile =
         crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
             .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    prepare_zk_ams_batch_admission_privacy_action_with_rng_and_profile_v1(
+        context,
+        governance,
+        action,
+        witnesses,
+        config,
+        canonical_genesis_hash,
+        ZkAmsAdmissionRelationModeV1::Production,
+        profile,
+        rng,
+    )
+}
+/// Prepare and prove one ZK-AMS batch admission against the immutable release
+/// candidate without making that candidate available to production callers.
+///
+/// # Errors
+///
+/// Returns a closed intent, transcript, witness, native-proof, encoding, or
+/// self-verification failure.
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn prepare_zk_ams_batch_admission_release_candidate_privacy_action_with_rng_v1<R>(
+    context: ZkAmsPrivacyActionTransactionContextV1,
+    governance: ZkAmsPrivacyActionGovernanceV1,
+    action: PrivacyZkAmsBatchAdmissionV1,
+    witnesses: &[ZkAmsBatchCredentialWitnessV1<'_>],
+    config: ZkAmsMaskedProverConfigV1,
+    canonical_genesis_hash: [u8; 32],
+    rng: &mut R,
+) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    if canonical_genesis_hash == [0; 32] {
+        return Err(ZkAmsPrivacyActionBuildErrorV1::ZeroGenesisHash);
+    }
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(ZkAmsPrivacyActionBuildErrorV1::NetworkIdMismatch);
+    }
+    let profile = crate::privacy_profiles::zk_ams_release_candidate_profile_material_v1()
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    prepare_zk_ams_batch_admission_privacy_action_with_rng_and_profile_v1(
+        context,
+        governance,
+        action,
+        witnesses,
+        config,
+        canonical_genesis_hash,
+        ZkAmsAdmissionRelationModeV1::ReleaseCandidate,
+        profile,
+        rng,
+    )
+}
+fn prepare_zk_ams_batch_admission_privacy_action_with_rng_and_profile_v1<R>(
+    context: ZkAmsPrivacyActionTransactionContextV1,
+    governance: ZkAmsPrivacyActionGovernanceV1,
+    action: PrivacyZkAmsBatchAdmissionV1,
+    witnesses: &[ZkAmsBatchCredentialWitnessV1<'_>],
+    config: ZkAmsMaskedProverConfigV1,
+    canonical_genesis_hash: [u8; 32],
+    admission_relation_mode: ZkAmsAdmissionRelationModeV1,
+    profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
+    rng: &mut R,
+) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
     let statement = prepare_zk_ams_privacy_action_transaction_intent_with_profile_v1(
         &context,
         governance,
@@ -1038,7 +1165,14 @@ where
         .digest()
         .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::StatementDigest)?;
     let binding = zk_ams_action_binding_v1(&statement, canonical_genesis_hash, statement_digest);
-    let proof = prove_zk_ams_batch_admission_v1(&statement, &binding, witnesses, config, rng)?;
+    let proof = prove_zk_ams_batch_admission_with_mode_v1(
+        &statement,
+        &binding,
+        witnesses,
+        config,
+        rng,
+        admission_relation_mode,
+    )?;
     finalize_zk_ams_prepared_action_v1(
         &context,
         statement,
@@ -1046,6 +1180,7 @@ where
         IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1::new(proof)),
         canonical_genesis_hash,
         ZkAmsPrivacyActionEffectV1::BatchAdmission,
+        admission_relation_mode,
         profile,
     )
 }
@@ -1111,6 +1246,42 @@ where
         rng,
     )
 }
+/// Prepare and prove one ZK-AMS account provisioning action against the
+/// immutable release candidate without opening its production readiness gate.
+///
+/// # Errors
+///
+/// Returns a closed intent, transcript, ring, key-image, native-proof,
+/// encoding, or self-verification failure.
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn prepare_zk_ams_provision_release_candidate_privacy_action_with_rng_v1<R>(
+    context: ZkAmsPrivacyActionTransactionContextV1,
+    governance: ZkAmsPrivacyActionGovernanceV1,
+    action: PrivacyZkAmsProvisionAccountV1,
+    signer_index: usize,
+    secret: &ZkAmsSeedSecretV1,
+    canonical_genesis_hash: [u8; 32],
+    rng: &mut R,
+) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    if canonical_genesis_hash == [0; 32] {
+        return Err(ZkAmsPrivacyActionBuildErrorV1::ZeroGenesisHash);
+    }
+    let profile = crate::privacy_profiles::zk_ams_release_candidate_profile_material_v1()
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    prepare_zk_ams_provision_privacy_action_with_rng_and_profile_v1(
+        context,
+        governance,
+        action,
+        signer_index,
+        secret,
+        canonical_genesis_hash,
+        profile,
+        rng,
+    )
+}
 fn prepare_zk_ams_provision_privacy_action_with_rng_and_profile_v1<R>(
     context: ZkAmsPrivacyActionTransactionContextV1,
     governance: ZkAmsPrivacyActionGovernanceV1,
@@ -1147,6 +1318,7 @@ where
         IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(PrivacyProofBytesV1::new(proof)),
         canonical_genesis_hash,
         ZkAmsPrivacyActionEffectV1::ProvisionAccount,
+        ZkAmsAdmissionRelationModeV1::Production,
         profile,
     )
 }
@@ -1749,6 +1921,23 @@ pub fn prove_zk_ams_batch_admission_v1<R: CryptoRng + RngCore>(
     config: ZkAmsMaskedProverConfigV1,
     rng: &mut R,
 ) -> Result<Vec<u8>, ZkAmsErrorV1> {
+    prove_zk_ams_batch_admission_with_mode_v1(
+        statement,
+        binding,
+        witnesses,
+        config,
+        rng,
+        ZkAmsAdmissionRelationModeV1::Production,
+    )
+}
+fn prove_zk_ams_batch_admission_with_mode_v1<R: CryptoRng + RngCore>(
+    statement: &IrohaZkAmsStatementV1,
+    binding: &TranscriptBindingV1<'_>,
+    witnesses: &[ZkAmsBatchCredentialWitnessV1<'_>],
+    config: ZkAmsMaskedProverConfigV1,
+    rng: &mut R,
+    admission_relation_mode: ZkAmsAdmissionRelationModeV1,
+) -> Result<Vec<u8>, ZkAmsErrorV1> {
     let (public_inputs, issuer_key) = build_admission_public_inputs(statement, binding)?;
     if witnesses.len() != public_inputs.len() {
         return Err(ZkAmsErrorV1::CredentialMismatch);
@@ -1789,13 +1978,25 @@ pub fn prove_zk_ams_batch_admission_v1<R: CryptoRng + RngCore>(
             source: &mut checked_rng,
             randomness_unavailable: false,
         };
-        let result = prove_zk_ams_admission_relation_v1(
-            &relation_context,
-            &public_inputs,
-            &relation_witnesses,
-            config,
-            &mut adapter,
-        );
+        let result = match admission_relation_mode {
+            ZkAmsAdmissionRelationModeV1::Production => prove_zk_ams_admission_relation_v1(
+                &relation_context,
+                &public_inputs,
+                &relation_witnesses,
+                config,
+                &mut adapter,
+            ),
+            #[cfg(feature = "privacy-release-evidence")]
+            ZkAmsAdmissionRelationModeV1::ReleaseCandidate => {
+                prove_zk_ams_release_candidate_admission_relation_v1(
+                    &relation_context,
+                    &public_inputs,
+                    &relation_witnesses,
+                    config,
+                    &mut adapter,
+                )
+            }
+        };
         (result, adapter.randomness_unavailable)
     };
     let relation_proof = match relation_result {
@@ -1840,7 +2041,12 @@ pub fn prove_zk_ams_batch_admission_v1<R: CryptoRng + RngCore>(
             max: MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,
         });
     }
-    verify_zk_ams_batch_admission_v1(statement, binding, encoded.as_slice())?;
+    verify_zk_ams_batch_admission_with_mode_v1(
+        statement,
+        binding,
+        encoded.as_slice(),
+        admission_relation_mode,
+    )?;
     Ok(encoded.to_vec())
 }
 /// Verify the complete batch composition and return one atomic state effect.
@@ -1857,6 +2063,38 @@ pub fn verify_zk_ams_batch_admission_v1(
     statement: &IrohaZkAmsStatementV1,
     binding: &TranscriptBindingV1<'_>,
     proof_bytes: &[u8],
+) -> Result<VerifiedZkAmsBatchAdmissionV1, ZkAmsErrorV1> {
+    verify_zk_ams_batch_admission_with_mode_v1(
+        statement,
+        binding,
+        proof_bytes,
+        ZkAmsAdmissionRelationModeV1::Production,
+    )
+}
+/// Verify one complete ZK-AMS batch admission against the immutable release
+/// candidate.
+///
+/// # Errors
+///
+/// Returns the same closed failures as [`verify_zk_ams_batch_admission_v1`].
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn verify_zk_ams_batch_admission_release_candidate_v1(
+    statement: &IrohaZkAmsStatementV1,
+    binding: &TranscriptBindingV1<'_>,
+    proof_bytes: &[u8],
+) -> Result<VerifiedZkAmsBatchAdmissionV1, ZkAmsErrorV1> {
+    verify_zk_ams_batch_admission_with_mode_v1(
+        statement,
+        binding,
+        proof_bytes,
+        ZkAmsAdmissionRelationModeV1::ReleaseCandidate,
+    )
+}
+fn verify_zk_ams_batch_admission_with_mode_v1(
+    statement: &IrohaZkAmsStatementV1,
+    binding: &TranscriptBindingV1<'_>,
+    proof_bytes: &[u8],
+    admission_relation_mode: ZkAmsAdmissionRelationModeV1,
 ) -> Result<VerifiedZkAmsBatchAdmissionV1, ZkAmsErrorV1> {
     preflight_zk_ams_batch_admission_proof_size_v1(proof_bytes)?;
     let (public_inputs, _) = build_admission_public_inputs(statement, binding)?;
@@ -1875,8 +2113,22 @@ pub fn verify_zk_ams_batch_admission_v1(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let relation_context = relation_context(binding);
-    verify_zk_ams_admission_relation_v1(&relation_context, &public_inputs, &proof.relation_proof)
-        .map_err(|_| ZkAmsErrorV1::AdmissionRelation)?;
+    match admission_relation_mode {
+        ZkAmsAdmissionRelationModeV1::Production => verify_zk_ams_admission_relation_v1(
+            &relation_context,
+            &public_inputs,
+            &proof.relation_proof,
+        ),
+        #[cfg(feature = "privacy-release-evidence")]
+        ZkAmsAdmissionRelationModeV1::ReleaseCandidate => {
+            verify_zk_ams_release_candidate_admission_relation_v1(
+                &relation_context,
+                &public_inputs,
+                &proof.relation_proof,
+            )
+        }
+    }
+    .map_err(|_| ZkAmsErrorV1::AdmissionRelation)?;
     let relation_digest = relation_proof_digest(&proof.relation_proof);
     for (index, (anchor, possession)) in batch
         .anchors
@@ -2626,6 +2878,67 @@ fn validate_issuer_signature(
         recovery_y: Zeroizing::new(recovery_y),
     })
 }
+
+/// Validate governed ZK-AMS identifiers and the canonical issuer key before a
+/// wallet bundle is admitted into the isolated worker vault.
+pub fn preflight_zk_ams_action_governance_v1(
+    governance: &ZkAmsPrivacyActionGovernanceV1,
+) -> Result<(), ZkAmsErrorV1> {
+    if governance.issuer_id.is_zero()
+        || governance.issuer_policy_record_digest.is_zero()
+        || governance.registry_id.is_zero()
+        || governance.registry_record_digest.is_zero()
+        || governance.policy_id.is_zero()
+        || governance.policy_digest.is_zero()
+    {
+        return Err(ZkAmsErrorV1::InvalidStatement);
+    }
+    let issuer_key = P256VerifyingKey::from_sec1_bytes(governance.issuer_public_key.as_bytes())
+        .map_err(|_| ZkAmsErrorV1::InvalidIssuerKey)?;
+    if issuer_key.to_encoded_point(true).as_bytes() != governance.issuer_public_key.as_bytes() {
+        return Err(ZkAmsErrorV1::InvalidIssuerKey);
+    }
+    Ok(())
+}
+
+/// Validate one owner-supplied admission credential, its issuer signature,
+/// and its seed-secret opening without constructing a proof.
+pub fn preflight_zk_ams_admission_credential_v1(
+    governance: &ZkAmsPrivacyActionGovernanceV1,
+    credential: &PrivacyZkAmsPersonhoodCredentialV1,
+    issuer_signature: &[u8; 64],
+    seed_secret: &ZkAmsSeedSecretV1,
+) -> Result<(), ZkAmsErrorV1> {
+    preflight_zk_ams_action_governance_v1(governance)?;
+    if credential.version != ZK_AMS_PHC_VERSION_V1
+        || credential.issuer_id != governance.issuer_id
+        || credential.policy_id != governance.policy_id
+        || credential.subject_commitment.is_zero()
+        || credential.credential_nonce.is_zero()
+        || zk_ams_seed_public_key_v1(seed_secret) != *credential.seed_public_key.as_bytes()
+    {
+        return Err(ZkAmsErrorV1::InvalidCredential);
+    }
+    decode_nonidentity_point(*credential.seed_public_key.as_bytes())?;
+    let issuer_key = P256VerifyingKey::from_sec1_bytes(governance.issuer_public_key.as_bytes())
+        .map_err(|_| ZkAmsErrorV1::InvalidIssuerKey)?;
+    validate_issuer_signature(
+        issuer_signature,
+        *credential.digest().as_bytes(),
+        &issuer_key,
+    )?;
+    Ok(())
+}
+
+/// Validate one canonical admitted seed-key ring without constructing an LSAG
+/// proof.
+pub fn preflight_zk_ams_seed_key_ring_v1(
+    ring: &[PrivacyZkAmsSeedPublicKeyV1],
+) -> Result<(), ZkAmsErrorV1> {
+    let ring = ring.iter().map(|key| *key.as_bytes()).collect::<Vec<_>>();
+    validate_ring(&ring).map(drop)
+}
+
 fn relation_context<'a>(binding: &'a TranscriptBindingV1<'a>) -> ZkAmsProofContextV1<'a> {
     ZkAmsProofContextV1 {
         // The protected Halo2 profile retains this internal field name; the

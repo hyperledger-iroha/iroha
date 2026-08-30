@@ -470,6 +470,8 @@ def _validate_generation(snapshot: Path):
     manifest_path = snapshot / MANIFEST_NAME
     manifest_link = snapshot.parent / MANIFEST_NAME
     expected_link_target = f"{ARCHIVE_ROOT}/{MANIFEST_NAME}"
+    configured_lock = os.environ.get("NORITO_BRIDGE_SELECTED_CARGO_LOCKFILE")
+    lockfile_path = Path(configured_lock) if configured_lock else None
     try:
         os.symlink(expected_link_target, manifest_link)
         validator.validate(
@@ -480,6 +482,7 @@ def _validate_generation(snapshot: Path):
             expected_link_target=expected_link_target,
             swift_loader=None,
             verify_repository_provenance=True,
+            lockfile_path=lockfile_path,
         )
     except validator.ValidationError as error:
         fail(f"XCFramework generation is not canonical: {error}")

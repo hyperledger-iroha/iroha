@@ -189,7 +189,7 @@ def exact_probe(_sdk: str, _path: Path) -> int:
 
 
 def exact_symbol_inventory(_path: Path) -> tuple[str, ...]:
-    """Return the five approved privacy C exports for synthetic artifacts."""
+    """Return the approved privacy C exports for synthetic artifacts."""
 
     return checker.APPROVED_PRIVACY_C_EXPORTS
 
@@ -326,7 +326,7 @@ def test_verify_rejects_every_non_exact_abi(
         )
 
 
-def test_bridge_requires_exact_five_privacy_c_exports(tmp_path: Path) -> None:
+def test_bridge_requires_exact_approved_privacy_c_exports(tmp_path: Path) -> None:
     source = clean_source(tmp_path)
     artifact = native_artifact(tmp_path)
 

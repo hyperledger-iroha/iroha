@@ -194,8 +194,9 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
       }
 
       static func create() -> NativeEndpoint? {
-        // TODO: ship these optional symbols only with an audited device service that provides
-        // the complete journal/counter/outbox contract; App Attest by itself is insufficient.
+        // SECURITY INVARIANT: these optional symbols may ship only with an audited device
+        // service that provides the complete journal/counter/outbox contract. App Attest by
+        // itself is insufficient, so an image without both symbols remains online-only.
         let (handle, _) = NoritoBridgeLoader.openHandle()
         guard let handle,
           let capabilitiesSymbol = dlsym(

@@ -21,6 +21,7 @@ napi-derive = { version = "3.3.2", default-features = false, features = ["type-d
 iroha_crypto = { workspace = true, features = ["node-crypto", "sm", "gost"], default-features = false }
 iroha_core = { workspace = true, features = ["node"], default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model", "transparent_api", "gost", "sm", "bls"], default-features = false }
+iroha_torii_shared = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_schema = { workspace = true }
 iroha_version = { workspace = true }

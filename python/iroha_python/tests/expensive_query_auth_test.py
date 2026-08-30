@@ -46,11 +46,33 @@ class _Session(requests.Session):
         self.calls: list[dict[str, Any]] = []
 
     def request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
-        self.calls.append({"method": method, "path": urlsplit(url).path, **kwargs})
+        raise AssertionError(
+            f"canonical request bypassed prepared transport: {method} {url}"
+        )
+
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        assert request.url is not None
+        self.calls.append(
+            {
+                "method": request.method,
+                "path": urlsplit(request.url).path,
+                "headers": request.headers,
+                "data": request.body,
+                "prepared": True,
+                **kwargs,
+            }
+        )
         if not self.responses:
-            raise AssertionError(f"unexpected request {method} {url}")
+            raise AssertionError(
+                f"unexpected request {request.method} {request.url}"
+            )
         response = self.responses.pop(0)
-        response.url = url
+        response.request = request
+        response.url = request.url
         return response
 
 
@@ -165,3 +187,39 @@ def test_query_dispatch_is_not_retried_after_a_503() -> None:
     with pytest.raises(RuntimeError, match="unexpected status 503"):
         client.query_accounts(limit=1)
     assert len(session.calls) == 1
+
+
+def test_subclass_preserves_deferred_auth_across_account_endpoint_families() -> None:
+    session = _Session([200] * 3)
+    captured: list[bytes] = []
+    client = _client(
+        session,
+        captured=captured,
+        default_headers={"X-SDK-Request-Class": "high-level-python"},
+    )
+    auth = client._canonical_request_auth  # noqa: SLF001
+    assert isinstance(auth, ToriiCanonicalRequestAuth)
+
+    client.get_runtime_metrics(canonical_auth=auth)
+    client.get_governance_council_current(canonical_auth=auth)
+    client.query_accounts(limit=1)
+
+    assert [call["path"] for call in session.calls] == [
+        "/v1/runtime/metrics",
+        "/v1/gov/council/current",
+        "/v1/accounts/query",
+    ]
+    assert len(captured) == len(session.calls)
+    for call, message in zip(session.calls, captured, strict=True):
+        assert call["prepared"] is True
+        assert call["allow_redirects"] is False
+        assert call["headers"]["X-SDK-Request-Class"] == "high-level-python"
+        assert call["headers"]["X-Iroha-Account"] == ACCOUNT_HEADER
+        assert message == canonical_network_request_signature_message(
+            NETWORK_ID.literal,
+            call["method"],
+            call["path"],
+            call["data"] or b"",
+            timestamp_ms=4_102_444_801_000,
+            nonce="python-expensive-query-auth",
+        )

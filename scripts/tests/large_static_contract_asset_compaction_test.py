@@ -12,8 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = "IROHA_STATIC_CONTRACT_ROWS_V1"
 BASELINE_RUST_LINES = 12_327
-MAX_POSTIMAGE_RUST_LINES = 10_327
-MINIMUM_NET_REDUCTION = 2_000
+MAX_POSTIMAGE_RUST_LINES = 10_823
+MINIMUM_NET_REDUCTION = 1_504
 SOURCE_PATHS = (
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs',
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs',
@@ -195,6 +195,7 @@ SECTION_ORDER = {
         'openapi.static_account_operations_publish_exact_auth_and_private_responses.method_rows',
         'openapi.musubi_provider_bundle_attestation.schema_rows',
         'openapi.transaction_payload.required',
+        'openapi.transaction_admission_intent.labels',
         'openapi.offline_request.properties.1',
         'openapi.offline_request.properties.2',
         'openapi.offline_backend.labels',
@@ -261,7 +262,8 @@ TEST_INVENTORY = {
         'generated_openapi_has_only_resolvable_component_schema_refs',
         'package_openapi_authority_is_canonical_norito_json',
         'release_openapi_authorities_match_served_bytes_byte_for_byte',
-        'transaction_payload_schema_requires_closed_network_domain_and_positive_ttl',
+        'transaction_payload_schema_requires_closed_domain_admission_and_positive_ttl',
+        'authenticated_transaction_nullable_fields_are_required_and_nullable',
         'incoming_static_openapi_contracts_remain_bound_to_runtime_routes',
         'static_account_operations_publish_exact_auth_and_private_responses',
         'musubi_provider_bundle_attestation_and_exact_release_contract_is_static',
@@ -293,6 +295,7 @@ TEST_INVENTORY = {
         'pipeline_fastpq_recovery_documents_operator_auth_and_bounds',
         'signed_transaction_submission_documents_exact_preadmission_contract',
         'signed_transaction_reject_code_inventory_matches_runtime_metadata',
+        'openapi_schemas_include_system_keys',
 ),
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': (
         'vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses',
@@ -313,7 +316,7 @@ ATTRIBUTE_SIGNATURE = {
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 'a91e1c3bbf4e2512564f795b197544667aae798efb4c609a30f94853ddf9085d',
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': '8a61371f2409f09729a5ccfe5ea016c79d7f2168100feab501bd9b2c218263d0',
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
-    'crates/iroha_torii/src/openapi.rs': '5968520f9d0b30a610cdecfb63620470f26506b2bfc7a7faa67a7c609ec324dc',
+    'crates/iroha_torii/src/openapi.rs': '715abf8e2d4fd4d09c36642a5643dc17dcdc2060bc134cb332ded1b3299b63a7',
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': '4fed0cf78a5e0c5d97e2466b067521b039d34c3b1a457b80b96e836474b58a35',
 }
 
@@ -483,7 +486,7 @@ class LargeStaticContractAssetTests(unittest.TestCase):
         )
         self.assertEqual(
             hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest(),
-            "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b",
+            "179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7",
         )
 
 

@@ -31,8 +31,11 @@ use super::{
         OfflineCashEqParentLineageV2, OfflineCashGuardBundleLineageChildRoleV2,
         OfflineCashParentLineageCodecErrorV2,
     },
-    state_recursive_fold::{CanonicalStateAccumulatorV2, StateRecursiveFoldParityV2},
+    state_recursive_fold::CanonicalStateAccumulatorV2,
 };
+
+#[cfg(test)]
+use super::state_recursive_fold::StateRecursiveFoldParityV2;
 
 const PROTOCOL_DOMAIN_V2: &[u8] = b"iroha:offline-cash:v2:halo2-source-protocol";
 const HALO2_BACKEND_REVISION_V2: &[u8] = b"halo2-axiom/0.5.1";

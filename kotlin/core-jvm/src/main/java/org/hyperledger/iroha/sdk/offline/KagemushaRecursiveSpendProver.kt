@@ -19,6 +19,9 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
+private const val DRAIN_ONLY_REDEEM_WIRE_ID_V4 =
+    "iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4"
+
 /**
  * Native bridge ABI 22 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
  *
@@ -33,6 +36,457 @@ class KagemushaRecursiveSpendProver private constructor() {
         message: String,
         cause: Throwable? = null,
     ) : IllegalStateException(message, cause)
+
+    /** Caller-owned trust for the finalized device-policy BridgeFinalityProof. */
+    class OfflineDeviceFinalityTrustAnchorV1(
+        @JvmField val networkId: NetworkId,
+        trustedHeightContextId: ByteArray,
+    ) {
+        private val contextId = trustedHeightContextId.copyOf()
+
+        init {
+            require(contextId.size == 32 && (contextId[31].toInt() and 1) == 1) {
+                "trustedHeightContextId must be one exact marked 32-byte Iroha hash"
+            }
+        }
+
+        fun trustedHeightContextId(): ByteArray = contextId.copyOf()
+
+        override fun equals(other: Any?): Boolean =
+            this === other || other is OfflineDeviceFinalityTrustAnchorV1 &&
+                networkId == other.networkId && contextId.contentEquals(other.contextId)
+
+        override fun hashCode(): Int = 31 * networkId.hashCode() + contextId.contentHashCode()
+    }
+
+    /** Caller-owned durable checkpoint for one device-policy proof page. */
+    class OfflineDevicePolicyCheckpointV1(
+        @JvmField val networkId: NetworkId,
+        @JvmField val height: Long,
+        heightContextId: ByteArray,
+    ) {
+        private val contextId = heightContextId.copyOf()
+
+        init {
+            require(height > 0) { "height must be positive" }
+            require(contextId.size == 32 && (contextId[31].toInt() and 1) == 1) {
+                "heightContextId must be one exact marked 32-byte Iroha hash"
+            }
+        }
+
+        fun heightContextId(): ByteArray = contextId.copyOf()
+
+        override fun equals(other: Any?): Boolean =
+            this === other || other is OfflineDevicePolicyCheckpointV1 &&
+                networkId == other.networkId && height == other.height &&
+                contextId.contentEquals(other.contextId)
+
+        override fun hashCode(): Int =
+            31 * (31 * networkId.hashCode() + height.hashCode()) + contextId.contentHashCode()
+    }
+
+    /** Natively verified page plus the exact checkpoint eligible for durable promotion. */
+    class OfflineDevicePolicyVerifiedPageV1 internal constructor(
+        projection: ByteArray,
+        expectedNetworkId: NetworkId,
+    ) {
+        @JvmField val evaluatedCheckpoint: OfflineDevicePolicyCheckpointV1
+        @JvmField val moreAvailable: Boolean
+        @JvmField val terminalPolicyView: DeviceAttestationPolicyViewV1?
+
+        init {
+            require(
+                projection.size in VERIFIED_POLICY_PAGE_FIXED_BYTES_V1..
+                    MAX_DEVICE_POLICY_VERIFIED_PAGE_BYTES_V1,
+            ) { "verified policy page projection has an invalid size" }
+            require(
+                projection.copyOfRange(0, VERIFIED_POLICY_PAGE_MAGIC_V1.size)
+                    .contentEquals(VERIFIED_POLICY_PAGE_MAGIC_V1),
+            ) { "verified policy page projection has an invalid discriminator" }
+            require(projection[8].toInt() and 0x80 == 0) {
+                "evaluated policy height exceeds the maintained SDK range"
+            }
+            var height = 0L
+            for (index in 8 until 16) {
+                height = (height shl 8) or (projection[index].toLong() and 0xff)
+            }
+            val context = projection.copyOfRange(16, 48)
+            val moreByte = projection[48].toInt() and 0xff
+            require(moreByte in 0..1 && projection.sliceArray(49 until 52).all { it == 0.toByte() }) {
+                "verified policy page projection has invalid flags"
+            }
+            var policyLength = 0L
+            for (index in 52 until 56) {
+                policyLength = (policyLength shl 8) or (projection[index].toLong() and 0xff)
+            }
+            require(
+                policyLength <= MAX_DEVICE_ATTESTATION_POLICY_VIEW_ARCHIVE_BYTES_V1.toLong() &&
+                    VERIFIED_POLICY_PAGE_FIXED_BYTES_V1.toLong() + policyLength ==
+                    projection.size.toLong(),
+            ) { "verified policy page projection has an invalid terminal-policy length" }
+            moreAvailable = moreByte == 1
+            require(moreAvailable == (policyLength == 0L)) {
+                "verified policy page pagination and terminal policy disagree"
+            }
+            evaluatedCheckpoint = OfflineDevicePolicyCheckpointV1(
+                expectedNetworkId,
+                height,
+                context,
+            )
+            terminalPolicyView = if (policyLength == 0L) {
+                null
+            } else {
+                DeviceAttestationPolicyViewV1(
+                    projection.copyOfRange(VERIFIED_POLICY_PAGE_FIXED_BYTES_V1, projection.size),
+                    OfflineDeviceFinalityTrustAnchorV1(expectedNetworkId, context),
+                )
+            }
+        }
+    }
+
+    /** Exact protected-state selector; canonical request auth supplies the account identity. */
+    class OfflineDeviceEligibilityRequestV1(
+        registrationHash: ByteArray,
+        @JvmField val deviceId: String,
+        @JvmField val attestationKeyId: String,
+        @JvmField val requestedTtlMilliseconds: Long,
+    ) {
+        private val registrationHashValue = registrationHash.copyOf()
+
+        init {
+            val deviceBytes = deviceId.toByteArray(StandardCharsets.UTF_8)
+            val keyBytes = attestationKeyId.toByteArray(StandardCharsets.UTF_8)
+            require(registrationHashValue.size == 32 && registrationHashValue.any { it != 0.toByte() }) {
+                "registrationHash must be one non-zero 32-byte protected-state key"
+            }
+            require(
+                deviceBytes.isNotEmpty() && deviceBytes.size <= MAX_DEVICE_ELIGIBILITY_DEVICE_ID_BYTES_V1 &&
+                    deviceId == deviceId.trim() && deviceId.none(Character::isISOControl),
+            ) { "deviceId must be canonical bounded UTF-8" }
+            require(
+                keyBytes.isNotEmpty() &&
+                    keyBytes.size <= MAX_DEVICE_ELIGIBILITY_ATTESTATION_KEY_ID_BYTES_V1 &&
+                    attestationKeyId == attestationKeyId.trim() &&
+                    attestationKeyId.none(Character::isISOControl),
+            ) { "attestationKeyId must be canonical bounded UTF-8" }
+            require(requestedTtlMilliseconds in 1..MAX_DEVICE_ELIGIBILITY_CREDENTIAL_TTL_MS_V1) {
+                "requestedTtlMilliseconds must be within the 24-hour credential limit"
+            }
+        }
+
+        fun registrationHash(): ByteArray = registrationHashValue.copyOf()
+
+        override fun equals(other: Any?): Boolean =
+            this === other || other is OfflineDeviceEligibilityRequestV1 &&
+                registrationHashValue.contentEquals(other.registrationHashValue) &&
+                deviceId == other.deviceId && attestationKeyId == other.attestationKeyId &&
+                requestedTtlMilliseconds == other.requestedTtlMilliseconds
+
+        override fun hashCode(): Int =
+            31 * (
+                31 * (
+                    31 * registrationHashValue.contentHashCode() + deviceId.hashCode()
+                ) + attestationKeyId.hashCode()
+            ) + requestedTtlMilliseconds.hashCode()
+    }
+
+    enum class OfflineDeviceEligibilityOutcomeV1 { ELIGIBLE, DRAIN_ONLY, CRYPTOGRAPHICALLY_REJECTED }
+
+    enum class OfflineDeviceEligibilityReasonV1 {
+        POLICY_SATISFIED,
+        CRYPTOGRAPHIC_ATTESTATION_REJECTED,
+        POLICY_NOT_FRESH,
+        INCOMPLETE_ATTESTED_PROPERTIES,
+        UNSUPPORTED_PRE_ANDROID_12_TEE,
+        VULNERABLE_FIRMWARE,
+        PERMANENTLY_BLOCKED_DEVICE,
+    }
+
+    class OfflineDeviceEligibilityDecisionV1 internal constructor(
+        @JvmField val outcome: OfflineDeviceEligibilityOutcomeV1,
+        @JvmField val reason: OfflineDeviceEligibilityReasonV1,
+        matchedRuleIds: List<String>,
+    ) {
+        @JvmField val matchedRuleIds: List<String> =
+            Collections.unmodifiableList(ArrayList(matchedRuleIds))
+    }
+
+    class OfflineDeviceEligibilityAdmissionProvenanceV1 internal constructor(
+        registrationHash: ByteArray,
+        admissionPolicyHash: ByteArray,
+        @JvmField val admissionHeight: Long,
+        admissionTransactionHash: ByteArray,
+    ) {
+        private val registrationHashValue = registrationHash.copyOf()
+        private val admissionPolicyHashValue = admissionPolicyHash.copyOf()
+        private val admissionTransactionHashValue = admissionTransactionHash.copyOf()
+
+        fun registrationHash(): ByteArray = registrationHashValue.copyOf()
+        fun admissionPolicyHash(): ByteArray = admissionPolicyHashValue.copyOf()
+        fun admissionTransactionHash(): ByteArray = admissionTransactionHashValue.copyOf()
+    }
+
+    class OfflineDevicePolicyFinalityClaimsV1 internal constructor(
+        @JvmField val finalizedBlockHeight: Long,
+        finalizedBlockHash: ByteArray,
+        @JvmField val finalizedBlockTimestampMilliseconds: Long,
+        finalityEvidenceHash: ByteArray,
+    ) {
+        private val finalizedBlockHashValue = finalizedBlockHash.copyOf()
+        private val finalityEvidenceHashValue = finalityEvidenceHash.copyOf()
+        fun finalizedBlockHash(): ByteArray = finalizedBlockHashValue.copyOf()
+        fun finalityEvidenceHash(): ByteArray = finalityEvidenceHashValue.copyOf()
+    }
+
+    class OfflineDeviceEligibilityPolicyClaimsV1 internal constructor(
+        @JvmField val policyEpoch: Long,
+        policyHash: ByteArray,
+        @JvmField val freshnessDeadlineMilliseconds: Long,
+        @JvmField val finality: OfflineDevicePolicyFinalityClaimsV1,
+    ) {
+        private val policyHashValue = policyHash.copyOf()
+        fun policyHash(): ByteArray = policyHashValue.copyOf()
+    }
+
+    /**
+     * Public claims projected from one natively verified, finalized device-policy view.
+     *
+     * The fixed ABI-22 projection is deliberately smaller than the policy archive: callers can
+     * use these claims as a registration trust context only after the native bridge has verified
+     * the canonical policy, its exact block binding, and the Sumeragi finality proof against a
+     * caller-owned network and height-context anchor.
+     */
+    class OfflineDeviceAttestationPolicyViewClaimsV1 internal constructor(projection: ByteArray) {
+        @JvmField val policyEpoch: Long
+        @JvmField val freshnessDeadlineMilliseconds: Long
+        @JvmField val finalizedBlockHeight: Long
+        @JvmField val finalizedBlockTimestampMilliseconds: Long
+        private val policyHashValue: ByteArray
+        private val finalizedBlockHashValue: ByteArray
+        private val finalityEvidenceHashValue: ByteArray
+
+        init {
+            require(
+                projection.size == OFFLINE_DEVICE_POLICY_VIEW_CLAIMS_BYTES_V1 &&
+                    projection.copyOfRange(0, 8)
+                        .contentEquals(OFFLINE_DEVICE_POLICY_VIEW_CLAIMS_MAGIC_V1),
+            ) { "offline device policy claims projection has invalid framing" }
+            policyEpoch = readProjectionUInt64(projection, 8)
+            policyHashValue = projection.copyOfRange(16, 48)
+            freshnessDeadlineMilliseconds = readProjectionUInt64(projection, 48)
+            finalizedBlockHeight = readProjectionUInt64(projection, 56)
+            finalizedBlockHashValue = projection.copyOfRange(64, 96)
+            finalizedBlockTimestampMilliseconds = readProjectionUInt64(projection, 96)
+            finalityEvidenceHashValue = projection.copyOfRange(104, 136)
+            require(
+                policyEpoch > 0 && policyHashValue.any { it != 0.toByte() } &&
+                    freshnessDeadlineMilliseconds > finalizedBlockTimestampMilliseconds &&
+                    finalizedBlockHeight > 0 &&
+                    finalizedBlockHashValue.any { it != 0.toByte() } &&
+                    finalizedBlockTimestampMilliseconds > 0 &&
+                    finalityEvidenceHashValue.any { it != 0.toByte() },
+            ) { "offline device policy claims projection is invalid" }
+        }
+
+        fun policyHash(): ByteArray = policyHashValue.copyOf()
+
+        fun finalizedBlockHash(): ByteArray = finalizedBlockHashValue.copyOf()
+
+        fun finalityEvidenceHash(): ByteArray = finalityEvidenceHashValue.copyOf()
+    }
+
+    class OfflineDeviceEligibilityCredentialClaimsV1 internal constructor(
+        @JvmField val accountId: String,
+        @JvmField val deviceId: String,
+        @JvmField val attestationKeyId: String,
+        devicePublicKey: ByteArray,
+        assertionPublicKey: ByteArray,
+        @JvmField val issuedAtMilliseconds: Long,
+        @JvmField val expiresAtMilliseconds: Long,
+    ) {
+        private val devicePublicKeyValue = devicePublicKey.copyOf()
+        private val assertionPublicKeyValue = assertionPublicKey.copyOf()
+        fun devicePublicKey(): ByteArray = devicePublicKeyValue.copyOf()
+        fun assertionPublicKey(): ByteArray = assertionPublicKeyValue.copyOf()
+    }
+
+    /** Native-verified public decision, issuer, optional credential, policy, and provenance. */
+    class OfflineDeviceEligibilityResponseV1 internal constructor(
+        projection: ByteArray,
+        responseArchive: ByteArray,
+        expectedRegistrationHash: ByteArray,
+        trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+    ) {
+        @JvmField val decision: OfflineDeviceEligibilityDecisionV1
+        @JvmField val issuer: EligibilityIssuerPublicKeyV1
+        @JvmField val credential: EligibilityCredentialV1?
+        @JvmField val finalizedPolicy: DeviceAttestationPolicyViewV1
+        @JvmField val policyClaims: OfflineDeviceEligibilityPolicyClaimsV1
+        @JvmField val credentialClaims: OfflineDeviceEligibilityCredentialClaimsV1?
+        @JvmField val admission: OfflineDeviceEligibilityAdmissionProvenanceV1
+        private val responseArchiveValue = responseArchive.copyOf()
+
+        init {
+            require(
+                responseArchiveValue.isNotEmpty() &&
+                    responseArchiveValue.size <= MAX_DEVICE_ELIGIBILITY_RESPONSE_ARCHIVE_BYTES_V1 &&
+                projection.size in VERIFIED_ELIGIBILITY_RESPONSE_FIXED_BYTES_V1..
+                    MAX_DEVICE_ELIGIBILITY_VERIFIED_RESPONSE_BYTES_V1,
+            ) { "verified eligibility response projection has an invalid size" }
+            require(
+                projection.copyOfRange(0, 8).contentEquals(VERIFIED_ELIGIBILITY_RESPONSE_MAGIC_V1) &&
+                    projection[11] == 0.toByte() &&
+                    projection.copyOfRange(118, 120).all { it == 0.toByte() } &&
+                    projection.copyOfRange(290, 292).all { it == 0.toByte() },
+            ) { "verified eligibility response projection has invalid framing" }
+            val outcome = OfflineDeviceEligibilityOutcomeV1.entries.getOrNull(
+                projection[8].toInt() and 0xff,
+            ) ?: throw IllegalArgumentException("eligibility outcome is invalid")
+            val reason = OfflineDeviceEligibilityReasonV1.entries.getOrNull(
+                projection[9].toInt() and 0xff,
+            ) ?: throw IllegalArgumentException("eligibility reason is invalid")
+            val credentialFlag = projection[10].toInt() and 0xff
+            require(credentialFlag in 0..1) { "eligibility credential flag is invalid" }
+            val admissionHeight = readProjectionUInt64(projection, 12)
+            val registrationHash = projection.copyOfRange(20, 52)
+            val admissionPolicyHash = projection.copyOfRange(52, 84)
+            val admissionTransactionHash = projection.copyOfRange(84, 116)
+            require(
+                admissionHeight > 0 && registrationHash.contentEquals(expectedRegistrationHash) &&
+                    registrationHash.any { it != 0.toByte() } &&
+                    admissionPolicyHash.any { it != 0.toByte() } &&
+                    admissionTransactionHash.any { it != 0.toByte() },
+            ) { "eligibility admission provenance is invalid" }
+            val matchedCount = readProjectionUInt16(projection, 116)
+            val matchedLength = readProjectionUInt32(projection, 120)
+            val issuerLength = readProjectionUInt32(projection, 124)
+            val credentialLength = readProjectionUInt32(projection, 128)
+            val policyLength = readProjectionUInt32(projection, 132)
+            val policyEpoch = readProjectionUInt64(projection, 136)
+            val policyHash = projection.copyOfRange(144, 176)
+            val freshnessDeadline = readProjectionUInt64(projection, 176)
+            val finalizedBlockHeight = readProjectionUInt64(projection, 184)
+            val finalizedBlockHash = projection.copyOfRange(192, 224)
+            val finalizedBlockTimestamp = readProjectionUInt64(projection, 224)
+            val finalityEvidenceHash = projection.copyOfRange(232, 264)
+            val credentialIssuedAt = readProjectionUInt64(projection, 264)
+            val credentialExpiresAt = readProjectionUInt64(projection, 272)
+            val claimLengths = listOf(
+                readProjectionUInt16(projection, 280),
+                readProjectionUInt16(projection, 282),
+                readProjectionUInt16(projection, 284),
+                readProjectionUInt16(projection, 286),
+                readProjectionUInt16(projection, 288),
+            )
+            val claimsLength = readProjectionUInt32(projection, 292)
+            require(
+                policyEpoch > 0 && policyHash.any { it != 0.toByte() } &&
+                    freshnessDeadline > finalizedBlockTimestamp &&
+                    finalizedBlockHeight >= admissionHeight &&
+                    finalizedBlockHash.any { it != 0.toByte() } &&
+                    finalizedBlockTimestamp > 0 && finalityEvidenceHash.any { it != 0.toByte() } &&
+                    claimLengths.sumOf { it.toLong() } == claimsLength,
+            ) { "eligibility response claims are invalid" }
+            var expectedLength = VERIFIED_ELIGIBILITY_RESPONSE_FIXED_BYTES_V1.toLong()
+            for (
+                length in listOf(
+                    matchedLength,
+                    issuerLength,
+                    credentialLength,
+                    policyLength,
+                    claimsLength,
+                )
+            ) {
+                expectedLength = Math.addExact(expectedLength, length)
+            }
+            require(
+                expectedLength == projection.size.toLong() &&
+                    issuerLength in 1..MAX_ELIGIBILITY_ISSUER_ARCHIVE_BYTES_V1.toLong() &&
+                    credentialLength in 0..MAX_ELIGIBILITY_CREDENTIAL_ARCHIVE_BYTES_V1.toLong() &&
+                    policyLength in 1..MAX_DEVICE_ATTESTATION_POLICY_VIEW_ARCHIVE_BYTES_V1.toLong() &&
+                    (credentialFlag == 1) == (credentialLength > 0) &&
+                    (outcome == OfflineDeviceEligibilityOutcomeV1.ELIGIBLE) ==
+                    (credentialLength > 0) &&
+                    (credentialLength == 0L) ==
+                    (credentialIssuedAt == 0L && credentialExpiresAt == 0L &&
+                        claimLengths.all { it == 0 }),
+            ) { "eligibility response sections or credential presence are invalid" }
+
+            var cursor = VERIFIED_ELIGIBILITY_RESPONSE_FIXED_BYTES_V1
+            val matchedEnd = Math.addExact(cursor, matchedLength.toInt())
+            val matchedRuleIds = decodeMatchedRuleProjection(
+                projection.copyOfRange(cursor, matchedEnd),
+                matchedCount,
+            )
+            cursor = matchedEnd
+            val issuerEnd = Math.addExact(cursor, issuerLength.toInt())
+            val issuerArchive = projection.copyOfRange(cursor, issuerEnd)
+            cursor = issuerEnd
+            val credentialEnd = Math.addExact(cursor, credentialLength.toInt())
+            val credentialArchive = projection.copyOfRange(cursor, credentialEnd)
+            cursor = credentialEnd
+            val policyEnd = Math.addExact(cursor, policyLength.toInt())
+            val policyArchive = projection.copyOfRange(cursor, policyEnd)
+            cursor = policyEnd
+            val claimsBytes = projection.copyOfRange(cursor, projection.size)
+            requireEligibilityDecisionProjection(outcome, reason, matchedRuleIds)
+
+            decision = OfflineDeviceEligibilityDecisionV1(outcome, reason, matchedRuleIds)
+            issuer = EligibilityIssuerPublicKeyV1(issuerArchive)
+            if (credentialArchive.isEmpty()) {
+                credential = null
+                credentialClaims = null
+            } else {
+                require(
+                    credentialIssuedAt > 0 && credentialExpiresAt > credentialIssuedAt &&
+                        claimLengths[3] == 65 && claimLengths[4] == 65,
+                ) { "eligibility credential claims are invalid" }
+                val sections = ArrayList<ByteArray>(claimLengths.size)
+                var claimCursor = 0
+                for (length in claimLengths) {
+                    val end = Math.addExact(claimCursor, length)
+                    require(end <= claimsBytes.size) { "eligibility credential claims are truncated" }
+                    sections.add(claimsBytes.copyOfRange(claimCursor, end))
+                    claimCursor = end
+                }
+                require(
+                    claimCursor == claimsBytes.size && sections[3].firstOrNull() == 0x04.toByte() &&
+                        sections[4].firstOrNull() == 0x04.toByte(),
+                ) { "eligibility credential public-key claims are invalid" }
+                credential = EligibilityCredentialV1(credentialArchive, trustAnchor)
+                credentialClaims = OfflineDeviceEligibilityCredentialClaimsV1(
+                    decodeCanonicalProjectionString(sections[0], "accountId"),
+                    decodeCanonicalProjectionString(sections[1], "deviceId"),
+                    decodeCanonicalProjectionString(sections[2], "attestationKeyId"),
+                    sections[3],
+                    sections[4],
+                    credentialIssuedAt,
+                    credentialExpiresAt,
+                )
+            }
+            finalizedPolicy = DeviceAttestationPolicyViewV1(policyArchive, trustAnchor)
+            policyClaims = OfflineDeviceEligibilityPolicyClaimsV1(
+                policyEpoch,
+                policyHash,
+                freshnessDeadline,
+                OfflineDevicePolicyFinalityClaimsV1(
+                    finalizedBlockHeight,
+                    finalizedBlockHash,
+                    finalizedBlockTimestamp,
+                    finalityEvidenceHash,
+                ),
+            )
+            admission = OfflineDeviceEligibilityAdmissionProvenanceV1(
+                registrationHash,
+                admissionPolicyHash,
+                admissionHeight,
+                admissionTransactionHash,
+            )
+        }
+
+        /** Exact canonical Torii response, retained only after native verification. */
+        fun noritoEncoded(): ByteArray = responseArchiveValue.copyOf()
+    }
 
     /** Canonical ABI-21 artifact roles. Declaration order is part of the native contract. */
     enum class ArtifactRoleV4(val fileName: String) {
@@ -55,8 +509,14 @@ class KagemushaRecursiveSpendProver private constructor() {
     companion object {
         const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 22
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+        /** Frozen recursive proof/artifact ABI carried unchanged through the ABI-22 bridge. */
+        const val REQUIRED_RECURSIVE_PROOF_ARTIFACT_ABI_VERSION: Int = 21
         /** Mandatory sender-final peer-cash handoff/finality contract. */
         const val CASH_HANDOFF_CAPABILITY_V1: String = "cash_handoff_v1"
+        /** Eligibility-gated handoff advertised separately from the legacy capability. */
+        const val CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1: String =
+            "cash_handoff_eligibility_v1"
+        const val V4_ARTIFACT_MANIFEST_VERSION: Int = 4
         const val V4_ARTIFACT_MANIFEST_SCHEMA: String =
             "kagemusha.offline.recursive_spend.artifact_manifest.v4"
         const val ARTIFACT_MANIFEST_SCHEMA: String = V4_ARTIFACT_MANIFEST_SCHEMA
@@ -89,6 +549,35 @@ class KagemushaRecursiveSpendProver private constructor() {
         /** Consensus ceiling for one canonical recipient-only ABI-21 peer archive. */
         const val MAX_PEER_ARCHIVE_BYTES_V4: Int = 32 * 1024 * 1024
         const val MAX_PEER_ARCHIVE_BYTES: Int = MAX_PEER_ARCHIVE_BYTES_V4
+        const val MAX_ELIGIBILITY_CREDENTIAL_ARCHIVE_BYTES_V1: Int = 64 * 1024
+        const val MAX_ELIGIBILITY_PAYMENT_ENVELOPE_ARCHIVE_BYTES_V1: Int =
+            MAX_PEER_ARCHIVE_BYTES_V4 + MAX_ELIGIBILITY_CREDENTIAL_ARCHIVE_BYTES_V1 +
+                64 * 1024
+        const val MAX_DEVICE_ATTESTATION_POLICY_VIEW_ARCHIVE_BYTES_V1: Int =
+            8 * 1024 * 1024 + 256 * 1024 + 64 * 1024
+        const val MAX_DEVICE_POLICY_PROOF_PAGE_ARCHIVE_BYTES_V1: Int =
+            MAX_DEVICE_ATTESTATION_POLICY_VIEW_ARCHIVE_BYTES_V1 + 3 * 1024 * 1024 + 64 * 1024
+        const val MAX_DEVICE_POLICY_VERIFIED_PAGE_BYTES_V1: Int =
+            MAX_DEVICE_ATTESTATION_POLICY_VIEW_ARCHIVE_BYTES_V1 + 56
+        const val MAX_DEVICE_ELIGIBILITY_REQUEST_ARCHIVE_BYTES_V1: Int = 8 * 1024
+        const val MAX_DEVICE_ELIGIBILITY_RESPONSE_ARCHIVE_BYTES_V1: Int =
+            MAX_DEVICE_ATTESTATION_POLICY_VIEW_ARCHIVE_BYTES_V1 +
+                MAX_ELIGIBILITY_CREDENTIAL_ARCHIVE_BYTES_V1 + 64 * 1024
+        const val MAX_DEVICE_ELIGIBILITY_VERIFIED_RESPONSE_BYTES_V1: Int =
+            MAX_DEVICE_ELIGIBILITY_RESPONSE_ARCHIVE_BYTES_V1 + 64 * 1024
+        const val MAX_DEVICE_ELIGIBILITY_CREDENTIAL_TTL_MS_V1: Long = 24L * 60 * 60 * 1000
+        const val MAX_DEVICE_ELIGIBILITY_DEVICE_ID_BYTES_V1: Int = 128
+        const val MAX_DEVICE_ELIGIBILITY_ATTESTATION_KEY_ID_BYTES_V1: Int = 64
+        private const val VERIFIED_POLICY_PAGE_FIXED_BYTES_V1: Int = 56
+        private val VERIFIED_POLICY_PAGE_MAGIC_V1: ByteArray =
+            byteArrayOf(0x49, 0x44, 0x50, 0x50, 0x56, 0x31, 0, 0)
+        private const val OFFLINE_DEVICE_POLICY_VIEW_CLAIMS_BYTES_V1: Int = 136
+        private val OFFLINE_DEVICE_POLICY_VIEW_CLAIMS_MAGIC_V1: ByteArray =
+            byteArrayOf(0x49, 0x44, 0x50, 0x56, 0x43, 0x4c, 0x31, 0)
+        private const val VERIFIED_ELIGIBILITY_RESPONSE_FIXED_BYTES_V1: Int = 296
+        private val VERIFIED_ELIGIBILITY_RESPONSE_MAGIC_V1: ByteArray =
+            byteArrayOf(0x49, 0x44, 0x45, 0x52, 0x53, 0x50, 0x31, 0)
+        private const val MAX_ELIGIBILITY_ISSUER_ARCHIVE_BYTES_V1: Int = 4 * 1024
         /** Consensus-derived ceiling for one canonical ABI-21 top-up provenance archive. */
         const val MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4: Int = 6_488_064
         /** Largest V4 local verify carrier accepted by native, plus framing headroom. */
@@ -254,6 +743,347 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun decodePeerPayment(archive: ByteArray): PeerPayment = PeerPayment(archive)
+
+        @JvmStatic
+        fun decodeEligibilityCredentialV1(archive: ByteArray): EligibilityCredentialV1 =
+            EligibilityCredentialV1(archive)
+
+        @JvmStatic
+        fun decodeEligibilityIssuerPublicKeyV1(
+            archive: ByteArray,
+        ): EligibilityIssuerPublicKeyV1 = EligibilityIssuerPublicKeyV1(archive)
+
+        @JvmStatic
+        fun decodeDeviceAttestationPolicyViewV1(
+            archive: ByteArray,
+        ): DeviceAttestationPolicyViewV1 = DeviceAttestationPolicyViewV1(archive)
+
+        /**
+         * Canonically decode and authenticate a finalized V2 policy view.
+         * The context anchor is caller-owned and is never learned from the archive.
+         */
+        @JvmStatic
+        fun verifyDeviceAttestationPolicyViewV1(
+            archive: ByteArray,
+            trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+            evaluationTimeMilliseconds: Long,
+        ): DeviceAttestationPolicyViewV1 {
+            require(evaluationTimeMilliseconds > 0) {
+                "evaluationTimeMilliseconds must be positive"
+            }
+            requireArtifactBridge()
+            val canonical = nativeVerifyOfflineDeviceAttestationPolicyViewV1(
+                archive.copyOf(),
+                trustAnchor.networkId.bytes(),
+                trustAnchor.trustedHeightContextId(),
+                evaluationTimeMilliseconds,
+            )
+            require(canonical.contentEquals(archive)) {
+                "native policy verifier changed canonical policy-view bytes"
+            }
+            return DeviceAttestationPolicyViewV1(canonical, trustAnchor)
+        }
+
+        /**
+         * Reverify [policyView] and project its exact finalized policy/block binding.
+         *
+         * A decoded but unverified policy view is rejected because it carries no caller-owned
+         * trust anchor. Native code performs the finality verification again before returning the
+         * fixed public projection; no Torii status field participates in this trust decision.
+         */
+        @JvmStatic
+        fun projectDeviceAttestationPolicyViewClaimsV1(
+            policyView: DeviceAttestationPolicyViewV1,
+            evaluationTimeMilliseconds: Long,
+        ): OfflineDeviceAttestationPolicyViewClaimsV1 {
+            require(evaluationTimeMilliseconds > 0) {
+                "evaluationTimeMilliseconds must be positive"
+            }
+            val trustAnchor = checkNotNull(policyView.verificationTrustAnchor) {
+                "policy view must be returned by the native finalized-policy verifier"
+            }
+            requireArtifactBridge()
+            return OfflineDeviceAttestationPolicyViewClaimsV1(
+                nativeProjectOfflineDeviceAttestationPolicyViewClaimsV1(
+                    policyView.noritoEncoded(),
+                    trustAnchor.networkId.bytes(),
+                    trustAnchor.trustedHeightContextId(),
+                    evaluationTimeMilliseconds,
+                ),
+            )
+        }
+
+        private fun readProjectionUInt16(bytes: ByteArray, offset: Int): Int {
+            require(offset >= 0 && offset + 2 <= bytes.size)
+            return ((bytes[offset].toInt() and 0xff) shl 8) or
+                (bytes[offset + 1].toInt() and 0xff)
+        }
+
+        private fun readProjectionUInt32(bytes: ByteArray, offset: Int): Long {
+            require(offset >= 0 && offset + 4 <= bytes.size)
+            var result = 0L
+            for (index in offset until offset + 4) {
+                result = (result shl 8) or (bytes[index].toLong() and 0xff)
+            }
+            return result
+        }
+
+        private fun readProjectionUInt64(bytes: ByteArray, offset: Int): Long {
+            require(offset >= 0 && offset + 8 <= bytes.size)
+            require((bytes[offset].toInt() and 0x80) == 0) {
+                "projection value exceeds the maintained signed Long range"
+            }
+            var result = 0L
+            for (index in offset until offset + 8) {
+                result = (result shl 8) or (bytes[index].toLong() and 0xff)
+            }
+            return result
+        }
+
+        private fun decodeMatchedRuleProjection(bytes: ByteArray, expectedCount: Int): List<String> {
+            val rules = ArrayList<String>(expectedCount)
+            var cursor = 0
+            while (cursor < bytes.size) {
+                require(cursor + 2 <= bytes.size) { "matched-rule projection is truncated" }
+                val length = readProjectionUInt16(bytes, cursor)
+                cursor += 2
+                require(length > 0 && cursor + length <= bytes.size) {
+                    "matched-rule projection has an invalid length"
+                }
+                val rule = decodeCanonicalProjectionString(
+                    bytes.copyOfRange(cursor, cursor + length),
+                    "matchedRuleId",
+                )
+                rules.add(rule)
+                cursor += length
+            }
+            require(rules.size == expectedCount && rules.zipWithNext().all { it.first < it.second }) {
+                "matched-rule projection count or ordering is invalid"
+            }
+            return Collections.unmodifiableList(rules)
+        }
+
+        private fun decodeCanonicalProjectionString(bytes: ByteArray, field: String): String {
+            require(bytes.isNotEmpty()) { "$field must not be empty" }
+            val value = bytes.toString(StandardCharsets.UTF_8)
+            require(
+                value.toByteArray(StandardCharsets.UTF_8).contentEquals(bytes) &&
+                    value == value.trim() && value.none(Character::isISOControl),
+            ) { "$field is not canonical UTF-8" }
+            return value
+        }
+
+        private fun requireEligibilityDecisionProjection(
+            outcome: OfflineDeviceEligibilityOutcomeV1,
+            reason: OfflineDeviceEligibilityReasonV1,
+            matchedRuleIds: List<String>,
+        ) {
+            val valid = when (Triple(outcome, reason, matchedRuleIds.isEmpty())) {
+                Triple(
+                    OfflineDeviceEligibilityOutcomeV1.ELIGIBLE,
+                    OfflineDeviceEligibilityReasonV1.POLICY_SATISFIED,
+                    true,
+                ),
+                Triple(
+                    OfflineDeviceEligibilityOutcomeV1.CRYPTOGRAPHICALLY_REJECTED,
+                    OfflineDeviceEligibilityReasonV1.CRYPTOGRAPHIC_ATTESTATION_REJECTED,
+                    true,
+                ),
+                Triple(
+                    OfflineDeviceEligibilityOutcomeV1.DRAIN_ONLY,
+                    OfflineDeviceEligibilityReasonV1.POLICY_NOT_FRESH,
+                    true,
+                ),
+                Triple(
+                    OfflineDeviceEligibilityOutcomeV1.DRAIN_ONLY,
+                    OfflineDeviceEligibilityReasonV1.INCOMPLETE_ATTESTED_PROPERTIES,
+                    true,
+                ),
+                Triple(
+                    OfflineDeviceEligibilityOutcomeV1.DRAIN_ONLY,
+                    OfflineDeviceEligibilityReasonV1.UNSUPPORTED_PRE_ANDROID_12_TEE,
+                    true,
+                ),
+                Triple(
+                    OfflineDeviceEligibilityOutcomeV1.DRAIN_ONLY,
+                    OfflineDeviceEligibilityReasonV1.VULNERABLE_FIRMWARE,
+                    false,
+                ),
+                Triple(
+                    OfflineDeviceEligibilityOutcomeV1.DRAIN_ONLY,
+                    OfflineDeviceEligibilityReasonV1.PERMANENTLY_BLOCKED_DEVICE,
+                    false,
+                ),
+                -> true
+                else -> false
+            }
+            require(valid) { "eligibility decision projection is inconsistent" }
+        }
+
+        /** Encode one exact typed policy-proof request from caller-owned trust. */
+        @JvmStatic
+        fun makeOfflineDevicePolicyProofRequestV1(
+            checkpoint: OfflineDevicePolicyCheckpointV1,
+        ): ByteArray {
+            requireArtifactBridge()
+            return nativeEncodeOfflineDevicePolicyProofRequestV1(
+                checkpoint.height,
+                checkpoint.heightContextId(),
+            ).also { require(it.isNotEmpty()) { "native policy proof request is empty" } }.copyOf()
+        }
+
+        /**
+         * Verify one proof page. Persist [OfflineDevicePolicyVerifiedPageV1.evaluatedCheckpoint]
+         * atomically before using it for another page; native and this SDK own no checkpoint store.
+         */
+        @JvmStatic
+        fun verifyOfflineDevicePolicyProofPageV1(
+            archive: ByteArray,
+            checkpoint: OfflineDevicePolicyCheckpointV1,
+            evaluationTimeMilliseconds: Long,
+        ): OfflineDevicePolicyVerifiedPageV1 {
+            require(
+                archive.isNotEmpty() && archive.size <= MAX_DEVICE_POLICY_PROOF_PAGE_ARCHIVE_BYTES_V1,
+            ) { "policy proof page exceeds its canonical response bound" }
+            require(evaluationTimeMilliseconds > 0) {
+                "evaluationTimeMilliseconds must be positive"
+            }
+            requireArtifactBridge()
+            val projection = nativeVerifyOfflineDevicePolicyProofV1(
+                archive.copyOf(),
+                checkpoint.networkId.bytes(),
+                checkpoint.height,
+                checkpoint.heightContextId(),
+                evaluationTimeMilliseconds,
+            )
+            return OfflineDevicePolicyVerifiedPageV1(projection, checkpoint.networkId)
+        }
+
+        /** Encode the exact authenticated POST body without duplicating the caller account. */
+        @JvmStatic
+        fun makeOfflineDeviceEligibilityRequestV1(
+            request: OfflineDeviceEligibilityRequestV1,
+        ): ByteArray {
+            requireArtifactBridge()
+            return nativeEncodeOfflineDeviceEligibilityRequestV1(
+                request.registrationHash(),
+                request.deviceId.toByteArray(StandardCharsets.UTF_8),
+                request.attestationKeyId.toByteArray(StandardCharsets.UTF_8),
+                request.requestedTtlMilliseconds,
+            ).also {
+                require(it.isNotEmpty() && it.size <= MAX_DEVICE_ELIGIBILITY_REQUEST_ARCHIVE_BYTES_V1) {
+                    "native device eligibility request is empty or oversized"
+                }
+            }.copyOf()
+        }
+
+        /**
+         * Canonically decode and authenticate one issuance response against the
+         * exact request registration, independently pinned issuer, network,
+         * finality context, and wall-clock evaluation time.
+         */
+        @JvmStatic
+        fun verifyOfflineDeviceEligibilityResponseV1(
+            archive: ByteArray,
+            request: OfflineDeviceEligibilityRequestV1,
+            expectedIssuer: EligibilityIssuerPublicKeyV1,
+            trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+            evaluationTimeMilliseconds: Long,
+        ): OfflineDeviceEligibilityResponseV1 {
+            require(
+                archive.isNotEmpty() && archive.size <= MAX_DEVICE_ELIGIBILITY_RESPONSE_ARCHIVE_BYTES_V1,
+            ) { "device eligibility response exceeds its canonical response bound" }
+            require(evaluationTimeMilliseconds > 0) {
+                "evaluationTimeMilliseconds must be positive"
+            }
+            requireArtifactBridge()
+            val projection = nativeVerifyOfflineDeviceEligibilityResponseV1(
+                archive.copyOf(),
+                request.registrationHash(),
+                expectedIssuer.noritoEncoded(),
+                trustAnchor.networkId.bytes(),
+                trustAnchor.trustedHeightContextId(),
+                evaluationTimeMilliseconds,
+            )
+            return OfflineDeviceEligibilityResponseV1(
+                projection,
+                archive,
+                request.registrationHash(),
+                trustAnchor,
+            )
+        }
+
+        /** Verify issuer, credential claims, policy binding, freshness, and finality together. */
+        @JvmStatic
+        fun verifyEligibilityCredentialV1(
+            archive: ByteArray,
+            expectedIssuer: EligibilityIssuerPublicKeyV1,
+            currentPolicyView: DeviceAttestationPolicyViewV1,
+            evaluationTimeMilliseconds: Long,
+        ): EligibilityCredentialV1 {
+            require(evaluationTimeMilliseconds > 0) {
+                "evaluationTimeMilliseconds must be positive"
+            }
+            val trustAnchor = checkNotNull(currentPolicyView.verificationTrustAnchor) {
+                "currentPolicyView has not passed native finality verification"
+            }
+            requireArtifactBridge()
+            val canonical = nativeVerifyOfflineDeviceEligibilityCredentialV1(
+                archive.copyOf(),
+                expectedIssuer.noritoEncoded(),
+                currentPolicyView.noritoEncoded(),
+                trustAnchor.networkId.bytes(),
+                trustAnchor.trustedHeightContextId(),
+                evaluationTimeMilliseconds,
+            )
+            require(canonical.contentEquals(archive)) {
+                "native credential verifier changed canonical credential bytes"
+            }
+            return EligibilityCredentialV1(canonical, trustAnchor)
+        }
+
+        /**
+         * Authenticate an IPN1 peer certificate as a live governed eligibility
+         * credential and return the registered device key authorized to sign
+         * that peer transcript. Raw public keys are never accepted here.
+         */
+        @JvmStatic
+        fun verifyEligibilityPeerCertificateV1(
+            certificate: ByteArray,
+            expectedIssuer: EligibilityIssuerPublicKeyV1,
+            currentPolicyView: DeviceAttestationPolicyViewV1,
+            evaluationTimeMilliseconds: Long,
+        ): KagemushaDevicePublicKeyV2 {
+            require(evaluationTimeMilliseconds > 0) {
+                "evaluationTimeMilliseconds must be positive"
+            }
+            val trustAnchor = checkNotNull(currentPolicyView.verificationTrustAnchor) {
+                "currentPolicyView has not passed native finality verification"
+            }
+            requireArtifactBridge()
+            val publicKey = nativeVerifyOfflineDeviceEligibilityPeerCertificateV1(
+                certificate.copyOf(),
+                expectedIssuer.noritoEncoded(),
+                currentPolicyView.noritoEncoded(),
+                trustAnchor.networkId.bytes(),
+                trustAnchor.trustedHeightContextId(),
+                evaluationTimeMilliseconds,
+            )
+            return KagemushaDevicePublicKeyV2(publicKey)
+        }
+
+        /** Restore only after the ABI-22 static validator accepts the exact envelope. */
+        @JvmStatic
+        fun decodeEligibilityPaymentEnvelopeV1(
+            archive: ByteArray,
+        ): EligibilityPaymentEnvelopeV1 {
+            requireArtifactBridge()
+            val canonical = nativeValidateEligibilityPaymentStaticV1(archive.copyOf())
+            require(canonical.contentEquals(archive)) {
+                "native eligibility validator changed canonical envelope bytes"
+            }
+            return EligibilityPaymentEnvelopeV1(canonical)
+        }
 
         @JvmStatic
         fun decodeReceiverAcknowledgement(archive: ByteArray): ReceiverAcknowledgement =
@@ -540,6 +1370,11 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun decodeTopUpFinalityRosterArtifact(archive: ByteArray): TopUpFinalityRosterArtifact =
             TopUpFinalityRosterArtifact(archive)
 
+        /** Decode exact compact-finality proof bytes without interpreting proof-controlled fields. */
+        @JvmStatic
+        fun decodeTopUpFinalityProof(archive: ByteArray): TopUpFinalityProof =
+            TopUpFinalityProof(archive)
+
         /** Restore the exact canonical Torii request retained for an idempotent top-up retry. */
         @JvmStatic
         fun decodeTopUpRequest(archive: ByteArray): TopUpRequest = TopUpRequest(archive)
@@ -548,6 +1383,51 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun decodeRedeemSubmissionRequest(archive: ByteArray): RedeemSubmissionRequest =
             RedeemSubmissionRequest(archive)
+
+        /**
+         * Natively decode the HTTP-202 operation reference and bind it to the exact retained
+         * request identity. HTTP acceptance is not finality, but its transaction hash is the only
+         * hash later authenticated through committed transaction details and therefore must be
+         * persisted before polling.
+         */
+        @JvmStatic
+        fun projectOperationReference(
+            reference: OperationReference,
+            expectedOperationId: String,
+            expectedKind: OperationKind,
+            expectedSubmittedAtMilliseconds: Long,
+        ): OperationReferenceProjection {
+            requireArtifactBridge()
+            val kindText = when (expectedKind) {
+                OperationKind.TOP_UP -> "top_up"
+                OperationKind.REDEEM -> "redeem"
+            }
+            val fields = nativeProjectOperationReferenceV1(
+                reference.noritoEncoded(),
+                expectedOperationId.toByteArray(Charsets.UTF_8),
+                kindText.toByteArray(Charsets.UTF_8),
+                expectedSubmittedAtMilliseconds,
+            )
+            requireFieldCount(fields, 6, "operation reference projection")
+            check(canonicalText(fields[0], "operationState") == "pending") {
+                "native Kagemusha operation reference is not Pending"
+            }
+            check(canonicalText(fields[1], "operationKind") == kindText) {
+                "native Kagemusha operation reference changed kind"
+            }
+            val submittedAt = longInteger(fields[5], "submittedAtMilliseconds")
+            check(submittedAt == expectedSubmittedAtMilliseconds) {
+                "native Kagemusha operation reference changed submitted time"
+            }
+            return OperationReferenceProjection(
+                state = OperationState.PENDING,
+                kind = expectedKind,
+                operationId = requireDigest(fields[2], "operationId"),
+                transactionHash = requireDigest(fields[3], "transactionHash"),
+                statusUri = canonicalText(fields[4], "statusUri"),
+                submittedAtMilliseconds = submittedAt,
+            )
+        }
 
         @JvmStatic
         fun projectOperationStatus(status: OperationStatus): OperationStatusProjection {
@@ -613,37 +1493,41 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun projectReadiness(readiness: Readiness): ReadinessProjection {
             requireArtifactBridge()
             val fields = nativeProjectReadinessV4(readiness.noritoEncoded())
-            check(fields.size >= 17) { "native Kagemusha readiness projection returned invalid fields" }
-            val blockerCount = integer(fields[16], "blockerCount")
-            check(blockerCount >= 0 && fields.size == 17 + blockerCount * 2) {
+            check(fields.size >= 18) { "native Kagemusha readiness projection returned invalid fields" }
+            val blockerCount = integer(fields[17], "blockerCount")
+            check(blockerCount >= 0 && fields.size == 18 + blockerCount * 2) {
                 "native Kagemusha readiness projection returned invalid blockers"
             }
             val blockers = ArrayList<ReadinessBlocker>(blockerCount)
             repeat(blockerCount) { index ->
                 blockers.add(
                     ReadinessBlocker(
-                        canonicalText(fields[17 + index * 2], "blockerCode"),
-                        canonicalText(fields[18 + index * 2], "blockerMessage"),
+                        canonicalText(fields[18 + index * 2], "blockerCode"),
+                        canonicalText(fields[19 + index * 2], "blockerMessage"),
                     ),
                 )
             }
             return ReadinessProjection(
                 cashHandoffCapability = canonicalText(fields[0], "cashHandoffCapability"),
-                requiredBridgeAbiVersion = integer(fields[1], "requiredBridgeAbiVersion"),
-                maximumHops = integer(fields[2], "maximumHops"),
-                assetDefinitionId = canonicalText(fields[3], "assetDefinitionId"),
-                assetScale = fields[4].takeIf { it.isNotEmpty() }?.let { integer(it, "assetScale") },
-                evaluatedBlockHeight = longInteger(fields[5], "evaluatedBlockHeight"),
-                evaluatedBlockHash = requireDigest(fields[6], "evaluatedBlockHash"),
-                proofBackendAvailable = bool(fields[7], "proofBackendAvailable"),
-                recursiveLineageSupported = bool(fields[8], "recursiveLineageSupported"),
-                ready = bool(fields[9], "ready"),
-                transferVerifier = activeVerifier(fields[10]),
-                topUpShieldVerifier = activeVerifier(fields[11]),
-                unshieldVerifier = activeVerifier(fields[12]),
-                recursiveStepEqVerifier = activeVerifier(fields[13]),
-                recursiveStepEpVerifier = activeVerifier(fields[14]),
-                artifactSet = authenticatedArtifactSet(fields[15]),
+                eligibilityCashHandoffCapability = canonicalText(
+                    fields[1],
+                    "eligibilityCashHandoffCapability",
+                ),
+                requiredBridgeAbiVersion = integer(fields[2], "requiredBridgeAbiVersion"),
+                maximumHops = integer(fields[3], "maximumHops"),
+                assetDefinitionId = canonicalText(fields[4], "assetDefinitionId"),
+                assetScale = fields[5].takeIf { it.isNotEmpty() }?.let { integer(it, "assetScale") },
+                evaluatedBlockHeight = longInteger(fields[6], "evaluatedBlockHeight"),
+                evaluatedBlockHash = requireDigest(fields[7], "evaluatedBlockHash"),
+                proofBackendAvailable = bool(fields[8], "proofBackendAvailable"),
+                recursiveLineageSupported = bool(fields[9], "recursiveLineageSupported"),
+                ready = bool(fields[10], "ready"),
+                transferVerifier = activeVerifier(fields[11]),
+                topUpShieldVerifier = activeVerifier(fields[12]),
+                unshieldVerifier = activeVerifier(fields[13]),
+                recursiveStepEqVerifier = activeVerifier(fields[14]),
+                recursiveStepEpVerifier = activeVerifier(fields[15]),
+                artifactSet = authenticatedArtifactSet(fields[16]),
                 blockers = blockers,
             )
         }
@@ -683,6 +1567,77 @@ class KagemushaRecursiveSpendProver private constructor() {
                 fields[2],
                 fields[3],
                 fields[4],
+            )
+        }
+
+        /**
+         * Creates the closed same-account drain-only redemption authorization.
+         *
+         * [finalizedPolicy] must come from the native finalized-policy verifier. Native code
+         * verifies its canonical policy bytes, exact block binding, Sumeragi finality proof,
+         * caller-owned NetworkId/context anchor, and freshness again before encoding. The result
+         * carries no eligibility credential, device registration hash, or P-256 assertion and is
+         * rejected by consensus outside a redemption submitted by the exact Ed25519 recipient.
+         */
+        @JvmStatic
+        fun createDrainOnlySameAccountRedemptionAuthorizationV1(
+            authority: String,
+            chainDiscriminant: Int,
+            deviceId: String,
+            assetDefinitionId: String,
+            operationId: ByteArray,
+            issuedAtMilliseconds: Long,
+            expiresAtMilliseconds: Long,
+            nonce: ByteArray,
+            payloadDigest: ByteArray,
+            finalizedPolicy: DeviceAttestationPolicyViewV1,
+        ): RequestAuthorization {
+            requireArtifactBridge()
+            val trustAnchor = checkNotNull(finalizedPolicy.verificationTrustAnchor) {
+                "drain-only redemption requires a native-verified finalized policy view"
+            }
+            return RequestAuthorization(
+                nativeFinalizeDrainOnlyRedemptionAuthorizationV1(
+                    utf8(authority, "authority"),
+                    requireChainDiscriminant(chainDiscriminant),
+                    utf8(deviceId, "deviceId"),
+                    utf8(assetDefinitionId, "assetDefinitionId"),
+                    requireDigest(operationId, "operationId"),
+                    issuedAtMilliseconds,
+                    expiresAtMilliseconds,
+                    requireDigest(nonce, "nonce"),
+                    requireDigest(payloadDigest, "payloadDigest"),
+                    finalizedPolicy.noritoEncoded(),
+                    trustAnchor.networkId.bytes(),
+                    trustAnchor.trustedHeightContextId(),
+                ),
+            )
+        }
+
+        /**
+         * Registry-decode the exact drain-only request and return its one canonical native
+         * `RedeemKagemushaRecursiveV4` instruction. Native code rejects another recipient,
+         * authority, authorization variant, wire id, or non-canonical request archive.
+         */
+        @JvmStatic
+        fun buildDrainOnlyRedeemInstructionV4(
+            request: RedeemSubmissionRequest,
+            authority: String,
+            chainDiscriminant: Int,
+        ): DrainOnlyRedeemInstructionV4 {
+            requireArtifactBridge()
+            val fields = nativeBuildDrainOnlyRedeemInstructionV4(
+                request.noritoEncoded(),
+                utf8(authority, "authority"),
+                requireChainDiscriminant(chainDiscriminant),
+            )
+            requireFieldCount(fields, 5, "drain-only redemption instruction")
+            return DrainOnlyRedeemInstructionV4(
+                wireId = canonicalText(fields[0], "drainOnlyRedeemWireId"),
+                framedPayload = fields[1],
+                operationId = requireDigest(fields[2], "operationId"),
+                issuedAtMilliseconds = longInteger(fields[3], "issuedAtMilliseconds"),
+                expiresAtMilliseconds = longInteger(fields[4], "expiresAtMilliseconds"),
             )
         }
 
@@ -1335,6 +2290,36 @@ class KagemushaRecursiveSpendProver private constructor() {
             }
         }
 
+        /**
+         * Verify the compact top-up proof and expose only its native-authenticated block identity
+         * for agreement with the uniform finalized issuer outcome.
+         */
+        @JvmStatic
+        fun projectVerifiedTopUpFinalityV4(
+            topUpAnchor: TopUpAnchorV4,
+            topUpFinalityProof: TopUpFinalityProof,
+            topUpFinalityRosterArtifact: TopUpFinalityRosterArtifact,
+        ): VerifiedTopUpFinalityV4 {
+            requireArtifactBridge()
+            requireV4ProofBackend()
+            val fields = nativeProjectVerifiedTopUpFinalityV4(
+                topUpAnchor.noritoEncoded(),
+                topUpFinalityProof.noritoEncoded(),
+                topUpFinalityRosterArtifact.noritoEncoded(),
+            )
+            requireFieldCount(fields, 5, "verified V4 top-up finality projection")
+            return VerifiedTopUpFinalityV4(
+                operationId = requireDigest(fields[0], "operationId"),
+                exactTransactionHashHex = canonicalText(fields[1], "transactionHashHex"),
+                exactHeight = longInteger(fields[2], "height"),
+                exactBlockHashHex = canonicalText(fields[3], "blockHashHex"),
+                heightContextId = requireFinalityCheckpointContext(
+                    fields[4],
+                    "heightContextId",
+                ),
+            )
+        }
+
         /** Build and validate the complete origin-finality inventory for one V4 bundle. */
         @JvmStatic
         fun buildTopUpProvenanceV4(
@@ -1484,6 +2469,122 @@ class KagemushaRecursiveSpendProver private constructor() {
             operationId.fill(0)
             requestDigest.fill(0)
             return result
+        }
+
+        @JvmStatic
+        fun prepareEligibilityPaymentV1(
+            payment: PeerPayment,
+            credential: EligibilityCredentialV1,
+            request: RecipientPaymentRequest,
+        ): EligibilityPaymentPayloadV1 {
+            checkNotNull(credential.verificationTrustAnchor) {
+                "credential has not passed native issuer/policy/finality verification"
+            }
+            requireArtifactBridge()
+            val paymentArchive = payment.noritoEncoded()
+            val credentialArchive = credential.noritoEncoded()
+            val requestArchive = request.noritoEncoded()
+            return try {
+                EligibilityPaymentPayloadV1(nativePrepareEligibilityPaymentV1(
+                    paymentArchive,
+                    credentialArchive,
+                    requestArchive,
+                ))
+            } finally {
+                paymentArchive.fill(0)
+                credentialArchive.fill(0)
+                requestArchive.fill(0)
+            }
+        }
+
+        @JvmStatic
+        fun eligibilityPaymentSigningBytesV1(
+            payload: EligibilityPaymentPayloadV1,
+        ): ByteArray {
+            requireArtifactBridge()
+            val archive = payload.noritoEncoded()
+            return try {
+                nativeEligibilityPaymentSigningBytesV1(archive).also { bytes ->
+                    require(bytes.isNotEmpty() && bytes.size <= MAX_PEER_ARCHIVE_BYTES_V2) {
+                        "native eligibility signing preimage exceeds its bound"
+                    }
+                }
+            } finally {
+                archive.fill(0)
+            }
+        }
+
+        @JvmStatic
+        fun finalizeEligibilityPaymentV1(
+            payload: EligibilityPaymentPayloadV1,
+            signature: KagemushaDeviceSignatureV2,
+        ): EligibilityPaymentEnvelopeV1 {
+            requireArtifactBridge()
+            val archive = payload.noritoEncoded()
+            val rawSignature = signature.rawBytes()
+            return try {
+                EligibilityPaymentEnvelopeV1(nativeFinalizeEligibilityPaymentV1(
+                    archive,
+                    rawSignature,
+                ))
+            } finally {
+                archive.fill(0)
+                rawSignature.fill(0)
+            }
+        }
+
+        @JvmStatic
+        fun validateEligibilityPaymentStaticV1(
+            envelope: EligibilityPaymentEnvelopeV1,
+        ): EligibilityPaymentEnvelopeV1 {
+            requireArtifactBridge()
+            val archive = envelope.noritoEncoded()
+            return try {
+                val canonical = nativeValidateEligibilityPaymentStaticV1(archive)
+                require(canonical.contentEquals(archive)) {
+                    "native eligibility validator changed canonical envelope bytes"
+                }
+                EligibilityPaymentEnvelopeV1(canonical)
+            } finally {
+                archive.fill(0)
+            }
+        }
+
+        @JvmStatic
+        fun validateEligibilityPaymentFirstDeliveryV1(
+            envelope: EligibilityPaymentEnvelopeV1,
+            request: RecipientPaymentRequest,
+            expectedIssuer: EligibilityIssuerPublicKeyV1,
+            currentPolicyView: DeviceAttestationPolicyViewV1,
+            receivedAtMilliseconds: Long,
+        ): PeerPayment {
+            require(receivedAtMilliseconds > 0) {
+                "receivedAtMilliseconds must be positive"
+            }
+            val trustAnchor = checkNotNull(currentPolicyView.verificationTrustAnchor) {
+                "currentPolicyView has not passed native finality verification"
+            }
+            requireArtifactBridge()
+            val envelopeArchive = envelope.noritoEncoded()
+            val requestArchive = request.noritoEncoded()
+            val issuerArchive = expectedIssuer.noritoEncoded()
+            val policyArchive = currentPolicyView.noritoEncoded()
+            return try {
+                PeerPayment(nativeValidateEligibilityPaymentFirstDeliveryFinalizedV1(
+                    envelopeArchive,
+                    requestArchive,
+                    issuerArchive,
+                    policyArchive,
+                    trustAnchor.networkId.bytes(),
+                    trustAnchor.trustedHeightContextId(),
+                    receivedAtMilliseconds,
+                ))
+            } finally {
+                envelopeArchive.fill(0)
+                requestArchive.fill(0)
+                issuerArchive.fill(0)
+                policyArchive.fill(0)
+            }
         }
 
         @JvmStatic
@@ -1921,6 +3022,41 @@ class KagemushaRecursiveSpendProver private constructor() {
                 symbolProbe = {
                     expectRejectedSymbolProbe {
                         nativeArtifactBeginV4(byteArrayOf(0), ByteArray(32), ByteArray(32))
+                    } && expectRejectedSymbolProbe {
+                        nativeVerifyOfflineDeviceAttestationPolicyViewV1(
+                            byteArrayOf(0),
+                            ByteArray(32),
+                            ByteArray(32),
+                            1,
+                        )
+                    } && expectRejectedSymbolProbe {
+                        nativeVerifyOfflineDeviceEligibilityCredentialV1(
+                            byteArrayOf(0),
+                            byteArrayOf(0),
+                            byteArrayOf(0),
+                            ByteArray(32),
+                            ByteArray(32),
+                            1,
+                        )
+                    } && expectRejectedSymbolProbe {
+                        nativeVerifyOfflineDeviceEligibilityPeerCertificateV1(
+                            byteArrayOf(0),
+                            byteArrayOf(0),
+                            byteArrayOf(0),
+                            ByteArray(32),
+                            ByteArray(32),
+                            1,
+                        )
+                    } && expectRejectedSymbolProbe {
+                        nativeValidateEligibilityPaymentFirstDeliveryFinalizedV1(
+                            byteArrayOf(0),
+                            byteArrayOf(0),
+                            byteArrayOf(0),
+                            byteArrayOf(0),
+                            ByteArray(32),
+                            ByteArray(32),
+                            1,
+                        )
                     }
                 },
             )
@@ -2318,7 +3454,9 @@ class KagemushaRecursiveSpendProver private constructor() {
         private fun peerArchivePadding(schema: String): Int = when (schema) {
             "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
             "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2",
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4" -> 8
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4",
+            "iroha_data_model::offline::model::KagemushaEligibilityPaymentEnvelopePayloadV1",
+            "iroha_data_model::offline::model::KagemushaEligibilityPaymentEnvelopeV1" -> 8
             "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2" -> 0
             else -> 0
         }
@@ -2425,10 +3563,25 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeValidateSpendableBranchV4(bundle: ByteArray, provenance: ByteArray, membershipWitness: ByteArray, opening: ByteArray, blockHeight: Long): ByteArray
         @JvmStatic private external fun nativeBuildOutputMembershipPathsV4(initialRoot: ByteArray, finalRoot: ByteArray, recipientFields: Array<ByteArray>, changeFields: Array<ByteArray>, dummyFields: Array<ByteArray>): ByteArray
         @JvmStatic private external fun nativeBuildInitRequestV4(anchor: ByteArray, proof: ByteArray, roster: ByteArray, opening: ByteArray, outputMembership: ByteArray): ByteArray
+        @JvmStatic private external fun nativeProjectVerifiedTopUpFinalityV4(anchor: ByteArray, finalityProof: ByteArray, rosterArtifact: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBuildTopUpProvenanceV4(bundle: ByteArray, roster: ByteArray, anchors: Array<ByteArray>, finalityProofs: Array<ByteArray>, blockHeight: Long): ByteArray
         @JvmStatic private external fun nativeValidateTopUpProvenanceV4(bundle: ByteArray, provenance: ByteArray, blockHeight: Long): ByteArray
         @JvmStatic private external fun nativeBuildAppendRequestV4(bundles: Array<ByteArray>, topUpProvenances: Array<ByteArray>, openings: Array<ByteArray>, witnesses: Array<ByteArray>, changeOpening: ByteArray, outputMembership: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
         @JvmStatic private external fun nativeProjectPeerPaymentV4(payment: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativeEncodeOfflineDevicePolicyProofRequestV1(trustedCheckpointHeight: Long, trustedCheckpointContextId: ByteArray): ByteArray
+        @JvmStatic private external fun nativeVerifyOfflineDevicePolicyProofV1(proofPage: ByteArray, expectedNetworkId: ByteArray, trustedCheckpointHeight: Long, trustedCheckpointContextId: ByteArray, evaluationTimeMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeEncodeOfflineDeviceEligibilityRequestV1(registrationHash: ByteArray, deviceId: ByteArray, attestationKeyId: ByteArray, requestedTtlMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeVerifyOfflineDeviceEligibilityResponseV1(response: ByteArray, expectedRegistrationHash: ByteArray, expectedIssuer: ByteArray, expectedNetworkId: ByteArray, trustedContextId: ByteArray, evaluationTimeMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeVerifyOfflineDeviceAttestationPolicyViewV1(policyView: ByteArray, expectedNetworkId: ByteArray, trustedContextId: ByteArray, evaluationTimeMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeProjectOfflineDeviceAttestationPolicyViewClaimsV1(policyView: ByteArray, expectedNetworkId: ByteArray, trustedContextId: ByteArray, evaluationTimeMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeVerifyOfflineDeviceEligibilityCredentialV1(credential: ByteArray, expectedIssuer: ByteArray, policyView: ByteArray, expectedNetworkId: ByteArray, trustedContextId: ByteArray, evaluationTimeMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeVerifyOfflineDeviceEligibilityPeerCertificateV1(credential: ByteArray, expectedIssuer: ByteArray, policyView: ByteArray, expectedNetworkId: ByteArray, trustedContextId: ByteArray, evaluationTimeMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativePrepareEligibilityPaymentV1(payment: ByteArray, credential: ByteArray, request: ByteArray): ByteArray
+        @JvmStatic private external fun nativeEligibilityPaymentSigningBytesV1(payload: ByteArray): ByteArray
+        @JvmStatic private external fun nativeFinalizeEligibilityPaymentV1(payload: ByteArray, signature: ByteArray): ByteArray
+        @JvmStatic private external fun nativeValidateEligibilityPaymentStaticV1(envelope: ByteArray): ByteArray
+        @JvmStatic private external fun nativeValidateEligibilityPaymentFirstDeliveryV1(envelope: ByteArray, request: ByteArray, expectedIssuer: ByteArray, policyView: ByteArray, receivedAtMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeValidateEligibilityPaymentFirstDeliveryFinalizedV1(envelope: ByteArray, request: ByteArray, expectedIssuer: ByteArray, policyView: ByteArray, expectedNetworkId: ByteArray, trustedContextId: ByteArray, receivedAtMilliseconds: Long): ByteArray
         @JvmStatic private external fun nativeProjectInitResultV4(result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectSplitResultV4(result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBuildVerifyRequestV4(bundle: ByteArray, recipientRequest: ByteArray, topUpProvenance: ByteArray, maximumHops: Int, blockHeight: Long, verifiedAtMilliseconds: Long): ByteArray
@@ -2442,11 +3595,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeProjectAuthenticatedArtifactSetV4(artifactSet: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectActiveVerifierV2(verifier: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareAuthorizationV2(authority: ByteArray, chainDiscriminant: Int, deviceId: ByteArray, assetDefinitionId: ByteArray, operationId: ByteArray, issuedAtMilliseconds: Long, expiresAtMilliseconds: Long, nonce: ByteArray, payloadDigest: ByteArray, registrationHash: ByteArray, hardwareAssertionPlatform: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativeFinalizeDrainOnlyRedemptionAuthorizationV1(authority: ByteArray, chainDiscriminant: Int, deviceId: ByteArray, assetDefinitionId: ByteArray, operationId: ByteArray, issuedAtMilliseconds: Long, expiresAtMilliseconds: Long, nonce: ByteArray, payloadDigest: ByteArray, policyView: ByteArray, expectedNetworkId: ByteArray, trustedContextId: ByteArray): ByteArray
+        @JvmStatic private external fun nativeBuildDrainOnlyRedeemInstructionV4(request: ByteArray, authority: ByteArray, chainDiscriminant: Int): Array<ByteArray>
         @JvmStatic private external fun nativeFinalizeHardwareAuthorizationV2(preparation: ByteArray, authenticatorData: ByteArray, signatureDer: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeFinalizeIosAppAttestAuthorizationV2(preparation: ByteArray, assertionObject: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeFinalizeTopUpV4(unsigned: ByteArray, authorization: ByteArray): ByteArray
         @JvmStatic private external fun nativeFinalizeRedeemV4(buildResult: ByteArray, authorization: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareTopUpV4(networkId: ByteArray, chainDiscriminant: Int, assetDefinition: ByteArray, payer: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray, leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray, shieldVerifierCommitment: ByteArray, artifactBinding: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativeProjectOperationReferenceV1(reference: ByteArray, expectedOperationId: ByteArray, expectedKind: ByteArray, expectedSubmittedAtMilliseconds: Long): Array<ByteArray>
         @JvmStatic private external fun nativeProjectOperationStatusV4(status: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBranchClaimsConflictV2(left: ByteArray, right: ByteArray): Boolean
         @JvmStatic private external fun nativePrepareRedemptionChangeV4(bundle: ByteArray, inputOpening: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, entropy: ByteArray): Array<ByteArray>
@@ -2577,6 +3733,50 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
     }
 
+    /** Nominal bounded native input; the ABI-22 entrypoint performs exact typed decoding. */
+    abstract class EligibilityNativeInputArchive internal constructor(
+        archive: ByteArray,
+        field: String,
+        maximumBytes: Int,
+    ) {
+        private val bytes = requireBoundedBytes(archive, field, maximumBytes)
+
+        fun noritoEncoded(): ByteArray = bytes.copyOf()
+
+        final override fun equals(other: Any?): Boolean =
+            other != null && this::class == other::class &&
+                other is EligibilityNativeInputArchive && bytes.contentEquals(other.bytes)
+
+        final override fun hashCode(): Int = bytes.contentHashCode()
+    }
+
+    class EligibilityCredentialV1 internal constructor(
+        archive: ByteArray,
+        internal val verificationTrustAnchor: OfflineDeviceFinalityTrustAnchorV1? = null,
+    ) :
+        EligibilityNativeInputArchive(
+            archive,
+            "eligibilityCredentialV1",
+            MAX_ELIGIBILITY_CREDENTIAL_ARCHIVE_BYTES_V1,
+        )
+
+    class EligibilityIssuerPublicKeyV1 internal constructor(archive: ByteArray) :
+        EligibilityNativeInputArchive(
+            archive,
+            "eligibilityIssuerPublicKeyV1",
+            MAX_ELIGIBILITY_ISSUER_ARCHIVE_BYTES_V1,
+        )
+
+    class DeviceAttestationPolicyViewV1 internal constructor(
+        archive: ByteArray,
+        internal val verificationTrustAnchor: OfflineDeviceFinalityTrustAnchorV1? = null,
+    ) :
+        EligibilityNativeInputArchive(
+            archive,
+            "deviceAttestationPolicyViewV1",
+            MAX_DEVICE_ATTESTATION_POLICY_VIEW_ARCHIVE_BYTES_V1,
+        )
+
     class RecipientPaymentRequest internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
         "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
@@ -2612,6 +3812,22 @@ class KagemushaRecursiveSpendProver private constructor() {
         "peerPayment",
         MAX_PEER_ARCHIVE_BYTES_V4,
     )
+
+    class EligibilityPaymentPayloadV1 internal constructor(archive: ByteArray) :
+        CanonicalArchive(
+            archive,
+            "iroha_data_model::offline::model::KagemushaEligibilityPaymentEnvelopePayloadV1",
+            "eligibilityPaymentPayloadV1",
+            MAX_ELIGIBILITY_PAYMENT_ENVELOPE_ARCHIVE_BYTES_V1,
+        )
+
+    class EligibilityPaymentEnvelopeV1 internal constructor(archive: ByteArray) :
+        CanonicalArchive(
+            archive,
+            "iroha_data_model::offline::model::KagemushaEligibilityPaymentEnvelopeV1",
+            "eligibilityPaymentEnvelopeV1",
+            MAX_ELIGIBILITY_PAYMENT_ENVELOPE_ARCHIVE_BYTES_V1,
+        )
 
     class ReceiverAcknowledgement internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
@@ -2935,6 +4151,41 @@ class KagemushaRecursiveSpendProver private constructor() {
         MAX_TORII_RESPONSE_BYTES,
     )
 
+    /** Exact block identity returned only after the native compact-finality verifier succeeds. */
+    class VerifiedTopUpFinalityV4 internal constructor(
+        operationId: ByteArray,
+        private val exactTransactionHashHex: String,
+        private val exactHeight: Long,
+        private val exactBlockHashHex: String,
+        heightContextId: ByteArray,
+    ) {
+        private val exactOperationId = requireDigest(operationId, "operationId")
+        private val exactHeightContextId = requireFinalityCheckpointContext(
+            heightContextId,
+            "heightContextId",
+        )
+
+        init {
+            require(isMarkedIrohaHashHex(exactTransactionHashHex)) {
+                "transactionHashHex must be an exact lowercase marked 32-byte Iroha hash"
+            }
+            require(exactHeight > 0) { "height must be positive" }
+            require(isMarkedIrohaHashHex(exactBlockHashHex)) {
+                "blockHashHex must be an exact lowercase marked 32-byte Iroha hash"
+            }
+        }
+
+        fun operationId(): ByteArray = exactOperationId.copyOf()
+        fun transactionHashHex(): String = exactTransactionHashHex
+        fun height(): Long = exactHeight
+        fun blockHashHex(): String = exactBlockHashHex
+        fun heightContextId(): ByteArray = exactHeightContextId.copyOf()
+
+        private fun isMarkedIrohaHashHex(value: String): Boolean =
+            value.matches(Regex("[0-9a-f]{64}")) &&
+                (Character.digit(value.last(), 16) and 1) == 1
+    }
+
     /** Complete bounded origin-finality inventory required to spend or verify one V4 bundle. */
     class TopUpProvenanceV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
@@ -2949,6 +4200,31 @@ class KagemushaRecursiveSpendProver private constructor() {
         "redeemSubmissionRequest",
         MAX_TORII_REDEEM_REQUEST_BYTES_V4,
     )
+
+    class DrainOnlyRedeemInstructionV4 internal constructor(
+        val wireId: String,
+        framedPayload: ByteArray,
+        operationId: ByteArray,
+        val issuedAtMilliseconds: Long,
+        val expiresAtMilliseconds: Long,
+    ) {
+        private val framedPayloadValue = requiredBytes(framedPayload, "framedPayload")
+        private val operationIdValue = requireDigest(operationId, "operationId")
+
+        init {
+            require(wireId == DRAIN_ONLY_REDEEM_WIRE_ID_V4) {
+                "native drain-only redemption instruction returned another wire id"
+            }
+            require(
+                issuedAtMilliseconds > 0 &&
+                    expiresAtMilliseconds > issuedAtMilliseconds,
+            ) { "native drain-only redemption instruction returned an invalid lifetime" }
+        }
+
+        fun framedPayload(): ByteArray = framedPayloadValue.copyOf()
+
+        fun operationId(): ByteArray = operationIdValue.copyOf()
+    }
 
     class RedeemUnsignedV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
@@ -3839,6 +5115,7 @@ class KagemushaRecursiveSpendProver private constructor() {
     class OfflineStatus internal constructor(
         val mandatory: Boolean,
         val cashHandoffCapability: String,
+        val eligibilityCashHandoffCapability: String,
         val requiredBridgeAbiVersion: Int,
         val maximumHops: Int,
         val ready: Boolean,
@@ -3849,6 +5126,11 @@ class KagemushaRecursiveSpendProver private constructor() {
             require(!mandatory) { "mandatory must be false for universal offline capability" }
             require(cashHandoffCapability == CASH_HANDOFF_CAPABILITY_V1) {
                 "cashHandoffCapability must be the exact cash_handoff_v1 contract"
+            }
+            require(
+                eligibilityCashHandoffCapability == CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1,
+            ) {
+                "eligibilityCashHandoffCapability must be the exact cash_handoff_eligibility_v1 contract"
             }
             require(requiredBridgeAbiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
                 "requiredBridgeAbiVersion must be 22"
@@ -3865,6 +5147,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             private val fields = setOf(
                 "mandatory",
                 "cash_handoff_capability",
+                "eligibility_cash_handoff_capability",
                 "required_bridge_abi_version",
                 "max_hops",
                 "ready",
@@ -3882,6 +5165,10 @@ class KagemushaRecursiveSpendProver private constructor() {
                     ?: error("offline capability mandatory must be a boolean")
                 val capability = parsed["cash_handoff_capability"] as? String
                     ?: error("offline capability cash_handoff_capability must be a string")
+                val eligibilityCapability = parsed["eligibility_cash_handoff_capability"] as? String
+                    ?: error(
+                        "offline capability eligibility_cash_handoff_capability must be a string",
+                    )
                 val abi = exactInt(parsed["required_bridge_abi_version"], "required_bridge_abi_version")
                 val hops = exactInt(parsed["max_hops"], "max_hops")
                 val ready = parsed["ready"] as? Boolean
@@ -3895,6 +5182,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 return OfflineStatus(
                     mandatory = mandatory,
                     cashHandoffCapability = capability,
+                    eligibilityCashHandoffCapability = eligibilityCapability,
                     requiredBridgeAbiVersion = abi,
                     maximumHops = hops,
                     ready = ready,
@@ -4011,6 +5299,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
     class ReadinessProjection internal constructor(
         val cashHandoffCapability: String,
+        val eligibilityCashHandoffCapability: String,
         val requiredBridgeAbiVersion: Int,
         val maximumHops: Int,
         val assetDefinitionId: String,
@@ -4033,6 +5322,11 @@ class KagemushaRecursiveSpendProver private constructor() {
         init {
             require(cashHandoffCapability == CASH_HANDOFF_CAPABILITY_V1) {
                 "cashHandoffCapability must be the exact cash_handoff_v1 contract"
+            }
+            require(
+                eligibilityCashHandoffCapability == CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1,
+            ) {
+                "eligibilityCashHandoffCapability must be the exact cash_handoff_eligibility_v1 contract"
             }
         }
 
@@ -4066,6 +5360,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         /** Complete fail-closed wallet decision for the exact Torii-authenticated release. */
         val offlineReady: Boolean
             get() = ready && cashHandoffCapability == CASH_HANDOFF_CAPABILITY_V1 &&
+                eligibilityCashHandoffCapability == CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1 &&
                 recursiveLineageSupported && bridgeCompatible &&
                 chainArtifactSetReady && allVerifiersActive && assetScale != null &&
                 assetScale in 0..KagemushaScaledAmount.MAXIMUM_SCALE &&
@@ -4081,6 +5376,30 @@ class KagemushaRecursiveSpendProver private constructor() {
         "operationReference",
         MAX_TORII_RESPONSE_BYTES,
     )
+
+    class OperationReferenceProjection internal constructor(
+        val state: OperationState,
+        val kind: OperationKind,
+        operationId: ByteArray,
+        transactionHash: ByteArray,
+        val statusUri: String,
+        val submittedAtMilliseconds: Long,
+    ) {
+        private val operationIdValue = requireDigest(operationId, "operationId")
+        private val transactionHashValue = requireDigest(transactionHash, "transactionHash")
+
+        init {
+            require(state == OperationState.PENDING)
+            require(statusUri == "/v1/offline/operations/${hex(operationIdValue)}") {
+                "statusUri is not canonical for operationId"
+            }
+            require(submittedAtMilliseconds > 0)
+        }
+
+        fun operationId(): ByteArray = operationIdValue.copyOf()
+
+        fun transactionHash(): ByteArray = transactionHashValue.copyOf()
+    }
 
     class OperationStatus internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
@@ -4121,7 +5440,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun transactionHash(): ByteArray = transactionHashValue.copyOf()
     }
 
-    /** Strict typed client for the five first-release Kagemusha Torii routes. */
+    /** Strict typed client for the governed Kagemusha Torii routes. */
     class ToriiClient internal constructor(
         baseUri: URI,
         private val transport: TransportExecutor,
@@ -4133,6 +5452,11 @@ class KagemushaRecursiveSpendProver private constructor() {
             const val REDEEM_PATH: String = "/v1/offline/redeem"
             const val OPERATIONS_PATH: String = "/v1/offline/operations"
             const val RECEIVER_LINEAGE_PATH: String = "/v1/offline/receiver-lineage"
+            const val DEVICE_ATTESTATION_POLICY_PATH: String =
+                "/v1/offline/device-attestation-policy"
+            const val DEVICE_ATTESTATION_POLICY_PROOF_PATH: String =
+                "/v1/offline/device-attestation-policy/proof"
+            const val DEVICE_ELIGIBILITY_PATH: String = "/v1/offline/device-eligibility"
             const val JSON_MEDIA_TYPE: String = "application/json"
             const val NORITO_MEDIA_TYPE: String = "application/x-norito"
 
@@ -4177,6 +5501,184 @@ class KagemushaRecursiveSpendProver private constructor() {
                 200,
                 JSON_MEDIA_TYPE,
             ).thenApply { OfflineStatus.decode(it.body) }
+        }
+
+        fun getDeviceAttestationPolicyViewV1(
+            canonicalAuth: ToriiCanonicalRequestAuth,
+            trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+            evaluationTimeMilliseconds: Long = System.currentTimeMillis(),
+        ): CompletableFuture<DeviceAttestationPolicyViewV1> {
+            require(localSigningContext.networkId() == trustAnchor.networkId) {
+                "offline device policy trust must match LocalSigningContext.networkId"
+            }
+            require(evaluationTimeMilliseconds > 0) {
+                "evaluationTimeMilliseconds must be positive"
+            }
+            val target = URI.create("$baseUri$DEVICE_ATTESTATION_POLICY_PATH")
+            val timestampMs = canonicalAuth.timestampMs
+            val nonce = canonicalAuth.nonce
+            require((timestampMs == null) == (nonce == null)) {
+                "timestampMs and nonce must be provided together"
+            }
+            val authHeaders = if (timestampMs == null) {
+                CanonicalRequestSigner.buildHeaders(
+                    localSigningContext.networkId(),
+                    "GET",
+                    target,
+                    null,
+                    canonicalAuth.accountId,
+                    canonicalAuth.privateKey,
+                )
+            } else {
+                CanonicalRequestSigner.buildHeaders(
+                    localSigningContext.networkId(),
+                    "GET",
+                    target,
+                    null,
+                    canonicalAuth.accountId,
+                    canonicalAuth.privateKey,
+                    timestampMs,
+                    nonce!!,
+                )
+            }
+            val builder = TransportRequest.builder()
+                .setMethod("GET")
+                .setUri(target)
+                .addHeader("Accept", NORITO_MEDIA_TYPE)
+                .setMaximumResponseBytes(MAX_DEVICE_ATTESTATION_POLICY_VIEW_ARCHIVE_BYTES_V1.toLong())
+            authHeaders.forEach { (name, value) -> builder.addHeader(name, value) }
+            return execute(builder.build(), 200).thenApply { response ->
+                verifyDeviceAttestationPolicyViewV1(
+                    response.body,
+                    trustAnchor,
+                    evaluationTimeMilliseconds,
+                )
+            }
+        }
+
+        /**
+         * Fetch and verify one policy proof page. Persist the evaluated checkpoint before another
+         * call and provide fresh canonical authentication for every page.
+         */
+        fun getDeviceAttestationPolicyProofPageV1(
+            canonicalAuth: ToriiCanonicalRequestAuth,
+            checkpoint: OfflineDevicePolicyCheckpointV1,
+            evaluationTimeMilliseconds: Long = System.currentTimeMillis(),
+        ): CompletableFuture<OfflineDevicePolicyVerifiedPageV1> {
+            require(localSigningContext.networkId() == checkpoint.networkId) {
+                "offline device policy checkpoint must match LocalSigningContext.networkId"
+            }
+            require(evaluationTimeMilliseconds > 0) {
+                "evaluationTimeMilliseconds must be positive"
+            }
+            val target = URI.create("$baseUri$DEVICE_ATTESTATION_POLICY_PROOF_PATH")
+            val body = makeOfflineDevicePolicyProofRequestV1(checkpoint)
+            val timestampMs = canonicalAuth.timestampMs
+            val nonce = canonicalAuth.nonce
+            require((timestampMs == null) == (nonce == null)) {
+                "timestampMs and nonce must be provided together"
+            }
+            val authHeaders = if (timestampMs == null) {
+                CanonicalRequestSigner.buildHeaders(
+                    localSigningContext.networkId(),
+                    "POST",
+                    target,
+                    body,
+                    canonicalAuth.accountId,
+                    canonicalAuth.privateKey,
+                )
+            } else {
+                CanonicalRequestSigner.buildHeaders(
+                    localSigningContext.networkId(),
+                    "POST",
+                    target,
+                    body,
+                    canonicalAuth.accountId,
+                    canonicalAuth.privateKey,
+                    timestampMs,
+                    nonce!!,
+                )
+            }
+            val builder = TransportRequest.builder()
+                .setMethod("POST")
+                .setUri(target)
+                .addHeader("Accept", NORITO_MEDIA_TYPE)
+                .addHeader("Content-Type", NORITO_MEDIA_TYPE)
+                .setBody(body)
+                .setMaximumResponseBytes(MAX_DEVICE_POLICY_PROOF_PAGE_ARCHIVE_BYTES_V1.toLong())
+            authHeaders.forEach { (name, value) -> builder.addHeader(name, value) }
+            return execute(builder.build(), 200).thenApply { response ->
+                verifyOfflineDevicePolicyProofPageV1(
+                    response.body,
+                    checkpoint,
+                    evaluationTimeMilliseconds,
+                )
+            }
+        }
+
+        /**
+         * Evaluate an exact native-protected registration and return a credential only for an
+         * eligible finalized decision. Canonical auth supplies the account and is never replayed
+         * through redirects or retries by the maintained transport contract.
+         */
+        fun postOfflineDeviceEligibilityV1(
+            request: OfflineDeviceEligibilityRequestV1,
+            canonicalAuth: ToriiCanonicalRequestAuth,
+            expectedIssuer: EligibilityIssuerPublicKeyV1,
+            trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+            evaluationTimeMilliseconds: Long = System.currentTimeMillis(),
+        ): CompletableFuture<OfflineDeviceEligibilityResponseV1> {
+            require(localSigningContext.networkId() == trustAnchor.networkId) {
+                "offline device eligibility trust must match LocalSigningContext.networkId"
+            }
+            require(evaluationTimeMilliseconds > 0) {
+                "evaluationTimeMilliseconds must be positive"
+            }
+            val target = URI.create("$baseUri$DEVICE_ELIGIBILITY_PATH")
+            val body = makeOfflineDeviceEligibilityRequestV1(request)
+            val timestampMs = canonicalAuth.timestampMs
+            val nonce = canonicalAuth.nonce
+            require((timestampMs == null) == (nonce == null)) {
+                "timestampMs and nonce must be provided together"
+            }
+            val authHeaders = if (timestampMs == null) {
+                CanonicalRequestSigner.buildHeaders(
+                    localSigningContext.networkId(),
+                    "POST",
+                    target,
+                    body,
+                    canonicalAuth.accountId,
+                    canonicalAuth.privateKey,
+                )
+            } else {
+                CanonicalRequestSigner.buildHeaders(
+                    localSigningContext.networkId(),
+                    "POST",
+                    target,
+                    body,
+                    canonicalAuth.accountId,
+                    canonicalAuth.privateKey,
+                    timestampMs,
+                    nonce!!,
+                )
+            }
+            val builder = TransportRequest.builder()
+                .setMethod("POST")
+                .setUri(target)
+                .addHeader("Accept", NORITO_MEDIA_TYPE)
+                .addHeader("Content-Type", NORITO_MEDIA_TYPE)
+                .setBody(body)
+                .setMaximumResponseBytes(MAX_DEVICE_ELIGIBILITY_RESPONSE_ARCHIVE_BYTES_V1.toLong())
+            authHeaders.forEach { (name, value) -> builder.addHeader(name, value) }
+            return execute(builder.build(), 200).thenApply { response ->
+                verifyOfflineDeviceEligibilityResponseV1(
+                    response.body,
+                    request,
+                    expectedIssuer,
+                    trustAnchor,
+                    evaluationTimeMilliseconds,
+                )
+            }
         }
 
         fun getRecipientRegistrationLineage(

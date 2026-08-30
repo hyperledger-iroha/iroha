@@ -435,6 +435,20 @@ const MIN_BLOCK_CADENCE_MS: u64 = 1;
 const GENESIS_BLOCK_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const POST_GENESIS_LIVENESS_WINDOW: Duration = Duration::from_secs(5);
 const DEFAULT_NETWORK_PEERS: usize = 4;
+// Test networks must not derive an admission budget from host-wide filesystem
+// geometry. Large shared APFS volumes can require more reserved headroom than
+// the runner actually has free, which makes an otherwise bounded localnet fail
+// configuration validation before genesis. Callers may still override this in
+// a later config layer when a fixture needs different storage geometry.
+const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
+// Keep the authenticated SoraNet handshake enabled in local test networks, but
+// bound its Argon2 proof-of-work so four peers do not spend minutes competing
+// for memory-hard puzzle slots before consensus can form. Production defaults
+// remain unchanged, and later caller layers may explicitly override these.
+const TEST_SORANET_POW_DIFFICULTY: i64 = 1;
+const TEST_SORANET_PUZZLE_MEMORY_KIB: i64 = 4 * 1024;
+const TEST_SORANET_PUZZLE_TIME_COST: i64 = 1;
+const TEST_SORANET_PUZZLE_LANES: i64 = 1;
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 const NETWORK_PERMIT_DIR_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_DIR";
@@ -5876,6 +5890,12 @@ fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
         merge_tables(&mut merged, layer);
     }
     apply_identity_defaults_for_detection(&mut merged);
+    // Profile detection inspects caller layers without the real peer's base
+    // config. A caller PoP may therefore name a validator which is intentionally
+    // absent from this synthetic document. Actual trust-roster validation runs
+    // against the fully merged peer config before this detector is invoked;
+    // retain only the detector's matching synthetic identity and PoP here.
+    merged.remove("trusted_peers_pop");
     ensure_sora_profile_trusted_peer_pop(&mut merged);
     merged
 }
@@ -6406,6 +6426,32 @@ impl NetworkBuilder {
             i64::try_from(test_concurrency_threads()).expect("test concurrency threads fit in i64");
         writer
             .write(["telemetry_enabled"], true)
+            .write(
+                ["nexus", "storage", "local_budget_bytes"],
+                TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+            )
+            .write(
+                ["network", "soranet_handshake", "pow", "difficulty"],
+                TEST_SORANET_POW_DIFFICULTY,
+            )
+            .write(
+                [
+                    "network",
+                    "soranet_handshake",
+                    "pow",
+                    "puzzle",
+                    "memory_kib",
+                ],
+                TEST_SORANET_PUZZLE_MEMORY_KIB,
+            )
+            .write(
+                ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                TEST_SORANET_PUZZLE_TIME_COST,
+            )
+            .write(
+                ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                TEST_SORANET_PUZZLE_LANES,
+            )
             .write(
                 ["concurrency", "scheduler_min_threads"],
                 concurrency_threads,
@@ -12643,6 +12689,49 @@ mod tests {
         );
     }
     #[test]
+    fn default_builder_pins_bounded_nexus_storage_budget() {
+        let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
+        let budget = config_layers
+            .iter()
+            .find_map(|layer| {
+                get_nested_value(layer, &["nexus", "storage", "local_budget_bytes"])
+                    .and_then(toml::Value::as_integer)
+            })
+            .expect("default builder should pin a bounded Nexus storage budget");
+        assert_eq!(budget, TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES);
+    }
+    #[test]
+    fn default_builder_bounds_local_soranet_handshake_work() {
+        let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
+        let read_integer = |path: &[&str]| {
+            config_layers
+                .iter()
+                .find_map(|layer| get_nested_value(layer, path).and_then(toml::Value::as_integer))
+        };
+        assert_eq!(
+            read_integer(&["network", "soranet_handshake", "pow", "difficulty"]),
+            Some(TEST_SORANET_POW_DIFFICULTY)
+        );
+        assert_eq!(
+            read_integer(&[
+                "network",
+                "soranet_handshake",
+                "pow",
+                "puzzle",
+                "memory_kib",
+            ]),
+            Some(TEST_SORANET_PUZZLE_MEMORY_KIB)
+        );
+        assert_eq!(
+            read_integer(&["network", "soranet_handshake", "pow", "puzzle", "time_cost",]),
+            Some(TEST_SORANET_PUZZLE_TIME_COST)
+        );
+        assert_eq!(
+            read_integer(&["network", "soranet_handshake", "pow", "puzzle", "lanes",]),
+            Some(TEST_SORANET_PUZZLE_LANES)
+        );
+    }
+    #[test]
     fn default_builder_scales_concurrency_defaults() {
         let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
         let base = config_layers
@@ -12723,6 +12812,24 @@ mod tests {
             NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
             "pre-genesis projection must receive only the non-runtime schema sentinel"
         );
+        let pow = &actual.network.soranet_handshake.pow;
+        assert!(
+            pow.required,
+            "localnet must retain authenticated PoW admission"
+        );
+        assert_eq!(i64::from(pow.difficulty), TEST_SORANET_POW_DIFFICULTY);
+        let puzzle = pow
+            .puzzle
+            .expect("localnet must retain an explicit bounded Argon2 puzzle");
+        assert_eq!(
+            i64::from(puzzle.memory_kib.get()),
+            TEST_SORANET_PUZZLE_MEMORY_KIB
+        );
+        assert_eq!(
+            i64::from(puzzle.time_cost.get()),
+            TEST_SORANET_PUZZLE_TIME_COST
+        );
+        assert_eq!(i64::from(puzzle.lanes.get()), TEST_SORANET_PUZZLE_LANES);
     }
     #[test]
     fn generated_network_configs_parse_for_legal_roster_scales() {

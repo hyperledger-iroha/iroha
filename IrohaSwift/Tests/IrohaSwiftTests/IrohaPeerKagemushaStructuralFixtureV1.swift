@@ -6,21 +6,16 @@ import Foundation
 /// valid request/payment/acknowledgement or pass it to the typed adapter.
 func irohaPeerKagemushaStructuralArchiveV1(
     kind: IrohaPeerWireKindV1,
+    schemaVersion: UInt16 = IrohaPeerWireMessageV1.kagemushaLegacySchemaVersion,
     payload: Data
 ) -> Data {
     precondition(!payload.isEmpty)
-    let schema: String
-    let alignment: Int
-    switch kind {
-    case .receiveRequest:
-        schema = KagemushaRecursiveSpend.recipientReceiveOfferWireName
-        alignment = 16
-    case .payment:
-        schema = KagemushaRecursiveSpend.peerPaymentWireNameV4
-        alignment = 16
-    case .acknowledgement:
-        schema = KagemushaRecursiveSpend.acknowledgementWireName
-        alignment = 8
+    guard let schema = kind.requiredKagemushaCanonicalSchema(
+        schemaVersion: schemaVersion
+    ), let alignment = KagemushaRecursiveSpend.archivedPayloadAlignment(
+        forWireName: schema
+    ) else {
+        preconditionFailure("Unsupported Kagemusha IPM1 kind/schema pair")
     }
     return noritoEncode(
         typeName: schema,

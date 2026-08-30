@@ -28,9 +28,28 @@ pub const VEGA_MDL_FIGURE9_ARTIFACT_MANIFEST_SCHEMA_VERSION_V1: u16 = 1;
 /// boundary. It is an input-safety limit, not evidence of an actual artifact's
 /// released size or of prover peak memory.
 pub const VEGA_MDL_FIGURE9_KEY_ARTIFACT_MAX_BYTES_V1: u64 = 512 * 1024 * 1024;
+/// Exact rollout blocker retained while the governed Figure 9 release pins are absent.
+pub const VEGA_FIGURE9_RELEASE_READINESS_BLOCKER_V1: &str = "MissingGovernedFigure9ProverArtifacts";
+
+// These source constants are the only consensus-catalog release authority for
+// Vega. Runtime artifact installation is deliberately not consulted: a
+// process-local `OnceLock` can prove that bytes were installed in one process,
+// but cannot make a profile governance-available across validators. The pins
+// remain wholly open until an externally qualified, reviewed release replaces
+// every zero in one signed source change.
+const VEGA_MDL_FIGURE9_RELEASE_PROVING_KEY_EXACT_BYTES_V1: u64 = 0;
+const VEGA_MDL_FIGURE9_RELEASE_PROVING_KEY_RAW_SHA256_V1: [u8; 32] = [0; 32];
+const VEGA_MDL_FIGURE9_RELEASE_VERIFIER_KEY_EXACT_BYTES_V1: u64 = 0;
+const VEGA_MDL_FIGURE9_RELEASE_VERIFIER_KEY_RAW_SHA256_V1: [u8; 32] = [0; 32];
+const VEGA_MDL_FIGURE9_RELEASE_ARTIFACT_MANIFEST_SHA256_V1: [u8; 32] = [0; 32];
+const VEGA_MDL_FIGURE9_RELEASE_PACKAGE_SHA256_V1: [u8; 32] = [0; 32];
+const VEGA_MDL_FIGURE9_RELEASE_EVIDENCE_SET_SHA256_V1: [u8; 32] = [0; 32];
+const VEGA_MDL_FIGURE9_RELEASE_GOVERNANCE_AUTHORIZATION_SHA256_V1: [u8; 32] = [0; 32];
 
 const ARTIFACT_MANIFEST_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.vega.figure9.microsoft-mc.artifact-manifest.v1\0";
+const RELEASE_ACTIVATION_BINDING_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha.vega.figure9.microsoft-mc.release-activation-binding.v1\0";
 const UPSTREAM_SOURCE_COMMIT_V1: [u8; 40] = *b"c0ee259053cd12eaf43ed71b5cde375452b3ee4d";
 const UPSTREAM_SOURCE_TREE_V1: [u8; 40] = *b"7226b6cbfbfe8613dd2d5ee831096b7578a5c115";
 const VENDOR_MANIFEST_SHA256_V1: [u8; 32] = [
@@ -43,6 +62,32 @@ const UPSTREAM_TREE_MANIFEST_LINE_V1: &[u8] =
     b"upstream_tree=7226b6cbfbfe8613dd2d5ee831096b7578a5c115\n";
 const VENDOR_MANIFEST_DIGEST_LINE_V1: &[u8] =
     b"vendor_manifest_sha256=539c54251c8853fa99673e71d777966a3e3e238e64028d47b3e683329023236f\n";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VegaMdlFigure9ReleasePrerequisitePinsV1 {
+    proving_key_exact_bytes: u64,
+    proving_key_raw_sha256: [u8; 32],
+    verifier_key_exact_bytes: u64,
+    verifier_key_raw_sha256: [u8; 32],
+    artifact_manifest_sha256: [u8; 32],
+    package_sha256: [u8; 32],
+    evidence_set_sha256: [u8; 32],
+    governance_authorization_sha256: [u8; 32],
+}
+
+const fn source_release_prerequisite_pins_v1() -> VegaMdlFigure9ReleasePrerequisitePinsV1 {
+    VegaMdlFigure9ReleasePrerequisitePinsV1 {
+        proving_key_exact_bytes: VEGA_MDL_FIGURE9_RELEASE_PROVING_KEY_EXACT_BYTES_V1,
+        proving_key_raw_sha256: VEGA_MDL_FIGURE9_RELEASE_PROVING_KEY_RAW_SHA256_V1,
+        verifier_key_exact_bytes: VEGA_MDL_FIGURE9_RELEASE_VERIFIER_KEY_EXACT_BYTES_V1,
+        verifier_key_raw_sha256: VEGA_MDL_FIGURE9_RELEASE_VERIFIER_KEY_RAW_SHA256_V1,
+        artifact_manifest_sha256: VEGA_MDL_FIGURE9_RELEASE_ARTIFACT_MANIFEST_SHA256_V1,
+        package_sha256: VEGA_MDL_FIGURE9_RELEASE_PACKAGE_SHA256_V1,
+        evidence_set_sha256: VEGA_MDL_FIGURE9_RELEASE_EVIDENCE_SET_SHA256_V1,
+        governance_authorization_sha256:
+            VEGA_MDL_FIGURE9_RELEASE_GOVERNANCE_AUTHORIZATION_SHA256_V1,
+    }
+}
 
 /// Role of one canonical Figure 9 setup artifact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -308,6 +353,146 @@ fn compiled_profile_contains_once(needle: &[u8]) -> bool {
     matches.next().is_some() && matches.next().is_none()
 }
 
+fn release_digests_are_nonzero_and_distinct_v1(digests: &[[u8; 32]]) -> bool {
+    for (index, digest) in digests.iter().enumerate() {
+        if *digest == [0; 32] || digests[..index].contains(digest) {
+            return false;
+        }
+    }
+    true
+}
+
+fn release_prerequisite_pins_are_open_v1(pins: VegaMdlFigure9ReleasePrerequisitePinsV1) -> bool {
+    pins.proving_key_exact_bytes == 0
+        && pins.proving_key_raw_sha256 == [0; 32]
+        && pins.verifier_key_exact_bytes == 0
+        && pins.verifier_key_raw_sha256 == [0; 32]
+        && pins.artifact_manifest_sha256 == [0; 32]
+        && pins.package_sha256 == [0; 32]
+        && pins.evidence_set_sha256 == [0; 32]
+        && pins.governance_authorization_sha256 == [0; 32]
+}
+
+fn complete_release_manifest_from_pins_v1(
+    pins: VegaMdlFigure9ReleasePrerequisitePinsV1,
+) -> Option<VegaMdlFigure9ArtifactManifestV1> {
+    let Ok(proving_key) = VegaMdlFigure9ArtifactBindingV1::new(
+        VegaMdlFigure9ArtifactRoleV1::ProvingKey,
+        pins.proving_key_exact_bytes,
+        pins.proving_key_raw_sha256,
+    ) else {
+        return None;
+    };
+    let Ok(verifier_key) = VegaMdlFigure9ArtifactBindingV1::new(
+        VegaMdlFigure9ArtifactRoleV1::VerifierKey,
+        pins.verifier_key_exact_bytes,
+        pins.verifier_key_raw_sha256,
+    ) else {
+        return None;
+    };
+    let Ok(manifest) = VegaMdlFigure9ArtifactManifestV1::new(proving_key, verifier_key) else {
+        return None;
+    };
+    let digests = [
+        pins.proving_key_raw_sha256,
+        pins.verifier_key_raw_sha256,
+        pins.artifact_manifest_sha256,
+        pins.package_sha256,
+        pins.evidence_set_sha256,
+        pins.governance_authorization_sha256,
+    ];
+    if !release_digests_are_nonzero_and_distinct_v1(&digests)
+        || manifest.manifest_sha256() != pins.artifact_manifest_sha256
+    {
+        return None;
+    }
+    Some(manifest)
+}
+
+fn release_prerequisite_pins_complete_v1(pins: VegaMdlFigure9ReleasePrerequisitePinsV1) -> bool {
+    complete_release_manifest_from_pins_v1(pins).is_some()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VegaMdlFigure9ReleasePinStateV1 {
+    Open,
+    Complete,
+    Invalid,
+}
+
+fn release_prerequisite_pin_state_v1(
+    pins: VegaMdlFigure9ReleasePrerequisitePinsV1,
+) -> VegaMdlFigure9ReleasePinStateV1 {
+    if release_prerequisite_pins_are_open_v1(pins) {
+        VegaMdlFigure9ReleasePinStateV1::Open
+    } else if release_prerequisite_pins_complete_v1(pins) {
+        VegaMdlFigure9ReleasePinStateV1::Complete
+    } else {
+        VegaMdlFigure9ReleasePinStateV1::Invalid
+    }
+}
+
+fn validate_manifest_against_release_pins_v1(
+    manifest: &VegaMdlFigure9ArtifactManifestV1,
+    pins: VegaMdlFigure9ReleasePrerequisitePinsV1,
+) -> Result<(), VegaMdlFigure9ArtifactQualificationErrorV1> {
+    match release_prerequisite_pin_state_v1(pins) {
+        VegaMdlFigure9ReleasePinStateV1::Open => Ok(()),
+        VegaMdlFigure9ReleasePinStateV1::Invalid => {
+            Err(VegaMdlFigure9ArtifactQualificationErrorV1::InvalidReleasePrerequisitePins)
+        }
+        VegaMdlFigure9ReleasePinStateV1::Complete => {
+            let expected = complete_release_manifest_from_pins_v1(pins).ok_or(
+                VegaMdlFigure9ArtifactQualificationErrorV1::InvalidReleasePrerequisitePins,
+            )?;
+            if manifest == &expected {
+                Ok(())
+            } else {
+                Err(VegaMdlFigure9ArtifactQualificationErrorV1::ReleaseArtifactIdentityMismatch)
+            }
+        }
+    }
+}
+
+fn release_activation_binding_digest_with_pins_v1(
+    pins: VegaMdlFigure9ReleasePrerequisitePinsV1,
+) -> Option<[u8; 32]> {
+    complete_release_manifest_from_pins_v1(pins)?;
+    let mut hasher = Sha256::new();
+    hasher.update(RELEASE_ACTIVATION_BINDING_DIGEST_DOMAIN_V1);
+    hasher.update(pins.proving_key_exact_bytes.to_be_bytes());
+    hasher.update(pins.proving_key_raw_sha256);
+    hasher.update(pins.verifier_key_exact_bytes.to_be_bytes());
+    hasher.update(pins.verifier_key_raw_sha256);
+    hasher.update(pins.artifact_manifest_sha256);
+    hasher.update(pins.package_sha256);
+    hasher.update(pins.evidence_set_sha256);
+    hasher.update(pins.governance_authorization_sha256);
+    Some(hasher.finalize().into())
+}
+
+/// Whether every immutable PK, VK, package, evidence, and reviewed governance
+/// authorization pin required by the production compiled-profile catalog is
+/// populated and internally consistent.
+///
+/// This predicate is derived only from signed source constants. Runtime key
+/// installation remains a separate deployment precondition and can never
+/// turn an unavailable consensus profile into an available one.
+#[must_use]
+pub fn vega_figure9_release_prerequisite_pins_complete_v1() -> bool {
+    release_prerequisite_pins_complete_v1(source_release_prerequisite_pins_v1())
+}
+
+/// Source-derived binding of the complete governed Figure 9 artifact release.
+///
+/// The digest is absent while the source pins are wholly open or invalid. It
+/// is consumed by the production compiled-profile constructor so the
+/// governance activation tuple cannot equal the candidate-only tuple.
+#[must_use]
+pub(crate) fn vega_figure9_release_activation_binding_digest_v1() -> Option<[u8; 32]> {
+    release_activation_binding_digest_with_pins_v1(source_release_prerequisite_pins_v1())
+}
+
 /// Error returned by a deployment-owned artifact source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaMdlFigure9ArtifactSourceErrorV1 {
@@ -347,6 +532,12 @@ pub enum VegaMdlFigure9ArtifactQualificationErrorV1 {
     /// PK and VK claimed the same raw canonical artifact identity.
     #[error("Vega Figure 9 PK and VK artifact bindings are ambiguous")]
     AmbiguousArtifactBindings,
+    /// Source release pins were partially populated or internally inconsistent.
+    #[error("Vega Figure 9 release prerequisite pins are invalid")]
+    InvalidReleasePrerequisitePins,
+    /// Runtime artifact identity differs from the complete source release pins.
+    #[error("Vega Figure 9 runtime artifact identity differs from the source release pins")]
+    ReleaseArtifactIdentityMismatch,
     /// Source returned an explicit provider failure.
     #[error("Vega Figure 9 artifact provider failed: {0}")]
     SourceFailure(VegaMdlFigure9ArtifactSourceErrorV1),
@@ -610,6 +801,7 @@ pub fn qualify_and_install_vega_mdl_figure9_verifier_artifact_v1(
 > {
     let manifest = source.artifact_manifest().clone();
     manifest.validate()?;
+    validate_manifest_against_release_pins_v1(&manifest, source_release_prerequisite_pins_v1())?;
     let expected = manifest.artifact(VegaMdlFigure9ArtifactRoleV1::VerifierKey);
     let mut state = SourceCallbackStateV1::new();
     let source_result = source.with_verifier_key(&mut |verifier_key| {
@@ -643,6 +835,7 @@ pub fn qualify_and_install_vega_mdl_figure9_prover_artifacts_v1(
 {
     let manifest = source.artifact_manifest().clone();
     manifest.validate()?;
+    validate_manifest_against_release_pins_v1(&manifest, source_release_prerequisite_pins_v1())?;
     let expected_proving_key = manifest.artifact(VegaMdlFigure9ArtifactRoleV1::ProvingKey);
     let expected_verifier_key = manifest.artifact(VegaMdlFigure9ArtifactRoleV1::VerifierKey);
     let mut state = SourceCallbackStateV1::new();
@@ -703,6 +896,36 @@ mod tests {
             ),
         )
         .expect("metadata-only synthetic manifest")
+    }
+
+    const fn open_release_pins() -> VegaMdlFigure9ReleasePrerequisitePinsV1 {
+        VegaMdlFigure9ReleasePrerequisitePinsV1 {
+            proving_key_exact_bytes: 0,
+            proving_key_raw_sha256: [0; 32],
+            verifier_key_exact_bytes: 0,
+            verifier_key_raw_sha256: [0; 32],
+            artifact_manifest_sha256: [0; 32],
+            package_sha256: [0; 32],
+            evidence_set_sha256: [0; 32],
+            governance_authorization_sha256: [0; 32],
+        }
+    }
+
+    fn complete_release_pins(
+        manifest: &VegaMdlFigure9ArtifactManifestV1,
+    ) -> VegaMdlFigure9ReleasePrerequisitePinsV1 {
+        let proving_key = manifest.artifact(VegaMdlFigure9ArtifactRoleV1::ProvingKey);
+        let verifier_key = manifest.artifact(VegaMdlFigure9ArtifactRoleV1::VerifierKey);
+        VegaMdlFigure9ReleasePrerequisitePinsV1 {
+            proving_key_exact_bytes: proving_key.exact_byte_len(),
+            proving_key_raw_sha256: proving_key.raw_canonical_sha256(),
+            verifier_key_exact_bytes: verifier_key.exact_byte_len(),
+            verifier_key_raw_sha256: verifier_key.raw_canonical_sha256(),
+            artifact_manifest_sha256: manifest.manifest_sha256(),
+            package_sha256: [0xA1; 32],
+            evidence_set_sha256: [0xB2; 32],
+            governance_authorization_sha256: [0xC3; 32],
+        }
     }
 
     #[derive(Clone, Copy)]
@@ -894,6 +1117,81 @@ mod tests {
             manifest.upstream_source_commit().as_slice(),
             VEGA_PINNED_SOURCE_COMMIT_V1
         );
+    }
+
+    #[test]
+    fn release_prerequisite_pins_distinguish_open_and_validated_complete_states() {
+        let open = open_release_pins();
+        assert!(release_prerequisite_pins_are_open_v1(open));
+        assert!(!release_prerequisite_pins_complete_v1(open));
+        assert_eq!(
+            release_prerequisite_pin_state_v1(open),
+            VegaMdlFigure9ReleasePinStateV1::Open
+        );
+        assert!(!vega_figure9_release_prerequisite_pins_complete_v1());
+        assert_eq!(vega_figure9_release_activation_binding_digest_v1(), None);
+        assert_eq!(
+            VEGA_FIGURE9_RELEASE_READINESS_BLOCKER_V1,
+            "MissingGovernedFigure9ProverArtifacts"
+        );
+
+        let manifest = manifest();
+        let complete = complete_release_pins(&manifest);
+        assert!(!release_prerequisite_pins_are_open_v1(complete));
+        assert!(release_prerequisite_pins_complete_v1(complete));
+        assert_eq!(
+            release_prerequisite_pin_state_v1(complete),
+            VegaMdlFigure9ReleasePinStateV1::Complete
+        );
+        assert_eq!(
+            validate_manifest_against_release_pins_v1(&manifest, complete),
+            Ok(())
+        );
+        let release_binding = release_activation_binding_digest_with_pins_v1(complete)
+            .expect("complete synthetic pins derive a production release binding");
+        assert_ne!(release_binding, [0; 32]);
+
+        let mut mismatched_manifest = complete;
+        mismatched_manifest.artifact_manifest_sha256[0] ^= 1;
+        assert!(!release_prerequisite_pins_complete_v1(mismatched_manifest));
+        assert_eq!(
+            release_prerequisite_pin_state_v1(mismatched_manifest),
+            VegaMdlFigure9ReleasePinStateV1::Invalid
+        );
+        assert_eq!(
+            validate_manifest_against_release_pins_v1(&manifest, mismatched_manifest),
+            Err(VegaMdlFigure9ArtifactQualificationErrorV1::InvalidReleasePrerequisitePins)
+        );
+        let mut aliased_evidence = complete;
+        aliased_evidence.evidence_set_sha256 = aliased_evidence.package_sha256;
+        assert!(!release_prerequisite_pins_complete_v1(aliased_evidence));
+
+        let alternate_manifest = VegaMdlFigure9ArtifactManifestV1::new(
+            binding(
+                VegaMdlFigure9ArtifactRoleV1::ProvingKey,
+                b"different-synthetic-figure9-proving-key",
+            ),
+            binding(
+                VegaMdlFigure9ArtifactRoleV1::VerifierKey,
+                b"different-synthetic-figure9-verifier-key",
+            ),
+        )
+        .expect("alternate metadata-only synthetic manifest");
+        assert_eq!(
+            validate_manifest_against_release_pins_v1(&alternate_manifest, complete),
+            Err(VegaMdlFigure9ArtifactQualificationErrorV1::ReleaseArtifactIdentityMismatch)
+        );
+        assert_eq!(
+            validate_manifest_against_release_pins_v1(&alternate_manifest, open),
+            Ok(()),
+            "wholly open source pins preserve explicit candidate qualification"
+        );
+
+        let mut alternate_package = complete;
+        alternate_package.package_sha256 = [0xD4; 32];
+        let alternate_binding = release_activation_binding_digest_with_pins_v1(alternate_package)
+            .expect("distinct complete package pin derives a release binding");
+        assert_ne!(release_binding, alternate_binding);
     }
 
     #[test]

@@ -401,6 +401,38 @@ public final class PrivacyNativeBridge {
         .decodeExact12CapabilityManifestV1(Arrays.copyOf(archive, archive.length));
   }
 
+  /**
+   * Authenticate one canonical signed transaction as exactly the requested closed operation.
+   *
+   * <p>This validates the transaction signature, exact {@link NetworkId}, exact canonical
+   * authenticated authority, privacy intent binding, statement/proof variants, and consensus
+   * envelope limits. It never treats a local proof check as transaction acceptance.
+   */
+  public static PrivacyExact12ActionInspectionV1 inspectSignedExact12ActionV1(
+      final org.hyperledger.iroha.sdk.privacy.PrivacyExact12ActionRequestV1 request,
+      final NetworkId networkId,
+      final String authorityAccountId) {
+    if (!NATIVE_AVAILABLE) {
+      throw new IllegalStateException("native Exact12 signed-action inspection is unavailable");
+    }
+    if (request == null || networkId == null || authorityAccountId == null) {
+      throw new IllegalArgumentException(
+          "request, networkId, and authorityAccountId must be provided");
+    }
+    final byte[] projection;
+    try {
+      projection =
+          nativeInspectSignedExact12ActionV1(
+              request.getSignedTransactionVersioned(),
+              networkId.bytes(),
+              authorityAccountId.getBytes(StandardCharsets.UTF_8),
+              request.operation.ordinal());
+    } catch (final RuntimeException | LinkageError error) {
+      throw new IllegalStateException("native Exact12 signed-action inspection failed", error);
+    }
+    return new PrivacyExact12ActionInspectionV1(projection);
+  }
+
   /** Validates bytes as the exact compiled-profile catalog of the loaded binary. */
   public static CompiledProfileCatalogValidationStatusV1 validateCompiledProfileCatalogV1(
       final byte[] archive) {
@@ -566,6 +598,12 @@ public final class PrivacyNativeBridge {
 
   private static native boolean nativeValidateExact12SubmitProofConstruction(
       byte[] manifestArchive, int protocolIndex, byte[] instructionArchive);
+
+  private static native byte[] nativeInspectSignedExact12ActionV1(
+      byte[] signedTransactionVersioned,
+      byte[] networkId,
+      byte[] authorityAccountId,
+      int operationIndex);
 
   private static native byte[] nativeExact12FixtureBundle();
 

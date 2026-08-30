@@ -246,7 +246,7 @@ fn source_surface_is_move_only_bounded_concrete_and_non_authorizing() {
         .expect("production source prefix");
     let parent = include_str!("phase23_rns_link.rs");
     let adapter = include_str!("phase23_rns_link_external_spool.rs");
-    let spool_leaf = include_str!("../../../../../iroha_confidential_spool/src/lib.rs");
+    let spool_leaf = include_str!("../../../../../iroha_crypto/src/confidential_spool.rs");
     let crate_manifest = include_str!("../../../../Cargo.toml");
     assert!(source.lines().count() <= 1_050);
     assert!(source.len() <= 50_000);
@@ -320,5 +320,7 @@ fn source_surface_is_move_only_bounded_concrete_and_non_authorizing() {
     assert!(!adapter.contains("#[derive(Debug"));
     assert!(spool_leaf.contains("CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_V1"));
     assert!(spool_leaf.contains("CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_SLOTS_V1"));
-    assert!(crate_manifest.contains("iroha_confidential_spool = { workspace = true }"));
+    assert!(
+        crate_manifest.contains("iroha_crypto = { workspace = true, default-features = false }")
+    );
 }

@@ -158,10 +158,10 @@ OPENING_LOCK_PIN = FilePin(
 )
 LOCK_PIN = FilePin(
     LOCKFILE,
-    "5d04cef722cb695dd636110be01ff8de52ae7b45",
-    "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b",
-    311_172,
-    13_613,
+    "dec1238701c58b8b5b906c26624865c685d5ac70",
+    "179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7",
+    311_212,
+    13_615,
 )
 REPLACEMENT_PINS = (
     FilePin(
@@ -235,6 +235,16 @@ REPLACEMENT_PINS = (
         529,
     ),
 )
+
+REPLACEMENT_CURRENT_PINS = {
+    "crates/norito/README.md": FilePin(
+        "crates/norito/README.md",
+        "7c3155d71693d3c143e182ee9fa2d20b7e28134d",
+        "e98c51b15d49ed1f50b783d4b73faa60871e8ee3e4d054bf33d1086f36e272c7",
+        31_215,
+        533,
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -446,6 +456,11 @@ def _authenticate_openings() -> dict[str, bytes]:
 
     _authenticate_file(IVM_MANIFEST_PIN, opening_tree=True)
     _authenticate_file(OPENING_LOCK_PIN, opening_tree=True)
+    replacement_paths = {pin.path for pin in REPLACEMENT_PINS}
+    _require(
+        set(REPLACEMENT_CURRENT_PINS).issubset(replacement_paths),
+        "current replacement pin path is not in the opening inventory",
+    )
     for pin in REPLACEMENT_PINS:
         _authenticate_file(pin, opening_tree=True)
     return openings
@@ -587,12 +602,26 @@ def _validate(snapshot: Snapshot, openings: dict[str, bytes]) -> None:
     assert lock is not None
     _require(lock == _git_blob(LOCK_PIN.blob), "Cargo.lock differs from current authority")
     for pin in REPLACEMENT_PINS:
+        current_pin = REPLACEMENT_CURRENT_PINS.get(pin.path, pin)
+        _require(current_pin.path == pin.path, f"replacement path changed: {pin.path}")
         data = snapshot.files[pin.path]
         _require(data is not None, f"replacement missing: {pin.path}")
-        _require(len(data) == pin.byte_count, f"replacement bytes changed: {pin.path}")
-        _require(data.count(b"\n") == pin.line_count, f"replacement lines changed: {pin.path}")
-        _require(_sha256(data) == pin.sha256, f"replacement content changed: {pin.path}")
-        _require(_git_blob_id(data) == pin.blob, f"replacement blob changed: {pin.path}")
+        _require(
+            len(data) == current_pin.byte_count,
+            f"replacement bytes changed: {pin.path}",
+        )
+        _require(
+            data.count(b"\n") == current_pin.line_count,
+            f"replacement lines changed: {pin.path}",
+        )
+        _require(
+            _sha256(data) == current_pin.sha256,
+            f"replacement content changed: {pin.path}",
+        )
+        _require(
+            _git_blob_id(data) == current_pin.blob,
+            f"replacement blob changed: {pin.path}",
+        )
     for path, markers in REPLACEMENT_MARKERS.items():
         source = snapshot.files[path]
         assert source is not None

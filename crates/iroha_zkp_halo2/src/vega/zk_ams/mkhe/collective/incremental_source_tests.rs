@@ -10,6 +10,196 @@ impl MaskedRelaxedRandomSourceV1 for FailingRandom {
         Err(MaskedRelaxedRandomErrorV1::Unavailable)
     }
 }
+
+#[test]
+fn streaming_native_bgv_opening_receipt_digest_has_exact_kat_and_mutation_gates() {
+    let topology = CollectiveEncryptionInputTopologyV1 {
+        layout_digest: [4; 32],
+        plaintext_chunk_index: 5,
+        plaintext_used_slots: 6,
+    };
+    let digest = streaming_native_bgv_opening_receipt_digest_v1(
+        [1; 32],
+        [2; 32],
+        [3; 32],
+        topology,
+        7,
+        [8; 32],
+        [9; 32],
+        [10; 32],
+        u16::try_from(STREAMING_NATIVE_BGV_OPENING_EQUATION_COUNT_V1).unwrap(),
+        [11; 32],
+    )
+    .expect("fixed opening-receipt axes");
+    assert_eq!(
+        hex::encode(digest),
+        "56a5b0ff97ec5eed78bc8d70e246dae117b46baa2db7683a24524260d4bc5f6c"
+    );
+    assert_ne!(
+        streaming_native_bgv_opening_receipt_digest_v1(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            topology,
+            8,
+            [8; 32],
+            [9; 32],
+            [10; 32],
+            u16::try_from(STREAMING_NATIVE_BGV_OPENING_EQUATION_COUNT_V1).unwrap(),
+            [11; 32],
+        )
+        .unwrap(),
+        digest
+    );
+    assert_ne!(
+        streaming_native_bgv_opening_receipt_digest_v1(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            topology,
+            7,
+            [8; 32],
+            [9; 32],
+            [10; 32],
+            u16::try_from(STREAMING_NATIVE_BGV_OPENING_EQUATION_COUNT_V1).unwrap(),
+            [12; 32],
+        )
+        .unwrap(),
+        digest
+    );
+    assert_ne!(
+        streaming_native_bgv_opening_receipt_digest_v1(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            topology,
+            7,
+            [8; 32],
+            [9; 32],
+            [10; 32],
+            u16::try_from(STREAMING_NATIVE_BGV_OPENING_EQUATION_COUNT_V1).unwrap() - 1,
+            [11; 32],
+        )
+        .unwrap(),
+        digest
+    );
+    assert!(
+        streaming_native_bgv_opening_receipt_digest_v1(
+            [1; 32], [2; 32], [3; 32], topology, 7, [8; 32], [9; 32], [10; 32], 0, [11; 32],
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn streaming_native_bgv_opening_receipt_source_gate_preserves_exact_equation_provenance() {
+    let source = include_str!("incremental_source.rs");
+    assert!(
+        source.contains(
+            "const _: () = assert!(STREAMING_NATIVE_BGV_OPENING_EQUATION_COUNT_V1 == 76);"
+        )
+    );
+    let publisher = source
+        .split("fn publish_next_limb_v1")
+        .nth(1)
+        .expect("native limb publisher")
+        .split("fn write_streaming_collective_limb_coefficients_v1")
+        .next()
+        .expect("native limb publisher boundary");
+    let source_finish = publisher.find("source_reader.finish").unwrap();
+    let source_match = publisher
+        .find("validate_streaming_second_source_receipt_v1")
+        .unwrap();
+    let output_finish = publisher.find("output_transaction.finish").unwrap();
+    let output_match = publisher
+        .find("validate_streaming_collective_limb_pointer_v1")
+        .unwrap();
+    let equation_absorb = publisher
+        .find("absorb_published_equation_v1")
+        .expect("sealed equation audit advance");
+    let poison_clear = publisher.find("self.poisoned = false").unwrap();
+    assert!(source_finish < source_match);
+    assert!(source_match < output_finish);
+    assert!(output_finish < output_match);
+    assert!(output_match < equation_absorb);
+    assert!(equation_absorb < poison_clear);
+
+    let finish = source
+        .split("fn finish(self) -> Result<CompletedStreamingCollectiveEncryptionV1")
+        .nth(1)
+        .expect("streaming completion")
+        .split("struct StreamingCollectiveAutomorphismDigestV1")
+        .next()
+        .expect("streaming completion boundary");
+    assert!(finish.contains("native_bgv_opening_equations"));
+    assert!(finish.contains(".finish_v1(ciphertext_digest)?"));
+
+    let receipt = source
+        .split("struct StreamingNativeBgvOpeningReceiptSealV1;")
+        .nth(1)
+        .expect("private opening receipt")
+        .split("struct VerifiedStreamingCollectiveEncryptionProductV1")
+        .next()
+        .expect("opening receipt boundary");
+    assert!(receipt.contains("VerifiedStreamingNativeBgvOpeningReceiptV1"));
+    assert!(!receipt.contains("derive(Clone"));
+    assert!(!receipt.contains("derive(Debug"));
+    assert!(!receipt.contains("Encode"));
+    assert!(!receipt.contains("Decode"));
+    assert!(!source.contains("from_raw_opening_receipt"));
+
+    let product = source
+        .split("impl VerifiedStreamingCollectiveEncryptionProductV1")
+        .nth(1)
+        .expect("verified encryption product")
+        .split("struct PurposeForkedCollectiveKeyAdmissionAxesV1")
+        .next()
+        .expect("verified encryption product boundary");
+    assert!(product.contains("fn into_verified_manifest_v1("));
+    assert!(product.contains("native_bgv_opening_receipt.validate_for_manifest_v1(&manifest)?;"));
+    assert!(product.contains("#[cfg(test)]\n    fn into_verified_manifest_with_profile_v1("));
+    assert!(!product.contains("fn into_manifest_v1("));
+    assert!(
+        !source
+            .contains("impl core::ops::Deref for VerifiedStreamingCollectiveEncryptionProductV1")
+    );
+
+    let public_path = source
+        .split("pub fn encrypt_zk_ams_mkhe_collective_packed_streaming_v1")
+        .nth(1)
+        .expect("public streaming encryption entrypoint")
+        .split("#[cfg(test)]")
+        .next()
+        .expect("public streaming encryption boundary");
+    assert!(public_path.contains(
+        ".and_then(VerifiedStreamingCollectiveEncryptionProductV1::into_verified_manifest_v1)"
+    ));
+
+    let tail = include_str!("incremental_source_rns_native_tail_publication_v2.rs");
+    assert!(tail.contains(".and_then(|product| product.into_verified_manifest_v1())"));
+
+    let phase23 = include_str!("incremental_source_phase23.rs");
+    let verified_split = product
+        .find("fn into_verified_parts_v1(")
+        .expect("verified receipt-retaining split");
+    let revalidation = product[verified_split..]
+        .find("native_bgv_opening_receipt.validate_for_manifest_v1(&manifest)?;")
+        .map(|offset| verified_split + offset)
+        .expect("receipt-retaining split validation");
+    let verified_return = product[revalidation..]
+        .find("Ok((manifest, native_bgv_opening_receipt))")
+        .map(|offset| revalidation + offset)
+        .expect("verified receipt-retaining split return");
+    assert!(verified_split < revalidation);
+    assert!(revalidation < verified_return);
+    let split = phase23
+        .find("match product.into_verified_parts_v1()")
+        .expect("Phase-23 verified receipt-retaining split");
+    let retention = phase23
+        .find(".push(native_bgv_opening_receipt)")
+        .expect("Phase-23 receipt retention");
+    assert!(split < retention);
+}
 struct TestStageV1 {
     staging_identity: [u8; 32],
     seal_identity: Option<[u8; 32]>,
@@ -550,6 +740,7 @@ fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_diges
     let mut active = authenticated
         .activate_v1(
             &authority.binding,
+            authority.authority_digest(),
             &canonical,
             topology,
             sample_index,
@@ -583,7 +774,9 @@ fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_diges
         authority.authority_digest,
         &profile,
     )
-    .unwrap();
+    .unwrap()
+    .into_verified_manifest_with_profile_v1(&profile)
+    .expect("native BGV receipt must be consumed before manifest projection");
     manifest.validate_for_profile_v1(&profile).unwrap();
     assert_eq!(manifest.sample_index(), sample_index);
     assert_eq!(manifest.level(), 0);
@@ -672,6 +865,125 @@ fn source_authenticated_streaming_encryption_matches_native_tiny_limbs_and_diges
     );
     drop(opening);
 }
+
+#[test]
+fn streaming_native_bgv_opening_receipt_rejects_every_bound_axis_mutation_before_consumption() {
+    let profile = test_profile();
+    let (key, _) = test_key(0xb7);
+    let canonical = test_canonical_plaintext(&[0, 1, 2, 3, 5, 8, 13, 16]);
+    let topology = test_input_topology(&profile, b"native-bgv-receipt-adversarial");
+    let sample_index = 49;
+    let mut key_store = TestStreamingCasV1::new(0x72);
+    let authority = test_streaming_key_authority_v1(&profile, &key, &mut key_store, sample_index);
+    let prepared =
+        PreparedStreamingCollectiveEncryptionV1::new_v1(&authority.binding, &profile).unwrap();
+    let authenticated = prepared.authenticate_key_source_v1(&mut key_store).unwrap();
+    let mut active = authenticated
+        .activate_v1(
+            &authority.binding,
+            authority.authority_digest(),
+            &canonical,
+            topology,
+            sample_index,
+            &mut KatRandom::new(b"native-bgv-receipt-adversarial"),
+        )
+        .unwrap();
+    let mut ciphertext_store = TestStreamingCasV1::new(0x82);
+    active
+        .publish_all_v1(&mut key_store, &mut ciphertext_store)
+        .unwrap();
+    let completed = active.finish().unwrap();
+    let mut product = ZkAmsMkheStreamingCollectiveCiphertextV1::from_completed_v1(
+        completed,
+        &authority.binding,
+        authority.authority_digest,
+        &profile,
+    )
+    .unwrap();
+    product
+        .native_bgv_opening_receipt
+        .validate_for_manifest_with_profile_v1(&product.manifest, &profile)
+        .unwrap();
+
+    macro_rules! assert_receipt_mutation_rejected {
+        ($mutation:block) => {{
+            $mutation
+            assert_eq!(
+                product
+                    .native_bgv_opening_receipt
+                    .validate_for_manifest_with_profile_v1(&product.manifest, &profile),
+                Err(ZkAmsMkheErrorV1::InvalidCiphertext)
+            );
+            $mutation
+            product
+                .native_bgv_opening_receipt
+                .validate_for_manifest_with_profile_v1(&product.manifest, &profile)
+                .unwrap();
+        }};
+    }
+
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.profile_digest[0] ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.key_digest[0] ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.key_authority_digest[0] ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.topology.layout_digest[0] ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product
+            .native_bgv_opening_receipt
+            .topology
+            .plaintext_chunk_index ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product
+            .native_bgv_opening_receipt
+            .topology
+            .plaintext_used_slots ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.sample_index ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.transcript_digest[0] ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.ciphertext_digest[0] ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.manifest_digest[0] ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.equation_count ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product
+            .native_bgv_opening_receipt
+            .equation_transcript_digest[0] ^= 1;
+    });
+    assert_receipt_mutation_rejected!({
+        product.native_bgv_opening_receipt.receipt_digest[0] ^= 1;
+    });
+    product.manifest.manifest_digest[0] ^= 1;
+    assert!(
+        product
+            .native_bgv_opening_receipt
+            .validate_for_manifest_with_profile_v1(&product.manifest, &profile)
+            .is_err()
+    );
+    product.manifest.manifest_digest[0] ^= 1;
+
+    let manifest = product
+        .into_verified_manifest_with_profile_v1(&profile)
+        .expect("unaltered real native BGV receipt is consumed");
+    manifest.validate_for_profile_v1(&profile).unwrap();
+}
+
 #[test]
 fn streaming_prepass_precedes_entropy_and_late_source_failure_cannot_authorize_output() {
     let profile = test_profile();
@@ -695,7 +1007,14 @@ fn streaming_prepass_precedes_entropy_and_late_source_failure_cannot_authorize_o
     let authenticated = prepared.authenticate_key_source_v1(&mut key_store).unwrap();
     let mut random = CountingKatRandomV1::new(b"late-source-failure");
     let mut active = authenticated
-        .activate_v1(&authority.binding, &canonical, topology, 48, &mut random)
+        .activate_v1(
+            &authority.binding,
+            authority.authority_digest(),
+            &canonical,
+            topology,
+            48,
+            &mut random,
+        )
         .unwrap();
     assert!(random.calls > 0);
     key_store.fail_read_at = Some(key_store.read_calls + 1);
@@ -764,14 +1083,14 @@ fn two_limb_incremental_kernel_rejects_foreign_key_and_zeroizes_preallocated_dro
     );
 }
 #[test]
-fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_reference() {
+fn incremental_source_has_sealed_limb_streaming_surface_and_compiled_private_native_reference() {
     let source = include_str!("incremental_source.rs");
-    let disabled_phase23 = concat!(
-        "#[cfg(any())]\n",
+    let private_phase23 = concat!(
         "#[path = \"incremental_source_phase23.rs\"]\n",
         "mod incremental_source_phase23;"
     );
-    assert!(source.contains(disabled_phase23));
+    assert!(source.contains(private_phase23));
+    assert!(!source.contains("#[cfg(any())]"));
     assert_eq!(source.matches("mod incremental_source_phase23;").count(), 1);
     assert!(source.contains("Source-authenticated, limb-streamed collective encryption"));
     assert!(source.contains("38 independently addressed `c0` limbs"));

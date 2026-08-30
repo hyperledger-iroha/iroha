@@ -32,6 +32,10 @@ use crate::vega::{
 };
 use core::fmt;
 const WHOLE_PROOF_MAGIC_V1: [u8; 8] = *b"ZKRNLNK1";
+const VERIFIER_AUTHENTICATED_TRANSPORT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.phase23.rns-link.verifier-authenticated-transport";
+const VERIFIER_TRANSPORT_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.phase23.rns-link.verifier-transport-binding";
 const WHOLE_PROOF_VERSION_V1: u8 = 1;
 const WHOLE_PROOF_FLAGS_V1: u8 = 0;
 const WHOLE_PROOF_SECTION_FLAGS_V1: u8 = 0;
@@ -223,6 +227,160 @@ pub(super) struct ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
     family_sections: [WholeProofFamilySectionV1; WHOLE_PROOF_FAMILY_COUNT_V1],
     relation_sections: [WholeProofRelationRecordsV1; 4],
 }
+
+/// Leaf-private seal for a transport authenticated from verifier-owned inputs.
+struct VerifierAuthenticatedTransportSealV1;
+
+/// Move-only canonical RNS-Link transport bound to verifier-derived release inputs.
+///
+/// This capability proves only byte-level correspondence: the exact canonical wire is bound to
+/// the governed profile and algorithm, the opaque context, the verifier-derived challenge set,
+/// the ordered commitment root, and all 43 native Hyrax commitments. It deliberately does not
+/// certify any packing, carry, quotient, or Hyrax/BGV equality response and therefore cannot be
+/// used as an algebraic receipt or release authorization.
+#[allow(
+    dead_code,
+    reason = "the authenticated transport awaits the production context-authority handoff"
+)]
+pub(super) struct ZkAmsPhase23RnsLinkVerifierAuthenticatedTransportV1 {
+    _seal: VerifierAuthenticatedTransportSealV1,
+    envelope: ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
+    binding: ZkAmsPhase23RnsLinkWholeProofBindingV1,
+    canonical_wire_bytes: u32,
+    canonical_wire_digest: [u8; 32],
+    binding_digest: [u8; 32],
+    receipt_digest: [u8; 32],
+}
+
+#[allow(
+    dead_code,
+    reason = "the authenticated transport awaits the production context-authority handoff"
+)]
+impl ZkAmsPhase23RnsLinkVerifierAuthenticatedTransportV1 {
+    /// Authenticate one exact canonical wire against inputs derived by the verifier.
+    pub(super) fn authenticate_exact_v1(
+        bytes: &[u8],
+        context: &ZkAmsPhase23RnsLinkContextV1,
+        commitments: &[ZkAmsPhase23RnsLinkChunkCommitmentV1],
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        // Keep malformed bytes behind the allocation-free preflight before deriving the expensive
+        // challenge set or allocating the owned envelope.
+        preflight_zk_ams_phase23_rns_link_whole_proof_v1(bytes)?;
+        let binding = ZkAmsPhase23RnsLinkWholeProofBindingV1::derive(context, commitments)?;
+        let envelope =
+            ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1::decode_exact_for_binding_v1(
+                bytes, &binding,
+            )?;
+        let canonical_wire_bytes =
+            u32::try_from(bytes.len()).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let canonical_wire_digest = crate::vega::sponge::keccak256(bytes);
+        let binding_digest = verifier_transport_binding_digest_v1(&binding)?;
+        let receipt_digest = verifier_authenticated_transport_receipt_digest_v1(
+            canonical_wire_bytes,
+            canonical_wire_digest,
+            binding_digest,
+        );
+        let value = Self {
+            _seal: VerifierAuthenticatedTransportSealV1,
+            envelope,
+            binding,
+            canonical_wire_bytes,
+            canonical_wire_digest,
+            binding_digest,
+            receipt_digest,
+        };
+        value.validate_v1()?;
+        Ok(value)
+    }
+
+    fn validate_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
+        self.envelope.validate_release_binding(&self.binding)?;
+        let canonical = self.envelope.encode_canonical()?;
+        let canonical_wire_bytes = u32::try_from(canonical.len())
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        let canonical_wire_digest = crate::vega::sponge::keccak256(&canonical);
+        let binding_digest = verifier_transport_binding_digest_v1(&self.binding)?;
+        if self.canonical_wire_bytes != canonical_wire_bytes
+            || self.canonical_wire_bytes
+                != u32::try_from(WHOLE_PROOF_EXACT_BYTES_V1)
+                    .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            || self.canonical_wire_digest == [0; 32]
+            || self.canonical_wire_digest != canonical_wire_digest
+            || self.binding_digest == [0; 32]
+            || self.binding_digest != binding_digest
+            || self.receipt_digest == [0; 32]
+            || self.receipt_digest
+                != verifier_authenticated_transport_receipt_digest_v1(
+                    canonical_wire_bytes,
+                    canonical_wire_digest,
+                    binding_digest,
+                )
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        Ok(())
+    }
+
+    /// Consume the transport into the exact envelope and its verifier-derived binding.
+    pub(super) fn into_bound_parts_v1(
+        self,
+    ) -> (
+        ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1,
+        ZkAmsPhase23RnsLinkWholeProofBindingV1,
+    ) {
+        (self.envelope, self.binding)
+    }
+
+    #[cfg(test)]
+    const fn receipt_digest_v1(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+}
+
+fn verifier_transport_binding_digest_v1(
+    binding: &ZkAmsPhase23RnsLinkWholeProofBindingV1,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let mut hash = crate::vega::sponge::Keccak256::new();
+    hash.update(VERIFIER_TRANSPORT_BINDING_DOMAIN_V1);
+    hash.update(&[WHOLE_PROOF_VERSION_V1]);
+    hash.update(&binding.profile_digest);
+    hash.update(&binding.algorithm_manifest_digest);
+    hash.update(&binding.context_digest);
+    hash.update(&binding.statement_digest);
+    hash.update(&binding.ordered_commitment_root);
+    hash.update(
+        &u16::try_from(binding.hyrax_commitments.len())
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            .to_be_bytes(),
+    );
+    for commitment in &binding.hyrax_commitments {
+        hash.update(
+            &commitment
+                .to_non_identity_wire_bytes()
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
+        );
+    }
+    let digest = hash.finalize();
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(digest)
+}
+
+fn verifier_authenticated_transport_receipt_digest_v1(
+    canonical_wire_bytes: u32,
+    canonical_wire_digest: [u8; 32],
+    binding_digest: [u8; 32],
+) -> [u8; 32] {
+    let mut hash = crate::vega::sponge::Keccak256::new();
+    hash.update(VERIFIER_AUTHENTICATED_TRANSPORT_DOMAIN_V1);
+    hash.update(&[WHOLE_PROOF_VERSION_V1]);
+    hash.update(&canonical_wire_bytes.to_be_bytes());
+    hash.update(&canonical_wire_digest);
+    hash.update(&binding_digest);
+    hash.finalize()
+}
+
 impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
     /// Decode exactly after an allocation-free structural and canonical
     /// preflight. The returned value remains explicitly unverified.
@@ -361,9 +519,16 @@ impl ZkAmsPhase23RnsLinkUnverifiedWholeProofEnvelopeV1 {
         // Preserve the cheap malformed-input boundary before deriving the
         // release challenge set or allocating owned proof records.
         preflight_zk_ams_phase23_rns_link_whole_proof_v1(bytes)?;
-        let value = Self::decode_exact(bytes)?;
         let binding = ZkAmsPhase23RnsLinkWholeProofBindingV1::derive(context, commitments)?;
-        value.validate_release_binding(&binding)?;
+        Self::decode_exact_for_binding_v1(bytes, &binding)
+    }
+
+    fn decode_exact_for_binding_v1(
+        bytes: &[u8],
+        binding: &ZkAmsPhase23RnsLinkWholeProofBindingV1,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        let value = Self::decode_exact(bytes)?;
+        value.validate_release_binding(binding)?;
         Ok(value)
     }
     /// Encode the sole canonical structural representation. This operation
@@ -1190,6 +1355,122 @@ mod tests {
                 &commitments,
             ),
             Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+        );
+    }
+    #[test]
+    fn verifier_authenticated_transport_is_move_only_exact_and_non_algebraic() {
+        let (proof, context, commitments) = release_bound_fixture();
+        let wire = proof.encode_canonical().expect("release-bound wire");
+        let transport = ZkAmsPhase23RnsLinkVerifierAuthenticatedTransportV1::authenticate_exact_v1(
+            &wire,
+            &context,
+            &commitments,
+        )
+        .expect("verifier-derived transport authentication");
+        transport.validate_v1().expect("sealed transport validates");
+        let receipt_digest = transport.receipt_digest_v1();
+        assert_ne!(receipt_digest, [0; 32]);
+        let (decoded, binding) = transport.into_bound_parts_v1();
+        assert_eq!(decoded, proof);
+        decoded
+            .validate_release_binding(&binding)
+            .expect("consumed parts retain exact verifier binding");
+
+        // A relation response remains explicitly unverified: changing one canonical evaluation
+        // produces a different authenticated transport, not an algebraic-verification failure.
+        let mut different_response = decoded;
+        different_response.relation_sections[0].records[0].evaluation = Scalar::from_u64(65_535);
+        let different_wire = different_response
+            .encode_canonical()
+            .expect("canonical changed response");
+        let different_transport =
+            ZkAmsPhase23RnsLinkVerifierAuthenticatedTransportV1::authenticate_exact_v1(
+                &different_wire,
+                &context,
+                &commitments,
+            )
+            .expect("transport authentication does not overclaim algebra");
+        assert_ne!(different_transport.receipt_digest_v1(), receipt_digest);
+    }
+    #[test]
+    fn verifier_authenticated_transport_rejects_every_verifier_binding_substitution() {
+        let (proof, context, commitments) = release_bound_fixture();
+        let wire = proof.encode_canonical().expect("release-bound wire");
+        let shell = whole_proof_fixture()
+            .encode_canonical()
+            .expect("structurally canonical digest shell");
+        assert!(
+            ZkAmsPhase23RnsLinkVerifierAuthenticatedTransportV1::authenticate_exact_v1(
+                &shell,
+                &context,
+                &commitments,
+            )
+            .is_err()
+        );
+        let wrong_context = release_context(b"authenticated-transport-wrong-context");
+        assert!(
+            ZkAmsPhase23RnsLinkVerifierAuthenticatedTransportV1::authenticate_exact_v1(
+                &wire,
+                &wrong_context,
+                &commitments,
+            )
+            .is_err()
+        );
+        let different_commitments =
+            relation_commitments(&proof, b"authenticated-transport-wrong-commitments");
+        assert!(
+            ZkAmsPhase23RnsLinkVerifierAuthenticatedTransportV1::authenticate_exact_v1(
+                &wire,
+                &context,
+                &different_commitments,
+            )
+            .is_err()
+        );
+        let mut reordered_commitments = commitments;
+        reordered_commitments.swap(0, 1);
+        assert!(
+            ZkAmsPhase23RnsLinkVerifierAuthenticatedTransportV1::authenticate_exact_v1(
+                &wire,
+                &context,
+                &reordered_commitments,
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn verifier_authenticated_transport_receipt_digest_has_exact_kat_and_mutation_gates() {
+        let digest = verifier_authenticated_transport_receipt_digest_v1(
+            u32::try_from(WHOLE_PROOF_EXACT_BYTES_V1).unwrap(),
+            [0x11; 32],
+            [0x22; 32],
+        );
+        assert_eq!(
+            hex::encode(digest),
+            "0102d6dca09da8df91a9c5b3d463a48a9eca92249a1551ae992c2602678bb5de"
+        );
+        assert_ne!(
+            verifier_authenticated_transport_receipt_digest_v1(
+                u32::try_from(WHOLE_PROOF_EXACT_BYTES_V1).unwrap() - 1,
+                [0x11; 32],
+                [0x22; 32],
+            ),
+            digest
+        );
+        assert_ne!(
+            verifier_authenticated_transport_receipt_digest_v1(
+                u32::try_from(WHOLE_PROOF_EXACT_BYTES_V1).unwrap(),
+                [0x10; 32],
+                [0x22; 32],
+            ),
+            digest
+        );
+        assert_ne!(
+            verifier_authenticated_transport_receipt_digest_v1(
+                u32::try_from(WHOLE_PROOF_EXACT_BYTES_V1).unwrap(),
+                [0x11; 32],
+                [0x23; 32],
+            ),
+            digest
         );
     }
     #[test]

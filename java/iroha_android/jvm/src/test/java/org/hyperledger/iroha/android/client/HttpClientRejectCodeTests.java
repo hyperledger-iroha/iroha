@@ -10,6 +10,7 @@ import java.util.concurrent.CompletableFuture;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -56,7 +57,8 @@ public final class HttpClientRejectCodeTests {
                 org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
                     java.util.Collections.emptyList(), 1L))
             .setNetworkId(
-                org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
+                NetworkId.parse(
+                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"))
             .setAuthority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
             .setCreationTimeMs(1L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))

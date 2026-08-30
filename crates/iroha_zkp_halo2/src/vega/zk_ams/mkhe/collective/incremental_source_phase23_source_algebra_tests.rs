@@ -371,15 +371,17 @@ fn hostile_order_top_zero_formula_equation_and_centering_mutations_fail() {
 fn production_seals_flags_poison_order_and_privacy_stay_fail_closed() {
     let _ordered = OrderedCiphertextBundleSealV2::TestOnly;
     let _proof = RadixHyraxProofSealV2::TestOnly;
-    assert!(!SOURCE_RELATION_POLYNOMIALS_CONSTRUCTED_V2);
-    assert!(!SOURCE_ALGEBRA_VERIFIED_V2);
-    assert!(!RADIX_PACKING_VERIFIED_V2);
-    assert!(!RADIX_CARRY_VERIFIED_V2);
-    assert!(!NEGACYCLIC_QUOTIENT_VERIFIED_V2);
-    assert!(!PRIVATE_HYRAX_VERIFIED_V2);
-    assert!(!Q_PCS_HANDOFF_COMPLETE_V2);
-    assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2);
-    assert!(!RELEASE_COMPLETE_V2);
+    const {
+        assert!(!SOURCE_RELATION_POLYNOMIALS_CONSTRUCTED_V2);
+        assert!(!SOURCE_ALGEBRA_VERIFIED_V2);
+        assert!(!RADIX_PACKING_VERIFIED_V2);
+        assert!(!RADIX_CARRY_VERIFIED_V2);
+        assert!(!NEGACYCLIC_QUOTIENT_VERIFIED_V2);
+        assert!(!PRIVATE_HYRAX_VERIFIED_V2);
+        assert!(!Q_PCS_HANDOFF_COMPLETE_V2);
+        assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2);
+        assert!(!RELEASE_COMPLETE_V2);
+    };
     for impossible_field in [
         "ordered_43_ciphertexts: Infallible",
         "move_only_key_authority: Infallible",

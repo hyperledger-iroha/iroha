@@ -3677,6 +3677,25 @@ pub enum ZkAmsMkheDecryptedPlaintextV1 {
     /// Canonical T256 scalar bytes, one per ring coefficient.
     T256(Vec<[u8; 32]>),
 }
+
+impl Drop for ZkAmsMkheDecryptedPlaintextV1 {
+    fn drop(&mut self) {
+        match self {
+            #[cfg(test)]
+            Self::Tiny(values) => {
+                core::hint::black_box(values.as_mut_slice()).fill(0);
+            }
+            Self::T256(values) => {
+                let values = core::hint::black_box(values.as_mut_slice());
+                for value in values.iter_mut() {
+                    value.fill(0);
+                }
+                let _ = core::hint::black_box(values);
+            }
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+}
 type DecryptedPlaintextV1 = ZkAmsMkheDecryptedPlaintextV1;
 /// Result of verifying and combining the sole exact ordered all-eight share set.
 #[derive(Clone, Debug, PartialEq, Eq)]

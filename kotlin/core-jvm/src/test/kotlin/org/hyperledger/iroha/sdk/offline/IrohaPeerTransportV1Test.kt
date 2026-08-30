@@ -137,8 +137,8 @@ class IrohaPeerTransportV1Test {
         assertEquals(0x0102, wrapped.canonicalPayload.schemaVersion)
         assertContentEquals(archive, wrapped.canonicalPayload.bytes)
         assertContentEquals(archive, IrohaPeerKagemushaAdapterV1.decode(wrapped).archive())
-        assertEquals(12_425, archive.size)
-        assertEquals(12_509, wrapped.encode().size)
+        assertEquals(12_423, archive.size)
+        assertEquals(12_507, wrapped.encode().size)
 
         val tooSmall = IrohaPeerWireLimitsV1(
             maximumCanonicalBytes = 32 * 1024,
@@ -526,6 +526,81 @@ class IrohaPeerTransportV1Test {
             IrohaPeerWireMessageV1.decodeHeader(wrongSchemaHeader)
         }
         assertTrue(hostile.message.orEmpty().contains("requires schema 258, received 1"))
+    }
+
+    @Test
+    fun `eligibility payment uses distinct capability schema and canonical type`() {
+        assertEquals(22, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(
+            21,
+            KagemushaRecursiveSpendProver.REQUIRED_RECURSIVE_PROOF_ARTIFACT_ABI_VERSION,
+        )
+        assertEquals(4, KagemushaRecursiveSpendProver.V4_ARTIFACT_MANIFEST_VERSION)
+        assertEquals(
+            "cash_handoff_eligibility_v1",
+            IrohaPeerKagemushaEligibilityAdapterV1.CAPABILITY,
+        )
+        assertTrue(
+            IrohaPeerKagemushaEligibilityAdapterV1.CAPABILITY !=
+                KagemushaRecursiveSpendProver.CASH_HANDOFF_CAPABILITY_V1,
+        )
+
+        val canonical = IrohaPeerKagemushaStructuralTestV1.archive(
+            IrohaPeerPayloadKind.PAYMENT,
+            "eligibility-envelope".toByteArray(),
+            IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION,
+        )
+        val envelope = IrohaPeerKagemushaEligibilityPaymentEnvelopeV1(canonical)
+        val message = IrohaPeerKagemushaEligibilityAdapterV1.wrap(envelope)
+        assertEquals(IrohaPeerPayloadKind.PAYMENT, message.canonicalPayload.kind)
+        assertEquals(0x0103, message.canonicalPayload.schemaVersion)
+        assertEquals(message, IrohaPeerWireMessageV1.decode(message.encode()))
+        assertEquals(envelope, IrohaPeerKagemushaEligibilityAdapterV1.decode(message))
+
+        val legacy = IrohaPeerKagemushaStructuralTestV1.archive(
+            IrohaPeerPayloadKind.PAYMENT,
+            byteArrayOf(0x51),
+        )
+        IrohaPeerCanonicalPayload(
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+            IrohaPeerPayloadKind.PAYMENT,
+            IrohaPeerWireMessageV1.KAGEMUSHA_LEGACY_SCHEMA_VERSION,
+            legacy,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            IrohaPeerCanonicalPayload(
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+                IrohaPeerPayloadKind.PAYMENT,
+                IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION,
+                legacy,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            IrohaPeerCanonicalPayload(
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+                IrohaPeerPayloadKind.PAYMENT,
+                IrohaPeerWireMessageV1.KAGEMUSHA_LEGACY_SCHEMA_VERSION,
+                canonical,
+            )
+        }
+        for (kind in listOf(
+            IrohaPeerPayloadKind.RECEIVE_REQUEST,
+            IrohaPeerPayloadKind.ACKNOWLEDGEMENT,
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                IrohaPeerCanonicalPayload(
+                    IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+                    kind,
+                    IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION,
+                    canonical,
+                )
+            }
+        }
+
+        val wrongSchema = canonical.copyOf().also { it[6] = (it[6].toInt() xor 1).toByte() }
+        assertFailsWith<IllegalArgumentException> {
+            IrohaPeerKagemushaEligibilityPaymentEnvelopeV1(wrongSchema)
+        }
     }
 
     @Test

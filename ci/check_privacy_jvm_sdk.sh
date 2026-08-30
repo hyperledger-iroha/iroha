@@ -6,8 +6,8 @@ JAVA_HOME_OVERRIDE="${PRIVACY_JVM_SDK_JAVA_HOME:-}"
 PYTHON_BIN="${PRIVACY_JVM_SDK_PYTHON_BIN:-python3}"
 CARGO_BIN="${PRIVACY_JVM_SDK_CARGO_BIN:-cargo}"
 RUSTC_BIN="${PRIVACY_JVM_SDK_RUSTC_BIN:-rustc}"
-FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+FROZEN_CARGO_LOCK_SHA256="31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d"
+TRACKED_ROOT_CARGO_LOCK_SHA256="179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7"
 ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 JAVA_OUT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-java-sdk-test.XXXXXX")"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-jvm-native.XXXXXX")"
@@ -27,6 +27,10 @@ fail() {
   echo "error: $*" >&2
   exit 1
 }
+
+"${PYTHON_BIN}" -I -S \
+  "${ROOT_DIR}/ci/check_privacy_finalized_state_jvm_parity.py" \
+  --root "${ROOT_DIR}"
 
 sha256_file() {
   "${PYTHON_BIN}" -I -S - "$1" <<'PY'
@@ -179,6 +183,9 @@ java -version
 cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12ActionModelsV1Test \
+  --tests org.hyperledger.iroha.sdk.client.AuthenticatedOfflineDeviceRegistrationResultV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyFinalizedStateModelsV1Test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
@@ -187,6 +194,9 @@ cd "${ROOT_DIR}/kotlin"
 
 cd "${ROOT_DIR}/java/iroha_android"
 ./gradlew --no-daemon -q :core:test \
+  --tests org.hyperledger.iroha.android.client.AuthenticatedOfflineDeviceRegistrationResultV1Tests \
+  --tests org.hyperledger.iroha.android.client.AuthenticatedPrivacyStateQueryNativeBridgeTests \
+  --tests org.hyperledger.iroha.android.privacy.PrivacyExact12ActionInspectionV1Tests \
   --tests org.hyperledger.iroha.android.privacy.PrivacyExact12FixtureCodecV1Tests \
   --tests org.hyperledger.iroha.android.model.instructions.ProofAttachmentModelTests \
   --tests org.hyperledger.iroha.android.norito.ProofAttachmentNoritoTests

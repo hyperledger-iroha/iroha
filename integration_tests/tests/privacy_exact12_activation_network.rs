@@ -1,8 +1,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-validator governance lifecycle coverage for the complete canonical
-//! first-release exact-12 privacy registry. Ten executable profiles retain
-//! positive governance coverage; ZK-ACE and ZK-AMS remain explicitly
-//! unavailable and fail closed on every validator.
+//! first-release exact-12 privacy registry. Every compiled profile follows its
+//! assigned rollout wave and receives positive governance coverage; ZK-AMS and
+//! any still-open evidence-gated profile remain explicitly unavailable and
+//! fail closed on every validator at every wave boundary.
 //!
 //! This scenario deliberately does not construct privacy proofs. The isolated
 //! release-evidence runner owns native-engine proof coverage; this test proves
@@ -13,7 +14,7 @@
 //! ```text
 //! TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 \
 //! IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests \
-//! --test network_functional --features zk-stark \
+//! --test privacy_release_network --features 'zk-stark privacy-release-evidence' \
 //! privacy_exact12_activation_network::canonical_exact12_governance_survives_four_peer_activation_replay_and_restart \
 //! -- --exact --nocapture --test-threads=1
 //! ```
@@ -22,10 +23,12 @@ use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+    privacy_engines::zk_ace::ZK_ACE_FULL_ENGINE_AVAILABLE_V1,
     privacy_profiles::{
         CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
         compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
-        zk_ams_release_candidate_profile_material_v1,
+        vega_release_candidate_profile_material_v1, zk_ams_release_candidate_profile_material_v1,
+        zk_x509_release_candidate_profile_material_v1,
     },
 };
 use iroha_data_model::{
@@ -63,15 +66,93 @@ const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
 const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
-const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 2] = [ZK_ACE_PROTOCOL, ZK_AMS_PROTOCOL];
+const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+const GOVERNANCE_WAVE_1_V1: [PrivacyProtocolIdV1; 4] = [
+    PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+    PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+    PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+    PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+];
+const GOVERNANCE_WAVE_2_V1: [PrivacyProtocolIdV1; 4] = [
+    PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+    PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    PrivacyProtocolIdV1::PqMaspStarkV0,
+];
+const GOVERNANCE_WAVE_3_V1: [PrivacyProtocolIdV1; 2] = [
+    PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+    PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+];
+const GOVERNANCE_WAVE_4_V1: [PrivacyProtocolIdV1; 2] = [
+    PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+    PrivacyProtocolIdV1::IrohaZkAmsV1,
+];
+const GOVERNANCE_WAVES_V1: [&[PrivacyProtocolIdV1]; 4] = [
+    &GOVERNANCE_WAVE_1_V1,
+    &GOVERNANCE_WAVE_2_V1,
+    &GOVERNANCE_WAVE_3_V1,
+    &GOVERNANCE_WAVE_4_V1,
+];
 #[derive(Clone, Copy)]
 struct ExpectedProtocolState {
     protocol_id: PrivacyProtocolIdV1,
     compiled_profile: PrivacyCompiledProfileResultV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
 }
+fn validate_governance_wave_catalog_v1() -> Result<()> {
+    ensure!(
+        PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1 == 300,
+        "Exact12 rollout requires the frozen 300-block notice, got {}",
+        PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
+    );
+    let flattened = GOVERNANCE_WAVES_V1
+        .iter()
+        .flat_map(|wave| wave.iter().copied())
+        .collect::<Vec<_>>();
+    ensure!(
+        flattened.len() == PrivacyProtocolIdV1::COUNT,
+        "four-wave Exact12 catalog must contain exactly {} rows, got {}",
+        PrivacyProtocolIdV1::COUNT,
+        flattened.len()
+    );
+    for protocol_id in PrivacyProtocolIdV1::ALL {
+        ensure!(
+            flattened
+                .iter()
+                .filter(|candidate| **candidate == protocol_id)
+                .count()
+                == 1,
+            "protocol `{}` must occur exactly once in the four-wave rollout catalog",
+            protocol_id.canonical_label()
+        );
+    }
+    Ok(())
+}
+fn governance_wave_index_v1(protocol_id: PrivacyProtocolIdV1) -> usize {
+    GOVERNANCE_WAVES_V1
+        .iter()
+        .position(|wave| wave.contains(&protocol_id))
+        .expect("validated Exact12 protocol has one governance wave")
+}
 fn is_expected_unavailable(protocol_id: PrivacyProtocolIdV1) -> bool {
-    UNAVAILABLE_PROTOCOLS.contains(&protocol_id)
+    protocol_id == ZK_AMS_PROTOCOL
+        || protocol_id == VEGA_PROTOCOL
+        || protocol_id == ZK_X509_PROTOCOL
+        || (protocol_id == ZK_ACE_PROTOCOL && !ZK_ACE_FULL_ENGINE_AVAILABLE_V1)
+}
+fn expected_unavailable_protocols() -> impl Iterator<Item = PrivacyProtocolIdV1> {
+    [
+        ZK_ACE_PROTOCOL,
+        ZK_AMS_PROTOCOL,
+        VEGA_PROTOCOL,
+        ZK_X509_PROTOCOL,
+    ]
+    .into_iter()
+    .filter(|protocol_id| is_expected_unavailable(*protocol_id))
+}
+fn expected_unavailable_protocol_count() -> usize {
+    expected_unavailable_protocols().count()
 }
 fn require_test_network_feature(feature: &str) -> Result<()> {
     let enabled = std::env::var("TEST_NETWORK_IROHAD_FEATURES")
@@ -153,9 +234,9 @@ fn compiled_available_profiles() -> Result<Vec<CompiledPrivacyProfileV1>> {
         }
     }
     ensure!(
-        profiles.len() == PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len(),
+        profiles.len() == PrivacyProtocolIdV1::COUNT - expected_unavailable_protocol_count(),
         "available exact-12 profile count drifted: expected {}, got {}",
-        PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len(),
+        PrivacyProtocolIdV1::COUNT - expected_unavailable_protocol_count(),
         profiles.len()
     );
     for pair in profiles.windows(2) {
@@ -180,10 +261,10 @@ fn expected_states(
 ) -> Result<Vec<ExpectedProtocolState>> {
     let activations = activations.into_iter().collect::<Vec<_>>();
     ensure!(
-        profiles.len() == PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
+        profiles.len() == PrivacyProtocolIdV1::COUNT - expected_unavailable_protocol_count()
             && activations.len() == profiles.len(),
         "expected-state construction requires exactly {} available profiles and activations",
-        PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
+        PrivacyProtocolIdV1::COUNT - expected_unavailable_protocol_count()
     );
     let mut available = profiles.iter().copied().zip(activations).peekable();
     let mut expected = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
@@ -497,7 +578,7 @@ fn assert_unreleased_profiles_unavailable(
         "{context}: committed height {} is below {minimum_height}",
         snapshot.committed_height
     );
-    for protocol_id in UNAVAILABLE_PROTOCOLS {
+    for protocol_id in expected_unavailable_protocols() {
         let row = snapshot
             .protocols
             .iter()
@@ -575,10 +656,15 @@ async fn wait_for_identical_unreleased_profiles(
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> {
+async fn unreleased_exact12_profiles_fail_closed_across_four_peer_restart() -> Result<()> {
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
-    for protocol_id in UNAVAILABLE_PROTOCOLS {
+    let unavailable_protocols = expected_unavailable_protocols().collect::<Vec<_>>();
+    ensure!(
+        !unavailable_protocols.is_empty(),
+        "retire this fail-closed test once every Exact12 profile is governance-available"
+    );
+    for protocol_id in unavailable_protocols.iter().copied() {
         let unavailable = CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id };
         ensure!(
             compiled_privacy_profile_v1(protocol_id) == Err(unavailable),
@@ -596,6 +682,10 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
     }
     let zk_ams_candidate = zk_ams_release_candidate_profile_material_v1()
         .wrap_err("derive deterministic but non-activatable ZK-AMS candidate profile")?;
+    let vega_candidate = vega_release_candidate_profile_material_v1()
+        .wrap_err("derive deterministic but non-activatable Vega candidate profile")?;
+    let zk_x509_candidate = zk_x509_release_candidate_profile_material_v1()
+        .wrap_err("derive deterministic but non-activatable ZK-X509 candidate profile")?;
     let mut zk_ace_candidate = compiled_available_profiles()?
         .into_iter()
         .next()
@@ -612,10 +702,15 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);
         });
-    let context = stringify!(zk_ace_and_zk_ams_fail_closed_across_four_peer_restart);
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let context = stringify!(unreleased_exact12_profiles_fail_closed_across_four_peer_restart);
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| {
+            eyre!(
+                "{context}: release-evidence qualification requires the four-peer localnet; \
+                 the unavailable-profile gate cannot pass by skipping network execution"
+            )
+        })?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -634,7 +729,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
         wait_for_identical_unreleased_profiles(
             &all_clients,
             initial_height,
-            "ZK-ACE and ZK-AMS must begin unavailable and unregistered",
+            "evidence-gated protocols must begin unavailable and unregistered",
         )
         .await?;
         let grant = instruction_transaction(
@@ -652,7 +747,13 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
             "unavailable-profile governance grant convergence",
         )
         .await?;
-        for candidate in [zk_ace_candidate, zk_ams_candidate] {
+        for candidate in unavailable_protocols.iter().map(|protocol_id| match *protocol_id {
+            ZK_ACE_PROTOCOL => zk_ace_candidate,
+            ZK_AMS_PROTOCOL => zk_ams_candidate,
+            VEGA_PROTOCOL => vega_candidate,
+            ZK_X509_PROTOCOL => zk_x509_candidate,
+            _ => unreachable!("unexpected evidence-gated privacy protocol"),
+        }) {
             let proposal_height = next_incoming_height(&client)?;
             let activation_height = proposal_height
                 .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
@@ -688,8 +789,8 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
         }
         let bundle = privacy_exact12_fixture_bundle_v1()
             .wrap_err("construct canonical Exact12 fixture bundle")?;
-        let mut unavailable_actions = Vec::with_capacity(UNAVAILABLE_PROTOCOLS.len());
-        for protocol_id in UNAVAILABLE_PROTOCOLS {
+        let mut unavailable_actions = Vec::with_capacity(unavailable_protocols.len());
+        for protocol_id in unavailable_protocols.iter().copied() {
             let fixture_row = bundle
                 .rows
                 .iter()
@@ -782,7 +883,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
         wait_for_identical_unreleased_profiles(
             &all_clients,
             final_height,
-            "ZK-ACE and ZK-AMS closed status must survive validator restart",
+            "evidence-gated closed status must survive validator restart",
         )
         .await?;
         let restarted_client = bounded_client(restart_peer.client());
@@ -805,7 +906,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
             );
         }
         println!(
-            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_activation_network::zk_ace_and_zk_ams_fail_closed_across_four_peer_restart:passed"
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_activation_network::unreleased_exact12_profiles_fail_closed_across_four_peer_restart:passed"
         );
         Ok(())
     }
@@ -818,6 +919,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
 -> Result<()> {
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
+    validate_governance_wave_catalog_v1()?;
     let profiles = compiled_available_profiles()?;
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -827,9 +929,14 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);
         });
-    let Some(network) = sandbox::start_network_async_or_skip(builder, TEST_NAME).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, TEST_NAME)
+        .await?
+        .ok_or_else(|| {
+            eyre!(
+                "{TEST_NAME}: release-evidence qualification requires the four-peer localnet; \
+                 the Exact12 governance gate cannot pass by skipping network execution"
+            )
+        })?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -850,7 +957,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients,
             initial_height,
             &absent,
-            "available profiles must begin inactive while ZK-ACE and ZK-AMS remain unavailable",
+            "available profiles must begin inactive while evidence-gated profiles remain unavailable",
         )
         .await?;
         let immutable_consensus_policy = initial_snapshots[0].consensus_policy;
@@ -959,186 +1066,260 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             "rejected profile substitution must not register any activation",
         )
         .await?;
-        let first_registration_height = next_incoming_height(&client)?;
-        let final_registration_height = first_registration_height
-            .checked_add(
-                u64::try_from(profiles.len() - 1).expect("available profile count fits u64"),
-            )
-            .ok_or_else(|| eyre!("final available-profile registration height overflowed"))?;
-        let activation_height = final_registration_height
-            .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-            .ok_or_else(|| eyre!("shared exact-12 activation height overflowed"))?;
-        let mut proposed_records = Vec::with_capacity(profiles.len());
+        let restart_index = all_clients.len() - 1;
+        let restart_peer = network.peers()[restart_index].clone();
+        let config_layers = network.config_layers().collect::<Vec<_>>();
+        let healthy_clients = all_clients[..restart_index].to_vec();
+        let mut proposal_records = vec![None; profiles.len()];
+        let mut lifecycle_records = vec![None; profiles.len()];
         let mut first_proposal_transaction = None;
-        for (index, compiled) in profiles.iter().copied().enumerate() {
-            let expected_height = first_registration_height
-                .checked_add(u64::try_from(index).expect("exact-12 index fits u64"))
-                .ok_or_else(|| eyre!("exact-12 proposal height overflowed"))?;
-            let observed_height = next_incoming_height(&client)?;
-            ensure!(
-                observed_height == expected_height,
-                "proposal `{}` would land at height {observed_height}, expected deterministic \
-                 height {expected_height}",
-                compiled.protocol_id.canonical_label()
-            );
-            let proposed = proposed_activation(compiled, expected_height, activation_height);
-            let transaction = instruction_transaction(
-                &client,
-                RegisterPrivacyProtocolActivationV1::new(proposed),
-            );
-            let submitted_hash = submit_signed_transaction(
-                &client,
-                &transaction,
-                &format!(
-                    "register exact compiled activation for `{}`",
+        let mut final_wave_activation_height = None;
+        let mut final_wave_active_snapshots = None;
+        for (wave_index, wave_protocols) in GOVERNANCE_WAVES_V1.iter().enumerate() {
+            let wave_number = wave_index + 1;
+            let profile_indices = profiles
+                .iter()
+                .enumerate()
+                .filter_map(|(index, profile)| {
+                    wave_protocols.contains(&profile.protocol_id).then_some(index)
+                })
+                .collect::<Vec<_>>();
+            let height_before_registration = client
+                .get_privacy_capabilities()
+                .wrap_err_with(|| {
+                    format!("query committed height before Exact12 governance wave {wave_number}")
+                })?
+                .committed_height;
+            let final_registration_height = height_before_registration
+                .checked_add(
+                    u64::try_from(profile_indices.len())
+                        .expect("available profiles in one governance wave fit u64"),
+                )
+                .ok_or_else(|| eyre!("wave {wave_number} registration height overflowed"))?;
+            let activation_height = final_registration_height
+                .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
+                .ok_or_else(|| eyre!("wave {wave_number} activation height overflowed"))?;
+            for (wave_offset, profile_index) in profile_indices.iter().copied().enumerate() {
+                let compiled = profiles[profile_index];
+                ensure!(
+                    governance_wave_index_v1(compiled.protocol_id) == wave_index,
+                    "profile `{}` escaped its assigned governance wave",
                     compiled.protocol_id.canonical_label()
+                );
+                let expected_height = height_before_registration
+                    .checked_add(
+                        u64::try_from(wave_offset + 1)
+                            .expect("governance wave offset fits u64"),
+                    )
+                    .ok_or_else(|| eyre!("wave {wave_number} proposal height overflowed"))?;
+                let observed_height = next_incoming_height(&client)?;
+                ensure!(
+                    observed_height == expected_height,
+                    "wave {wave_number} proposal `{}` would land at height {observed_height}, \
+                     expected deterministic height {expected_height}",
+                    compiled.protocol_id.canonical_label()
+                );
+                let proposed = proposed_activation(compiled, expected_height, activation_height);
+                let transaction = instruction_transaction(
+                    &client,
+                    RegisterPrivacyProtocolActivationV1::new(proposed),
+                );
+                let submitted_hash = submit_signed_transaction(
+                    &client,
+                    &transaction,
+                    &format!(
+                        "register wave {wave_number} compiled activation for `{}`",
+                        compiled.protocol_id.canonical_label()
+                    ),
+                )
+                .await?;
+                ensure!(
+                    *submitted_hash.as_ref() == *transaction.hash().as_ref(),
+                    "submitted wave {wave_number} proposal hash drifted for `{}`",
+                    compiled.protocol_id.canonical_label()
+                );
+                if first_proposal_transaction.is_none() {
+                    first_proposal_transaction = Some(transaction);
+                }
+                proposal_records[profile_index] = Some(proposed);
+                lifecycle_records[profile_index] = Some(proposed);
+            }
+            ensure!(
+                client
+                    .get_privacy_capabilities()
+                    .wrap_err_with(|| {
+                        format!("query height after Exact12 governance wave {wave_number}")
+                    })?
+                    .committed_height
+                    == final_registration_height,
+                "wave {wave_number} registrations did not occupy their deterministic \
+                 consecutive heights"
+            );
+            ensure!(
+                activation_height - final_registration_height
+                    == PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+                "wave {wave_number} does not retain the exact 300-block notice after its final \
+                 registration"
+            );
+            for profile_index in profile_indices.iter().copied() {
+                let proposed = proposal_records[profile_index]
+                    .expect("wave registration retained its proposed lifecycle");
+                let PrivacyProtocolLifecycleV1::Proposed(proposed_lifecycle) = proposed.lifecycle
+                else {
+                    unreachable!("locally constructed wave record has Proposed lifecycle");
+                };
+                ensure!(
+                    proposed_lifecycle
+                        .activate_at_height
+                        .checked_sub(proposed_lifecycle.proposed_at_height)
+                        .is_some_and(|notice| notice >= PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1),
+                    "wave {wave_number} profile `{}` has less than the required notice",
+                    profiles[profile_index].protocol_id.canonical_label()
+                );
+            }
+            let expected_proposed =
+                expected_states(&profiles, lifecycle_records.iter().copied())?;
+            wait_for_identical_exact12_snapshots(
+                &all_clients,
+                final_registration_height,
+                &expected_proposed,
+                &format!(
+                    "wave {wave_number} records are Proposed while prior waves remain Active and \
+                     evidence-gated rows remain unavailable"
+                ),
+            )
+            .await?;
+            let last_pre_activation_height = activation_height
+                .checked_sub(1)
+                .ok_or_else(|| eyre!("wave {wave_number} activation height has no predecessor"))?;
+            timeout(
+                ACTIVATION_ADVANCE_TIMEOUT,
+                advance_to_exact_height(&client, last_pre_activation_height),
+            )
+            .await
+            .map_err(|_| {
+                eyre!(
+                    "advancing governance wave {wave_number} through the exact {}-block notice \
+                     exceeded {ACTIVATION_ADVANCE_TIMEOUT:?}",
+                    PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
+                )
+            })??;
+            wait_for_identical_exact12_snapshots(
+                &all_clients,
+                last_pre_activation_height,
+                &expected_proposed,
+                &format!(
+                    "wave {wave_number} remains Proposed through activation height minus one"
+                ),
+            )
+            .await?;
+            let final_wave = wave_number == GOVERNANCE_WAVES_V1.len();
+            if final_wave {
+                ensure!(
+                    restart_peer.shutdown_if_started().await,
+                    "selected validator was not running before final-wave persistence coverage"
+                );
+                timeout(
+                    RESTART_TIMEOUT,
+                    restart_peer.start_checked(config_layers.iter(), None),
+                )
+                .await
+                .map_err(|_| {
+                    eyre!(
+                        "pre-activation final-wave persistence restart exceeded \
+                         {RESTART_TIMEOUT:?}"
+                    )
+                })?
+                .wrap_err("restart final-wave validator from its persisted state")?;
+                let persisted = wait_for_identical_exact12_snapshots(
+                    std::slice::from_ref(&all_clients[restart_index]),
+                    last_pre_activation_height,
+                    &expected_proposed,
+                    "cold-restarted validator recovers all prior waves and the final-wave notice",
+                )
+                .await?;
+                ensure!(
+                    persisted[0].committed_height == last_pre_activation_height,
+                    "cold-restarted validator recovered final-wave state at height {}, expected \
+                     {last_pre_activation_height}",
+                    persisted[0].committed_height
+                );
+                ensure!(
+                    persisted[0].consensus_policy == immutable_consensus_policy,
+                    "cold-restarted validator recovered a mutated privacy consensus policy"
+                );
+                ensure!(
+                    restart_peer.shutdown_if_started().await,
+                    "cold-restarted validator was not running before the final-wave quorum probe"
+                );
+            }
+            submit_instruction(
+                &client,
+                Log::new(
+                    Level::INFO,
+                    format!(
+                        "exact-12 governance wave {wave_number} activation block \
+                         {activation_height}"
+                    ),
+                ),
+                &format!("commit Exact12 governance wave {wave_number} activation block"),
+            )
+            .await?;
+            for profile_index in profile_indices.iter().copied() {
+                let compiled = profiles[profile_index];
+                let proposed = proposal_records[profile_index]
+                    .expect("activated wave retained its proposal");
+                let PrivacyProtocolLifecycleV1::Proposed(proposed_lifecycle) = proposed.lifecycle
+                else {
+                    unreachable!("locally constructed wave record has Proposed lifecycle");
+                };
+                lifecycle_records[profile_index] = Some(compiled.activation_record(
+                    PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                        proposed_at_height: proposed_lifecycle.proposed_at_height,
+                        activated_at_height: activation_height,
+                        state_since_height: activation_height,
+                    }),
+                ));
+            }
+            let expected_active = expected_states(&profiles, lifecycle_records.iter().copied())?;
+            let active_snapshots = wait_for_identical_exact12_snapshots(
+                if final_wave {
+                    &healthy_clients
+                } else {
+                    &all_clients
+                },
+                activation_height,
+                &expected_active,
+                &format!(
+                    "governance wave {wave_number} activates only its compiled rows while \
+                     evidence-gated rows remain unavailable"
                 ),
             )
             .await?;
             ensure!(
-                *submitted_hash.as_ref() == *transaction.hash().as_ref(),
-                "submitted proposal hash drifted for `{}`",
-                compiled.protocol_id.canonical_label()
+                active_snapshots
+                    .iter()
+                    .all(|snapshot| snapshot.consensus_policy == immutable_consensus_policy),
+                "governance wave {wave_number} mutated the privacy consensus policy"
             );
-            if index == 0 {
-                first_proposal_transaction = Some(transaction);
+            if final_wave {
+                final_wave_activation_height = Some(activation_height);
+                final_wave_active_snapshots = Some(active_snapshots);
             }
-            proposed_records.push(proposed);
         }
-        ensure!(
-            client
-                .get_privacy_capabilities()
-                .wrap_err("query height after exact-12 proposals")?
-                .committed_height
-                == final_registration_height,
-            "the available-profile proposals did not occupy their deterministic consecutive heights"
-        );
-        let proposed = expected_states(&profiles, proposed_records.iter().copied().map(Some))?;
-        let proposed_snapshots = wait_for_identical_exact12_snapshots(
-            &all_clients,
-            final_registration_height,
-            &proposed,
-            "all available records are Proposed while unavailable rows remain fail-closed",
-        )
-        .await?;
-        ensure!(
-            proposed_snapshots.iter().all(|snapshot| snapshot
-                .protocols
-                .iter()
-                .filter(|row| !is_expected_unavailable(row.protocol_id))
-                .all(|row| row
-                    .activation
-                    .is_some_and(|record| !record.lifecycle.is_active()))),
-            "an available pre-activation proposal was incorrectly exposed as Active"
-        );
-        let last_pre_activation_height = activation_height
-            .checked_sub(1)
-            .ok_or_else(|| eyre!("shared exact-12 activation height has no predecessor"))?;
-        timeout(
-            ACTIVATION_ADVANCE_TIMEOUT,
-            advance_to_exact_height(&client, last_pre_activation_height),
-        )
-        .await
-        .map_err(|_| {
-            eyre!(
-                "advancing through the exact {}-block activation lead exceeded \
-                 {ACTIVATION_ADVANCE_TIMEOUT:?}",
-                PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
-            )
-        })??;
-        let last_proposed_snapshots = wait_for_identical_exact12_snapshots(
-            &all_clients,
-            last_pre_activation_height,
-            &proposed,
-            "every available lifecycle remains Proposed through activation height minus one",
-        )
-        .await?;
-        ensure!(
-            last_proposed_snapshots.iter().all(|snapshot| snapshot
-                .protocols
-                .iter()
-                .filter(|row| !is_expected_unavailable(row.protocol_id))
-                .all(|row| row
-                    .activation
-                    .is_some_and(|record| !record.lifecycle.is_active()))),
-            "an available lifecycle became Active before its governed height"
-        );
-        let restart_index = all_clients.len() - 1;
-        let restart_peer = network.peers()[restart_index].clone();
-        let config_layers = network.config_layers().collect::<Vec<_>>();
-        ensure!(
-            restart_peer.shutdown_if_started().await,
-            "selected Proposed exact-12 validator was not running before activation catch-up \
-             coverage"
-        );
-        timeout(
-            RESTART_TIMEOUT,
-            restart_peer.start_checked(config_layers.iter(), None),
-        )
-        .await
-        .map_err(|_| {
-            eyre!("pre-activation exact-12 persistence restart exceeded {RESTART_TIMEOUT:?}")
-        })?
-        .wrap_err("restart Proposed exact-12 validator from its persisted state")?;
-        let persisted_proposed = wait_for_identical_exact12_snapshots(
-            std::slice::from_ref(&all_clients[restart_index]),
-            last_pre_activation_height,
-            &proposed,
-            "cold-restarted validator recovers available proposals and closed unavailable rows",
-        )
-        .await?;
-        ensure!(
-            persisted_proposed[0].committed_height == last_pre_activation_height,
-            "cold-restarted validator recovered Proposed exact-12 state at height {}, expected \
-             its exact stopped height {last_pre_activation_height}",
-            persisted_proposed[0].committed_height
-        );
-        ensure!(
-            persisted_proposed[0].consensus_policy == immutable_consensus_policy,
-            "cold-restarted validator recovered a mutated privacy consensus policy"
-        );
-        ensure!(
-            restart_peer.shutdown_if_started().await,
-            "cold-restarted Proposed exact-12 validator was not running before the activation \
-             quorum probe"
-        );
-        let healthy_clients = all_clients[..restart_index].to_vec();
-        submit_instruction(
-            &client,
-            Log::new(
-                Level::INFO,
-                format!("exact-12 shared activation block {activation_height}"),
-            ),
-            "commit exact-12 shared activation block",
-        )
-        .await?;
-        let active_records = profiles
-            .iter()
-            .copied()
-            .zip(proposed_records.iter().copied())
-            .map(|(compiled, proposed)| {
-                let PrivacyProtocolLifecycleV1::Proposed(proposed_lifecycle) = proposed.lifecycle
-                else {
-                    unreachable!("locally constructed proposal has Proposed lifecycle");
-                };
-                compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-                    PrivacyActiveLifecycleV1 {
-                        proposed_at_height: proposed_lifecycle.proposed_at_height,
-                        activated_at_height: activation_height,
-                        state_since_height: activation_height,
-                    },
-                ))
-            })
-            .collect::<Vec<_>>();
+        let activation_height = final_wave_activation_height
+            .ok_or_else(|| eyre!("four-wave Exact12 rollout omitted its final checkpoint"))?;
+        let proposed_records = proposal_records
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| eyre!("a compiled Exact12 profile was never proposed in its wave"))?;
+        let active_records = lifecycle_records
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| eyre!("a compiled Exact12 profile was never activated in its wave"))?;
         let active = expected_states(&profiles, active_records.iter().copied().map(Some))?;
-        let active_snapshots = wait_for_identical_exact12_snapshots(
-            &healthy_clients,
-            activation_height,
-            &active,
-            "the three-validator quorum promotes every available profile while validator four \
-             remains offline with Proposed state and unavailable rows stay closed",
-        )
-        .await?;
+        let active_snapshots = final_wave_active_snapshots
+            .ok_or_else(|| eyre!("four-wave Exact12 rollout omitted final active snapshots"))?;
         ensure!(
             active_snapshots.iter().all(|snapshot| snapshot
                 .protocols
@@ -1147,7 +1328,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
                 .all(|row| row
                     .activation
                     .is_some_and(|record| record.lifecycle.is_active()))),
-            "an available lifecycle failed to become Active at the shared governed height"
+            "an available lifecycle failed to become Active by the final governance wave"
         );
         ensure!(
             active_snapshots

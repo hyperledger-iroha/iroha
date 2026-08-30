@@ -2,6 +2,10 @@ import type { Buffer } from "buffer";
 import type { BrowserFeePayment } from "./transaction-codec.js";
 import { OperatorSigningContext } from "./operator-request.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
+import type {
+  PrivacyActionOperationViewV1,
+  PrivacyExact12ActionRequestV1,
+} from "./privacy-exact12-actions.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./src/blockProofTypes.js";
 import type { BufferEncoding } from "./src/nodeBufferTypes.js";
 import type { ToriiBrowserExplorerAccountsOptions, ToriiBrowserExplorerAssetDefinition, ToriiBrowserExplorerAssetDefinitionsOptions, ToriiBrowserExplorerAssetsOptions, ToriiBrowserExplorerCursorPage, ToriiBrowserExplorerDomainsOptions, ToriiBrowserExplorerOwnedDomainOptions } from "./src/toriiBrowserExplorerTypes.js";
@@ -13,6 +17,7 @@ export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 export * from "./bootle-lantern-issuance.js";
+export * from "./privacy-exact12-actions.js";
 export * from "./src/blockProofTypes.js";
 export * from "./src/toriiBrowserExplorerTypes.js";
 export type * from "./src/subscriptionTypes.js";
@@ -30,6 +35,7 @@ export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 22;
 export const KAGEMUSHA_MANIFEST_VERSION: 4;
 export const KAGEMUSHA_MAX_HOPS: 8;
 export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY: "cash_handoff_v1";
+export const KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY: "cash_handoff_eligibility_v1";
 export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES: 524288;
 export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES: 50331648;
 
@@ -74,6 +80,7 @@ export interface KagemushaAuthenticatedArtifactSetV4 {
 export interface OfflineStatus {
   readonly mandatory: false;
   readonly cash_handoff_capability: "cash_handoff_v1";
+  readonly eligibility_cash_handoff_capability: "cash_handoff_eligibility_v1";
   readonly required_bridge_abi_version: 22;
   readonly max_hops: 8;
   readonly ready: true;
@@ -4070,6 +4077,91 @@ export interface TransactionStatusReadOptions {
   allowShortHash?: boolean;
   signal?: AbortSignal;
   scope?: "local" | "global";
+}
+
+/** Exact-network authentication required by every Exact12 action state transition. */
+export interface PrivacyActionStatusOptionsV1 {
+  canonicalAuth: CanonicalRequestAuth;
+  networkId: NetworkId;
+  signal?: AbortSignal;
+  scope?: "global";
+}
+
+/** Exact-network authentication for one finalized typed privacy-state query. */
+export interface PrivacyFinalizedStateQueryOptionsV1
+  extends PrivacyActionStatusOptionsV1 {}
+
+export type PrivacyFixed32InputV1 = Uint8Array | ReadonlyArray<number>;
+
+export interface PrivacyZkAceReplayNullifierQueryV1 {
+  policyId: PrivacyFixed32InputV1;
+  replayNullifier: PrivacyFixed32InputV1;
+}
+
+export interface PrivacyProofManagedPoolStateQueryV1 {
+  protocolId:
+    | "monero-fcmp-plus-plus-v1"
+    | "iroha-ivm-private-note-stark-v1"
+    | "pq-masp-stark-v0";
+  poolId: PrivacyFixed32InputV1;
+}
+
+export interface PrivacyOrchardPoolStateQueryV1 {
+  poolId: PrivacyFixed32InputV1;
+}
+
+export interface PrivacyOrchardNullifierQueryV1 {
+  poolId: PrivacyFixed32InputV1;
+  nullifier: PrivacyFixed32InputV1;
+}
+
+export interface PrivacyAnonymousPgcPoolStateQueryV1 {
+  poolId: PrivacyFixed32InputV1;
+}
+
+export interface PrivacyZkAmsAdmissionQueryV1 {
+  issuerId: PrivacyFixed32InputV1;
+  registryId: PrivacyFixed32InputV1;
+  policyId: PrivacyFixed32InputV1;
+  phcHash: PrivacyFixed32InputV1;
+}
+
+export interface PrivacyZkAmsProvisionQueryV1 {
+  issuerId: PrivacyFixed32InputV1;
+  registryId: PrivacyFixed32InputV1;
+  policyId: PrivacyFixed32InputV1;
+  keyImage: PrivacyFixed32InputV1;
+}
+
+export interface PrivacyZkX509CertificateNullifierQueryV1 {
+  trustAnchorId: PrivacyFixed32InputV1;
+  policyId: PrivacyFixed32InputV1;
+  nullifier: PrivacyFixed32InputV1;
+}
+
+/**
+ * Native-validated finalized state. All scalar integer leaves are canonical
+ * decimal strings so the full u64 domain survives JavaScript JSON parsing.
+ */
+export type PrivacyFinalizedStateViewV1 = Readonly<Record<string, JsonValue>> &
+  Readonly<{
+    network_id: JsonValue;
+    finalized_height: string;
+    finalized_block_hash: JsonValue;
+  }>;
+
+/** Submission and bounded terminal-status polling for one closed Exact12 signed action. */
+export interface PrivacyActionSubmitOptionsV1
+  extends PrivacyActionStatusOptionsV1 {
+  wait?: boolean;
+  intervalMs?: number;
+  timeoutMs?: number | null;
+  maxAttempts?: number | null;
+  onStatus?: (
+    status: string | null,
+    payload: ToriiPipelineTransactionStatus | null,
+    attempt: number,
+  ) => void | Promise<void>;
 }
 
 export interface IsoBridgeSignerSnapshot {
@@ -10750,6 +10842,48 @@ export declare class ToriiClient {
     payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
     options?: { signal?: AbortSignal },
   ): Promise<{ acceptedCount: number; route?: unknown }>;
+  /** Native-inspect, fresh-gate, submit, and optionally await a finalized semantic receipt. */
+  submitSignedPrivacyActionV1(
+    request: PrivacyExact12ActionRequestV1,
+    options: PrivacyActionSubmitOptionsV1,
+  ): Promise<PrivacyActionOperationViewV1>;
+  /** Refresh through authenticated committed-result and finalized typed-receipt queries. */
+  getPrivacyActionStatusV1(
+    operation: PrivacyActionOperationViewV1,
+    options: PrivacyActionStatusOptionsV1,
+  ): Promise<PrivacyActionOperationViewV1>;
+  getPrivacyZkAceReplayNullifierV1(
+    request: PrivacyZkAceReplayNullifierQueryV1,
+    options: PrivacyFinalizedStateQueryOptionsV1,
+  ): Promise<PrivacyFinalizedStateViewV1 | null>;
+  getPrivacyProofManagedPoolStateV1(
+    request: PrivacyProofManagedPoolStateQueryV1,
+    options: PrivacyFinalizedStateQueryOptionsV1,
+  ): Promise<PrivacyFinalizedStateViewV1 | null>;
+  getPrivacyOrchardPoolStateV1(
+    request: PrivacyOrchardPoolStateQueryV1,
+    options: PrivacyFinalizedStateQueryOptionsV1,
+  ): Promise<PrivacyFinalizedStateViewV1 | null>;
+  getPrivacyOrchardNullifierV1(
+    request: PrivacyOrchardNullifierQueryV1,
+    options: PrivacyFinalizedStateQueryOptionsV1,
+  ): Promise<PrivacyFinalizedStateViewV1 | null>;
+  getPrivacyAnonymousPgcPoolStateV1(
+    request: PrivacyAnonymousPgcPoolStateQueryV1,
+    options: PrivacyFinalizedStateQueryOptionsV1,
+  ): Promise<PrivacyFinalizedStateViewV1 | null>;
+  getPrivacyZkAmsAdmissionV1(
+    request: PrivacyZkAmsAdmissionQueryV1,
+    options: PrivacyFinalizedStateQueryOptionsV1,
+  ): Promise<PrivacyFinalizedStateViewV1 | null>;
+  getPrivacyZkAmsProvisionV1(
+    request: PrivacyZkAmsProvisionQueryV1,
+    options: PrivacyFinalizedStateQueryOptionsV1,
+  ): Promise<PrivacyFinalizedStateViewV1 | null>;
+  getPrivacyZkX509CertificateNullifierV1(
+    request: PrivacyZkX509CertificateNullifierQueryV1,
+    options: PrivacyFinalizedStateQueryOptionsV1,
+  ): Promise<PrivacyFinalizedStateViewV1 | null>;
   getTransactionStatus(
     hashHex: string,
     options?: TransactionStatusReadOptions,
@@ -11049,7 +11183,7 @@ export declare class ToriiClient {
   ): Promise<ToriiGovernanceBallotResponse>;
   setProtectedNamespaces(
     namespaces: string | string[],
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiProtectedNamespacesApplyResponse>;
   getProtectedNamespaces(options: RequiredCanonicalRequestOptions): Promise<ToriiProtectedNamespacesGetResponse>;
   getSumeragiStatus(options?: {

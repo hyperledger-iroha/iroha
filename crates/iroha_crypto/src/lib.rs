@@ -2129,7 +2129,10 @@ impl PublicKey {
                     .map_err(|err| Error::KeyGen(err.to_string()))?,
             ),
         };
-        Ok(Self::new(inner))
+        let public_key = Self::new(inner);
+        let (algorithm, payload) = public_key.try_to_bytes()?;
+        PublicKeyFull::validate_bytes_for_decode(algorithm, payload)?;
+        Ok(public_key)
     }
     /// Extracts raw bytes from the public key, copying the payload.
     ///

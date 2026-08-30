@@ -102,8 +102,8 @@ env:
   ANDROID_PLATFORM_PACKAGE: platforms;android-35
   ANDROID_BUILD_TOOLS_PACKAGE: build-tools;35.0.0
   ANDROID_NDK_VERSION: 28.0.12674087
-  # TODO: enable each platform only after its own protected, source-bound
-  # Kagemusha promotion receipt is authenticated by this workflow.
+  # Promotion gate: each platform remains disabled until this workflow
+  # authenticates its protected, source-bound Kagemusha promotion receipt.
   APPLE_PRIVACY_PRODUCTION_ENABLED: "false"
   ANDROID_PRIVACY_PRODUCTION_ENABLED: "false"
 
@@ -178,9 +178,29 @@ jobs:
     timeout-minutes: 120
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: ${{ env.APPLE_PRIVACY_PRODUCTION_ENABLED }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Bind reviewed Apple privacy mode
+        shell: bash
+        run: |
+          if [[ -z "${GITHUB_ENV:-}" ]]; then
+            echo "GITHUB_ENV is unavailable; refusing to guess the Apple privacy mode" >&2
+            exit 1
+          fi
+          case "${APPLE_PRIVACY_PRODUCTION_ENABLED:-}" in
+            true)
+              require_privacy_artifact=1
+              ;;
+            false)
+              require_privacy_artifact=0
+              ;;
+            *)
+              echo "APPLE_PRIVACY_PRODUCTION_ENABLED must be exactly true or false" >&2
+              exit 1
+              ;;
+          esac
+          echo "PRIVACY_PRODUCTION_ENABLED=$APPLE_PRIVACY_PRODUCTION_ENABLED" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_PRIVACY_PRODUCTION_APPLE_ARTIFACT=$require_privacy_artifact" >> "$GITHUB_ENV"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -286,6 +306,7 @@ jobs:
         working-directory: IrohaSwift
         run: >-
           swift test
+          --manifest-cache none
           --disable-automatic-resolution
           --scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR"
       - name: Package Apple mobile SDK artifact
@@ -357,9 +378,23 @@ jobs:
     env:
       IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      PRIVACY_PRODUCTION_ENABLED: ${{ env.ANDROID_PRIVACY_PRODUCTION_ENABLED }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Bind reviewed Android privacy mode
+        shell: bash
+        run: |
+          if [[ -z "${GITHUB_ENV:-}" ]]; then
+            echo "GITHUB_ENV is unavailable; refusing to guess the Android privacy mode" >&2
+            exit 1
+          fi
+          case "${ANDROID_PRIVACY_PRODUCTION_ENABLED:-}" in
+            true|false) ;;
+            *)
+              echo "ANDROID_PRIVACY_PRODUCTION_ENABLED must be exactly true or false" >&2
+              exit 1
+              ;;
+          esac
+          echo "PRIVACY_PRODUCTION_ENABLED=$ANDROID_PRIVACY_PRODUCTION_ENABLED" >> "$GITHUB_ENV"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"

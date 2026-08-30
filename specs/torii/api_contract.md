@@ -165,8 +165,12 @@ framing instead of the finite HTTP envelope.
 offline-wallet capability discovery. It does not evaluate a validator, asset,
 domain, dataspace, escrow account, verifier catalog, or deployment profile.
 Every app-API build returns the same asset-neutral ABI-21/V4
-`cash_handoff_v1` contract with `mandatory: false`, `ready: true`, and empty
-`assets` and `blockers` arrays. Clients must not use this response, `/health`,
+`cash_handoff_v1` contract and the distinct ABI-22
+`cash_handoff_eligibility_v1` transport-envelope capability, with
+`mandatory: false`, `ready: true`, and empty `assets` and `blockers` arrays.
+The response names them separately as `cash_handoff_capability` and
+`eligibility_cash_handoff_capability`; clients must reject a missing,
+substituted, or conflated value. Clients must not use this response, `/health`,
 or `/readyz` as an offline-feature admission gate.
 
 Proof, authority, balance, release, and lineage errors belong to the specific

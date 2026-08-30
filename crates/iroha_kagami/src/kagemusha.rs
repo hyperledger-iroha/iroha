@@ -58,7 +58,8 @@ use iroha_data_model::offline::{
     OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1,
     OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1,
     OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1,
-    OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1, OfflineDeviceAttestationPolicy,
+    OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1,
+    OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2, OfflineDeviceAttestationPolicy,
     kagemusha_recursive_spend_release_sha256,
 };
 use std::{
@@ -654,7 +655,7 @@ fn validate_device_attestation_policy_for_atomic_activation(
     policy: &OfflineDeviceAttestationPolicy,
     policy_evaluation_time_ms: u64,
 ) -> Result<()> {
-    if policy.version != 1
+    if policy.version != OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2
         || !policy.require_ios_app_policy
         || !policy.require_android_app_policy
         || policy.trusted_roots.is_empty()
@@ -662,9 +663,12 @@ fn validate_device_attestation_policy_for_atomic_activation(
         || policy.android_apps.is_empty()
     {
         bail!(
-            "atomic Kagemusha activation requires version-1 fail-closed iOS and Android app policy"
+            "atomic Kagemusha activation requires version-2 fail-closed iOS and Android app policy"
         );
     }
+    policy
+        .validate_v2_rule_shape()
+        .map_err(|error| eyre!("invalid device vulnerability policy: {error}"))?;
     validate_atomic_activation_policy_shape(policy)?;
     validate_atomic_activation_trusted_roots(policy)?;
     validate_atomic_activation_revocations(policy)?;

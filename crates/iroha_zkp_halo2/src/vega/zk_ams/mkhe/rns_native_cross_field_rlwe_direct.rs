@@ -1324,7 +1324,7 @@ struct RnsNativeMembershipBackedDirectSourceV1<
     N: RnsNativeCrossFieldNumericCursorV1,
 > {
     numeric: &'owner mut N,
-    existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>,
+    existing_radix: &'owner RnsNativeExistingRadixDirectAliasV1<'proof>,
     inventory: &'owner RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
 }
 
@@ -4233,6 +4233,7 @@ pub(super) struct RnsNativeCrossFieldRlweAtomicVerifiedV2<
 > {
     direct: RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'proof>,
     inventory: RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>,
     terminal_chronology: ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1,
     numeric_sidecar: RnsNativeCrossFieldRlweNumericSidecarV2,
 }
@@ -4252,6 +4253,7 @@ pub(super) struct RnsNativeCrossFieldRlweAllRootsVerifiedV2<
 > {
     direct: RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'proof>,
     inventory: RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>,
     _terminal_roots_equal: ZkAmsMkheRnsNativeAllTerminalRootsEqualV1,
     _numeric_sidecar: RnsNativeCrossFieldRlweNumericSidecarV2,
 }
@@ -4282,6 +4284,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         Ok(RnsNativeCrossFieldRlweAllRootsVerifiedV2 {
             direct: self.direct,
             inventory: self.inventory,
+            existing_radix: self.existing_radix,
             _terminal_roots_equal: terminal_roots_equal,
             _numeric_sidecar: self.numeric_sidecar,
         })
@@ -4299,6 +4302,20 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         &self,
     ) -> &RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S> {
         &self.inventory
+    }
+
+    /// Mutably lend the retained inventory only to the purpose-bound
+    /// source/packing replay. The all-roots-equal owner remains intact.
+    pub(super) fn inventory_mut(
+        &mut self,
+    ) -> &mut RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S> {
+        &mut self.inventory
+    }
+
+    /// Borrow the exact authenticated existing-radix alias retained across
+    /// direct verification for the later source/packing point replay.
+    pub(super) const fn existing_radix(&self) -> &RnsNativeExistingRadixDirectAliasV1<'proof> {
+        &self.existing_radix
     }
 }
 
@@ -4346,7 +4363,7 @@ where
     let equality_pending = {
         let source = RnsNativeMembershipBackedDirectSourceV1 {
             numeric: &mut numeric_sidecar,
-            existing_radix,
+            existing_radix: &existing_radix,
             inventory: &inventory,
         };
         verify_preflighted_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _>(
@@ -4366,6 +4383,7 @@ where
     Ok(RnsNativeCrossFieldRlweAtomicVerifiedV2 {
         direct: terminal_bound,
         inventory,
+        existing_radix,
         terminal_chronology,
         numeric_sidecar,
     })

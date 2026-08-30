@@ -14,6 +14,8 @@ import * as packageSubpath from "@iroha/iroha-js/transaction-codec";
 const EXPECTED_EXPORTS = [
   "BrowserTransactionCodecError",
   "browserSignedTransactionHashHex",
+  "browserInstructionBatchHashHex",
+  "browserInstructionArchiveBatchHashHex",
   "browserTransactionCodec",
   "browserTransactionPayloadHashHex",
   "buildBrowserExecutableBatchPayload",

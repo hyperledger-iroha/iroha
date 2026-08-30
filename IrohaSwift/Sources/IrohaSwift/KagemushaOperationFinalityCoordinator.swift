@@ -546,15 +546,59 @@ public protocol KagemushaOperationFinalityTransport: Sendable {
     ) async throws -> KagemushaOperationReference
 }
 
-extension ToriiClient: KagemushaOperationFinalityTransport {
+/// Authenticated Torii transport. The account-bound canonical auth is captured
+/// once so the finality coordinator cannot accidentally fall back to an
+/// unsigned status or submission route.
+public struct ToriiAuthenticatedKagemushaOperationTransport:
+    KagemushaOperationFinalityTransport,
+    Sendable
+{
+    public let client: ToriiClient
+    public let accountId: String
+    private let privateKey: Data
+
+    public init(
+        client: ToriiClient,
+        accountId: String,
+        privateKey: Data
+    ) {
+        self.client = client
+        self.accountId = accountId
+        self.privateKey = Data(privateKey)
+    }
+
+    private func freshCanonicalAuth() -> ToriiCanonicalRequestAuth {
+        ToriiCanonicalRequestAuth(
+            accountId: accountId,
+            privateKey: privateKey
+        )
+    }
+
+    public func getKagemushaOperationStatus(
+        operationId: String,
+        chainDiscriminant: UInt16
+    ) async throws -> KagemushaOperationStatus {
+        try await client.getKagemushaOperationStatus(
+            operationId: operationId,
+            chainDiscriminant: chainDiscriminant,
+            canonicalAuth: freshCanonicalAuth()
+        )
+    }
+
     public func submitKagemushaOperation(
         _ operation: KagemushaOperationSubmission
     ) async throws -> KagemushaOperationReference {
         switch operation {
         case let .topUp(request):
-            return try await submitKagemushaTopUp(request)
+            return try await client.submitKagemushaTopUp(
+                request,
+                canonicalAuth: freshCanonicalAuth()
+            )
         case let .redeem(request):
-            return try await submitKagemushaRedeem(request)
+            return try await client.submitKagemushaRedeem(
+                request,
+                canonicalAuth: freshCanonicalAuth()
+            )
         }
     }
 }

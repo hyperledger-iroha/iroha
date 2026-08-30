@@ -53,6 +53,11 @@ import {
   stringifyStrictLosslessIntegerJson,
 } from "../src/strictLosslessJson.js";
 import {
+  PrivacyActionOperationViewV1,
+  privacyExact12LedgerEffectKindV1,
+  privacyExact12ProtocolIdV1,
+} from "../src/privacyExact12ActionModels.js";
+import {
   makeNativeTest,
   nativeBinding,
   nativeBindingError,
@@ -195,6 +200,251 @@ test("governance lossless JSON writer preserves raw u64 tokens", () => {
     () => stringifyStrictLosslessIntegerJson(cyclic, "test"),
     /cyclic values/u,
   );
+});
+
+test("authenticated Exact12 status preserves the complete u64 height domain", async () => {
+  const hash = "ab".repeat(32);
+  const readStatus = async (heightToken) => {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        textBody: `{"hash":"${hash}","status":{"kind":"Applied","block_height":${heightToken}},"scope":"global","resolved_from":"state"}`,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    return client._getAuthenticatedPrivacyActionStatusV1(hash, {
+      canonicalAuth: APPLICATION_CANONICAL_AUTH,
+      networkId: VK_SIGNING_NETWORK_ID,
+    });
+  };
+
+  assert.equal(
+    (await readStatus("9007199254740993")).status.block_height,
+    9007199254740993n,
+  );
+  assert.equal(
+    (await readStatus("18446744073709551615")).status.block_height,
+    18446744073709551615n,
+  );
+  await assert.rejects(
+    () => readStatus("18446744073709551616"),
+    /range 1\.\.18446744073709551615/u,
+  );
+});
+
+test("authenticated Exact12 status rejects duplicate integer evidence", async () => {
+  const hash = "ac".repeat(32);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      textBody: `{"hash":"${hash}","status":{"kind":"Applied","block_height":7,"block_height":8},"scope":"global","resolved_from":"state"}`,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(
+    () => client._getAuthenticatedPrivacyActionStatusV1(hash, {
+      canonicalAuth: APPLICATION_CANONICAL_AUTH,
+      networkId: VK_SIGNING_NETWORK_ID,
+    }),
+    /duplicate object key/u,
+  );
+});
+
+function exact12SubmittedStatusFixture() {
+  const operationSchema = "orchard_note_action_v1";
+  return new PrivacyActionOperationViewV1({
+    protocolId: privacyExact12ProtocolIdV1(operationSchema),
+    operationSchema,
+    transactionHash: new Uint8Array(32).fill(1),
+    transactionIntentDigest: new Uint8Array(32).fill(2),
+    statementDigest: new Uint8Array(32).fill(3),
+    proofEnvelopeHash: new Uint8Array(32).fill(4),
+    localState: "submitted",
+    terminalChainState: null,
+    committedHeight: null,
+    rejectionReason: null,
+    ledgerEffectKind: privacyExact12LedgerEffectKindV1(operationSchema),
+    capabilityManifestDigest: new Uint8Array(32).fill(5),
+    capabilityCommittedHeight: 6n,
+    executionCapabilityManifestDigest: null,
+    executionCapabilityCommittedHeight: null,
+    executionReceiptFinalizedHeight: null,
+    executionReceiptFinalizedBlockHash: null,
+  });
+}
+
+function exact12AuthoritativeStatus(operation, kind, resolvedFrom = "state") {
+  const status = { kind };
+  if (["Applied", "Committed", "Rejected"].includes(kind)) {
+    status.block_height = 42n;
+  }
+  return Object.freeze({
+    hash: Buffer.from(operation.transactionHash).toString("hex"),
+    status: Object.freeze(status),
+    scope: "global",
+    resolved_from: resolvedFrom,
+  });
+}
+
+test("Exact12 terminal resolver retries while committed details or receipt indexes lag", async () => {
+  const operation = exact12SubmittedStatusFixture();
+  const client = new ToriiClient(BASE_URL);
+  const status = exact12AuthoritativeStatus(operation, "Applied");
+  const successDetails = Object.freeze({
+    resultOk: true,
+    rejectionMessage: null,
+    committedHeight: 42n,
+  });
+  const receipt = Object.freeze({ admittedAtHeight: 42n });
+  const cases = [
+    { details: null, receipt: null },
+    { details: successDetails, receipt: null },
+    { details: null, receipt },
+  ];
+  for (const evidence of cases) {
+    client._getAuthenticatedPrivacyActionDetailsV1 = async () => evidence.details;
+    client._getAuthenticatedPrivacyActionReceiptV1 = async () => evidence.receipt;
+    assert.equal(
+      await client._resolvePrivacyActionStatusV1(operation, status, {}),
+      operation,
+    );
+  }
+
+  client._getAuthenticatedPrivacyActionDetailsV1 = async () => null;
+  client._getAuthenticatedPrivacyActionReceiptV1 = async () => null;
+  assert.equal(
+    await client._resolvePrivacyActionStatusV1(
+      operation,
+      exact12AuthoritativeStatus(operation, "Rejected"),
+      {},
+    ),
+    operation,
+  );
+});
+
+test("Exact12 pipeline Committed remains nonterminal even if local evidence is available", async () => {
+  const operation = exact12SubmittedStatusFixture();
+  const client = new ToriiClient(BASE_URL);
+  let queriedTerminalEvidence = false;
+  client._getAuthenticatedPrivacyActionDetailsV1 = async () => {
+    queriedTerminalEvidence = true;
+    return {
+      resultOk: true,
+      rejectionMessage: null,
+      committedHeight: 42n,
+    };
+  };
+  client._getAuthenticatedPrivacyActionReceiptV1 = async () => {
+    queriedTerminalEvidence = true;
+    return { admittedAtHeight: 42n };
+  };
+  assert.equal(
+    await client._resolvePrivacyActionStatusV1(
+      operation,
+      exact12AuthoritativeStatus(operation, "Committed"),
+      {},
+    ),
+    operation,
+  );
+  assert.equal(queriedTerminalEvidence, false);
+});
+
+test("Exact12 terminal resolver polls past cache-only expiry and rejects contradictions", async () => {
+  const operation = exact12SubmittedStatusFixture();
+  const client = new ToriiClient(BASE_URL);
+  let queriedTerminalEvidence = false;
+  client._getAuthenticatedPrivacyActionDetailsV1 = async () => {
+    queriedTerminalEvidence = true;
+    return null;
+  };
+  client._getAuthenticatedPrivacyActionReceiptV1 = async () => {
+    queriedTerminalEvidence = true;
+    return null;
+  };
+  assert.equal(
+    await client._resolvePrivacyActionStatusV1(
+      operation,
+      exact12AuthoritativeStatus(operation, "Expired", "cache"),
+      {},
+    ),
+    operation,
+  );
+  assert.equal(queriedTerminalEvidence, false);
+
+  client._getAuthenticatedPrivacyActionDetailsV1 = async () => null;
+  client._getAuthenticatedPrivacyActionReceiptV1 = async () => ({
+    admittedAtHeight: 42n,
+  });
+  await assert.rejects(
+    () => client._resolvePrivacyActionStatusV1(
+      operation,
+      exact12AuthoritativeStatus(operation, "Rejected"),
+      {},
+    ),
+    /rejected Exact12 action has a finalized native execution receipt/u,
+  );
+
+  client._getAuthenticatedPrivacyActionDetailsV1 = async () => null;
+  client._getAuthenticatedPrivacyActionReceiptV1 = async () => ({
+    admittedAtHeight: 41n,
+  });
+  await assert.rejects(
+    () => client._resolvePrivacyActionStatusV1(
+      operation,
+      exact12AuthoritativeStatus(operation, "Applied"),
+      {},
+    ),
+    /status height differs from finalized execution receipt/u,
+  );
+
+  client._getAuthenticatedPrivacyActionDetailsV1 = async () => ({
+    resultOk: false,
+    rejectionMessage: "native effect rejected",
+    committedHeight: 42n,
+  });
+  client._getAuthenticatedPrivacyActionReceiptV1 = async () => null;
+  await assert.rejects(
+    () => client._resolvePrivacyActionStatusV1(
+      operation,
+      exact12AuthoritativeStatus(operation, "Applied"),
+      {},
+    ),
+    /successful Exact12 action status resolved to a rejected committed result/u,
+  );
+});
+
+test("authenticated Exact12 status rejects caller-constructed detached views", async () => {
+  const operationSchema = "orchard_note_action_v1";
+  const detached = new PrivacyActionOperationViewV1({
+    protocolId: privacyExact12ProtocolIdV1(operationSchema),
+    operationSchema,
+    transactionHash: new Uint8Array(32).fill(1),
+    transactionIntentDigest: new Uint8Array(32).fill(2),
+    statementDigest: new Uint8Array(32).fill(3),
+    proofEnvelopeHash: new Uint8Array(32).fill(4),
+    localState: "submitted",
+    terminalChainState: null,
+    committedHeight: null,
+    rejectionReason: null,
+    ledgerEffectKind: privacyExact12LedgerEffectKindV1(operationSchema),
+    capabilityManifestDigest: new Uint8Array(32).fill(5),
+    capabilityCommittedHeight: 6n,
+  });
+  let fetched = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetched = true;
+      throw new Error("detached Exact12 views must fail before network access");
+    },
+  });
+  await assert.rejects(
+    () => client.getPrivacyActionStatusV1(detached, {
+      canonicalAuth: APPLICATION_CANONICAL_AUTH,
+      networkId: VK_SIGNING_NETWORK_ID,
+    }),
+    /returned by authenticated submission/u,
+  );
+  assert.equal(fetched, false);
 });
 
 function expectedProductionBackendRejectionPattern(backend) {
@@ -24951,12 +25201,16 @@ test("HTTP error diagnostics abort stalled bodies and retry cleanup cancels disc
       }
       return createResponse({
         status: 200,
-        jsonData: validNodeCapabilitiesPayload(),
+        jsonData: {
+          now: 1_000_000,
+          offset_ms: -12,
+          confidence_ms: 25,
+        },
         headers: { "content-type": "application/json" },
       });
     },
   });
-  assert.equal((await retryClient.getNodeCapabilities()).abiVersion, 1);
+  assert.equal((await retryClient.getNetworkTimeNow()).timestampMs, 1_000_000);
   assert.equal(requests, 2);
   assert.equal(retryBodyCancels, 1);
 });

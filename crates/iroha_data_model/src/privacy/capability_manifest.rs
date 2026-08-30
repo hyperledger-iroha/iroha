@@ -32,12 +32,15 @@ pub enum PrivacyOperationSchemaV1 {
     /// `VeRange` range-proof component.
     #[cfg_attr(feature = "json", norito(rename = "verange_range_proof_v1"))]
     VeRangeRangeProofV1,
-    /// ZK-AMS admission and provisioning action.
+    /// ZK-AMS credential-batch admission action.
+    #[cfg_attr(feature = "json", norito(rename = "zk_ams_batch_admission_action_v1"))]
+    ZkAmsBatchAdmissionActionV1,
+    /// ZK-AMS anonymous account-provisioning action.
     #[cfg_attr(
         feature = "json",
-        norito(rename = "zk_ams_admission_and_provisioning_v1")
+        norito(rename = "zk_ams_provision_account_action_v1")
     )]
-    ZkAmsAdmissionAndProvisioningV1,
+    ZkAmsProvisionAccountActionV1,
     /// Vega credential presentation action.
     #[cfg_attr(feature = "json", norito(rename = "vega_credential_presentation_v1"))]
     VegaCredentialPresentationV1,
@@ -74,7 +77,8 @@ impl PrivacyOperationSchemaV1 {
             Self::ZkAceAuthorizationActionV1 => "zk_ace_authorization_action_v1",
             Self::AnonymousPgcPaymentActionV1 => "anonymous_pgc_payment_action_v1",
             Self::VeRangeRangeProofV1 => "verange_range_proof_v1",
-            Self::ZkAmsAdmissionAndProvisioningV1 => "zk_ams_admission_and_provisioning_v1",
+            Self::ZkAmsBatchAdmissionActionV1 => "zk_ams_batch_admission_action_v1",
+            Self::ZkAmsProvisionAccountActionV1 => "zk_ams_provision_account_action_v1",
             Self::VegaCredentialPresentationV1 => "vega_credential_presentation_v1",
             Self::ZkX509IdentityPresentationV1 => "zk_x509_identity_presentation_v1",
             Self::JindoPolynomialEvaluationV1 => "jindo_polynomial_evaluation_v1",
@@ -86,6 +90,165 @@ impl PrivacyOperationSchemaV1 {
             Self::IvmPrivateNoteActionV1 => "ivm_private_note_action_v1",
             Self::PqMaspNoteActionV1 => "pq_masp_note_action_v1",
         }
+    }
+
+    /// Return the sole retained protocol that executes this operation.
+    #[must_use]
+    pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
+        match self {
+            Self::ZkAceAuthorizationActionV1 => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            Self::AnonymousPgcPaymentActionV1 => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            Self::VeRangeRangeProofV1 => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            Self::ZkAmsBatchAdmissionActionV1 | Self::ZkAmsProvisionAccountActionV1 => {
+                PrivacyProtocolIdV1::IrohaZkAmsV1
+            }
+            Self::VegaCredentialPresentationV1 => PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            Self::ZkX509IdentityPresentationV1 => PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            Self::JindoPolynomialEvaluationV1 => {
+                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+            }
+            Self::BootleLanternCredentialPresentationV1 => {
+                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
+            }
+            Self::OrchardNoteActionV1 => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            Self::FcmpMembershipPaymentV1 => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            Self::IvmPrivateNoteActionV1 => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            Self::PqMaspNoteActionV1 => PrivacyProtocolIdV1::PqMaspStarkV0,
+        }
+    }
+
+    /// Return the typed ledger-effect class committed by this operation.
+    #[must_use]
+    pub const fn ledger_effect_kind(self) -> PrivacyLedgerEffectKindV1 {
+        match self {
+            Self::ZkAceAuthorizationActionV1 => PrivacyLedgerEffectKindV1::ZkAceTransparentTransfer,
+            Self::AnonymousPgcPaymentActionV1 => {
+                PrivacyLedgerEffectKindV1::AnonymousPgcAccountStateTransition
+            }
+            Self::VeRangeRangeProofV1
+            | Self::VegaCredentialPresentationV1
+            | Self::JindoPolynomialEvaluationV1
+            | Self::BootleLanternCredentialPresentationV1 => {
+                PrivacyLedgerEffectKindV1::VerificationOnly
+            }
+            Self::ZkAmsBatchAdmissionActionV1 => PrivacyLedgerEffectKindV1::ZkAmsBatchAdmission,
+            Self::ZkAmsProvisionAccountActionV1 => PrivacyLedgerEffectKindV1::ZkAmsProvisionAccount,
+            Self::ZkX509IdentityPresentationV1 => {
+                PrivacyLedgerEffectKindV1::ZkX509CertificateNullifier
+            }
+            Self::OrchardNoteActionV1 => PrivacyLedgerEffectKindV1::OrchardNoteStateTransition,
+            Self::FcmpMembershipPaymentV1 => PrivacyLedgerEffectKindV1::FcmpMembershipPayment,
+            Self::IvmPrivateNoteActionV1 => {
+                PrivacyLedgerEffectKindV1::IvmPrivateNoteStateTransition
+            }
+            Self::PqMaspNoteActionV1 => PrivacyLedgerEffectKindV1::PqMaspNoteStateTransition,
+        }
+    }
+}
+
+/// Closed typed ledger-effect class for every public Exact12 operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "ledger_effect_kind", content = "value", deny_unknown_fields)
+)]
+pub enum PrivacyLedgerEffectKindV1 {
+    /// The committed transaction verifies a statement without mutating privacy state.
+    #[cfg_attr(feature = "json", norito(rename = "verification_only"))]
+    VerificationOnly,
+    /// ZK-ACE policy-authorized transparent transfer and replay consumption.
+    #[cfg_attr(feature = "json", norito(rename = "zk_ace_transparent_transfer"))]
+    ZkAceTransparentTransfer,
+    /// Anonymous PGC encrypted account-table/root transition.
+    #[cfg_attr(
+        feature = "json",
+        norito(rename = "anonymous_pgc_account_state_transition")
+    )]
+    AnonymousPgcAccountStateTransition,
+    /// ZK-AMS credential batch admission.
+    #[cfg_attr(feature = "json", norito(rename = "zk_ams_batch_admission"))]
+    ZkAmsBatchAdmission,
+    /// ZK-AMS anonymous account provisioning.
+    #[cfg_attr(feature = "json", norito(rename = "zk_ams_provision_account"))]
+    ZkAmsProvisionAccount,
+    /// ZK-X509 certificate-nullifier consumption.
+    #[cfg_attr(feature = "json", norito(rename = "zk_x509_certificate_nullifier"))]
+    ZkX509CertificateNullifier,
+    /// Orchard note state transition.
+    #[cfg_attr(feature = "json", norito(rename = "orchard_note_state_transition"))]
+    OrchardNoteStateTransition,
+    /// FCMP++ membership payment, key-image consumption, and pool transition.
+    #[cfg_attr(feature = "json", norito(rename = "fcmp_membership_payment"))]
+    FcmpMembershipPayment,
+    /// Program-bound IVM private-note transition.
+    #[cfg_attr(feature = "json", norito(rename = "ivm_private_note_state_transition"))]
+    IvmPrivateNoteStateTransition,
+    /// ML-DSA/ML-KEM PQ-MASP note transition.
+    #[cfg_attr(feature = "json", norito(rename = "pq_masp_note_state_transition"))]
+    PqMaspNoteStateTransition,
+}
+impl PrivacyLedgerEffectKindV1 {
+    /// Return the sole public string spelling of this effect class.
+    #[must_use]
+    pub const fn canonical_label(self) -> &'static str {
+        match self {
+            Self::VerificationOnly => "verification_only",
+            Self::ZkAceTransparentTransfer => "zk_ace_transparent_transfer",
+            Self::AnonymousPgcAccountStateTransition => "anonymous_pgc_account_state_transition",
+            Self::ZkAmsBatchAdmission => "zk_ams_batch_admission",
+            Self::ZkAmsProvisionAccount => "zk_ams_provision_account",
+            Self::ZkX509CertificateNullifier => "zk_x509_certificate_nullifier",
+            Self::OrchardNoteStateTransition => "orchard_note_state_transition",
+            Self::FcmpMembershipPayment => "fcmp_membership_payment",
+            Self::IvmPrivateNoteStateTransition => "ivm_private_note_state_transition",
+            Self::PqMaspNoteStateTransition => "pq_masp_note_state_transition",
+        }
+    }
+}
+/// Fixed-width canonical set of public actions implemented by one protocol.
+///
+/// Every Exact12 protocol exposes one action except ZK-AMS, which exposes its
+/// ordered admission/provisioning pair. The fixed optional second slot keeps
+/// the public bound explicit and makes empty or unbounded action sets
+/// unrepresentable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyOperationSchemaSetV1 {
+    /// First and always-present canonical operation.
+    pub primary: PrivacyOperationSchemaV1,
+    /// Sole optional second operation; only ZK-AMS uses it in V1.
+    pub secondary: Option<PrivacyOperationSchemaV1>,
+}
+impl PrivacyOperationSchemaSetV1 {
+    /// Construct a singleton canonical operation set.
+    #[must_use]
+    pub const fn one(primary: PrivacyOperationSchemaV1) -> Self {
+        Self {
+            primary,
+            secondary: None,
+        }
+    }
+    /// Construct the sole two-operation canonical set shape.
+    #[must_use]
+    pub const fn two(
+        primary: PrivacyOperationSchemaV1,
+        secondary: PrivacyOperationSchemaV1,
+    ) -> Self {
+        Self {
+            primary,
+            secondary: Some(secondary),
+        }
+    }
+    /// Iterate over the one or two operations in canonical order.
+    pub fn iter(self) -> impl Iterator<Item = PrivacyOperationSchemaV1> {
+        [Some(self.primary), self.secondary].into_iter().flatten()
+    }
+    /// Return whether this exact bounded set contains an operation.
+    #[must_use]
+    pub fn contains(self, operation: PrivacyOperationSchemaV1) -> bool {
+        self.primary == operation || matches!(self.secondary, Some(value) if value == operation)
     }
 }
 /// Closed execution classification for a retained public privacy operation.
@@ -218,28 +381,47 @@ pub enum PrivacyCapabilityLimitationV1 {
     MissingDistributionWideKnowledgeSoundnessEvidence,
 }
 impl PrivacyProtocolIdV1 {
-    /// Canonical public operation schema for this retained protocol.
+    /// Canonical bounded public-operation set for this retained protocol.
     #[must_use]
-    pub const fn expected_operation_schema(self) -> PrivacyOperationSchemaV1 {
+    pub const fn expected_operation_schemas(self) -> PrivacyOperationSchemaSetV1 {
         match self {
-            Self::ZkAcePqAuthorizationV0 => PrivacyOperationSchemaV1::ZkAceAuthorizationActionV1,
-            Self::AnonymousPgcKOutOfNV1 => PrivacyOperationSchemaV1::AnonymousPgcPaymentActionV1,
-            Self::VeRangeTransparentRangeV1 => PrivacyOperationSchemaV1::VeRangeRangeProofV1,
-            Self::IrohaZkAmsV1 => PrivacyOperationSchemaV1::ZkAmsAdmissionAndProvisioningV1,
-            Self::VegaExistingCredentialZkV0 => {
-                PrivacyOperationSchemaV1::VegaCredentialPresentationV1
+            Self::ZkAcePqAuthorizationV0 => PrivacyOperationSchemaSetV1::one(
+                PrivacyOperationSchemaV1::ZkAceAuthorizationActionV1,
+            ),
+            Self::AnonymousPgcKOutOfNV1 => PrivacyOperationSchemaSetV1::one(
+                PrivacyOperationSchemaV1::AnonymousPgcPaymentActionV1,
+            ),
+            Self::VeRangeTransparentRangeV1 => {
+                PrivacyOperationSchemaSetV1::one(PrivacyOperationSchemaV1::VeRangeRangeProofV1)
             }
-            Self::IrohaZkX509StarkP256V0 => PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1,
-            Self::IrohaJindoPolynomialCommitmentV0 => {
-                PrivacyOperationSchemaV1::JindoPolynomialEvaluationV1
+            Self::IrohaZkAmsV1 => PrivacyOperationSchemaSetV1::two(
+                PrivacyOperationSchemaV1::ZkAmsBatchAdmissionActionV1,
+                PrivacyOperationSchemaV1::ZkAmsProvisionAccountActionV1,
+            ),
+            Self::VegaExistingCredentialZkV0 => PrivacyOperationSchemaSetV1::one(
+                PrivacyOperationSchemaV1::VegaCredentialPresentationV1,
+            ),
+            Self::IrohaZkX509StarkP256V0 => PrivacyOperationSchemaSetV1::one(
+                PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1,
+            ),
+            Self::IrohaJindoPolynomialCommitmentV0 => PrivacyOperationSchemaSetV1::one(
+                PrivacyOperationSchemaV1::JindoPolynomialEvaluationV1,
+            ),
+            Self::IrohaBootleLanternAnoncredV1 => PrivacyOperationSchemaSetV1::one(
+                PrivacyOperationSchemaV1::BootleLanternCredentialPresentationV1,
+            ),
+            Self::OrchardHalo2ActionsV1 => {
+                PrivacyOperationSchemaSetV1::one(PrivacyOperationSchemaV1::OrchardNoteActionV1)
             }
-            Self::IrohaBootleLanternAnoncredV1 => {
-                PrivacyOperationSchemaV1::BootleLanternCredentialPresentationV1
+            Self::MoneroFcmpPlusPlusV1 => {
+                PrivacyOperationSchemaSetV1::one(PrivacyOperationSchemaV1::FcmpMembershipPaymentV1)
             }
-            Self::OrchardHalo2ActionsV1 => PrivacyOperationSchemaV1::OrchardNoteActionV1,
-            Self::MoneroFcmpPlusPlusV1 => PrivacyOperationSchemaV1::FcmpMembershipPaymentV1,
-            Self::IrohaIvmPrivateNoteStarkV1 => PrivacyOperationSchemaV1::IvmPrivateNoteActionV1,
-            Self::PqMaspStarkV0 => PrivacyOperationSchemaV1::PqMaspNoteActionV1,
+            Self::IrohaIvmPrivateNoteStarkV1 => {
+                PrivacyOperationSchemaSetV1::one(PrivacyOperationSchemaV1::IvmPrivateNoteActionV1)
+            }
+            Self::PqMaspStarkV0 => {
+                PrivacyOperationSchemaSetV1::one(PrivacyOperationSchemaV1::PqMaspNoteActionV1)
+            }
         }
     }
     /// Canonical execution classification for this retained protocol.
@@ -309,8 +491,8 @@ impl PrivacyProtocolIdV1 {
 pub struct PrivacyExact12CapabilityRowV1 {
     /// Closed protocol identity.
     pub protocol_id: PrivacyProtocolIdV1,
-    /// Canonical public operation schema.
-    pub operation_schema: PrivacyOperationSchemaV1,
+    /// Canonical bounded public-operation set.
+    pub operation_schemas: PrivacyOperationSchemaSetV1,
     /// Closed execution classification.
     pub execution_mode: PrivacyExecutionModeV1,
     /// Exact amount/sender/receiver/asset/PQ feature bits.
@@ -356,7 +538,7 @@ impl PrivacyExact12CapabilityRowV1 {
         };
         Self {
             protocol_id: row.protocol_id,
-            operation_schema: row.protocol_id.expected_operation_schema(),
+            operation_schemas: row.protocol_id.expected_operation_schemas(),
             execution_mode: row.protocol_id.expected_execution_mode(),
             privacy_feature_mask: row.protocol_id.expected_feature_mask(),
             compiled_profile: row.compiled_profile,
@@ -395,12 +577,12 @@ impl PrivacyExact12CapabilityRowV1 {
         }
         .validate_at_committed_height(committed_height)
         .map_err(PrivacyExact12CapabilityRowValidationErrorV1::CapabilityRow)?;
-        let expected_operation_schema = self.protocol_id.expected_operation_schema();
-        if self.operation_schema != expected_operation_schema {
+        let expected_operation_schemas = self.protocol_id.expected_operation_schemas();
+        if self.operation_schemas != expected_operation_schemas {
             return Err(
-                PrivacyExact12CapabilityRowValidationErrorV1::OperationSchemaMismatch {
-                    expected: expected_operation_schema,
-                    actual: self.operation_schema,
+                PrivacyExact12CapabilityRowValidationErrorV1::OperationSchemasMismatch {
+                    expected: expected_operation_schemas,
+                    actual: self.operation_schemas,
                 },
             );
         }
@@ -460,13 +642,13 @@ pub enum PrivacyExact12CapabilityRowValidationErrorV1 {
     /// The embedded compiled profile or activation is invalid.
     #[error("privacy Exact12 capability row is invalid: {0}")]
     CapabilityRow(PrivacyCapabilityRowValidationErrorV1),
-    /// Operation schema differs from the closed protocol mapping.
-    #[error("privacy operation schema {actual:?} differs from required {expected:?}")]
-    OperationSchemaMismatch {
-        /// Required schema.
-        expected: PrivacyOperationSchemaV1,
-        /// Rejected schema.
-        actual: PrivacyOperationSchemaV1,
+    /// Operation-schema set differs from the closed protocol mapping.
+    #[error("privacy operation-schema set {actual:?} differs from required {expected:?}")]
+    OperationSchemasMismatch {
+        /// Required bounded set.
+        expected: PrivacyOperationSchemaSetV1,
+        /// Rejected bounded set.
+        actual: PrivacyOperationSchemaSetV1,
     },
     /// Execution mode differs from the closed protocol mapping.
     #[error("privacy execution mode {actual:?} differs from required {expected:?}")]

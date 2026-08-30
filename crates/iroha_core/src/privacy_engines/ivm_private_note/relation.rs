@@ -2,8 +2,9 @@
 use super::{codec::encode_private_program_v1, wallet::validate_ivm_private_encrypted_output_v1};
 use iroha_data_model::privacy::{
     IrohaIvmPrivateNoteStarkStatementV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
-    PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyPoolProgramNamespaceV1, PrivacyProgramIdV1,
-    PrivacyProtocolIdV1, PrivacyRootV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
+    PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyPoolProgramNamespaceV1,
+    PrivacyProgramIdV1, PrivacyProtocolIdV1, PrivacyRootV1, PrivacyValueBalanceDirectionV1,
+    PrivacyValueBalanceV1,
 };
 use sha2::{Digest as _, Sha256};
 use std::{collections::BTreeSet, fmt};
@@ -785,22 +786,28 @@ fn validate_note(note: &PrivateNotePlaintextV1) -> Result<(), IvmPrivateNoteRela
 fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
-pub(super) fn namespace_v1(statement: &IrohaIvmPrivateNoteStarkStatementV1) -> PrivacyNamespaceV1 {
+fn wallet_namespace_v1(
+    pool_id: PrivacyPoolIdV1,
+    program_id: PrivacyProgramIdV1,
+) -> PrivacyNamespaceV1 {
     PrivacyNamespaceV1::new(
         PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
-            pool_id: statement.pool_id,
-            program_id: statement.program_id,
+            pool_id,
+            program_id,
         }),
     )
 }
-pub(super) fn accumulator_leaf_invocation_v1(
-    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+pub(super) fn namespace_v1(statement: &IrohaIvmPrivateNoteStarkStatementV1) -> PrivacyNamespaceV1 {
+    wallet_namespace_v1(statement.pool_id, statement.program_id)
+}
+fn accumulator_leaf_invocation_for_namespace_v1(
+    namespace: PrivacyNamespaceV1,
     input: u8,
     commitment: PrivacyCommitmentV1,
 ) -> Result<Sha256InvocationV1, IvmPrivateNoteRelationErrorV1> {
-    let encoded_namespace = norito::to_bytes(&namespace_v1(statement))
-        .map_err(|_| IvmPrivateNoteRelationErrorV1::Encoding)?;
+    let encoded_namespace =
+        norito::to_bytes(&namespace).map_err(|_| IvmPrivateNoteRelationErrorV1::Encoding)?;
     let capacity = ACCUMULATOR_LEAF_DOMAIN_V1
         .len()
         .checked_add(8)
@@ -825,6 +832,13 @@ pub(super) fn accumulator_leaf_invocation_v1(
         preimage,
     })
 }
+pub(super) fn accumulator_leaf_invocation_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+    input: u8,
+    commitment: PrivacyCommitmentV1,
+) -> Result<Sha256InvocationV1, IvmPrivateNoteRelationErrorV1> {
+    accumulator_leaf_invocation_for_namespace_v1(namespace_v1(statement), input, commitment)
+}
 pub(super) fn accumulator_node_invocation_v1(
     input: u8,
     level: u8,
@@ -846,6 +860,89 @@ pub(super) fn accumulator_node_invocation_v1(
         preimage,
     })
 }
+
+/// Preflight the complete context-independent wallet relation before a worker
+/// advertises an imported private-note bundle as ready.
+///
+/// The execution epoch and action digest remain transaction inputs and are
+/// therefore checked by [`validate_private_note_relation_v1`] after statement
+/// construction. Everything determined solely by the owner-only bundle is
+/// rejected here: program encoding, membership, duplicate material, and value
+/// conservation.
+pub fn preflight_ivm_private_note_wallet_request_v1(
+    pool_id: PrivacyPoolIdV1,
+    state_root: PrivacyRootV1,
+    program: &PrivateProgramV1,
+    inputs: &[IvmPrivateNoteInputWitnessV1],
+    outputs: &[&IvmPrivateNoteOutputWitnessV1],
+) -> Result<(), IvmPrivateNoteRelationErrorV1> {
+    if pool_id.is_zero() || state_root.is_zero() {
+        return Err(IvmPrivateNoteRelationErrorV1::InvalidStatement);
+    }
+    if inputs.is_empty()
+        || inputs.len() > PRIVATE_NOTE_MAX_INPUTS_V1
+        || outputs.is_empty()
+        || outputs.len() > PRIVATE_NOTE_MAX_OUTPUTS_V1
+    {
+        return Err(IvmPrivateNoteRelationErrorV1::WitnessShape);
+    }
+    program.validate()?;
+    let program_id = derive_private_program_id_v1(program)?;
+    let namespace = wallet_namespace_v1(pool_id, program_id);
+    let mut input_sum = 0_u128;
+    let mut commitments = BTreeSet::new();
+    let mut positions = BTreeSet::new();
+    for (index, input) in inputs.iter().enumerate() {
+        validate_note(&input.note)?;
+        let commitment = input.commitment_v1()?;
+        if !commitments.insert(commitment) || !positions.insert(input.leaf_position) {
+            return Err(IvmPrivateNoteRelationErrorV1::Duplicate);
+        }
+        let input_u8 =
+            u8::try_from(index).map_err(|_| IvmPrivateNoteRelationErrorV1::WitnessShape)?;
+        let mut current =
+            accumulator_leaf_invocation_for_namespace_v1(namespace.clone(), input_u8, commitment)?
+                .digest;
+        let mut position = input.leaf_position;
+        for (level, sibling) in input.authentication_path.iter().enumerate() {
+            if is_zero(sibling) {
+                return Err(IvmPrivateNoteRelationErrorV1::ZeroWitnessComponent);
+            }
+            let level_u8 =
+                u8::try_from(level).map_err(|_| IvmPrivateNoteRelationErrorV1::WitnessShape)?;
+            current = if position & 1 == 0 {
+                accumulator_node_invocation_v1(input_u8, level_u8, &current, sibling)?
+            } else {
+                accumulator_node_invocation_v1(input_u8, level_u8, sibling, &current)?
+            }
+            .digest;
+            position >>= 1;
+        }
+        if position != 0 || PrivacyRootV1::new(current) != state_root {
+            return Err(IvmPrivateNoteRelationErrorV1::Membership);
+        }
+        input_sum = input_sum
+            .checked_add(input.note.value)
+            .ok_or(IvmPrivateNoteRelationErrorV1::ValueOverflow)?;
+    }
+    let mut output_sum = 0_u128;
+    for output in outputs {
+        validate_note(&output.note)?;
+        let commitment = derive_note_commitment_v1(&output.note)?;
+        if !commitments.insert(commitment) {
+            return Err(IvmPrivateNoteRelationErrorV1::Duplicate);
+        }
+        output_sum = output_sum
+            .checked_add(output.note.value)
+            .ok_or(IvmPrivateNoteRelationErrorV1::ValueOverflow)?;
+    }
+    // Both totals are deliberately materialized with checked arithmetic here.
+    // The native action builder derives the unique directional public bridge
+    // from their difference, so no caller-selected balance remains to check.
+    let _ = (input_sum, output_sum);
+    Ok(())
+}
+
 pub(super) fn validate_statement_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<(), IvmPrivateNoteRelationErrorV1> {

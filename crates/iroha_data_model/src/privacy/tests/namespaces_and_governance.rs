@@ -64,6 +64,21 @@ fn namespaces_root_roles_and_publications_are_closed_and_typed() {
     ca_publication
         .validate()
         .expect("canonical CA root publication");
+    let bootle_namespace = PrivacyNamespaceV1::from_statement(&statement_for(
+        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+    ));
+    assert!(matches!(
+        PrivacyRootPublicationV1::new(
+            bootle_namespace,
+            PrivacyRootRoleV1::Revocation,
+            1,
+            PrivacyRootV1::new(raw(171)),
+        ),
+        Err(PrivacyRootPublicationValidationError::IncompatibleRole {
+            protocol_id: PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            role: PrivacyRootRoleV1::Revocation,
+        })
+    ));
     assert!(matches!(
         PrivacyRootPublicationV1::new(
             x509_policy_namespace,

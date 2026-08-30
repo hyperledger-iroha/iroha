@@ -11,7 +11,7 @@ use super::{
 };
 use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
 use core::convert::Infallible;
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
@@ -847,7 +847,9 @@ fn narrow_signed_source_block_v1(
     }
     Ok(())
 }
-fn map_leaf_error_v1(_: iroha_confidential_spool::ConfidentialSpoolErrorV1) -> ZkAmsMkheErrorV1 {
+fn map_leaf_error_v1(
+    _: iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1,
+) -> ZkAmsMkheErrorV1 {
     ZkAmsMkheErrorV1::InvalidPhase23Fold
 }
 fn require_nonzero_v1(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMkheErrorV1> {

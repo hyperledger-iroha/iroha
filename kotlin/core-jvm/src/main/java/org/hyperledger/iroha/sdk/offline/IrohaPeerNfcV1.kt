@@ -14,8 +14,13 @@ object IrohaPeerNfcV1 {
     const val SESSION_ID_BYTES = 16
     const val HASH_BYTES = 32
     const val MAXIMUM_CHUNK_BYTES = 4_096
-    const val MAXIMUM_MESSAGE_BYTES =
-        IrohaPeerWireMessageV1.HEADER_LENGTH + IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES
+    /** Frozen NFC V1 ceiling for every legacy `0x0102` IPM1 message. */
+    const val MAXIMUM_MESSAGE_BYTES = IrohaPeerWireMessageV1.HEADER_LENGTH +
+        IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES
+    /** Exact NFC ceiling reserved solely for eligibility PAYMENT `0x0103`. */
+    const val MAXIMUM_ELIGIBILITY_PAYMENT_MESSAGE_BYTES =
+        IrohaPeerWireMessageV1.HEADER_LENGTH +
+            IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ELIGIBILITY_ENVELOPE_BYTES
     const val INFO_BYTES = 98
     const val STATUS_BYTES = 174
     const val PAYMENT_ADMISSION_BYTES = 244
@@ -81,15 +86,46 @@ class IrohaPeerNfcLimitsV1 @JvmOverloads constructor(
     val maximumMessageBytes: Int = IrohaPeerNfcV1.MAXIMUM_MESSAGE_BYTES,
     val maximumReadChunkBytes: Int = IrohaPeerNfcV1.MAXIMUM_CHUNK_BYTES,
     val maximumWriteChunkBytes: Int = IrohaPeerNfcV1.MAXIMUM_CHUNK_BYTES,
+    val maximumEligibilityPaymentMessageBytes: Int =
+        IrohaPeerNfcV1.MAXIMUM_ELIGIBILITY_PAYMENT_MESSAGE_BYTES,
 ) {
     init {
         require(
             maximumMessageBytes in
                 IrohaPeerWireMessageV1.HEADER_LENGTH..IrohaPeerNfcV1.MAXIMUM_MESSAGE_BYTES
         )
+        require(
+            maximumEligibilityPaymentMessageBytes in
+                IrohaPeerWireMessageV1.HEADER_LENGTH..
+                IrohaPeerNfcV1.MAXIMUM_ELIGIBILITY_PAYMENT_MESSAGE_BYTES
+        )
         require(maximumReadChunkBytes in 1..IrohaPeerNfcV1.MAXIMUM_CHUNK_BYTES)
         require(maximumWriteChunkBytes in 1..IrohaPeerNfcV1.MAXIMUM_CHUNK_BYTES)
     }
+
+    internal fun maximumMessageBytes(
+        profile: IrohaPeerPayloadProfile,
+        kind: IrohaPeerPayloadKind,
+        schemaVersion: Int,
+    ): Int {
+        require(profile.admits(schemaVersion, kind)) { "Invalid NFC IPM1 schema" }
+        return if (profile == IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND &&
+            kind == IrohaPeerPayloadKind.PAYMENT &&
+            schemaVersion ==
+            IrohaPeerWireMessageV1.KAGEMUSHA_ELIGIBILITY_PAYMENT_SCHEMA_VERSION
+        ) {
+            maximumEligibilityPaymentMessageBytes
+        } else {
+            maximumMessageBytes
+        }
+    }
+
+    internal fun maximumMessageBytes(message: IrohaPeerWireMessageV1): Int =
+        maximumMessageBytes(
+            message.canonicalPayload.profile,
+            message.canonicalPayload.kind,
+            message.canonicalPayload.schemaVersion,
+        )
 
     companion object { @JvmField val DEFAULT = IrohaPeerNfcLimitsV1() }
 }
@@ -236,14 +272,16 @@ class IrohaPeerNfcStatusV1(
                 acknowledgementHash.contentEquals(zero) &&
                 !flags.contains(IrohaPeerNfcFlagsV1.DURABLE_ACKNOWLEDGEMENT)
             IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING -> paymentProfile != null &&
-                paymentLength in (IrohaPeerWireMessageV1.HEADER_LENGTH + 1)..IrohaPeerNfcV1.MAXIMUM_MESSAGE_BYTES &&
+                paymentLength in (IrohaPeerWireMessageV1.HEADER_LENGTH + 1)..
+                IrohaPeerNfcV1.MAXIMUM_ELIGIBILITY_PAYMENT_MESSAGE_BYTES &&
                 receivedPaymentBytes in 0..paymentLength && paymentHash.size == 32 &&
                 !paymentHash.contentEquals(zero) && acknowledgementProfile == null &&
                 acknowledgementLength == 0 && acknowledgementHash.contentEquals(zero) &&
                 !flags.contains(IrohaPeerNfcFlagsV1.DURABLE_ACKNOWLEDGEMENT)
             IrohaPeerNfcPhaseV1.ACKNOWLEDGEMENT_READY, IrohaPeerNfcPhaseV1.COMPLETE ->
                 paymentProfile != null && acknowledgementProfile != null &&
-                    paymentLength in (IrohaPeerWireMessageV1.HEADER_LENGTH + 1)..IrohaPeerNfcV1.MAXIMUM_MESSAGE_BYTES &&
+                    paymentLength in (IrohaPeerWireMessageV1.HEADER_LENGTH + 1)..
+                    IrohaPeerNfcV1.MAXIMUM_ELIGIBILITY_PAYMENT_MESSAGE_BYTES &&
                     receivedPaymentBytes == paymentLength && paymentHash.size == 32 &&
                     !paymentHash.contentEquals(zero) &&
                     acknowledgementLength in (IrohaPeerWireMessageV1.HEADER_LENGTH + 1)..IrohaPeerNfcV1.MAXIMUM_MESSAGE_BYTES &&
@@ -758,7 +796,11 @@ class IrohaPeerNfcPaymentDescriptorV1 @JvmOverloads constructor(
         val inspected = IrohaPeerWireMessageV1.decodeHeader(descriptorHeader)
         require(inspected.kind == IrohaPeerPayloadKind.PAYMENT) { "NFC descriptor is not a payment" }
         messageLength = IrohaPeerWireMessageV1.HEADER_LENGTH + inspected.encodedLength
-        require(messageLength <= limits.maximumMessageBytes) { "NFC payment exceeds bound" }
+        require(messageLength <= limits.maximumMessageBytes(
+            inspected.profile,
+            inspected.kind,
+            inspected.schemaVersion,
+        )) { "NFC payment exceeds bound" }
         profile = inspected.profile
         schemaVersion = inspected.schemaVersion
         descriptorCanonicalHash = inspected.canonicalHash
@@ -929,7 +971,7 @@ class IrohaPeerNfcDurableAcknowledgementV1 private constructor(
             limits,
         ),
     ) {
-        require(context.payment.encode().size <= limits.maximumMessageBytes) {
+        require(context.payment.encode().size <= limits.maximumMessageBytes(context.payment)) {
             "NFC payment exceeds bound"
         }
         require(context.profilePolicy.accepts(this.acknowledgement.canonicalPayload.profile)) {
@@ -938,7 +980,8 @@ class IrohaPeerNfcDurableAcknowledgementV1 private constructor(
     }
 
     init {
-        require(paymentLength in (IrohaPeerWireMessageV1.HEADER_LENGTH + 1)..IrohaPeerNfcV1.MAXIMUM_MESSAGE_BYTES)
+        require(paymentLength in (IrohaPeerWireMessageV1.HEADER_LENGTH + 1)..
+            IrohaPeerNfcV1.MAXIMUM_ELIGIBILITY_PAYMENT_MESSAGE_BYTES)
         requireNfcHash(paymentHash)
         require(acknowledgement.canonicalPayload.kind == IrohaPeerPayloadKind.ACKNOWLEDGEMENT)
     }
@@ -988,7 +1031,10 @@ class IrohaPeerNfcDurableAcknowledgementV1 private constructor(
             require(acknowledgementLength > IrohaPeerWireMessageV1.HEADER_LENGTH &&
                 acknowledgementLength <= limits.maximumMessageBytes && fixed + acknowledgementLength == data.size)
             val paymentLength = data.nfcReadU32(90).nfcCheckedInt()
-            require(paymentLength <= limits.maximumMessageBytes) {
+            // IDA1 predates schema 0x0103 and carries only payment metadata.
+            // The complete payment was already header-admitted; allow only the
+            // separate eligibility ceiling here and never widen ACK decoding.
+            require(paymentLength <= limits.maximumEligibilityPaymentMessageBytes) {
                 "IDA1 payment exceeds local NFC bound"
             }
             val policy = profilePolicy ?: IrohaPeerNfcProfilePolicyV1(requestProfile)
@@ -1103,7 +1149,8 @@ class IrohaPeerNfcSenderCheckpointV1 @JvmOverloads constructor(
             require(requestLength > IrohaPeerWireMessageV1.HEADER_LENGTH &&
                 paymentLength > IrohaPeerWireMessageV1.HEADER_LENGTH &&
                 (acknowledgementLength == 0 || acknowledgementLength > IrohaPeerWireMessageV1.HEADER_LENGTH) &&
-                requestLength <= limits.maximumMessageBytes && paymentLength <= limits.maximumMessageBytes &&
+                requestLength <= limits.maximumMessageBytes &&
+                paymentLength <= limits.maximumEligibilityPaymentMessageBytes &&
                 acknowledgementLength <= limits.maximumMessageBytes &&
                 fixed + requestLength + paymentLength + acknowledgementLength == data.size)
             val paymentStart = fixed + requestLength
@@ -1128,9 +1175,18 @@ private fun decodeNfcMessage(
     expectedKind: IrohaPeerPayloadKind,
     limits: IrohaPeerNfcLimitsV1,
 ): IrohaPeerWireMessageV1 {
-    require(data.size in (IrohaPeerWireMessageV1.HEADER_LENGTH + 1)..limits.maximumMessageBytes) {
+    require(data.size in (IrohaPeerWireMessageV1.HEADER_LENGTH + 1)..
+        limits.maximumEligibilityPaymentMessageBytes) {
         "NFC IPM1 message length is invalid"
     }
+    val header = IrohaPeerWireMessageV1.decodeHeader(
+        data.copyOfRange(0, IrohaPeerWireMessageV1.HEADER_LENGTH),
+    )
+    require(data.size <= limits.maximumMessageBytes(
+        header.profile,
+        header.kind,
+        header.schemaVersion,
+    )) { "NFC IPM1 message exceeds its kind/schema bound" }
     return IrohaPeerWireMessageV1.decode(data, expectedProfile, expectedKind)
 }
 
@@ -1721,7 +1777,8 @@ object IrohaPeerNfcReaderExchangeV1 {
      * plus SELECT/INFO, phase probes, controls, and durable transitions.
      */
     const val DEFAULT_MAXIMUM_ACTIONS =
-        3 * IrohaPeerNfcV1.MAXIMUM_MESSAGE_BYTES + 16
+        IrohaPeerNfcV1.MAXIMUM_ELIGIBILITY_PAYMENT_MESSAGE_BYTES +
+            2 * IrohaPeerNfcV1.MAXIMUM_MESSAGE_BYTES + 16
 
     @JvmStatic
     @JvmOverloads

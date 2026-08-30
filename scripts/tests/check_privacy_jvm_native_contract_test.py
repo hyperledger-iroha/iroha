@@ -67,6 +67,119 @@ def workflow_job(source: str, name: str) -> str:
 class PrivacyJvmNativeContractTests(unittest.TestCase):
     """Guard both JVM SDKs against native capability skips."""
 
+    def test_offline_device_registration_result_is_typed_through_sdk_jni(self) -> None:
+        jni = read_rust_bridge_source()
+        bridge = read(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/"
+            "AuthenticatedTransactionDetailsNativeBridge.kt"
+        )
+        model = read(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/"
+            "AuthenticatedOfflineDeviceRegistrationResultV1.kt"
+        )
+        android_model = read(
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/"
+            "AuthenticatedOfflineDeviceRegistrationResultV1.java"
+        )
+        transport = read(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/"
+            "HttpClientTransport.kt"
+        )
+        runner = read("ci/check_privacy_jvm_sdk.sh")
+        artifact_checker = read("scripts/check_mobile_sdk_artifacts.sh")
+        artifact_checker_test = read("scripts/check_mobile_sdk_artifacts_test.sh")
+        symbol = (
+            "Java_org_hyperledger_iroha_sdk_client_"
+            "AuthenticatedTransactionDetailsNativeBridge_"
+            "nativeProjectExactOfflineDeviceRegistrationResultV1"
+        )
+        self.assertEqual(1, jni.count(symbol))
+        self.assertIn(symbol, artifact_checker)
+        self.assertIn(
+            symbol.replace("_sdk_", "_android_"), artifact_checker
+        )
+        self.assertIn(symbol, artifact_checker_test)
+        self.assertIn(
+            symbol.replace("_sdk_", "_android_"), artifact_checker_test
+        )
+        self.assertIn(
+            "fun projectCommittedOfflineDeviceRegistrationResultV1(", bridge
+        )
+        self.assertIn(
+            "private external fun nativeProjectExactOfflineDeviceRegistrationResultV1(",
+            bridge,
+        )
+        self.assertIn(
+            "class AuthenticatedOfflineDeviceRegistrationResultV1", model
+        )
+        self.assertIn("JSON_MAX_BYTES = 128 * 1024", model)
+        self.assertIn("JSON_MAX_BYTES = 128 * 1024", android_model)
+        for field in (
+            '"terminal_state"',
+            '"eligibility_outcome"',
+            '"eligibility_reason"',
+            '"matched_rule_ids"',
+            '"rejection_code"',
+            '"rejection_message"',
+        ):
+            self.assertIn(field, model)
+        self.assertIn(
+            "fun getAuthenticatedOfflineDeviceRegistrationResultV1(", transport
+        )
+        self.assertIn(
+            "AuthenticatedOfflineDeviceRegistrationResultV1Test", runner
+        )
+        self.assertIn(
+            "AuthenticatedOfflineDeviceRegistrationResultV1Tests", runner
+        )
+
+    def test_exact12_inspector_binds_canonical_auth_authority_across_jni(self) -> None:
+        action = read("crates/connect_norito_bridge/src/privacy_exact12_action.rs")
+        jni = read_rust_bridge_source()
+        kotlin_bridge = read(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/"
+            "PrivacyNativeBridge.kt"
+        )
+        kotlin_transport = read(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/"
+            "HttpClientTransport.kt"
+        )
+        java_bridge = read(
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/"
+            "privacy/PrivacyNativeBridge.java"
+        )
+        java_transport = read(
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/"
+            "client/HttpClientTransport.java"
+        )
+
+        for marker in (
+            "canonical_authority(authority_literal)?",
+            "signed.authority() != &expected_authority",
+            "authority differs from canonicalAuth account",
+        ):
+            self.assertIn(marker, action)
+        authority_parser = read(
+            "crates/connect_norito_bridge/src/authenticated_transaction_details.rs"
+        )
+        self.assertIn("AccountId::parse_encoded(authority_literal)", authority_parser)
+        self.assertIn("parsed.canonical() != authority_literal", authority_parser)
+        self.assertIn("shared_authority_parser_accepts_exact_unicode_i105_only", authority_parser)
+        self.assertNotIn("!authority_literal.is_ascii()", authority_parser)
+        for marker in (
+            '"authorityAccountId"',
+            "AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1",
+            "std::str::from_utf8(&authority)",
+            "authority: jni::objects::JByteArray<'_>",
+        ):
+            self.assertIn(marker, jni)
+        self.assertIn("authorityAccountId.toByteArray(Charsets.UTF_8)", kotlin_bridge)
+        self.assertIn("canonicalAuth.accountId,", kotlin_transport)
+        self.assertIn(
+            "authorityAccountId.getBytes(StandardCharsets.UTF_8)", java_bridge
+        )
+        self.assertIn("canonicalAuth.accountId());", java_transport)
+
     def test_kotlin_native_tests_require_the_bridge_unconditionally(self) -> None:
         source = read(
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/"
@@ -155,6 +268,77 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
             ):
                 self.assertEqual(1, source.count(prefix + method))
 
+    def test_exact12_applied_requires_native_finalized_receipt_on_both_jvms(self) -> None:
+        jni = read_rust_bridge_source()
+        kotlin_bridge = read(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/"
+            "AuthenticatedPrivacyActionReceiptNativeBridge.kt"
+        )
+        java_bridge = read(
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/"
+            "AuthenticatedPrivacyActionReceiptNativeBridge.java"
+        )
+        kotlin_model = read(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/"
+            "PrivacyExact12ActionModelsV1.kt"
+        )
+        kotlin_transport = read(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/"
+            "HttpClientTransport.kt"
+        )
+        java_transport = read(
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/"
+            "HttpClientTransport.java"
+        )
+
+        for namespace in ("sdk", "android"):
+            prefix = (
+                "Java_org_hyperledger_iroha_"
+                f"{namespace}_client_AuthenticatedPrivacyActionReceiptNativeBridge_"
+            )
+            for method in (
+                "nativeBridgeAbiVersion",
+                "nativePreparePrivacyActionReceiptQueryV1",
+                "nativeFinalizePrivacyActionReceiptQueryV1",
+                "nativeProjectPrivacyActionReceiptV1",
+            ):
+                self.assertEqual(1, jni.count(prefix + method))
+
+        for source in (kotlin_bridge, java_bridge):
+            for marker in (
+                "buildSignedPrivacyActionReceiptQueryV1",
+                "nativePreparePrivacyActionReceiptQueryV1",
+                "nativeFinalizePrivacyActionReceiptQueryV1",
+                "nativeProjectPrivacyActionReceiptV1",
+                "requestedActionBinding",
+                "capabilityManifestDigest",
+                "admittedAtHeight",
+                "finalizedBlockHash",
+            ):
+                self.assertIn(marker, source)
+
+        for marker in (
+            "executionCapabilityManifestDigest",
+            "executionCapabilityCommittedHeight",
+            "executionReceiptFinalizedHeight",
+            "executionReceiptFinalizedBlockHash",
+            "Applied Exact12 action requires complete authenticated execution-receipt evidence",
+        ):
+            self.assertIn(marker, kotlin_model)
+
+        for source in (kotlin_transport, java_transport):
+            for marker in (
+                '"/v1/query"',
+                "fetchExactNoritoBytesAllowingNotFound",
+                "getOptionalAuthenticatedCommittedTransactionResultV1",
+                "getAuthenticatedPrivacyActionExecutionReceiptV1",
+                "rejected Exact12 action contradicts an authenticated execution receipt",
+                "authenticated Exact12 receipt differs from the committed transaction height",
+            ):
+                self.assertIn(marker, source)
+            self.assertIn("Committed", source)
+            self.assertIn("cache", source)
+
     def test_jvm_runner_authenticates_the_only_loadable_bridge(self) -> None:
         source = read("ci/check_privacy_jvm_sdk.sh")
         for marker in (
@@ -183,6 +367,13 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
             "privacy-jvm-native-abi22-${{ github.sha }}",
         ):
             self.assertIn(marker, job)
+        for path_filter in (
+            '      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/**"',
+            '      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/**"',
+            '      - "IrohaSwift/Sources/IrohaSwift/**"',
+            '      - "csharp/src/Hyperledger.Iroha.Sdk/**"',
+        ):
+            self.assertIn(path_filter, source)
         self.assertNotIn("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE", job)
 
 

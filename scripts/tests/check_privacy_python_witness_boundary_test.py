@@ -58,8 +58,8 @@ fn next_function() {}
         encoding="utf-8",
     )
     registry = ",\n".join(
-        f"    {protocol!r}: 'schema-{index}'"
-        for index, protocol in enumerate(checker.GENERIC11_PROTOCOLS)
+        f"    {protocol!r}: {schemas!r}"
+        for protocol, schemas in checker.GENERIC11_OPERATION_SCHEMAS
     )
     (python_root / "privacy_wallet_worker.py").write_text(
         f"""PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1 = {{
@@ -133,7 +133,7 @@ def test_direct_bundle_and_zk_x509_worker_substitution_fail_closed(
     _write_fixture(
         tmp_path,
         extra_rust="fn sign_privacy_orchard_note_action_v1(execution_bundle: Vec<u8>) {}",
-        registry_suffix=f",\n    {checker.ZK_X509_PROTOCOL!r}: 'x509-schema'",
+        registry_suffix=f",\n    {checker.ZK_X509_PROTOCOL!r}: ('x509-schema',)",
     )
     report = checker.inspect_repository(tmp_path)
     assert any(

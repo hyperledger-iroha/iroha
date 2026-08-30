@@ -62,17 +62,31 @@ pub fn is_stark_fri_v1_backend_label(backend: &str) -> bool {
 }
 /// Domain tag used when deriving ZK-ACE identity commitments and replay nullifiers.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authorization:v0";
-/// Fixed action class of the disabled ZK-ACE candidate.
+/// Fixed action class of the first-release ZK-ACE authorization profile.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_transfer";
 /// Permanent Norito schema identity for the typed ZK-ACE public-input wrapper.
 pub const ZK_ACE_PRIVACY_PUBLIC_INPUTS_SCHEMA_NAME_V1: &str =
     "iroha.privacy.zk-ace.public-inputs.v1";
 /// Exact type-name-independent transfer-digest preimage schema.
-pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=poseidon-domain-words:dense-mds-goldilocks-x7:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=network-id:bytes32|part6=action-class:utf8|part7=policy-digest:bytes32";
+pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=4-independent-lane-domain-poseidon-hashes:dense-mds-goldilocks-x7:lane-domain-length-u64+7byte-le-limbs:logical-domain-as-part0:part-count-u64:each-part-length-u64+7byte-le-limbs:one-canonical-state0-u64le-per-lane|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=network-id:bytes32|part6=action-class:utf8|part7=policy-digest:bytes32";
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
 /// Number of bytes packed into each Goldilocks field limb for ZK-ACE hashes.
 pub const ZK_ACE_PACKED_LIMB_BYTES: usize = 7;
+/// Number of independent dense-MDS Poseidon `x^7` invocations in one ZK-ACE digest.
+pub const ZK_ACE_POSEIDON_DIGEST_LANES_V2: usize = 4;
+/// Equal-length outer domains for the four independent ZK-ACE digest lanes.
+///
+/// The original logical hash domain is framed as part zero below one of these
+/// domains. Consequently a `(lane, logical domain, parts)` tuple has one
+/// unambiguous canonical preimage, and no lane reuses another lane's sponge
+/// invocation.
+pub const ZK_ACE_POSEIDON_DIGEST_LANE_DOMAINS_V2: [&[u8]; ZK_ACE_POSEIDON_DIGEST_LANES_V2] = [
+    b"zk-ace.poseidon-x7.digest-lane-0.v2",
+    b"zk-ace.poseidon-x7.digest-lane-1.v2",
+    b"zk-ace.poseidon-x7.digest-lane-2.v2",
+    b"zk-ace.poseidon-x7.digest-lane-3.v2",
+];
 /// Default maximum proof payload size accepted by generic `OpenVerify` admission.
 pub const OPEN_VERIFY_DEFAULT_MAX_PROOF_BYTES: usize = 64 * 1024 * 1024;
 /// Default maximum circuit identifier size accepted by generic `OpenVerify` admission.
@@ -586,22 +600,62 @@ pub fn zk_ace_pack_bytes_to_field_limbs(bytes: &[u8]) -> ZkAcePackedBytesV1 {
 ///
 /// The function name predates correction of the implementation descriptor and
 /// remains as a source-compatibility alias; this construction is not Poseidon2.
-/// Its four returned words are sequential outputs of one capacity-1 sponge and
-/// therefore provide only about 32 bits of generic collision resistance as a
-/// combined digest. ZK-ACE production activation remains disabled until four
-/// independent lane-domain hashes replace this candidate construction.
+/// Each returned word is the first canonical state-zero output of a fresh
+/// capacity-1 sponge under one of four explicit lane domains. The logical
+/// `domain` is independently length-framed as part zero in every lane. Under
+/// the compiled classical-ROM model, the four independent 32-bit collision
+/// bounds compose to the required 128-bit commitment-binding target. This is
+/// not a quantum-random-oracle claim.
 #[must_use]
 pub fn zk_ace_poseidon2_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let words = zk_ace_poseidon2_domain_words(domain, parts);
-    let mut sponge = fastpq_isi::poseidon::PoseidonSponge::new();
-    sponge.absorb_slice(&words);
     let mut out = [0u8; 32];
-    for chunk in out.chunks_exact_mut(core::mem::size_of::<u64>()) {
-        chunk.copy_from_slice(&sponge.squeeze_element().to_le_bytes());
+    for (lane, chunk) in out
+        .chunks_exact_mut(core::mem::size_of::<u64>())
+        .enumerate()
+    {
+        let words = zk_ace_poseidon2_lane_domain_words(lane, domain, parts)
+            .expect("digest output has exactly four compiled lanes");
+        let mut sponge = fastpq_isi::poseidon::PoseidonSponge::new();
+        sponge.absorb_slice(&words);
+        chunk.copy_from_slice(&sponge.squeeze().to_le_bytes());
     }
     out
 }
+/// Canonical Goldilocks preimage for one independent ZK-ACE digest lane.
+///
+/// The lane domain is the outer hash domain. The caller's logical domain is
+/// part zero, followed by the caller-provided parts in their original order.
+/// Returning `None` for an out-of-range lane makes the public helper closed and
+/// prevents accidental fallback to an unseparated sponge.
+#[must_use]
+pub fn zk_ace_poseidon2_lane_domain_words(
+    lane: usize,
+    domain: &[u8],
+    parts: &[&[u8]],
+) -> Option<Vec<u64>> {
+    let lane_domain = *ZK_ACE_POSEIDON_DIGEST_LANE_DOMAINS_V2.get(lane)?;
+    let mut words = Vec::new();
+    let lane_domain = zk_ace_pack_bytes_to_field_limbs(lane_domain);
+    words.push(lane_domain.length);
+    words.extend_from_slice(&lane_domain.limbs);
+    words.push(
+        u64::try_from(parts.len())
+            .ok()
+            .and_then(|count| count.checked_add(1))
+            .unwrap_or(u64::MAX),
+    );
+    for part in core::iter::once(domain).chain(parts.iter().copied()) {
+        let packed = zk_ace_pack_bytes_to_field_limbs(part);
+        words.push(packed.length);
+        words.extend_from_slice(&packed.limbs);
+    }
+    Some(words)
+}
 /// Canonical Goldilocks preimage used by ZK-ACE dense-MDS Poseidon `x^7` hashing.
+///
+/// This is the retained logical-domain framing helper. The active digest wraps
+/// these semantics beneath each lane domain through
+/// [`zk_ace_poseidon2_lane_domain_words`].
 #[must_use]
 pub fn zk_ace_poseidon2_domain_words(domain: &[u8], parts: &[&[u8]]) -> Vec<u64> {
     let mut words = Vec::new();
@@ -1369,15 +1423,64 @@ mod tests {
         );
         assert_eq!(
             hex::encode(identity_commitment),
-            "c6b2d67fbc837b72de0097e8e7d3b451ff09c76a9e99f6c42ef43ae1ec5777f5"
+            "d770aa677488dc02dc57a0c3157a992c2a766b0b91ebe1027b81e3a34cc2a965"
         );
         assert_eq!(
             hex::encode(tx_digest),
-            "71af728bb6110a1cca751e6fe253742d4c30d8f69e3be2ebf056447088aec13e"
+            "d4cdf97c5323006cebc7041ef7c84d05a6b563930bddbb36f08a64ee9fae8017"
         );
         assert_eq!(
             hex::encode(replay_nullifier),
-            "6496615988495f553fb17dc9dd01cb49c002e870c4e4987aabefe5bf104c732c"
+            "958aebab0bff4d8c6f4a1ed04564058003e458d2fbae77412a6e18943a2572aa"
+        );
+    }
+    #[test]
+    fn zk_ace_digest_is_four_fresh_lane_domain_sponges() {
+        let logical_domain = b"zk-ace.four-lane-construction-kat.v2";
+        let parts = [b"first".as_slice(), b"second-part".as_slice()];
+        let digest = zk_ace_poseidon2_domain_hash(logical_domain, &parts);
+        assert_eq!(
+            hex::encode(digest),
+            "c32195fe1dcac05e7f8be8151f6742e8a56afae3fc0f965b10f53e601ca9f5d8",
+            "the complete four-lane data-model digest must remain KAT pinned"
+        );
+        let mut sequential = fastpq_isi::poseidon::PoseidonSponge::new();
+        sequential.absorb_slice(&zk_ace_poseidon2_domain_words(logical_domain, &parts));
+        let mut sequential_digest = [0_u8; 32];
+        for chunk in sequential_digest.chunks_exact_mut(core::mem::size_of::<u64>()) {
+            chunk.copy_from_slice(&sequential.squeeze_element().to_le_bytes());
+        }
+        assert_ne!(digest, sequential_digest);
+        let mut observed_words = BTreeSet::new();
+        let lane_domain_length = ZK_ACE_POSEIDON_DIGEST_LANE_DOMAINS_V2[0].len();
+        for lane in 0..ZK_ACE_POSEIDON_DIGEST_LANES_V2 {
+            assert_eq!(
+                ZK_ACE_POSEIDON_DIGEST_LANE_DOMAINS_V2[lane].len(),
+                lane_domain_length,
+                "lane domains must remain equal length"
+            );
+            let words = zk_ace_poseidon2_lane_domain_words(lane, logical_domain, &parts)
+                .expect("compiled lane");
+            assert!(
+                observed_words.insert(words.clone()),
+                "lane domains must differ"
+            );
+            let mut sponge = fastpq_isi::poseidon::PoseidonSponge::new();
+            sponge.absorb_slice(&words);
+            assert_eq!(
+                &digest[lane * 8..(lane + 1) * 8],
+                &sponge.squeeze().to_le_bytes(),
+                "lane {lane} must contribute exactly its first canonical state-zero output"
+            );
+        }
+        assert!(
+            zk_ace_poseidon2_lane_domain_words(
+                ZK_ACE_POSEIDON_DIGEST_LANES_V2,
+                logical_domain,
+                &parts,
+            )
+            .is_none(),
+            "the lane set must be closed"
         );
     }
     #[cfg(feature = "json")]

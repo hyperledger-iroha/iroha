@@ -114,6 +114,7 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "Register.Account",
   "Register.AssetDefinition",
   "ExecuteTrigger",
+  "Log",
   "Custom",
   "Kaigi.*",
   "Governance.*",
@@ -143,6 +144,7 @@ const SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID =
 const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const RECORD_SCCP_MESSAGE_WIRE_ID =
   "iroha_data_model::isi::bridge::RecordSccpMessage";
+const LOG_WIRE_ID = "iroha.log";
 const ISSUE_REPLICATION_ORDER_WIRE_ID =
   "iroha_data_model::isi::sorafs::IssueReplicationOrder";
 const COMPLETE_REPLICATION_ORDER_WIRE_ID =
@@ -304,6 +306,7 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.transfer": "iroha_data_model::isi::transfer::TransferBox",
   "iroha.custom": "iroha_data_model::isi::transparent::CustomInstruction",
   "iroha.execute_trigger": "iroha_data_model::isi::transparent::ExecuteTrigger",
+  [LOG_WIRE_ID]: "iroha_data_model::isi::transparent::Log",
   "iroha.rwa": "iroha_data_model::isi::rwa::RwaInstructionBox",
   [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_WIRE_ID,
   [SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID]:
@@ -2716,6 +2719,9 @@ function encodePureJsInstructionPayload(instruction) {
     const payload = encodeExecuteTriggerPayload(instruction.ExecuteTrigger);
     return encodeInstructionEnvelope("iroha.execute_trigger", payload);
   }
+  if (isPlainObject(instruction.Log)) {
+    return encodeLogInstruction(instruction.Log);
+  }
   if (Object.prototype.hasOwnProperty.call(instruction, "CancelAssetLock")) {
     assertOnlyObjectKeys(instruction, ["CancelAssetLock"], "instruction");
     return encodeCancelAssetLockInstruction(instruction.CancelAssetLock);
@@ -2859,6 +2865,8 @@ function decodePureJsInstruction(buffer) {
 
 function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstruction) {
   switch (wireId) {
+    case LOG_WIRE_ID:
+      return decodeLogInstructionPayload(payload);
     case "iroha.mint":
       return { Mint: decodeMintPayload(payload) };
     case "iroha.burn":
@@ -6764,6 +6772,44 @@ function decodeExecuteTriggerPayload(payload) {
   );
   reader.assertEof();
   return { trigger, args };
+}
+
+const LOG_LEVELS = Object.freeze(["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]);
+
+function encodeLogInstruction(value) {
+  assertOnlyObjectKeys(value, ["level", "msg"], "Log");
+  if (typeof value.level !== JS_TYPE_STRING) {
+    throw new TypeError("Log.level must be an exact uppercase log level");
+  }
+  const levelIndex = LOG_LEVELS.indexOf(value.level);
+  if (levelIndex < 0) {
+    throw new TypeError("Log.level must be TRACE, DEBUG, INFO, WARN, or ERROR");
+  }
+  if (typeof value.msg !== JS_TYPE_STRING) {
+    throw new TypeError("Log.msg must be a string");
+  }
+  return encodeInstructionEnvelope(
+    LOG_WIRE_ID,
+    encodeStructValue([
+      [encodeU32Value(levelIndex, "Log.level")],
+      [encodeNoritoStringValue(value.msg)],
+    ]),
+  );
+}
+
+function decodeLogInstructionPayload(payload) {
+  const fields = decodeStructFields(payload, "Log", ["level", "msg"]);
+  const levelIndex = decodeU32Value(fields.level, "Log.level");
+  const level = LOG_LEVELS[levelIndex];
+  if (level === undefined) {
+    throw new Error("Log.level has an invalid discriminant");
+  }
+  return {
+    Log: {
+      level,
+      msg: decodeStringValue(fields.msg, "Log.msg"),
+    },
+  };
 }
 
 function encodeAccountIdValue(value, context) {

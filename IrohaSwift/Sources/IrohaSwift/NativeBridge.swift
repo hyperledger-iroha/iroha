@@ -107,6 +107,24 @@ enum NoritoBridgeLoader {
         "iroha_privacy_validate_compiled_profile_catalog_v1",
         "iroha_privacy_exact12_fixture_bundle_v1",
         "iroha_privacy_validate_exact12_fixture_bundle_v1",
+        "iroha_privacy_inspect_signed_exact12_action_v1",
+        "iroha_privacy_authenticated_transaction_details_prepare_v1",
+        "iroha_privacy_authenticated_transaction_details_finalize_v1",
+        "iroha_privacy_authenticated_transaction_details_project_result_v1",
+        "iroha_privacy_authenticated_transaction_details_prepare_v2",
+        "iroha_privacy_authenticated_transaction_details_finalize_v2",
+        "iroha_privacy_authenticated_transaction_details_project_result_v2",
+        "iroha_privacy_authenticated_finality_proof_page_bind_v1",
+        "iroha_privacy_authenticated_finality_page_verify_v1",
+        "iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1",
+        "iroha_privacy_kagemusha_topup_finality_project_v4",
+        "iroha_privacy_authenticated_offline_device_registration_result_project_v1",
+        "iroha_privacy_authenticated_action_receipt_prepare_v1",
+        "iroha_privacy_authenticated_action_receipt_finalize_v1",
+        "iroha_privacy_authenticated_action_receipt_project_result_v1",
+        "iroha_privacy_authenticated_state_query_prepare_v1",
+        "iroha_privacy_authenticated_state_query_finalize_v1",
+        "iroha_privacy_authenticated_state_query_project_result_v1",
         "iroha_privacy_free_buffer",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
         "connect_norito_sorafs_reference_validate_bundle_json",
@@ -636,6 +654,10 @@ enum NativeBridgeError: Error, Equatable {
     case secpVerify
     case invalidPrivacyRequest
     case invalidPrivacyOutput
+    case authenticatedTransactionDetails
+    case privacyExact12Action
+    case authenticatedPrivacyActionReceipt
+    case authenticatedPrivacyStateQuery
     case bridgeUnavailable
     case detachedTransactionScaffold
     case detachedTransactionSignature
@@ -693,6 +715,10 @@ enum NativeBridgeError: Error, Equatable {
         case -501: return .detachedTransactionScaffold
         case -502: return .detachedTransactionSignature
         case -503: return .canonicalJSON
+        case -412: return .authenticatedTransactionDetails
+        case -413: return .privacyExact12Action
+        case -414: return .authenticatedPrivacyActionReceipt
+        case -415: return .authenticatedPrivacyStateQuery
         default: return .unknown(status)
         }
     }
@@ -761,6 +787,29 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     static let privacyCompiledProfileCatalogArchiveMaxBytes = 256 * 1024
     static let privacyExact12FixtureBundleMaxBytes = 2 * 1024 * 1024
+    static let privacyExact12SignedActionMaxBytes = 10 * 1024 * 1024
+    static let authenticatedTransactionDetailsPreparationMaxBytes = 64 * 1024
+    static let authenticatedTransactionDetailsSignedQueryMaxBytes = 64 * 1024
+    static let authenticatedTransactionDetailsResponseMaxBytes = 64 * 1024 * 1024
+    static let authenticatedTransactionDetailsResultMaxBytes = 8 * 1024
+    static let authenticatedTransactionDetailsResultV2MaxBytes = 64 * 1024
+    static let authenticatedFinalityCheckpointBytes = 40
+    static let authenticatedFinalityProofMaxBytes = 9 * 1024 * 1024
+    static let authenticatedFinalityPageMaxProofs = 64
+    static let authenticatedFinalityPageMaxBytes = 64 * 1024 * 1024
+    static let authenticatedFinalizedKagemushaOutcomeMaxBytes = 64 * 1024
+    static let authenticatedFinalizedPrivacyActionRejectionMaxBytes = 64 * 1024
+    static let authenticatedExecutedBlockWireMaxBytes = 32 * 1024 * 1024
+    static let authenticatedTopUpFinalityProjectionMaxBytes = 8 * 1024
+    static let authenticatedOfflineDeviceRegistrationResultMaxBytes = 128 * 1024
+    static let authenticatedActionReceiptPreparationMaxBytes = 64 * 1024
+    static let authenticatedActionReceiptSignedQueryMaxBytes = 64 * 1024
+    static let authenticatedActionReceiptResponseMaxBytes = 256 * 1024
+    static let authenticatedActionReceiptResultMaxBytes = 32 * 1024
+    static let authenticatedPrivacyStateQueryPreparationMaxBytes = 64 * 1024
+    static let authenticatedPrivacyStateQuerySignedQueryMaxBytes = 64 * 1024
+    static let authenticatedPrivacyStateQueryResponseMaxBytes = 256 * 1024
+    static let authenticatedPrivacyStateQueryResultMaxBytes = 256 * 1024
     private static let detachedTransactionNativeMaximumBytes = 16 * 1024 * 1024
 
     #if canImport(Darwin)
@@ -1793,6 +1842,154 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private typealias PrivacyValidateExact12FixtureBundleFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong
     ) -> Int32
+    private typealias PrivacyInspectSignedExact12ActionFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        Int32,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedTransactionDetailsPrepareFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedTransactionDetailsFinalizeFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedTransactionDetailsProjectResultFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedTransactionDetailsPrepareV2Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedFinalityProofPageBindV1Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<CUnsignedLong>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedFinalityPageVerifyV1Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedFinalizedKagemushaOutcomeProjectV1Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedFinalizedPrivacyActionRejectionProjectV1Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        Int32,
+        UInt32,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedTopUpFinalityProjectV4Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedOfflineDeviceRegistrationResultProjectFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedActionReceiptPrepareFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        Int32,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt32,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedActionReceiptFinalizeFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedActionReceiptProjectResultFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedPrivacyStateQueryPrepareFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt32,
+        UInt32,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedPrivacyStateQueryFinalizeFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias AuthenticatedPrivacyStateQueryProjectResultFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
         UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -1948,6 +2145,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var privacyValidateCompiledProfileCatalogFn: PrivacyValidateCompiledProfileCatalogFn? = nil
     private var privacyExact12FixtureBundleFn: PrivacyExact12FixtureBundleFn? = nil
     private var privacyValidateExact12FixtureBundleFn: PrivacyValidateExact12FixtureBundleFn? = nil
+    private var privacyInspectSignedExact12ActionFn: PrivacyInspectSignedExact12ActionFn? = nil
+    private var authenticatedTransactionDetailsPrepareFn: AuthenticatedTransactionDetailsPrepareFn? = nil
+    private var authenticatedTransactionDetailsFinalizeFn: AuthenticatedTransactionDetailsFinalizeFn? = nil
+    private var authenticatedTransactionDetailsProjectResultFn: AuthenticatedTransactionDetailsProjectResultFn? = nil
+    private var authenticatedTransactionDetailsPrepareV2Fn: AuthenticatedTransactionDetailsPrepareV2Fn? = nil
+    private var authenticatedTransactionDetailsFinalizeV2Fn: AuthenticatedTransactionDetailsFinalizeFn? = nil
+    private var authenticatedTransactionDetailsProjectResultV2Fn: AuthenticatedTransactionDetailsProjectResultFn? = nil
+    private var authenticatedFinalityProofPageBindV1Fn: AuthenticatedFinalityProofPageBindV1Fn? = nil
+    private var authenticatedFinalityPageVerifyV1Fn: AuthenticatedFinalityPageVerifyV1Fn? = nil
+    private var authenticatedFinalizedKagemushaOutcomeProjectV1Fn: AuthenticatedFinalizedKagemushaOutcomeProjectV1Fn? = nil
+    private var authenticatedFinalizedPrivacyActionRejectionProjectV1Fn: AuthenticatedFinalizedPrivacyActionRejectionProjectV1Fn? = nil
+    private var authenticatedTopUpFinalityProjectV4Fn: AuthenticatedTopUpFinalityProjectV4Fn? = nil
+    private var authenticatedOfflineDeviceRegistrationResultProjectFn: AuthenticatedOfflineDeviceRegistrationResultProjectFn? = nil
+    private var authenticatedActionReceiptPrepareFn: AuthenticatedActionReceiptPrepareFn? = nil
+    private var authenticatedActionReceiptFinalizeFn: AuthenticatedActionReceiptFinalizeFn? = nil
+    private var authenticatedActionReceiptProjectResultFn: AuthenticatedActionReceiptProjectResultFn? = nil
+    private var authenticatedPrivacyStateQueryPrepareFn: AuthenticatedPrivacyStateQueryPrepareFn? = nil
+    private var authenticatedPrivacyStateQueryFinalizeFn: AuthenticatedPrivacyStateQueryFinalizeFn? = nil
+    private var authenticatedPrivacyStateQueryProjectResultFn: AuthenticatedPrivacyStateQueryProjectResultFn? = nil
     // Privacy outputs point past a private allocation header. Only the dedicated
     // privacy free function can recover and zeroize that allocation safely.
     private var privacyFreeFn: FreeFn? = nil
@@ -2074,6 +2290,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let privacyValidateCompiledProfileCatalogFn: Any? = nil
     private let privacyExact12FixtureBundleFn: Any? = nil
     private let privacyValidateExact12FixtureBundleFn: Any? = nil
+    private let privacyInspectSignedExact12ActionFn: Any? = nil
+    private let authenticatedTransactionDetailsPrepareFn: Any? = nil
+    private let authenticatedTransactionDetailsFinalizeFn: Any? = nil
+    private let authenticatedTransactionDetailsProjectResultFn: Any? = nil
+    private let authenticatedTransactionDetailsPrepareV2Fn: Any? = nil
+    private let authenticatedTransactionDetailsFinalizeV2Fn: Any? = nil
+    private let authenticatedTransactionDetailsProjectResultV2Fn: Any? = nil
+    private let authenticatedFinalityProofPageBindV1Fn: Any? = nil
+    private let authenticatedFinalityPageVerifyV1Fn: Any? = nil
+    private let authenticatedFinalizedKagemushaOutcomeProjectV1Fn: Any? = nil
+    private let authenticatedFinalizedPrivacyActionRejectionProjectV1Fn: Any? = nil
+    private let authenticatedTopUpFinalityProjectV4Fn: Any? = nil
+    private let authenticatedOfflineDeviceRegistrationResultProjectFn: Any? = nil
+    private let authenticatedActionReceiptPrepareFn: Any? = nil
+    private let authenticatedActionReceiptFinalizeFn: Any? = nil
+    private let authenticatedActionReceiptProjectResultFn: Any? = nil
+    private let authenticatedPrivacyStateQueryPrepareFn: Any? = nil
+    private let authenticatedPrivacyStateQueryFinalizeFn: Any? = nil
+    private let authenticatedPrivacyStateQueryProjectResultFn: Any? = nil
     private let privacyFreeFn: Any? = nil
     private let privacyNativeProbeOk = false
 #endif
@@ -2088,6 +2323,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.privacyValidateCompiledProfileCatalogFn = nil
             self.privacyExact12FixtureBundleFn = nil
             self.privacyValidateExact12FixtureBundleFn = nil
+            self.privacyInspectSignedExact12ActionFn = nil
+            self.authenticatedTransactionDetailsPrepareFn = nil
+            self.authenticatedTransactionDetailsFinalizeFn = nil
+            self.authenticatedTransactionDetailsProjectResultFn = nil
+            self.authenticatedTransactionDetailsPrepareV2Fn = nil
+            self.authenticatedTransactionDetailsFinalizeV2Fn = nil
+            self.authenticatedTransactionDetailsProjectResultV2Fn = nil
+            self.authenticatedFinalityProofPageBindV1Fn = nil
+            self.authenticatedFinalityPageVerifyV1Fn = nil
+            self.authenticatedFinalizedKagemushaOutcomeProjectV1Fn = nil
+            self.authenticatedFinalizedPrivacyActionRejectionProjectV1Fn = nil
+            self.authenticatedTopUpFinalityProjectV4Fn = nil
+            self.authenticatedOfflineDeviceRegistrationResultProjectFn = nil
+            self.authenticatedActionReceiptPrepareFn = nil
+            self.authenticatedActionReceiptFinalizeFn = nil
+            self.authenticatedActionReceiptProjectResultFn = nil
+            self.authenticatedPrivacyStateQueryPrepareFn = nil
+            self.authenticatedPrivacyStateQueryFinalizeFn = nil
+            self.authenticatedPrivacyStateQueryProjectResultFn = nil
             self.privacyFreeFn = nil
             return
         }
@@ -2129,6 +2383,92 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         } else {
             self.privacyValidateExact12FixtureBundleFn = nil
         }
+        self.privacyInspectSignedExact12ActionFn = dlsym(
+            handle,
+            "iroha_privacy_inspect_signed_exact12_action_v1"
+        ).map { unsafeBitCast($0, to: PrivacyInspectSignedExact12ActionFn.self) }
+        self.authenticatedTransactionDetailsPrepareFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_transaction_details_prepare_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedTransactionDetailsPrepareFn.self) }
+        self.authenticatedTransactionDetailsFinalizeFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_transaction_details_finalize_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedTransactionDetailsFinalizeFn.self) }
+        self.authenticatedTransactionDetailsProjectResultFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_transaction_details_project_result_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedTransactionDetailsProjectResultFn.self) }
+        self.authenticatedTransactionDetailsPrepareV2Fn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_transaction_details_prepare_v2"
+        ).map { unsafeBitCast($0, to: AuthenticatedTransactionDetailsPrepareV2Fn.self) }
+        self.authenticatedTransactionDetailsFinalizeV2Fn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_transaction_details_finalize_v2"
+        ).map { unsafeBitCast($0, to: AuthenticatedTransactionDetailsFinalizeFn.self) }
+        self.authenticatedTransactionDetailsProjectResultV2Fn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_transaction_details_project_result_v2"
+        ).map { unsafeBitCast($0, to: AuthenticatedTransactionDetailsProjectResultFn.self) }
+        self.authenticatedFinalityProofPageBindV1Fn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_finality_proof_page_bind_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedFinalityProofPageBindV1Fn.self) }
+        self.authenticatedFinalityPageVerifyV1Fn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_finality_page_verify_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedFinalityPageVerifyV1Fn.self) }
+        self.authenticatedFinalizedKagemushaOutcomeProjectV1Fn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedFinalizedKagemushaOutcomeProjectV1Fn.self) }
+        self.authenticatedFinalizedPrivacyActionRejectionProjectV1Fn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_finalized_action_rejection_project_v1"
+        ).map {
+            unsafeBitCast(
+                $0,
+                to: AuthenticatedFinalizedPrivacyActionRejectionProjectV1Fn.self
+            )
+        }
+        self.authenticatedTopUpFinalityProjectV4Fn = dlsym(
+            handle,
+            "iroha_privacy_kagemusha_topup_finality_project_v4"
+        ).map { unsafeBitCast($0, to: AuthenticatedTopUpFinalityProjectV4Fn.self) }
+        self.authenticatedOfflineDeviceRegistrationResultProjectFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_offline_device_registration_result_project_v1"
+        ).map {
+            unsafeBitCast(
+                $0,
+                to: AuthenticatedOfflineDeviceRegistrationResultProjectFn.self
+            )
+        }
+        self.authenticatedActionReceiptPrepareFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_action_receipt_prepare_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedActionReceiptPrepareFn.self) }
+        self.authenticatedActionReceiptFinalizeFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_action_receipt_finalize_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedActionReceiptFinalizeFn.self) }
+        self.authenticatedActionReceiptProjectResultFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_action_receipt_project_result_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedActionReceiptProjectResultFn.self) }
+        self.authenticatedPrivacyStateQueryPrepareFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_state_query_prepare_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedPrivacyStateQueryPrepareFn.self) }
+        self.authenticatedPrivacyStateQueryFinalizeFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_state_query_finalize_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedPrivacyStateQueryFinalizeFn.self) }
+        self.authenticatedPrivacyStateQueryProjectResultFn = dlsym(
+            handle,
+            "iroha_privacy_authenticated_state_query_project_result_v1"
+        ).map { unsafeBitCast($0, to: AuthenticatedPrivacyStateQueryProjectResultFn.self) }
         if let freeSymbol = dlsym(handle, "iroha_privacy_free_buffer") {
             self.privacyFreeFn = unsafeBitCast(freeSymbol, to: FreeFn.self)
         } else {
@@ -3408,6 +3748,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             && privacyValidateCompiledProfileCatalogFn != nil
             && privacyExact12FixtureBundleFn != nil
             && privacyValidateExact12FixtureBundleFn != nil
+            && privacyInspectSignedExact12ActionFn != nil
+            && authenticatedTransactionDetailsPrepareFn != nil
+            && authenticatedTransactionDetailsFinalizeFn != nil
+            && authenticatedTransactionDetailsProjectResultFn != nil
+            && authenticatedTransactionDetailsPrepareV2Fn != nil
+            && authenticatedTransactionDetailsFinalizeV2Fn != nil
+            && authenticatedTransactionDetailsProjectResultV2Fn != nil
+            && authenticatedFinalityProofPageBindV1Fn != nil
+            && authenticatedFinalityPageVerifyV1Fn != nil
+            && authenticatedFinalizedKagemushaOutcomeProjectV1Fn != nil
+            && authenticatedFinalizedPrivacyActionRejectionProjectV1Fn != nil
+            && authenticatedTopUpFinalityProjectV4Fn != nil
+            && authenticatedOfflineDeviceRegistrationResultProjectFn != nil
+            && authenticatedActionReceiptPrepareFn != nil
+            && authenticatedActionReceiptFinalizeFn != nil
+            && authenticatedActionReceiptProjectResultFn != nil
+            && authenticatedPrivacyStateQueryPrepareFn != nil
+            && authenticatedPrivacyStateQueryFinalizeFn != nil
+            && authenticatedPrivacyStateQueryProjectResultFn != nil
             && privacyFreeFn != nil
             && privacyNativeProbeOk
         #else
@@ -5978,6 +6337,1108 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #else
         return nil
         #endif
+    }
+
+    func privacyInspectSignedExact12ActionV1(
+        signedTransaction: Data,
+        networkId: Data,
+        authorityAccountId: String,
+        operationIndex: Int32
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        let authority = Data(authorityAccountId.utf8)
+        guard bridgeEnabledForRuntime,
+              let privacyInspectSignedExact12ActionFn,
+              let privacyFreeFn,
+              !signedTransaction.isEmpty,
+              signedTransaction.count <= Self.privacyExact12SignedActionMaxBytes,
+              networkId.count == 32,
+              !authority.isEmpty else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = signedTransaction.withUnsafeBytes { signedBytes in
+            networkId.withUnsafeBytes { networkBytes in
+                authority.withUnsafeBytes { authorityBytes in
+                    privacyInspectSignedExact12ActionFn(
+                        signedBytes.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(signedTransaction.count),
+                        networkBytes.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(networkId.count),
+                        authorityBytes.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(authority.count),
+                        operationIndex,
+                        &outPtr,
+                        &outLen
+                    )
+                }
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: 128,
+            exactBytes: 128,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedTransactionDetailsPrepareV1(
+        networkId: Data,
+        authority: String,
+        transactionHashHex: String,
+        creationTimeMs: UInt64,
+        nonce: Data
+    ) throws -> (preparation: Data, signingDigest: Data)? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedTransactionDetailsPrepareFn,
+              let privacyFreeFn,
+              networkId.count == 32,
+              !authority.isEmpty,
+              transactionHashHex.utf8.count == 64,
+              creationTimeMs > 0,
+              nonce.count == 32 else {
+            return nil
+        }
+        let authorityBytes = Data(authority.utf8)
+        let hashBytes = Data(transactionHashHex.utf8)
+        var preparationPtr: UnsafeMutablePointer<UInt8>?
+        var preparationLen: CUnsignedLong = 0
+        var digestPtr: UnsafeMutablePointer<UInt8>?
+        var digestLen: CUnsignedLong = 0
+        let status = networkId.withUnsafeBytes { networkBytes in
+            authorityBytes.withUnsafeBytes { authorityBuffer in
+                hashBytes.withUnsafeBytes { hashBuffer in
+                    nonce.withUnsafeBytes { nonceBuffer in
+                        authenticatedTransactionDetailsPrepareFn(
+                            networkBytes.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(networkId.count),
+                            authorityBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(authorityBytes.count),
+                            hashBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(hashBytes.count),
+                            creationTimeMs,
+                            nonceBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(nonce.count),
+                            &preparationPtr,
+                            &preparationLen,
+                            &digestPtr,
+                            &digestLen
+                        )
+                    }
+                }
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let preparationPtr { privacyFreeFn(preparationPtr) }
+            if let digestPtr { privacyFreeFn(digestPtr) }
+            throw error
+        }
+        guard let preparationPtr, let digestPtr else {
+            if let preparationPtr { privacyFreeFn(preparationPtr) }
+            if let digestPtr { privacyFreeFn(digestPtr) }
+            throw NativeBridgeError.nullPointer
+        }
+        defer {
+            Self.clearPrivacyNativeBuffer(
+                preparationPtr,
+                length: preparationLen,
+                maximumBytes: Self.authenticatedTransactionDetailsPreparationMaxBytes
+            )
+            Self.clearPrivacyNativeBuffer(digestPtr, length: digestLen, maximumBytes: 32)
+            privacyFreeFn(preparationPtr)
+            privacyFreeFn(digestPtr)
+        }
+        guard preparationLen > 0,
+              preparationLen <= CUnsignedLong(
+                Self.authenticatedTransactionDetailsPreparationMaxBytes
+              ),
+              digestLen == 32 else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        return (
+            Data(bytes: preparationPtr, count: Int(preparationLen)),
+            Data(bytes: digestPtr, count: Int(digestLen))
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedTransactionDetailsFinalizeV1(
+        preparation: Data,
+        signature: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedTransactionDetailsFinalizeFn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedTransactionDetailsPreparationMaxBytes,
+              !signature.isEmpty,
+              signature.count <= 16 * 1024 else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = preparation.withUnsafeBytes { preparationBytes in
+            signature.withUnsafeBytes { signatureBytes in
+                authenticatedTransactionDetailsFinalizeFn(
+                    preparationBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(preparation.count),
+                    signatureBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(signature.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedTransactionDetailsSignedQueryMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedTransactionDetailsProjectResultV1(
+        preparation: Data,
+        response: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedTransactionDetailsProjectResultFn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedTransactionDetailsPreparationMaxBytes,
+              !response.isEmpty,
+              response.count <= Self.authenticatedTransactionDetailsResponseMaxBytes else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = preparation.withUnsafeBytes { preparationBytes in
+            response.withUnsafeBytes { responseBytes in
+                authenticatedTransactionDetailsProjectResultFn(
+                    preparationBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(preparation.count),
+                    responseBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(response.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedTransactionDetailsResultMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedTransactionDetailsPrepareV2(
+        networkId: Data,
+        queryAuthority: String,
+        expectedTransactionAuthority: String,
+        transactionHashHex: String,
+        creationTimeMs: UInt64,
+        nonce: Data
+    ) throws -> (preparation: Data, signingDigest: Data)? {
+        #if canImport(Darwin)
+        let queryAuthorityBytes = Data(queryAuthority.utf8)
+        let transactionAuthorityBytes = Data(expectedTransactionAuthority.utf8)
+        let hashBytes = Data(transactionHashHex.utf8)
+        guard bridgeEnabledForRuntime,
+              let authenticatedTransactionDetailsPrepareV2Fn,
+              let privacyFreeFn,
+              networkId.count == 32,
+              !queryAuthorityBytes.isEmpty,
+              !transactionAuthorityBytes.isEmpty,
+              hashBytes.count == 64,
+              creationTimeMs > 0,
+              nonce.count == 32 else {
+            return nil
+        }
+        var preparationPtr: UnsafeMutablePointer<UInt8>?
+        var preparationLen: CUnsignedLong = 0
+        var digestPtr: UnsafeMutablePointer<UInt8>?
+        var digestLen: CUnsignedLong = 0
+        let inputs = [
+            networkId,
+            queryAuthorityBytes,
+            transactionAuthorityBytes,
+            hashBytes,
+            nonce,
+        ]
+        let status = Self.withUnsafePrivacyInputPointers(inputs) { pointers in
+            authenticatedTransactionDetailsPrepareV2Fn(
+                pointers[0], CUnsignedLong(networkId.count),
+                pointers[1], CUnsignedLong(queryAuthorityBytes.count),
+                pointers[2], CUnsignedLong(transactionAuthorityBytes.count),
+                pointers[3], CUnsignedLong(hashBytes.count),
+                creationTimeMs,
+                pointers[4], CUnsignedLong(nonce.count),
+                &preparationPtr, &preparationLen,
+                &digestPtr, &digestLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let preparationPtr { privacyFreeFn(preparationPtr) }
+            if let digestPtr { privacyFreeFn(digestPtr) }
+            throw error
+        }
+        guard let preparationPtr, let digestPtr else {
+            if let preparationPtr { privacyFreeFn(preparationPtr) }
+            if let digestPtr { privacyFreeFn(digestPtr) }
+            throw NativeBridgeError.nullPointer
+        }
+        defer {
+            Self.clearPrivacyNativeBuffer(
+                preparationPtr,
+                length: preparationLen,
+                maximumBytes: Self.authenticatedTransactionDetailsPreparationMaxBytes
+            )
+            Self.clearPrivacyNativeBuffer(digestPtr, length: digestLen, maximumBytes: 32)
+            privacyFreeFn(preparationPtr)
+            privacyFreeFn(digestPtr)
+        }
+        guard preparationLen > 0,
+              preparationLen <= CUnsignedLong(
+                  Self.authenticatedTransactionDetailsPreparationMaxBytes
+              ),
+              digestLen == 32 else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        return (
+            Data(bytes: preparationPtr, count: Int(preparationLen)),
+            Data(bytes: digestPtr, count: Int(digestLen))
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedTransactionDetailsFinalizeV2(
+        preparation: Data,
+        signature: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedTransactionDetailsFinalizeV2Fn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedTransactionDetailsPreparationMaxBytes,
+              !signature.isEmpty,
+              signature.count <= 16 * 1024 else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = Self.withUnsafePrivacyInputPointers([preparation, signature]) { pointers in
+            authenticatedTransactionDetailsFinalizeV2Fn(
+                pointers[0], CUnsignedLong(preparation.count),
+                pointers[1], CUnsignedLong(signature.count),
+                &outPtr, &outLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedTransactionDetailsSignedQueryMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedTransactionDetailsProjectResultV2(
+        preparation: Data,
+        response: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedTransactionDetailsProjectResultV2Fn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedTransactionDetailsPreparationMaxBytes,
+              !response.isEmpty,
+              response.count <= Self.authenticatedTransactionDetailsResponseMaxBytes else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = Self.withUnsafePrivacyInputPointers([preparation, response]) { pointers in
+            authenticatedTransactionDetailsProjectResultV2Fn(
+                pointers[0], CUnsignedLong(preparation.count),
+                pointers[1], CUnsignedLong(response.count),
+                &outPtr, &outLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedTransactionDetailsResultV2MaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedFinalityProofPageBindV1(
+        _ proofs: [Data]
+    ) throws -> (archive: Data, hashHex: String)? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedFinalityProofPageBindV1Fn,
+              let privacyFreeFn,
+              (1...Self.authenticatedFinalityPageMaxProofs).contains(proofs.count) else {
+            return nil
+        }
+        var aggregateBytes = 0
+        for proof in proofs {
+            guard !proof.isEmpty,
+                  proof.count <= Self.authenticatedFinalityProofMaxBytes,
+                  aggregateBytes <= Self.authenticatedFinalityPageMaxBytes - proof.count else {
+                throw NativeBridgeError.authenticatedTransactionDetails
+            }
+            aggregateBytes += proof.count
+        }
+        var concatenated = Data()
+        concatenated.reserveCapacity(aggregateBytes)
+        var lengths: [CUnsignedLong] = []
+        lengths.reserveCapacity(proofs.count)
+        for proof in proofs {
+            concatenated.append(proof)
+            lengths.append(CUnsignedLong(proof.count))
+        }
+        var pagePtr: UnsafeMutablePointer<UInt8>?
+        var pageLen: CUnsignedLong = 0
+        var hashPtr: UnsafeMutablePointer<UInt8>?
+        var hashLen: CUnsignedLong = 0
+        let status = concatenated.withUnsafeBytes { proofBytes in
+            lengths.withUnsafeBufferPointer { lengthBuffer in
+                authenticatedFinalityProofPageBindV1Fn(
+                    proofBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(concatenated.count),
+                    lengthBuffer.baseAddress,
+                    CUnsignedLong(lengths.count),
+                    &pagePtr, &pageLen,
+                    &hashPtr, &hashLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let pagePtr { privacyFreeFn(pagePtr) }
+            if let hashPtr { privacyFreeFn(hashPtr) }
+            throw error
+        }
+        let archive = try Self.copyPrivacyNativeOutput(
+            pointer: pagePtr,
+            length: pageLen,
+            maximumBytes: Self.authenticatedFinalityPageMaxBytes,
+            free: privacyFreeFn
+        )
+        let hashBytes = try Self.copyPrivacyNativeOutput(
+            pointer: hashPtr,
+            length: hashLen,
+            maximumBytes: 64,
+            exactBytes: 64,
+            free: privacyFreeFn
+        )
+        guard let hashHex = String(data: hashBytes, encoding: .utf8) else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        return (archive, hashHex)
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedFinalityPageVerifyV1(
+        networkId: Data,
+        trustedCheckpoint: Data,
+        page: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedFinalityPageVerifyV1Fn,
+              let privacyFreeFn,
+              networkId.count == 32,
+              trustedCheckpoint.count == Self.authenticatedFinalityCheckpointBytes,
+              !page.isEmpty,
+              page.count <= Self.authenticatedFinalityPageMaxBytes else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = Self.withUnsafePrivacyInputPointers(
+            [networkId, trustedCheckpoint, page]
+        ) { pointers in
+            authenticatedFinalityPageVerifyV1Fn(
+                pointers[0], CUnsignedLong(networkId.count),
+                pointers[1], CUnsignedLong(trustedCheckpoint.count),
+                pointers[2], CUnsignedLong(page.count),
+                &outPtr, &outLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedFinalityCheckpointBytes,
+            exactBytes: Self.authenticatedFinalityCheckpointBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedFinalizedKagemushaOutcomeProjectV1(
+        preparation: Data,
+        response: Data,
+        expectedOperationId: Data,
+        expectedKind: String,
+        expectedRequest: Data,
+        networkId: Data,
+        trustedCheckpoint: Data,
+        finalityPage: Data,
+        executedBlockWire: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        let kindBytes = Data(expectedKind.utf8)
+        guard bridgeEnabledForRuntime,
+              let authenticatedFinalizedKagemushaOutcomeProjectV1Fn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedTransactionDetailsPreparationMaxBytes,
+              !response.isEmpty,
+              response.count <= Self.authenticatedTransactionDetailsResponseMaxBytes,
+              expectedOperationId.count == 32,
+              !kindBytes.isEmpty,
+              !expectedRequest.isEmpty,
+              networkId.count == 32,
+              trustedCheckpoint.count == Self.authenticatedFinalityCheckpointBytes,
+              !finalityPage.isEmpty,
+              finalityPage.count <= Self.authenticatedFinalityPageMaxBytes,
+              !executedBlockWire.isEmpty,
+              executedBlockWire.count <= Self.authenticatedExecutedBlockWireMaxBytes else {
+            return nil
+        }
+        let inputs = [
+            preparation, response, expectedOperationId, kindBytes, expectedRequest, networkId,
+            trustedCheckpoint, finalityPage, executedBlockWire,
+        ]
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = Self.withUnsafePrivacyInputPointers(inputs) { pointers in
+            authenticatedFinalizedKagemushaOutcomeProjectV1Fn(
+                pointers[0], CUnsignedLong(preparation.count),
+                pointers[1], CUnsignedLong(response.count),
+                pointers[2], CUnsignedLong(expectedOperationId.count),
+                pointers[3], CUnsignedLong(kindBytes.count),
+                pointers[4], CUnsignedLong(expectedRequest.count),
+                pointers[5], CUnsignedLong(networkId.count),
+                pointers[6], CUnsignedLong(trustedCheckpoint.count),
+                pointers[7], CUnsignedLong(finalityPage.count),
+                pointers[8], CUnsignedLong(executedBlockWire.count),
+                &outPtr, &outLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedFinalizedKagemushaOutcomeMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedFinalizedPrivacyActionRejectionProjectV1(
+        preparation: Data,
+        response: Data,
+        operationIndex: Int32,
+        actionIndex: UInt32,
+        requestedActionBinding: Data,
+        networkId: Data,
+        trustedCheckpoint: Data,
+        finalityPage: Data,
+        executedBlockWire: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedFinalizedPrivacyActionRejectionProjectV1Fn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedTransactionDetailsPreparationMaxBytes,
+              !response.isEmpty,
+              response.count <= Self.authenticatedTransactionDetailsResponseMaxBytes,
+              actionIndex == 0,
+              requestedActionBinding.count == 96,
+              networkId.count == 32,
+              trustedCheckpoint.count == Self.authenticatedFinalityCheckpointBytes,
+              !finalityPage.isEmpty,
+              finalityPage.count <= Self.authenticatedFinalityPageMaxBytes,
+              !executedBlockWire.isEmpty,
+              executedBlockWire.count <= Self.authenticatedExecutedBlockWireMaxBytes else {
+            return nil
+        }
+        let inputs = [
+            preparation, response, requestedActionBinding, networkId, trustedCheckpoint,
+            finalityPage, executedBlockWire,
+        ]
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = Self.withUnsafePrivacyInputPointers(inputs) { pointers in
+            authenticatedFinalizedPrivacyActionRejectionProjectV1Fn(
+                pointers[0], CUnsignedLong(preparation.count),
+                pointers[1], CUnsignedLong(response.count),
+                operationIndex,
+                actionIndex,
+                pointers[2], CUnsignedLong(requestedActionBinding.count),
+                pointers[3], CUnsignedLong(networkId.count),
+                pointers[4], CUnsignedLong(trustedCheckpoint.count),
+                pointers[5], CUnsignedLong(finalityPage.count),
+                pointers[6], CUnsignedLong(executedBlockWire.count),
+                &outPtr, &outLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedFinalizedPrivacyActionRejectionMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func kagemushaTopUpFinalityProjectV4(
+        anchor: Data,
+        finalityProof: Data,
+        rosterArtifact: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedTopUpFinalityProjectV4Fn,
+              let privacyFreeFn,
+              !anchor.isEmpty,
+              anchor.count <= KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes,
+              !finalityProof.isEmpty,
+              finalityProof.count <= KagemushaRecursiveSpend.topUpFinalityProofMaximumArchiveBytes,
+              !rosterArtifact.isEmpty,
+              rosterArtifact.count <= KagemushaRecursiveSpend.topUpFinalityRosterMaximumArchiveBytes else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = Self.withUnsafePrivacyInputPointers(
+            [anchor, finalityProof, rosterArtifact]
+        ) { pointers in
+            authenticatedTopUpFinalityProjectV4Fn(
+                pointers[0], CUnsignedLong(anchor.count),
+                pointers[1], CUnsignedLong(finalityProof.count),
+                pointers[2], CUnsignedLong(rosterArtifact.count),
+                &outPtr, &outLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedTopUpFinalityProjectionMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedOfflineDeviceRegistrationResultProjectV1(
+        preparation: Data,
+        response: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedOfflineDeviceRegistrationResultProjectFn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedTransactionDetailsPreparationMaxBytes,
+              !response.isEmpty,
+              response.count <= Self.authenticatedTransactionDetailsResponseMaxBytes else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = preparation.withUnsafeBytes { preparationBytes in
+            response.withUnsafeBytes { responseBytes in
+                authenticatedOfflineDeviceRegistrationResultProjectFn(
+                    preparationBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(preparation.count),
+                    responseBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(response.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedOfflineDeviceRegistrationResultMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedActionReceiptPrepareV1(
+        networkId: Data,
+        authority: String,
+        operationIndex: Int32,
+        transactionHashHex: String,
+        actionIndex: UInt32,
+        requestedActionBinding: Data,
+        creationTimeMs: UInt64,
+        nonce: Data
+    ) throws -> (preparation: Data, signingDigest: Data)? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedActionReceiptPrepareFn,
+              let privacyFreeFn,
+              networkId.count == 32,
+              !authority.isEmpty,
+              transactionHashHex.utf8.count == 64,
+              requestedActionBinding.count == 96,
+              creationTimeMs > 0,
+              nonce.count == 32 else {
+            return nil
+        }
+        let authorityBytes = Data(authority.utf8)
+        let hashBytes = Data(transactionHashHex.utf8)
+        var preparationPtr: UnsafeMutablePointer<UInt8>?
+        var preparationLen: CUnsignedLong = 0
+        var digestPtr: UnsafeMutablePointer<UInt8>?
+        var digestLen: CUnsignedLong = 0
+        let status = networkId.withUnsafeBytes { networkBytes in
+            authorityBytes.withUnsafeBytes { authorityBuffer in
+                hashBytes.withUnsafeBytes { hashBuffer in
+                    requestedActionBinding.withUnsafeBytes { bindingBuffer in
+                        nonce.withUnsafeBytes { nonceBuffer in
+                            authenticatedActionReceiptPrepareFn(
+                                networkBytes.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(networkId.count),
+                                authorityBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(authorityBytes.count),
+                                operationIndex,
+                                hashBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(hashBytes.count),
+                                actionIndex,
+                                bindingBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(requestedActionBinding.count),
+                                creationTimeMs,
+                                nonceBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(nonce.count),
+                                &preparationPtr,
+                                &preparationLen,
+                                &digestPtr,
+                                &digestLen
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let preparationPtr { privacyFreeFn(preparationPtr) }
+            if let digestPtr { privacyFreeFn(digestPtr) }
+            throw error
+        }
+        guard let preparationPtr, let digestPtr else {
+            if let preparationPtr { privacyFreeFn(preparationPtr) }
+            if let digestPtr { privacyFreeFn(digestPtr) }
+            throw NativeBridgeError.nullPointer
+        }
+        defer {
+            Self.clearPrivacyNativeBuffer(
+                preparationPtr,
+                length: preparationLen,
+                maximumBytes: Self.authenticatedActionReceiptPreparationMaxBytes
+            )
+            Self.clearPrivacyNativeBuffer(digestPtr, length: digestLen, maximumBytes: 32)
+            privacyFreeFn(preparationPtr)
+            privacyFreeFn(digestPtr)
+        }
+        guard preparationLen > 0,
+              preparationLen <= CUnsignedLong(
+                  Self.authenticatedActionReceiptPreparationMaxBytes
+              ),
+              digestLen == 32 else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        return (
+            Data(bytes: preparationPtr, count: Int(preparationLen)),
+            Data(bytes: digestPtr, count: Int(digestLen))
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedActionReceiptFinalizeV1(
+        preparation: Data,
+        signature: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedActionReceiptFinalizeFn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedActionReceiptPreparationMaxBytes,
+              !signature.isEmpty,
+              signature.count <= 16 * 1024 else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = preparation.withUnsafeBytes { preparationBytes in
+            signature.withUnsafeBytes { signatureBytes in
+                authenticatedActionReceiptFinalizeFn(
+                    preparationBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(preparation.count),
+                    signatureBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(signature.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedActionReceiptSignedQueryMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedActionReceiptProjectResultV1(
+        preparation: Data,
+        response: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedActionReceiptProjectResultFn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedActionReceiptPreparationMaxBytes,
+              !response.isEmpty,
+              response.count <= Self.authenticatedActionReceiptResponseMaxBytes else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = preparation.withUnsafeBytes { preparationBytes in
+            response.withUnsafeBytes { responseBytes in
+                authenticatedActionReceiptProjectResultFn(
+                    preparationBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(preparation.count),
+                    responseBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(response.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedActionReceiptResultMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedPrivacyStateQueryPrepareV1(
+        networkId: Data,
+        authority: String,
+        queryId: UInt32,
+        protocolIndex: UInt32,
+        requestBinding: Data,
+        creationTimeMs: UInt64,
+        nonce: Data
+    ) throws -> (preparation: Data, signingDigest: Data)? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedPrivacyStateQueryPrepareFn,
+              let privacyFreeFn,
+              networkId.count == 32,
+              !authority.isEmpty,
+              !requestBinding.isEmpty,
+              requestBinding.count <= 128,
+              creationTimeMs > 0,
+              nonce.count == 32 else {
+            return nil
+        }
+        let authorityBytes = Data(authority.utf8)
+        var preparationPtr: UnsafeMutablePointer<UInt8>?
+        var preparationLen: CUnsignedLong = 0
+        var digestPtr: UnsafeMutablePointer<UInt8>?
+        var digestLen: CUnsignedLong = 0
+        let status = networkId.withUnsafeBytes { networkBytes in
+            authorityBytes.withUnsafeBytes { authorityBuffer in
+                requestBinding.withUnsafeBytes { bindingBuffer in
+                    nonce.withUnsafeBytes { nonceBuffer in
+                        authenticatedPrivacyStateQueryPrepareFn(
+                            networkBytes.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(networkId.count),
+                            authorityBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(authorityBytes.count),
+                            queryId,
+                            protocolIndex,
+                            bindingBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(requestBinding.count),
+                            creationTimeMs,
+                            nonceBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(nonce.count),
+                            &preparationPtr,
+                            &preparationLen,
+                            &digestPtr,
+                            &digestLen
+                        )
+                    }
+                }
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let preparationPtr { privacyFreeFn(preparationPtr) }
+            if let digestPtr { privacyFreeFn(digestPtr) }
+            throw error
+        }
+        guard let preparationPtr, let digestPtr else {
+            if let preparationPtr { privacyFreeFn(preparationPtr) }
+            if let digestPtr { privacyFreeFn(digestPtr) }
+            throw NativeBridgeError.nullPointer
+        }
+        defer {
+            Self.clearPrivacyNativeBuffer(
+                preparationPtr,
+                length: preparationLen,
+                maximumBytes: Self.authenticatedPrivacyStateQueryPreparationMaxBytes
+            )
+            Self.clearPrivacyNativeBuffer(digestPtr, length: digestLen, maximumBytes: 32)
+            privacyFreeFn(preparationPtr)
+            privacyFreeFn(digestPtr)
+        }
+        guard preparationLen > 0,
+              preparationLen <= CUnsignedLong(
+                  Self.authenticatedPrivacyStateQueryPreparationMaxBytes
+              ),
+              digestLen == 32 else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        return (
+            Data(bytes: preparationPtr, count: Int(preparationLen)),
+            Data(bytes: digestPtr, count: Int(digestLen))
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedPrivacyStateQueryFinalizeV1(
+        preparation: Data,
+        signature: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedPrivacyStateQueryFinalizeFn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedPrivacyStateQueryPreparationMaxBytes,
+              !signature.isEmpty,
+              signature.count <= 16 * 1024 else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = preparation.withUnsafeBytes { preparationBytes in
+            signature.withUnsafeBytes { signatureBytes in
+                authenticatedPrivacyStateQueryFinalizeFn(
+                    preparationBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(preparation.count),
+                    signatureBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(signature.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedPrivacyStateQuerySignedQueryMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func authenticatedPrivacyStateQueryProjectResultV1(
+        preparation: Data,
+        response: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let authenticatedPrivacyStateQueryProjectResultFn,
+              let privacyFreeFn,
+              !preparation.isEmpty,
+              preparation.count <= Self.authenticatedPrivacyStateQueryPreparationMaxBytes,
+              !response.isEmpty,
+              response.count <= Self.authenticatedPrivacyStateQueryResponseMaxBytes else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: CUnsignedLong = 0
+        let status = preparation.withUnsafeBytes { preparationBytes in
+            response.withUnsafeBytes { responseBytes in
+                authenticatedPrivacyStateQueryProjectResultFn(
+                    preparationBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(preparation.count),
+                    responseBytes.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(response.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr { privacyFreeFn(outPtr) }
+            throw error
+        }
+        return try Self.copyPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            maximumBytes: Self.authenticatedPrivacyStateQueryResultMaxBytes,
+            free: privacyFreeFn
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    #if canImport(Darwin)
+    private static func withUnsafePrivacyInputPointers<Result>(
+        _ inputs: [Data],
+        _ body: ([UnsafePointer<UInt8>?]) -> Result
+    ) -> Result {
+        var pointers: [UnsafePointer<UInt8>?] = []
+        pointers.reserveCapacity(inputs.count)
+        func visit(_ index: Int) -> Result {
+            guard index < inputs.count else { return body(pointers) }
+            return inputs[index].withUnsafeBytes { bytes in
+                pointers.append(bytes.bindMemory(to: UInt8.self).baseAddress)
+                defer { pointers.removeLast() }
+                return visit(index + 1)
+            }
+        }
+        return visit(0)
+    }
+    #endif
+
+    private static func copyPrivacyNativeOutput(
+        pointer: UnsafeMutablePointer<UInt8>?,
+        length: CUnsignedLong,
+        maximumBytes: Int,
+        exactBytes: Int? = nil,
+        free: (UnsafeMutablePointer<UInt8>?) -> Void
+    ) throws -> Data {
+        guard let pointer else {
+            throw NativeBridgeError.nullPointer
+        }
+        defer {
+            clearPrivacyNativeBuffer(pointer, length: length, maximumBytes: maximumBytes)
+            free(pointer)
+        }
+        guard length > 0,
+              length <= CUnsignedLong(maximumBytes),
+              exactBytes.map({ length == CUnsignedLong($0) }) ?? true else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        return Data(bytes: pointer, count: Int(length))
     }
 
     private static func readPrivacyNativeOutput(

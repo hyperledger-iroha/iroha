@@ -264,7 +264,6 @@ use iroha_crypto::{
     ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, SignatureOf,
     blake2::{Blake2b512, digest::Digest},
 };
-use iroha_data_model::NetworkId;
 use iroha_data_model::alias::{AliasRecord, AliasTarget};
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
@@ -301,7 +300,7 @@ use iroha_data_model::{
     name::Name,
     nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
     nft::NftId,
-    peer::{Peer, PeerId},
+    peer::Peer,
     permission::Permission,
     query::{CommittedTransaction, SignedQuery},
     rwa::RwaId,
@@ -312,6 +311,7 @@ use iroha_data_model::{
         signed::{TransactionAdmissionIntent, TransactionEntrypoint, TransactionResult},
     },
 };
+use iroha_data_model::{NetworkId, peer::PeerId};
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanResolveAccountAlias,
 };
@@ -2401,7 +2401,6 @@ struct AppState {
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     local_peer_id: Option<PeerId>,
     #[cfg(feature = "connect")]
     connect_bus: connect::Bus,
@@ -5885,6 +5884,11 @@ async fn enforce_offline_cache_policy(
 ) -> Result<axum::response::Response, Infallible> {
     const OPERATION_PREFIX: &str = "/v1/offline/operations/";
     const READINESS_PATH: &str = "/v1/offline/readiness";
+    const KAGEMUSHA_ISSUANCE_STATUS_PATH: &str = "/v1/offline/kagemusha/issuance-status";
+    const DEVICE_ATTESTATION_POLICY_PATH: &str = "/v1/offline/device-attestation-policy";
+    const DEVICE_ATTESTATION_POLICY_PROOF_PATH: &str =
+        "/v1/offline/device-attestation-policy/proof";
+    const DEVICE_ELIGIBILITY_PATH: &str = "/v1/offline/device-eligibility";
     const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
     const TOP_UP_PATH: &str = "/v1/offline/top-up";
     const REDEEM_PATH: &str = "/v1/offline/redeem";
@@ -5896,6 +5900,10 @@ async fn enforce_offline_cache_policy(
         route.stable_route_id() == route_catalog::offline::READINESS.stable_route_id()
     }) || req.uri().path() == READINESS_PATH
         || req.uri().path().starts_with("/v1/offline/readiness/");
+    let kagemusha_issuance_status = route.is_some_and(|route| {
+        route.stable_route_id()
+            == route_catalog::offline::KAGEMUSHA_ISSUANCE_STATUS.stable_route_id()
+    }) || req.uri().path() == KAGEMUSHA_ISSUANCE_STATUS_PATH;
     let command = route.is_some_and(|route| {
         let id = route.stable_route_id();
         id == route_catalog::offline::TOP_UP.stable_route_id()
@@ -5904,8 +5912,24 @@ async fn enforce_offline_cache_policy(
     let recipient_lineage = route.is_some_and(|route| {
         route.stable_route_id() == route_catalog::offline::RECIPIENT_LINEAGE.stable_route_id()
     }) || req.uri().path() == RECIPIENT_LINEAGE_PATH;
+    let device_policy_or_eligibility = route.is_some_and(|route| {
+        let id = route.stable_route_id();
+        id == route_catalog::offline::DEVICE_ATTESTATION_POLICY.stable_route_id()
+            || id == route_catalog::offline::DEVICE_ATTESTATION_POLICY_PROOF.stable_route_id()
+            || id == route_catalog::offline::DEVICE_ELIGIBILITY.stable_route_id()
+    }) || matches!(
+        req.uri().path(),
+        DEVICE_ATTESTATION_POLICY_PATH
+            | DEVICE_ATTESTATION_POLICY_PROOF_PATH
+            | DEVICE_ELIGIBILITY_PATH
+    );
     let mut response = next.run(req).await;
-    let policy = if operation_status || command || recipient_lineage {
+    let policy = if operation_status
+        || command
+        || recipient_lineage
+        || device_policy_or_eligibility
+        || kagemusha_issuance_status
+    {
         Some("no-store")
     } else if readiness {
         if matches!(response.status(), StatusCode::OK | StatusCode::NOT_MODIFIED) {
@@ -7036,6 +7060,34 @@ mod offline_cache_policy_tests {
                 }),
             )
             .route(
+                "/v1/offline/device-attestation-policy",
+                get(|| async move {
+                    (
+                        [(header::CACHE_CONTROL, "public, max-age=86400")],
+                        StatusCode::OK,
+                    )
+                        .into_response()
+                }),
+            )
+            .route(
+                "/v1/offline/kagemusha/issuance-status",
+                get(|| async move {
+                    (
+                        [(header::CACHE_CONTROL, "public, max-age=86400")],
+                        StatusCode::OK,
+                    )
+                        .into_response()
+                }),
+            )
+            .route(
+                "/v1/offline/device-attestation-policy/proof",
+                post(|| async { StatusCode::OK }),
+            )
+            .route(
+                "/v1/offline/device-eligibility",
+                post(|| async { StatusCode::CONFLICT }),
+            )
+            .route(
                 "/v1/offline/top-up",
                 post(|| async {
                     (
@@ -7099,6 +7151,36 @@ mod offline_cache_policy_tests {
             .clone()
             .oneshot(
                 Request::builder()
+                    .uri("/v1/offline/device-attestation-policy")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&axum::http::HeaderValue::from_static("no-store"))
+        );
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/offline/kagemusha/issuance-status")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&axum::http::HeaderValue::from_static("no-store"))
+        );
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
                     .uri("/v1/offline/readiness?asset_definition_id=legacy")
                     .body(Body::empty())
                     .expect("request"),
@@ -7113,6 +7195,11 @@ mod offline_cache_policy_tests {
             ))
         );
         for (path, status) in [
+            (
+                "/v1/offline/device-attestation-policy/proof",
+                StatusCode::OK,
+            ),
+            ("/v1/offline/device-eligibility", StatusCode::CONFLICT),
             ("/v1/offline/top-up", StatusCode::ACCEPTED),
             ("/v1/offline/redeem", StatusCode::SERVICE_UNAVAILABLE),
         ] {
@@ -12043,6 +12130,797 @@ const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize 
     }
 }
 #[cfg(feature = "app_api")]
+fn offline_kagemusha_issuance_unavailable(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "offline_kagemusha_public_issuance_unavailable",
+        message: message.into(),
+    }
+}
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_kagemusha_issuance_status(
+    State(app): State<SharedAppState>,
+    Extension(_verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<NoritoBody<iroha_torii_shared::offline_api::KagemushaPublicIssuanceStatusV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/kagemusha/issuance-status",
+    )
+    .await?;
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let state = app.state.clone();
+    routing::run_admitted_blocking(
+        admission,
+        "offline Kagemusha public-issuance status worker failed",
+        move || {
+            let state_view = state.view();
+            let evaluated_height = u64::try_from(state_view.height()).map_err(|_| {
+                offline_kagemusha_issuance_unavailable(
+                    "The committed height does not fit the public issuance contract.",
+                )
+            })?;
+            if evaluated_height == 0 {
+                return Err(offline_kagemusha_issuance_unavailable(
+                    "No committed block is available for public-issuance evaluation.",
+                ));
+            }
+            let evaluated_block = state_view.latest_block().ok_or_else(|| {
+                offline_kagemusha_issuance_unavailable(
+                    "No committed block is available for public-issuance evaluation.",
+                )
+            })?;
+            if evaluated_block.header().height().get() != evaluated_height {
+                return Err(offline_kagemusha_issuance_unavailable(
+                    "The committed state tip and latest block height differ.",
+                ));
+            }
+            let evaluated_at_ms =
+                u64::try_from(evaluated_block.header().creation_time().as_millis()).map_err(
+                    |_| {
+                        offline_kagemusha_issuance_unavailable(
+                            "The committed block timestamp does not fit the public issuance contract.",
+                        )
+                    },
+                )?;
+            let finality = iroha_core::bridge::build_finality_proof(&state_view, evaluated_height)
+                .map_err(|error| {
+                    offline_kagemusha_issuance_unavailable(format!(
+                        "The exact durable finality proof is unavailable: {error}"
+                    ))
+                })?;
+            let finality_hash = finality.finality_artifact.block_hash;
+            if finality.version
+                != iroha_data_model::bridge::BRIDGE_FINALITY_PROOF_VERSION_V2
+                || finality.block_header.height().get() != evaluated_height
+                || finality.finality_artifact.height != evaluated_height
+                || finality.finality_artifact.height_context.network_id != *state_view.network_id()
+                || finality.block_header.hash() != finality_hash
+                || evaluated_block.hash() != finality_hash
+            {
+                return Err(offline_kagemusha_issuance_unavailable(
+                    "The durable finality proof does not bind the exact committed state tip.",
+                ));
+            }
+            let issuance = iroha_core::smartcontracts::isi::offline::resolve_kagemusha_public_issuance_v1(
+                state_view.world(),
+                &state_view.kagemusha_release_catalog,
+                state_view.network_id(),
+                evaluated_height,
+                evaluated_at_ms,
+            )
+            .map_err(offline_kagemusha_issuance_unavailable)?
+            .ok_or_else(|| {
+                offline_kagemusha_issuance_unavailable(
+                    "No finalized Kagemusha V4 release is enabled for public issuance.",
+                )
+            })?;
+            Ok(NoritoBody(
+                iroha_torii_shared::offline_api::KagemushaPublicIssuanceStatusV1 {
+                    schema_version: iroha_torii_shared::offline_api::KAGEMUSHA_PUBLIC_ISSUANCE_STATUS_SCHEMA_VERSION_V1,
+                    status: iroha_torii_shared::offline_api::KAGEMUSHA_PUBLIC_ISSUANCE_STATUS_PUBLIC_ENABLED_V1.to_owned(),
+                    evaluated_height,
+                    finalized_height: finality.finality_artifact.height,
+                    activation_committed_height: issuance.activation_committed_height,
+                    asset_definition_id: issuance.asset_definition_id.to_string(),
+                    asset_scale: issuance.asset_scale,
+                    recursive_proof_abi_version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_ABI_V4,
+                    manifest_version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+                    cash_handoff_capability: iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
+                    eligibility_cash_handoff_capability: iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1.to_owned(),
+                    required_bridge_abi_version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+                    max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
+                    release_manifest_sha256: hex::encode(issuance.release_manifest_sha256),
+                    activation_transaction_hash: hex::encode(issuance.activation_transaction_hash),
+                    governance_policy_sha256: hex::encode(issuance.governance_policy_sha256),
+                    lifecycle_state_sha256: hex::encode(issuance.lifecycle_state_sha256),
+                    runtime_effective_config_sha256: hex::encode(issuance.runtime_effective_config_sha256),
+                    finality_block_hash: hex::encode(finality_hash.as_ref()),
+                },
+            ))
+        },
+    )
+    .await
+}
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OfflineDevicePolicySnapshotBindingV1 {
+    network_id: NetworkId,
+    block_height: u64,
+    block_hash: Hash,
+    block_timestamp_ms: u64,
+}
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OfflineDevicePolicyProofBindingV1 {
+    network_id: NetworkId,
+    header_height: u64,
+    artifact_height: u64,
+    header_hash: Hash,
+    artifact_hash: Hash,
+    block_timestamp_ms: u64,
+}
+#[cfg(feature = "app_api")]
+fn validate_offline_device_policy_finality_binding_v1(
+    snapshot: &OfflineDevicePolicySnapshotBindingV1,
+    proof: &OfflineDevicePolicyProofBindingV1,
+) -> Result<(), &'static str> {
+    if proof.network_id != snapshot.network_id {
+        return Err("the finality proof targets a different NetworkId");
+    }
+    if proof.header_height != snapshot.block_height
+        || proof.artifact_height != snapshot.block_height
+    {
+        return Err("the finality proof targets a different block height");
+    }
+    if proof.header_hash != snapshot.block_hash || proof.artifact_hash != snapshot.block_hash {
+        return Err("the finality proof targets a different block hash");
+    }
+    if proof.block_timestamp_ms != snapshot.block_timestamp_ms {
+        return Err("the finality proof targets a different block timestamp");
+    }
+    Ok(())
+}
+#[cfg(feature = "app_api")]
+fn offline_device_policy_unavailable(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "offline_device_policy_unavailable",
+        message: message.into(),
+    }
+}
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_device_attestation_policy(
+    State(app): State<SharedAppState>,
+    Extension(_verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<NoritoBody<iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/device-attestation-policy",
+    )
+    .await?;
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let state = app.state.clone();
+    routing::run_admitted_blocking(
+        admission,
+        "offline device-attestation policy worker failed",
+        move || {
+            let evaluated_at_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| {
+                    offline_device_policy_unavailable(format!(
+                        "The system clock cannot evaluate policy freshness: {error}"
+                    ))
+                })?
+                .as_millis()
+                .try_into()
+                .map_err(|_| {
+                    offline_device_policy_unavailable(
+                        "The system clock does not fit the public policy-view contract.",
+                    )
+                })?;
+            let state_view = state.view();
+            let block_height = u64::try_from(state_view.height()).map_err(|_| {
+                offline_device_policy_unavailable(
+                    "The finalized block height does not fit the public policy-view contract.",
+                )
+            })?;
+            if block_height == 0 {
+                return Err(offline_device_policy_unavailable(
+                    "No committed block is available for device-policy evaluation.",
+                ));
+            }
+            let finalized_block = state_view.latest_block().ok_or_else(|| {
+                offline_device_policy_unavailable(
+                    "No committed block is available for device-policy evaluation.",
+                )
+            })?;
+            let finalized_header = finalized_block.header();
+            let block_timestamp_ms = u64::try_from(finalized_header.creation_time().as_millis())
+                .map_err(|_| {
+                    offline_device_policy_unavailable(
+                        "The finalized block timestamp does not fit the public policy-view contract.",
+                    )
+                })?;
+            if block_timestamp_ms == 0 || evaluated_at_ms < block_timestamp_ms {
+                return Err(offline_device_policy_unavailable(
+                    "The finalized block timestamp is invalid or ahead of the local wall clock.",
+                ));
+            }
+            let snapshot = OfflineDevicePolicySnapshotBindingV1 {
+                network_id: *state_view.network_id(),
+                block_height,
+                block_hash: Hash::from(finalized_block.hash()),
+                block_timestamp_ms,
+            };
+            let proof = iroha_core::bridge::build_finality_proof(&state_view, block_height)
+                .map_err(|error| {
+                    offline_device_policy_unavailable(format!(
+                        "The finalized policy proof is unavailable: {error}"
+                    ))
+                })?;
+            let proof_timestamp_ms = u64::try_from(proof.block_header.creation_time().as_millis())
+                .map_err(|_| {
+                    offline_device_policy_unavailable(
+                        "The proof block timestamp does not fit the public policy-view contract.",
+                    )
+                })?;
+            let proof_binding = OfflineDevicePolicyProofBindingV1 {
+                network_id: proof.finality_artifact.height_context.network_id,
+                header_height: proof.block_header.height().get(),
+                artifact_height: proof.finality_artifact.height,
+                header_hash: Hash::from(proof.block_header.hash()),
+                artifact_hash: Hash::from(proof.finality_artifact.block_hash),
+                block_timestamp_ms: proof_timestamp_ms,
+            };
+            validate_offline_device_policy_finality_binding_v1(&snapshot, &proof_binding)
+                .map_err(offline_device_policy_unavailable)?;
+            let finality_evidence_bytes = norito::encode_canonical(&proof).map_err(|error| {
+                offline_device_policy_unavailable(format!(
+                    "The finalized policy proof cannot be canonically encoded: {error}"
+                ))
+            })?;
+            if finality_evidence_bytes.len()
+                > iroha_data_model::offline::OFFLINE_DEVICE_POLICY_FINALITY_EVIDENCE_MAX_BYTES_V1
+            {
+                return Err(offline_device_policy_unavailable(
+                    "The finalized policy proof exceeds the bounded mobile response contract.",
+                ));
+            }
+            let finality =
+                iroha_data_model::offline::OfflineDevicePolicyFinalityBindingV1 {
+                    version: iroha_data_model::offline::OFFLINE_DEVICE_POLICY_FINALITY_BINDING_VERSION_V1,
+                    network_id: snapshot.network_id,
+                    finalized_block_height: snapshot.block_height,
+                    finalized_block_hash: snapshot.block_hash,
+                    finalized_block_timestamp_ms: snapshot.block_timestamp_ms,
+                    finality_evidence_hash: Hash::new(&finality_evidence_bytes),
+                };
+            let view = iroha_core::smartcontracts::isi::offline::isi::finalized_offline_device_attestation_policy_view_v1(
+                state_view.world(),
+                finality_evidence_bytes,
+                finality,
+                evaluated_at_ms,
+            )
+            .map_err(offline_device_policy_unavailable)?;
+            let encoded_view_bytes = norito::core::encoded_frame_len(&view).map_err(|error| {
+                offline_device_policy_unavailable(format!(
+                    "The finalized policy view cannot be canonically measured: {error}"
+                ))
+            })?;
+            if encoded_view_bytes
+                > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+            {
+                return Err(offline_device_policy_unavailable(
+                    "The finalized policy view exceeds the bounded mobile response contract.",
+                ));
+            }
+            Ok(NoritoBody(view))
+        },
+    )
+    .await
+}
+#[cfg(feature = "app_api")]
+fn offline_device_policy_proof_page_tip(
+    trusted_checkpoint_height: u64,
+    observed_ledger_tip_height: u64,
+) -> Option<u64> {
+    if trusted_checkpoint_height == 0 || trusted_checkpoint_height > observed_ledger_tip_height {
+        return None;
+    }
+    let maximum_gap = u64::try_from(
+        iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_MAX_FINALITY_PROOFS
+            .saturating_sub(1),
+    )
+    .expect("Offline device-policy finality proof bound fits u64");
+    Some(
+        trusted_checkpoint_height
+            .saturating_add(maximum_gap)
+            .min(observed_ledger_tip_height),
+    )
+}
+#[cfg(feature = "app_api")]
+fn offline_device_policy_proof_invalid(message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code: "offline_device_policy_proof_request_invalid",
+        message: message.into(),
+    }
+}
+#[cfg(feature = "app_api")]
+fn offline_device_policy_proof_inconsistent(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "offline_device_policy_proof_unavailable",
+        message: message.into(),
+    }
+}
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_device_attestation_policy_proof(
+    State(app): State<SharedAppState>,
+    Extension(_verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
+        iroha_torii_shared::offline_api::OfflineDevicePolicyProofRequestV1,
+    >,
+) -> Result<NoritoBody<iroha_torii_shared::offline_api::OfflineDevicePolicyProofV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/device-attestation-policy/proof",
+    )
+    .await?;
+    if request.version != iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_VERSION_V1
+        || request.trusted_checkpoint_height == 0
+    {
+        return Err(offline_device_policy_proof_invalid(
+            "The device-policy proof version or trusted checkpoint height is invalid.",
+        ));
+    }
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let state = app.state.clone();
+    routing::run_admitted_blocking(
+        admission,
+        "offline device-policy proof worker failed",
+        move || {
+            let evaluated_at_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| {
+                    offline_device_policy_proof_inconsistent(format!(
+                        "The system clock cannot evaluate policy freshness: {error}"
+                    ))
+                })?
+                .as_millis()
+                .try_into()
+                .map_err(|_| {
+                    offline_device_policy_proof_inconsistent(
+                        "The system clock does not fit the public policy-proof contract.",
+                    )
+                })?;
+            let state_view = state.view();
+            let observed_ledger_tip_height = u64::try_from(state_view.height()).map_err(|_| {
+                offline_device_policy_proof_inconsistent(
+                    "The ledger height does not fit the public policy-proof contract.",
+                )
+            })?;
+            let evaluated_block_height = offline_device_policy_proof_page_tip(
+                request.trusted_checkpoint_height,
+                observed_ledger_tip_height,
+            )
+            .ok_or_else(|| {
+                offline_device_policy_proof_invalid(
+                    "The trusted checkpoint is newer than the observed ledger tip.",
+                )
+            })?;
+            let proof_count = evaluated_block_height
+                .checked_sub(request.trusted_checkpoint_height)
+                .and_then(|gap| gap.checked_add(1))
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(|| {
+                    offline_device_policy_proof_invalid(
+                        "The trusted checkpoint cannot begin a finality page.",
+                    )
+                })?;
+            let mut finality_chain = Vec::with_capacity(proof_count);
+            for height in request.trusted_checkpoint_height..=evaluated_block_height {
+                finality_chain.push(
+                    iroha_core::bridge::build_finality_proof(&state_view, height).map_err(
+                        |error| {
+                            offline_device_policy_proof_inconsistent(format!(
+                                "The finality proof at height {height} is unavailable: {error}"
+                            ))
+                        },
+                    )?,
+                );
+            }
+            let finality_encoded_bytes = norito::core::encoded_frame_len(&finality_chain)
+                .map_err(|error| {
+                    offline_device_policy_proof_inconsistent(format!(
+                        "The finality proof chain cannot be encoded: {error}"
+                    ))
+                })?;
+            if finality_encoded_bytes
+                > iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES
+            {
+                return Err(Error::AppConflict {
+                    code: "offline_device_policy_finality_page_too_large",
+                    message: "The bounded device-policy finality page exceeds the response byte budget."
+                        .to_owned(),
+                });
+            }
+            let evaluated = finality_chain.last().ok_or_else(|| {
+                offline_device_policy_proof_inconsistent(
+                    "The device-policy finality proof chain is empty.",
+                )
+            })?;
+            let evaluated_context_id = evaluated.finality_artifact.context_id();
+            let evaluated_block_hash = evaluated.finality_artifact.block_hash;
+            let more_available = evaluated_block_height < observed_ledger_tip_height;
+            let policy_view = if more_available {
+                None
+            } else {
+                let block_timestamp_ms = u64::try_from(
+                    evaluated.block_header.creation_time().as_millis(),
+                )
+                .map_err(|_| {
+                    offline_device_policy_proof_inconsistent(
+                        "The finalized block timestamp does not fit the policy-proof contract.",
+                    )
+                })?;
+                if block_timestamp_ms == 0 || evaluated_at_ms < block_timestamp_ms {
+                    return Err(offline_device_policy_proof_inconsistent(
+                        "The finalized block timestamp is invalid or ahead of the local wall clock.",
+                    ));
+                }
+                let finality_evidence_bytes = norito::encode_canonical(evaluated).map_err(
+                    |error| {
+                        offline_device_policy_proof_inconsistent(format!(
+                            "The terminal policy proof cannot be canonically encoded: {error}"
+                        ))
+                    },
+                )?;
+                let finality =
+                    iroha_data_model::offline::OfflineDevicePolicyFinalityBindingV1 {
+                        version: iroha_data_model::offline::OFFLINE_DEVICE_POLICY_FINALITY_BINDING_VERSION_V1,
+                        network_id: *state_view.network_id(),
+                        finalized_block_height: evaluated_block_height,
+                        finalized_block_hash: Hash::from(evaluated_block_hash),
+                        finalized_block_timestamp_ms: block_timestamp_ms,
+                        finality_evidence_hash: Hash::new(&finality_evidence_bytes),
+                    };
+                Some(
+                    iroha_core::smartcontracts::isi::offline::isi::finalized_offline_device_attestation_policy_view_v1(
+                        state_view.world(),
+                        finality_evidence_bytes,
+                        finality,
+                        evaluated_at_ms,
+                    )
+                    .map_err(offline_device_policy_proof_inconsistent)?,
+                )
+            };
+            let response =
+                iroha_torii_shared::offline_api::OfflineDevicePolicyProofV1 {
+                    version: iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_VERSION_V1,
+                    policy_view,
+                    finality_chain,
+                    evaluated_context_id,
+                    evaluated_block_height,
+                    evaluated_block_hash: hex::encode(evaluated_block_hash.as_ref()),
+                    observed_ledger_tip_height,
+                    more_available,
+                };
+            let response_encoded_bytes = norito::core::encoded_frame_len(&response).map_err(
+                |error| {
+                    offline_device_policy_proof_inconsistent(format!(
+                        "The device-policy proof response cannot be encoded: {error}"
+                    ))
+                },
+            )?;
+            if response_encoded_bytes
+                > iroha_torii_shared::offline_api::OFFLINE_DEVICE_POLICY_PROOF_MAX_RESPONSE_BYTES
+            {
+                return Err(Error::AppConflict {
+                    code: "offline_device_policy_proof_too_large",
+                    message: "The device-policy proof exceeds the response byte budget."
+                        .to_owned(),
+                });
+            }
+            Ok(NoritoBody(response))
+        },
+    )
+    .await
+}
+#[cfg(feature = "app_api")]
+fn offline_device_eligibility_invalid(message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code: "offline_device_eligibility_request_invalid",
+        message: message.into(),
+    }
+}
+#[cfg(feature = "app_api")]
+fn offline_device_eligibility_unavailable(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "offline_device_eligibility_unavailable",
+        message: message.into(),
+    }
+}
+#[cfg(feature = "app_api")]
+fn map_offline_device_eligibility_resolution_error(message: String) -> Error {
+    if message.contains(" is absent")
+        || message.contains("does not match the authenticated exact selector")
+        || message.contains("account does not exist")
+    {
+        Error::AppNotFound {
+            code: "offline_device_registration_not_found",
+            message: "The authenticated protected device registration was not found.".to_owned(),
+        }
+    } else if message.contains(" is expired") {
+        Error::AppConflict {
+            code: "offline_device_registration_expired",
+            message: "The authenticated protected device registration has expired.".to_owned(),
+        }
+    } else {
+        offline_device_eligibility_unavailable(message)
+    }
+}
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_device_eligibility(
+    State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
+        iroha_torii_shared::offline_api::OfflineDeviceEligibilityRequestV1,
+    >,
+) -> Result<NoritoBody<iroha_torii_shared::offline_api::OfflineDeviceEligibilityResponseV1>, Error>
+{
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/device-eligibility",
+    )
+    .await?;
+    if request.version != iroha_torii_shared::offline_api::OFFLINE_DEVICE_ELIGIBILITY_VERSION_V1
+        || request.registration_hash == [0; 32]
+        || request.device_id.is_empty()
+        || request.device_id.len()
+            > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1
+        || request.device_id.trim() != request.device_id
+        || request.device_id.chars().any(char::is_control)
+        || request.attestation_key_id.is_empty()
+        || request.attestation_key_id.len()
+            > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1
+        || request.attestation_key_id.trim() != request.attestation_key_id
+        || request.attestation_key_id.chars().any(char::is_control)
+        || request.requested_ttl_ms == 0
+        || request.requested_ttl_ms
+            > iroha_data_model::offline::OFFLINE_DEVICE_ELIGIBILITY_CREDENTIAL_MAX_TTL_MS_V1
+    {
+        return Err(offline_device_eligibility_invalid(
+            "The device-eligibility version, protected registration selector, or TTL is invalid.",
+        ));
+    }
+    let issuer = app.offline_commands.clone().ok_or_else(|| {
+        offline_device_eligibility_unavailable(
+            "The configured offline eligibility credential issuer is unavailable.",
+        )
+    })?;
+    let authenticated_account = verified.account.clone();
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    let state = app.state.clone();
+    routing::run_admitted_blocking(
+        admission,
+        "offline device-eligibility worker failed",
+        move || {
+            let issued_at_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| {
+                    offline_device_eligibility_unavailable(format!(
+                        "The system clock cannot evaluate device eligibility: {error}"
+                    ))
+                })?
+                .as_millis()
+                .try_into()
+                .map_err(|_| {
+                    offline_device_eligibility_unavailable(
+                        "The system clock does not fit the device-eligibility contract.",
+                    )
+                })?;
+            let state_view = state.view();
+            let evaluated_height = u64::try_from(state_view.height()).map_err(|_| {
+                offline_device_eligibility_unavailable(
+                    "The finalized block height does not fit the device-eligibility contract.",
+                )
+            })?;
+            if evaluated_height == 0 {
+                return Err(offline_device_eligibility_unavailable(
+                    "No committed block is available for device-eligibility evaluation.",
+                ));
+            }
+            let finalized_block = state_view.latest_block().ok_or_else(|| {
+                offline_device_eligibility_unavailable(
+                    "No committed block is available for device-eligibility evaluation.",
+                )
+            })?;
+            let finalized_header = finalized_block.header();
+            let finalized_block_timestamp_ms =
+                u64::try_from(finalized_header.creation_time().as_millis()).map_err(|_| {
+                    offline_device_eligibility_unavailable(
+                        "The finalized block timestamp does not fit the device-eligibility contract.",
+                    )
+                })?;
+            if finalized_block_timestamp_ms == 0 || issued_at_ms < finalized_block_timestamp_ms {
+                return Err(offline_device_eligibility_unavailable(
+                    "The finalized block timestamp is invalid or ahead of the local wall clock.",
+                ));
+            }
+            let snapshot = OfflineDevicePolicySnapshotBindingV1 {
+                network_id: *state_view.network_id(),
+                block_height: evaluated_height,
+                block_hash: Hash::from(finalized_block.hash()),
+                block_timestamp_ms: finalized_block_timestamp_ms,
+            };
+            let proof = iroha_core::bridge::build_finality_proof(&state_view, evaluated_height)
+                .map_err(|error| {
+                    offline_device_eligibility_unavailable(format!(
+                        "The finalized eligibility proof is unavailable: {error}"
+                    ))
+                })?;
+            let proof_timestamp_ms = u64::try_from(proof.block_header.creation_time().as_millis())
+                .map_err(|_| {
+                    offline_device_eligibility_unavailable(
+                        "The proof timestamp does not fit the device-eligibility contract.",
+                    )
+                })?;
+            let proof_binding = OfflineDevicePolicyProofBindingV1 {
+                network_id: proof.finality_artifact.height_context.network_id,
+                header_height: proof.block_header.height().get(),
+                artifact_height: proof.finality_artifact.height,
+                header_hash: Hash::from(proof.block_header.hash()),
+                artifact_hash: Hash::from(proof.finality_artifact.block_hash),
+                block_timestamp_ms: proof_timestamp_ms,
+            };
+            validate_offline_device_policy_finality_binding_v1(&snapshot, &proof_binding)
+                .map_err(offline_device_eligibility_unavailable)?;
+            let finality_evidence_bytes = norito::encode_canonical(&proof).map_err(|error| {
+                offline_device_eligibility_unavailable(format!(
+                    "The eligibility finality proof cannot be canonically encoded: {error}"
+                ))
+            })?;
+            if finality_evidence_bytes.len()
+                > iroha_data_model::offline::OFFLINE_DEVICE_POLICY_FINALITY_EVIDENCE_MAX_BYTES_V1
+            {
+                return Err(offline_device_eligibility_unavailable(
+                    "The eligibility finality proof exceeds the bounded response contract.",
+                ));
+            }
+            let policy_finality =
+                iroha_data_model::offline::OfflineDevicePolicyFinalityBindingV1 {
+                    version: iroha_data_model::offline::OFFLINE_DEVICE_POLICY_FINALITY_BINDING_VERSION_V1,
+                    network_id: snapshot.network_id,
+                    finalized_block_height: snapshot.block_height,
+                    finalized_block_hash: snapshot.block_hash,
+                    finalized_block_timestamp_ms: snapshot.block_timestamp_ms,
+                    finality_evidence_hash: Hash::new(&finality_evidence_bytes),
+                };
+            let policy_view = iroha_core::smartcontracts::isi::offline::isi::finalized_offline_device_attestation_policy_view_v1(
+                state_view.world(),
+                finality_evidence_bytes,
+                policy_finality,
+                issued_at_ms,
+            )
+            .map_err(offline_device_eligibility_unavailable)?;
+            let resolution = iroha_core::smartcontracts::isi::offline::isi::resolve_kagemusha_offline_device_eligibility_v1(
+                state_view.world(),
+                iroha_core::smartcontracts::isi::offline::isi::KagemushaOfflineDeviceEligibilityRequestV1 {
+                    authenticated_account: &authenticated_account,
+                    original_registration_hash: request.registration_hash,
+                    expected_device_id: &request.device_id,
+                    expected_attestation_key_id: &request.attestation_key_id,
+                    evaluated_height,
+                    evaluated_at_ms: issued_at_ms,
+                },
+            )
+            .map_err(map_offline_device_eligibility_resolution_error)?;
+            if resolution.current_policy_epoch != policy_view.policy_epoch
+                || resolution.current_policy_hash != policy_view.policy_hash
+                || resolution.policy_freshness_deadline_ms != policy_view.freshness_deadline_ms
+                || policy_view.finality != policy_finality
+            {
+                return Err(offline_device_eligibility_unavailable(
+                    "The protected eligibility decision differs from the finalized policy view.",
+                ));
+            }
+            let issuer_public_key = issuer.eligibility_issuer_public_key().clone();
+            let credential = if resolution.decision.outcome
+                == iroha_data_model::offline::OfflineDeviceEligibilityOutcomeV1::Eligible
+            {
+                let requested_expiry = issued_at_ms
+                    .checked_add(request.requested_ttl_ms)
+                    .ok_or_else(|| {
+                        offline_device_eligibility_invalid(
+                            "The requested eligibility lifetime overflows the wall-clock contract.",
+                        )
+                    })?;
+                let expires_at_ms = requested_expiry
+                    .min(resolution.policy_freshness_deadline_ms)
+                    .min(resolution.registration_expires_at_ms);
+                if expires_at_ms <= issued_at_ms {
+                    return Err(offline_device_eligibility_unavailable(
+                        "The finalized policy or protected registration has no remaining credential lifetime.",
+                    ));
+                }
+                let payload =
+                    iroha_data_model::offline::OfflineDeviceEligibilityCredentialPayloadV1 {
+                        version: iroha_data_model::offline::OFFLINE_DEVICE_ELIGIBILITY_CREDENTIAL_VERSION_V1,
+                        network_id: policy_finality.network_id,
+                        account_id: resolution.account_id.clone(),
+                        device_id: resolution.device_id.clone(),
+                        attestation_key_id: resolution.attestation_key_id.clone(),
+                        device_public_key: resolution.device_public_key,
+                        assertion_public_key: resolution.assertion_public_key.clone(),
+                        registration_hash: resolution.registration_hash,
+                        eligibility: resolution.decision.outcome,
+                        policy_epoch: resolution.current_policy_epoch,
+                        policy_hash: resolution.current_policy_hash,
+                        policy_finality,
+                        policy_freshness_deadline_ms: resolution.policy_freshness_deadline_ms,
+                        issued_at_ms,
+                        expires_at_ms,
+                    };
+                Some(issuer.sign_eligibility_credential_v1(payload).map_err(|error| {
+                    offline_device_eligibility_unavailable(format!(
+                        "The configured eligibility issuer rejected finalized claims: {error}"
+                    ))
+                })?)
+            } else {
+                None
+            };
+            let response =
+                iroha_torii_shared::offline_api::OfflineDeviceEligibilityResponseV1 {
+                    version: iroha_torii_shared::offline_api::OFFLINE_DEVICE_ELIGIBILITY_VERSION_V1,
+                    decision: resolution.decision,
+                    issuer_public_key,
+                    credential,
+                    policy_view,
+                    registration_hash: resolution.registration_hash,
+                    admission_policy_hash: resolution.admission_policy_hash,
+                    admission_height: resolution.admission_height,
+                    admission_transaction_hash: hex::encode(
+                        resolution.admission_transaction_hash.as_ref(),
+                    ),
+                };
+            let response_encoded_bytes = norito::core::encoded_frame_len(&response).map_err(
+                |error| {
+                    offline_device_eligibility_unavailable(format!(
+                        "The device-eligibility response cannot be encoded: {error}"
+                    ))
+                },
+            )?;
+            if response_encoded_bytes
+                > iroha_torii_shared::offline_api::OFFLINE_DEVICE_ELIGIBILITY_MAX_RESPONSE_BYTES
+            {
+                return Err(Error::AppConflict {
+                    code: "offline_device_eligibility_response_too_large",
+                    message: "The device-eligibility response exceeds its byte budget.".to_owned(),
+                });
+            }
+            Ok(NoritoBody(response))
+        },
+    )
+    .await
+}
+#[cfg(feature = "app_api")]
 fn encode_offline_capability_representation(
     payload: &iroha_torii_shared::offline_api::OfflineStatus,
     format: crate::utils::ResponseFormat,
@@ -12333,15 +13211,21 @@ async fn handler_offline_recipient_lineage(
 #[cfg(all(test, feature = "app_api"))]
 mod universal_offline_capability_tests {
     use super::{
+        OfflineDevicePolicyProofBindingV1, OfflineDevicePolicySnapshotBindingV1,
         encode_offline_capability_representation, handler_livez, handler_readyz,
-        offline_redeem_body_limit, offline_top_up_body_limit, strong_etag_for_representation,
-        universal_offline_capability_status,
+        offline_device_policy_proof_page_tip, offline_redeem_body_limit, offline_top_up_body_limit,
+        strong_etag_for_representation, universal_offline_capability_status,
+        validate_offline_device_policy_finality_binding_v1,
     };
     #[test]
     fn universal_capability_is_ready_and_asset_neutral() {
         let capability = universal_offline_capability_status();
         assert!(!capability.mandatory);
         assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
+        assert_eq!(
+            capability.eligibility_cash_handoff_capability,
+            "cash_handoff_eligibility_v1"
+        );
         assert_eq!(capability.required_bridge_abi_version, 22);
         assert_eq!(capability.max_hops, 8);
         assert!(capability.ready);
@@ -12370,14 +13254,17 @@ mod universal_offline_capability_tests {
         );
     }
     #[tokio::test]
-    async fn node_probes_do_not_depend_on_offline_application_state() {
+    async fn node_readiness_fails_closed_without_consensus_while_liveness_stays_process_only() {
         let app = super::mk_app_state_for_tests();
         let readiness = handler_readyz(axum::extract::State(app)).await;
-        assert_eq!(readiness.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            readiness.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
         let body = axum::body::to_bytes(readiness.into_body(), usize::MAX)
             .await
             .expect("readiness body");
-        assert_eq!(&body[..], b"Ready");
+        assert_eq!(&body[..], b"consensus_handle_unavailable");
         let liveness = axum::response::IntoResponse::into_response(handler_livez().await);
         assert_eq!(liveness.status(), axum::http::StatusCode::OK);
         let body = axum::body::to_bytes(liveness.into_body(), usize::MAX)
@@ -12395,6 +13282,85 @@ mod universal_offline_capability_tests {
         assert_eq!(offline_redeem_body_limit(usize::MAX), redeem_protocol_max);
         assert_eq!(offline_top_up_body_limit(1024), 1024);
         assert_eq!(offline_redeem_body_limit(1024), 1024);
+    }
+    #[test]
+    fn device_policy_finality_pages_advance_at_most_sixty_three_blocks() {
+        assert_eq!(offline_device_policy_proof_page_tip(0, 10), None);
+        assert_eq!(offline_device_policy_proof_page_tip(11, 10), None);
+        assert_eq!(offline_device_policy_proof_page_tip(10, 10), Some(10));
+        assert_eq!(offline_device_policy_proof_page_tip(10, 73), Some(73));
+        assert_eq!(offline_device_policy_proof_page_tip(10, 74), Some(73));
+        assert_eq!(
+            offline_device_policy_proof_page_tip(u64::MAX, u64::MAX),
+            Some(u64::MAX)
+        );
+    }
+    #[test]
+    fn finalized_device_policy_rejects_every_snapshot_proof_identity_mismatch() {
+        use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::{NetworkId, block::BlockHeader};
+
+        fn network(seed: u8) -> NetworkId {
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([seed; Hash::LENGTH]),
+            ))
+        }
+
+        let snapshot = OfflineDevicePolicySnapshotBindingV1 {
+            network_id: network(0x41),
+            block_height: 73,
+            block_hash: Hash::new(b"finalized device-policy block"),
+            block_timestamp_ms: 1_800_000_000_000,
+        };
+        let proof = OfflineDevicePolicyProofBindingV1 {
+            network_id: snapshot.network_id,
+            header_height: snapshot.block_height,
+            artifact_height: snapshot.block_height,
+            header_hash: snapshot.block_hash,
+            artifact_hash: snapshot.block_hash,
+            block_timestamp_ms: snapshot.block_timestamp_ms,
+        };
+        assert_eq!(
+            validate_offline_device_policy_finality_binding_v1(&snapshot, &proof),
+            Ok(())
+        );
+
+        let mut mismatch = proof.clone();
+        mismatch.network_id = network(0x42);
+        assert_eq!(
+            validate_offline_device_policy_finality_binding_v1(&snapshot, &mismatch),
+            Err("the finality proof targets a different NetworkId")
+        );
+        mismatch = proof.clone();
+        mismatch.header_height += 1;
+        assert_eq!(
+            validate_offline_device_policy_finality_binding_v1(&snapshot, &mismatch),
+            Err("the finality proof targets a different block height")
+        );
+        mismatch = proof.clone();
+        mismatch.artifact_height += 1;
+        assert_eq!(
+            validate_offline_device_policy_finality_binding_v1(&snapshot, &mismatch),
+            Err("the finality proof targets a different block height")
+        );
+        mismatch = proof.clone();
+        mismatch.header_hash = Hash::new(b"different proof header");
+        assert_eq!(
+            validate_offline_device_policy_finality_binding_v1(&snapshot, &mismatch),
+            Err("the finality proof targets a different block hash")
+        );
+        mismatch = proof.clone();
+        mismatch.artifact_hash = Hash::new(b"different proof artifact");
+        assert_eq!(
+            validate_offline_device_policy_finality_binding_v1(&snapshot, &mismatch),
+            Err("the finality proof targets a different block hash")
+        );
+        mismatch = proof;
+        mismatch.block_timestamp_ms += 1;
+        assert_eq!(
+            validate_offline_device_policy_finality_binding_v1(&snapshot, &mismatch),
+            Err("the finality proof targets a different block timestamp")
+        );
     }
 }
 #[cfg(feature = "app_api")]
@@ -15120,6 +16086,8 @@ fn universal_offline_capability_status() -> iroha_torii_shared::offline_api::Off
         mandatory: false,
         cash_handoff_capability: iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
             .to_owned(),
+        eligibility_cash_handoff_capability:
+            iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1.to_owned(),
         required_bridge_abi_version:
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
         max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
@@ -15137,16 +16105,362 @@ async fn handler_health(
     check_access(&app, &headers, Some(remote.ip()), "v1/health").await?;
     Ok(routing::handle_health().await.into_response())
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OrdinaryNodeReadinessSnapshot {
+    consensus_handle_present: bool,
+    consensus_ingress_ready: bool,
+    restart_required: bool,
+    consensus_status_present: bool,
+    consensus_status_valid: bool,
+    local_committed_height: Option<u64>,
+    reducer_committed_height: Option<u64>,
+    queue_startup_reconciliation_pending: bool,
+    queue_durability_faulted: bool,
+    queue_saturated: bool,
+    local_peer_identity_present: bool,
+    local_peer_is_validator: bool,
+    validator_topology_coherent: bool,
+    validator_count: usize,
+    required_quorum: usize,
+    reachable_validator_count: usize,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OrdinaryNodeReadinessBlocker {
+    ConsensusHandleUnavailable,
+    ConsensusStarting,
+    RestartRequired,
+    ConsensusStatusUnavailable,
+    ConsensusStatusInvalid,
+    CommittedStateUnavailable,
+    ConsensusFrontierMismatch,
+    QueueStarting,
+    QueueDurabilityFault,
+    QueueSaturated,
+    ValidatorTopologyInvalid,
+    ValidatorQuorumUnreachable,
+}
+impl OrdinaryNodeReadinessBlocker {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ConsensusHandleUnavailable => "consensus_handle_unavailable",
+            Self::ConsensusStarting => "consensus_starting",
+            Self::RestartRequired => "restart_required",
+            Self::ConsensusStatusUnavailable => "consensus_status_unavailable",
+            Self::ConsensusStatusInvalid => "consensus_status_invalid",
+            Self::CommittedStateUnavailable => "committed_state_unavailable",
+            Self::ConsensusFrontierMismatch => "consensus_frontier_mismatch",
+            Self::QueueStarting => "queue_starting",
+            Self::QueueDurabilityFault => "queue_durability_fault",
+            Self::QueueSaturated => "queue_saturated",
+            Self::ValidatorTopologyInvalid => "validator_topology_invalid",
+            Self::ValidatorQuorumUnreachable => "validator_quorum_unreachable",
+        }
+    }
+}
+fn classify_ordinary_node_readiness(
+    snapshot: OrdinaryNodeReadinessSnapshot,
+) -> Option<OrdinaryNodeReadinessBlocker> {
+    use OrdinaryNodeReadinessBlocker as Blocker;
+    if !snapshot.consensus_handle_present {
+        return Some(Blocker::ConsensusHandleUnavailable);
+    }
+    if !snapshot.consensus_ingress_ready {
+        return Some(Blocker::ConsensusStarting);
+    }
+    if snapshot.restart_required {
+        return Some(Blocker::RestartRequired);
+    }
+    if !snapshot.consensus_status_present {
+        return Some(Blocker::ConsensusStatusUnavailable);
+    }
+    if !snapshot.consensus_status_valid {
+        return Some(Blocker::ConsensusStatusInvalid);
+    }
+    let (Some(local_height), Some(reducer_height)) = (
+        snapshot.local_committed_height,
+        snapshot.reducer_committed_height,
+    ) else {
+        return Some(Blocker::CommittedStateUnavailable);
+    };
+    if local_height == 0 || reducer_height == 0 {
+        return Some(Blocker::CommittedStateUnavailable);
+    }
+    if local_height != reducer_height {
+        return Some(Blocker::ConsensusFrontierMismatch);
+    }
+    if snapshot.queue_startup_reconciliation_pending {
+        return Some(Blocker::QueueStarting);
+    }
+    if snapshot.queue_durability_faulted {
+        return Some(Blocker::QueueDurabilityFault);
+    }
+    if snapshot.queue_saturated {
+        return Some(Blocker::QueueSaturated);
+    }
+    if !snapshot.local_peer_identity_present
+        || !snapshot.local_peer_is_validator
+        || !snapshot.validator_topology_coherent
+        || snapshot.validator_count == 0
+        || snapshot.required_quorum == 0
+        || snapshot.required_quorum > snapshot.validator_count
+        || snapshot.reachable_validator_count > snapshot.validator_count
+    {
+        return Some(Blocker::ValidatorTopologyInvalid);
+    }
+    if snapshot.reachable_validator_count < snapshot.required_quorum {
+        return Some(Blocker::ValidatorQuorumUnreachable);
+    }
+    None
+}
+fn ordinary_node_readiness_snapshot(app: &AppState) -> OrdinaryNodeReadinessSnapshot {
+    let sumeragi = app.sumeragi.as_ref();
+    let consensus_handle_present = sumeragi.is_some();
+    let consensus_ingress_ready = sumeragi.is_some_and(|handle| handle.ingress_ready());
+    let handle_restart_required = sumeragi.is_some_and(|handle| handle.restart_required());
+    let status =
+        iroha_core::sumeragi::status::v2_status_with_restart_required(handle_restart_required);
+    let consensus_status_present = status.is_some();
+    let consensus_status_valid = status
+        .as_ref()
+        .is_some_and(|status| status.validate().is_ok());
+    let restart_required = handle_restart_required
+        || status
+            .as_ref()
+            .is_some_and(|status| status.restart_required);
+    let local_committed_height = u64::try_from(app.state.committed_height()).ok();
+    let reducer_committed_height = status.as_ref().map(|status| status.last_committed_height);
+    let topology = app.state.commit_topology_snapshot();
+    let distinct_topology: BTreeSet<_> = topology.iter().cloned().collect();
+    let validator_count = status
+        .as_ref()
+        .and_then(|status| usize::try_from(status.height_context.validator_count).ok())
+        .unwrap_or(0);
+    let required_quorum = status
+        .as_ref()
+        .and_then(|status| usize::try_from(status.height_context.quorum.min_signers).ok())
+        .unwrap_or(0);
+    let canonical_quorum =
+        iroha_core::sumeragi::network_topology::commit_quorum_from_len(topology.len());
+    let validator_topology_coherent = !topology.is_empty()
+        && distinct_topology.len() == topology.len()
+        && validator_count == topology.len()
+        && required_quorum == canonical_quorum;
+    let local_peer_is_validator = app
+        .local_peer_id
+        .as_ref()
+        .is_some_and(|local_peer_id| distinct_topology.contains(local_peer_id));
+    let reachable_validator_count = app.online_peers.with_snapshot(|online_peers| {
+        distinct_topology
+            .iter()
+            .filter(|validator| {
+                app.local_peer_id.as_ref() == Some(*validator)
+                    || online_peers.iter().any(|peer| peer.id() == *validator)
+            })
+            .count()
+    });
+    OrdinaryNodeReadinessSnapshot {
+        consensus_handle_present,
+        consensus_ingress_ready,
+        restart_required,
+        consensus_status_present,
+        consensus_status_valid,
+        local_committed_height,
+        reducer_committed_height,
+        queue_startup_reconciliation_pending: app
+            .queue
+            .lane_reservation_startup_reconciliation_pending(),
+        queue_durability_faulted: app.queue.transaction_selection_durability_faulted(),
+        queue_saturated: app.queue.pressure_snapshot().is_saturated(),
+        local_peer_identity_present: app.local_peer_id.is_some(),
+        local_peer_is_validator,
+        validator_topology_coherent,
+        validator_count,
+        required_quorum,
+        reachable_validator_count,
+    }
+}
 /// GET `/readyz` — ordinary node admission readiness.
 ///
 /// Offline wallet UI capability is universal and never participates in this
-/// probe. Future ordinary chain-readiness checks belong here.
-async fn handler_readyz(State(_app): State<SharedAppState>) -> AxResponse {
-    (StatusCode::OK, "Ready").into_response()
+/// probe. The response body is a stable, non-secret blocker category.
+async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
+    match classify_ordinary_node_readiness(ordinary_node_readiness_snapshot(app.as_ref())) {
+        None => (StatusCode::OK, "Ready").into_response(),
+        Some(blocker) => (StatusCode::SERVICE_UNAVAILABLE, blocker.as_str()).into_response(),
+    }
 }
 /// GET `/livez` — process-only liveness; never claims protocol readiness.
 async fn handler_livez() -> impl IntoResponse {
     (StatusCode::OK, "Alive")
+}
+#[cfg(test)]
+mod ordinary_node_readiness_tests {
+    use super::{
+        OrdinaryNodeReadinessBlocker as Blocker, OrdinaryNodeReadinessSnapshot,
+        classify_ordinary_node_readiness,
+    };
+    fn ready_snapshot() -> OrdinaryNodeReadinessSnapshot {
+        OrdinaryNodeReadinessSnapshot {
+            consensus_handle_present: true,
+            consensus_ingress_ready: true,
+            restart_required: false,
+            consensus_status_present: true,
+            consensus_status_valid: true,
+            local_committed_height: Some(7),
+            reducer_committed_height: Some(7),
+            queue_startup_reconciliation_pending: false,
+            queue_durability_faulted: false,
+            queue_saturated: false,
+            local_peer_identity_present: true,
+            local_peer_is_validator: true,
+            validator_topology_coherent: true,
+            validator_count: 4,
+            required_quorum: 3,
+            reachable_validator_count: 3,
+        }
+    }
+    fn assert_blocked(
+        mut snapshot: OrdinaryNodeReadinessSnapshot,
+        mutate: impl FnOnce(&mut OrdinaryNodeReadinessSnapshot),
+        expected: Blocker,
+    ) {
+        mutate(&mut snapshot);
+        assert_eq!(classify_ordinary_node_readiness(snapshot), Some(expected));
+    }
+    #[test]
+    fn ordinary_node_readiness_classifier_requires_every_admission_signal() {
+        let ready = ready_snapshot();
+        assert_eq!(classify_ordinary_node_readiness(ready), None);
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.consensus_handle_present = false,
+            Blocker::ConsensusHandleUnavailable,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.consensus_ingress_ready = false,
+            Blocker::ConsensusStarting,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.restart_required = true,
+            Blocker::RestartRequired,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.consensus_status_present = false,
+            Blocker::ConsensusStatusUnavailable,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.consensus_status_valid = false,
+            Blocker::ConsensusStatusInvalid,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.local_committed_height = None,
+            Blocker::CommittedStateUnavailable,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.reducer_committed_height = Some(0),
+            Blocker::CommittedStateUnavailable,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.reducer_committed_height = Some(8),
+            Blocker::ConsensusFrontierMismatch,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.queue_startup_reconciliation_pending = true,
+            Blocker::QueueStarting,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.queue_durability_faulted = true,
+            Blocker::QueueDurabilityFault,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.queue_saturated = true,
+            Blocker::QueueSaturated,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.local_peer_identity_present = false,
+            Blocker::ValidatorTopologyInvalid,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.local_peer_is_validator = false,
+            Blocker::ValidatorTopologyInvalid,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.validator_topology_coherent = false,
+            Blocker::ValidatorTopologyInvalid,
+        );
+        assert_blocked(
+            ready,
+            |snapshot| snapshot.reachable_validator_count = 2,
+            Blocker::ValidatorQuorumUnreachable,
+        );
+    }
+    #[test]
+    fn ordinary_node_readiness_classifier_rejects_adversarial_quorum_geometry() {
+        let ready = ready_snapshot();
+        for mutate in [
+            |snapshot: &mut OrdinaryNodeReadinessSnapshot| snapshot.validator_count = 0,
+            |snapshot: &mut OrdinaryNodeReadinessSnapshot| snapshot.required_quorum = 0,
+            |snapshot: &mut OrdinaryNodeReadinessSnapshot| snapshot.required_quorum = 5,
+            |snapshot: &mut OrdinaryNodeReadinessSnapshot| {
+                snapshot.reachable_validator_count = 5;
+            },
+        ] {
+            assert_blocked(ready, mutate, Blocker::ValidatorTopologyInvalid);
+        }
+    }
+    #[test]
+    fn ordinary_node_readiness_classifier_counts_a_single_validator_self() {
+        let mut snapshot = ready_snapshot();
+        snapshot.validator_count = 1;
+        snapshot.required_quorum = 1;
+        snapshot.reachable_validator_count = 1;
+        assert_eq!(classify_ordinary_node_readiness(snapshot), None);
+    }
+    #[test]
+    fn ordinary_node_readiness_classifier_rejects_a_quorum_reachable_observer() {
+        let mut snapshot = ready_snapshot();
+        snapshot.local_peer_is_validator = false;
+        snapshot.reachable_validator_count = snapshot.required_quorum;
+        assert_eq!(
+            classify_ordinary_node_readiness(snapshot),
+            Some(Blocker::ValidatorTopologyInvalid)
+        );
+    }
+    #[test]
+    fn ordinary_node_readiness_classifier_has_stable_fail_closed_precedence() {
+        let mut snapshot = ready_snapshot();
+        snapshot.consensus_handle_present = false;
+        snapshot.consensus_ingress_ready = false;
+        snapshot.restart_required = true;
+        snapshot.consensus_status_present = false;
+        snapshot.consensus_status_valid = false;
+        snapshot.local_committed_height = None;
+        snapshot.queue_durability_faulted = true;
+        snapshot.queue_saturated = true;
+        snapshot.validator_topology_coherent = false;
+        snapshot.reachable_validator_count = 0;
+        assert_eq!(
+            classify_ordinary_node_readiness(snapshot),
+            Some(Blocker::ConsensusHandleUnavailable)
+        );
+        assert_eq!(
+            Blocker::ConsensusHandleUnavailable.as_str(),
+            "consensus_handle_unavailable"
+        );
+    }
 }
 async fn handler_version(State(app): State<SharedAppState>) -> impl IntoResponse {
     routing::handle_version(app.state.clone()).await
@@ -21298,8 +22612,37 @@ fn target_scope_singular_query(
         SingularQueryBox::FindNftById(query) => Some(SignedQueryScope::TargetDomain(
             query.nft_id().domain().clone(),
         )),
+        SingularQueryBox::FindPrivacyZkAceReplayNullifierV1(_)
+        | SingularQueryBox::FindPrivacyProofManagedPoolStateV1(_)
+        | SingularQueryBox::FindPrivacyOrchardPoolStateV1(_)
+        | SingularQueryBox::FindPrivacyOrchardNullifierV1(_)
+        | SingularQueryBox::FindPrivacyAnonymousPgcPoolStateV1(_)
+        | SingularQueryBox::FindPrivacyZkAmsAdmissionV1(_)
+        | SingularQueryBox::FindPrivacyZkAmsProvisionV1(_)
+        | SingularQueryBox::FindPrivacyZkX509CertificateNullifierV1(_)
+        | SingularQueryBox::FindPrivacyActionExecutionReceiptV1(_) => {
+            Some(SignedQueryScope::LocalReplicated)
+        }
         _ => None,
     }
+}
+fn is_registered_exact12_local_query(request: &impl SignedQueryScopeInput) -> bool {
+    use iroha_data_model::query::{QueryRequest, SingularQueryBox};
+
+    matches!(
+        request.request_with_authority().request(),
+        QueryRequest::Singular(
+            SingularQueryBox::FindPrivacyZkAceReplayNullifierV1(_)
+                | SingularQueryBox::FindPrivacyProofManagedPoolStateV1(_)
+                | SingularQueryBox::FindPrivacyOrchardPoolStateV1(_)
+                | SingularQueryBox::FindPrivacyOrchardNullifierV1(_)
+                | SingularQueryBox::FindPrivacyAnonymousPgcPoolStateV1(_)
+                | SingularQueryBox::FindPrivacyZkAmsAdmissionV1(_)
+                | SingularQueryBox::FindPrivacyZkAmsProvisionV1(_)
+                | SingularQueryBox::FindPrivacyZkX509CertificateNullifierV1(_)
+                | SingularQueryBox::FindPrivacyActionExecutionReceiptV1(_)
+        )
+    )
 }
 fn target_asset_definition_scope(
     _asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
@@ -21627,6 +22970,13 @@ fn torii_authorized_signed_query_routes(
         return Ok(Vec::new());
     }
     if matches!(scope, SignedQueryScope::LocalReplicated) {
+        // These key-addressed Exact12 status records are replicated identically
+        // on every route and expose only finalized public provenance. Avoid a
+        // synthetic all-dataspace permission requirement here; the executor's
+        // `Registered` classification remains the authoritative account gate.
+        if is_registered_exact12_local_query(request) {
+            return Ok(Vec::new());
+        }
         torii_authorize_signed_query_routes(
             app,
             request,
@@ -42995,7 +44345,6 @@ pub struct Torii {
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     local_peer_id: Option<PeerId>,
     // Query and transaction rate limits (operator-local)
     #[allow(dead_code)]
@@ -44762,9 +46111,6 @@ macro_rules! catalog_route_policy {
     (operator_post($handler:path, $state:ident)) => {
         catalog_post($handler).authenticated_operator($state.clone())
     };
-    (protocol_handshake_delete($handler:path)) => {
-        catalog_delete($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
-    };
     (protocol_handshake_get($handler:path)) => {
         catalog_get($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };
@@ -45910,9 +47256,17 @@ impl Torii {
             offline_redeem_body_limit(transaction_max_content_len);
         let offline_recipient_lineage_body_limit_bytes =
             <iroha_torii_shared::offline_api::OfflineRecipientLineageRequest as crate::utils::extractors::OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES;
+        let offline_device_policy_proof_body_limit_bytes =
+            <iroha_torii_shared::offline_api::OfflineDevicePolicyProofRequestV1 as crate::utils::extractors::OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES;
+        let offline_device_eligibility_body_limit_bytes =
+            <iroha_torii_shared::offline_api::OfflineDeviceEligibilityRequestV1 as crate::utils::extractors::OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES;
         mount_catalog_route_rows!(
             builder, offline;
             READINESS => public_get(handler_offline_readiness);
+            KAGEMUSHA_ISSUANCE_STATUS => canonical_account_get(handler_offline_kagemusha_issuance_status, app_state, 0);
+            DEVICE_ATTESTATION_POLICY => canonical_account_get(handler_offline_device_attestation_policy, app_state, 0);
+            DEVICE_ATTESTATION_POLICY_PROOF => limited_canonical_account_post(handler_offline_device_attestation_policy_proof, app_state, offline_device_policy_proof_body_limit_bytes, offline_device_policy_proof_body_limit_bytes);
+            DEVICE_ELIGIBILITY => limited_canonical_account_post(handler_offline_device_eligibility, app_state, offline_device_eligibility_body_limit_bytes, offline_device_eligibility_body_limit_bytes);
             RECIPIENT_LINEAGE => limited_canonical_account_post(handler_offline_recipient_lineage, app_state, offline_recipient_lineage_body_limit_bytes, offline_recipient_lineage_body_limit_bytes);
             TOP_UP => limited_canonical_signed_post(handler_offline_top_up, offline_top_up_body_limit_bytes);
             REDEEM => limited_canonical_signed_post(handler_offline_redeem, offline_redeem_body_limit_bytes);
@@ -48053,7 +49407,6 @@ impl Torii {
             ws_message_timeout: config.ws_message_timeout,
             #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             p2p: None,
-            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             local_peer_id: None,
             query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
             query_burst_per_authority: config.query_burst_per_authority,
@@ -48267,15 +49620,9 @@ impl Torii {
     pub fn with_p2p(self, _p2p: iroha_core::IrohaNetwork) -> Self {
         self
     }
-    /// Advertise the local peer id so Torii can decide when ingress requests must be proxied.
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    /// Advertise the local peer id for readiness and ingress routing decisions.
     pub fn with_local_peer_id(mut self, peer_id: PeerId) -> Self {
         self.local_peer_id = Some(peer_id);
-        self
-    }
-    /// No-op when P2P support is disabled.
-    #[cfg(not(any(feature = "app_api", feature = "p2p_ws", feature = "connect")))]
-    pub fn with_local_peer_id(self, _peer_id: PeerId) -> Self {
         self
     }
     fn parse_cors_origins(origins: &[String]) -> Vec<HeaderValue> {
@@ -48664,7 +50011,6 @@ impl Torii {
             sumeragi: self.sumeragi.clone(),
             #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             p2p: self.p2p.clone(),
-            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
             local_peer_id: self.local_peer_id.clone(),
             #[cfg(feature = "connect")]
             connect_bus: self.connect_bus.clone(),

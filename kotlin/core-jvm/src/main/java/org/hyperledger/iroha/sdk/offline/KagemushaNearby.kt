@@ -46,7 +46,12 @@ data class KagemushaNearbyDecoded(
  * The fixed header is `PKNB1 || kind:u8 || pairing:u8 || reserved:u8 || length:u32be`.
  */
 object KagemushaNearbyEnvelopeCodec {
+    /** Frozen PKNB1 ceiling for legacy `0x0102` messages. */
     const val MAXIMUM_ENVELOPE_BYTES = 32_704
+    /** Exact PKNB1 ceiling reserved solely for eligibility PAYMENT `0x0103`. */
+    const val MAXIMUM_ELIGIBILITY_PAYMENT_ENVELOPE_BYTES =
+        12 + IrohaPeerWireMessageV1.HEADER_LENGTH +
+            IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ELIGIBILITY_ENVELOPE_BYTES
     const val HEADER_LENGTH = 12
     private val MAGIC = "PKNB1".toByteArray(Charsets.US_ASCII)
 
@@ -80,6 +85,50 @@ object KagemushaNearbyEnvelopeCodec {
     @JvmStatic
     fun encodeRejection(): ByteArray =
         encodeEnvelope(KagemushaNearbyMessageKind.REJECTED, 0, ByteArray(0))
+
+    @JvmStatic
+    fun encodeEligibilityPayment(
+        envelope: IrohaPeerKagemushaEligibilityPaymentEnvelopeV1,
+    ): ByteArray {
+        val message = IrohaPeerKagemushaEligibilityAdapterV1.wrap(envelope).encode()
+        return try {
+            encodeEnvelope(
+                KagemushaNearbyMessageKind.PAYMENT,
+                0,
+                message,
+                MAXIMUM_ELIGIBILITY_PAYMENT_ENVELOPE_BYTES,
+            )
+        } finally {
+            message.fill(0)
+        }
+    }
+
+    @JvmStatic
+    fun decodeEligibilityPayment(
+        data: ByteArray,
+    ): IrohaPeerKagemushaEligibilityPaymentEnvelopeV1 {
+        require(data.size in HEADER_LENGTH..MAXIMUM_ELIGIBILITY_PAYMENT_ENVELOPE_BYTES &&
+            data.copyOfRange(0, MAGIC.size).contentEquals(MAGIC) &&
+            (data[5].toInt() and 0xff) == KagemushaNearbyMessageKind.PAYMENT.code &&
+            data[6].toInt() == 0 && data[7].toInt() == 0
+        ) { "Invalid eligibility Nearby envelope" }
+        val payloadLength = data.readU32Be(8)
+        require(payloadLength > 0 && payloadLength == data.size - HEADER_LENGTH) {
+            "Eligibility Nearby envelope length mismatch"
+        }
+        val payload = data.copyOfRange(HEADER_LENGTH, data.size)
+        return try {
+            IrohaPeerKagemushaEligibilityAdapterV1.decode(
+                IrohaPeerWireMessageV1.decode(
+                    payload,
+                    IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+                    IrohaPeerPayloadKind.PAYMENT,
+                ),
+            )
+        } finally {
+            payload.fill(0)
+        }
+    }
 
     @JvmStatic
     fun decode(data: ByteArray): KagemushaNearbyDecoded {
@@ -140,8 +189,10 @@ object KagemushaNearbyEnvelopeCodec {
         kind: KagemushaNearbyMessageKind,
         pairingCode: Int,
         payload: ByteArray,
+        maximumEnvelopeBytes: Int = MAXIMUM_ENVELOPE_BYTES,
     ): ByteArray {
-        require(pairingCode in 0..3 && payload.size <= MAXIMUM_ENVELOPE_BYTES - HEADER_LENGTH) {
+        require(pairingCode in 0..3 &&
+            payload.size <= maximumEnvelopeBytes - HEADER_LENGTH) {
             "Kagemusha Nearby envelope is too large"
         }
         return ByteArray(HEADER_LENGTH + payload.size).also { encoded ->

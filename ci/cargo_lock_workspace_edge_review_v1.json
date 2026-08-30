@@ -1,0 +1,155 @@
+{
+  "base": {
+    "cargo_lock": {
+      "blob": "5d04cef722cb695dd636110be01ff8de52ae7b45",
+      "bytes": 311172,
+      "checksum_package_count": 1073,
+      "line_count": 13613,
+      "package_count": 1177,
+      "sha256": "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b",
+      "source_package_count": 1076,
+      "unique_package_name_count": 1059
+    },
+    "commit": "be874e0f08743929a492dd17383747a96a4f0879"
+  },
+  "candidate": {
+    "cargo_lock": {
+      "blob": "dec1238701c58b8b5b906c26624865c685d5ac70",
+      "bytes": 311212,
+      "checksum_package_count": 1073,
+      "line_count": 13615,
+      "package_count": 1177,
+      "sha256": "179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7",
+      "source_package_count": 1076,
+      "unique_package_name_count": 1059
+    }
+  },
+  "lock_semantic_delta": {
+    "added_package_identities": 0,
+    "changed_dependency_lists": [
+      {
+        "added": [
+          "iroha_torii_shared"
+        ],
+        "package": "iroha_js_host",
+        "removed": [],
+        "version": "2.0.0-rc.2.0"
+      },
+      {
+        "added": [
+          "iroha_crypto"
+        ],
+        "package": "iroha_zkp_halo2",
+        "removed": [],
+        "version": "2.0.0-rc.2.0"
+      }
+    ],
+    "changed_package_metadata": 0,
+    "removed_package_identities": 0
+  },
+  "permitted_edges": [
+    {
+      "dependency": "iroha_data_model",
+      "effective_default_features": false,
+      "effective_direct_features": [
+        "application-model",
+        "http",
+        "privacy-exact12-conformance"
+      ],
+      "manifest": "crates/iroha/Cargo.toml",
+      "manifest_section": "dev-dependencies",
+      "member_spec": {
+        "default-features": false,
+        "features": [
+          "application-model",
+          "http",
+          "privacy-exact12-conformance"
+        ],
+        "workspace": true
+      },
+      "owner": "iroha",
+      "purpose": "enable deterministic Exact12 fixture construction only in iroha client conformance tests without widening the production dependency feature set",
+      "reachable_from_dependency_without_edge": 41,
+      "requested_features": [
+        "application-model",
+        "http",
+        "privacy-exact12-conformance"
+      ],
+      "target_default_features": [
+        "application-model"
+      ],
+      "target_manifest": "crates/iroha_data_model/Cargo.toml",
+      "workspace_spec": {
+        "default-features": false,
+        "path": "crates/iroha_data_model"
+      }
+    },
+    {
+      "dependency": "iroha_torii_shared",
+      "effective_default_features": true,
+      "effective_direct_features": [],
+      "manifest": "crates/iroha_js_host/Cargo.toml",
+      "manifest_section": "dependencies",
+      "member_spec": {
+        "workspace": true
+      },
+      "owner": "iroha_js_host",
+      "purpose": "decode authenticated committed transaction details through the shared Torii ABI model",
+      "reachable_from_dependency_without_edge": 41,
+      "requested_features": [],
+      "target_default_features": [],
+      "target_manifest": "crates/iroha_torii_shared/Cargo.toml",
+      "workspace_spec": {
+        "path": "crates/iroha_torii_shared"
+      }
+    },
+    {
+      "dependency": "iroha_crypto",
+      "effective_default_features": false,
+      "effective_direct_features": [],
+      "manifest": "crates/iroha_zkp_halo2/Cargo.toml",
+      "manifest_section": "dependencies",
+      "member_spec": {
+        "default-features": false,
+        "workspace": true
+      },
+      "owner": "iroha_zkp_halo2",
+      "purpose": "reuse the audited confidential-spool layouts for ZK-AMS phase-23 closure",
+      "reachable_from_dependency_without_edge": 19,
+      "requested_features": [],
+      "target_default_features": [
+        "application"
+      ],
+      "target_manifest": "crates/iroha_crypto/Cargo.toml",
+      "workspace_spec": {
+        "default-features": false,
+        "path": "crates/iroha_crypto"
+      }
+    }
+  ],
+  "permitted_spec_changes": [
+    {
+      "after_spec": {
+        "features": [
+          "fs",
+          "process"
+        ],
+        "version": "1.1.4"
+      },
+      "before_spec": {
+        "features": [
+          "process"
+        ],
+        "version": "1.1.4"
+      },
+      "dependency": "rustix",
+      "lock_semantic_effect": "none",
+      "manifest": "python/iroha_python/iroha_python_rs/Cargo.toml",
+      "manifest_section": "dependencies",
+      "purpose": "publish owner-only native secret bundles atomically without replacing an existing or racing destination"
+    }
+  ],
+  "review_scope": "exact-base-current-lock-workspace-edges-and-manifest-specs",
+  "schema": "iroha.cargo_lock_workspace_edge_review",
+  "schema_version": 1
+}

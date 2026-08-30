@@ -96,6 +96,61 @@ extension NoritoNativeBridge {
         UInt64,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias KagemushaV4ThreeArchiveTimeOutFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias OfflineDevicePolicyProofRequestV1Fn = @convention(c) (
+        UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias OfflineDevicePolicyProofVerifyV1Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias OfflineDeviceEligibilityRequestV1Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias OfflineDeviceEligibilityResponseVerifyV1Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias KagemushaV4FiveArchiveTimeOutFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias KagemushaV4SixArchiveTimeOutFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias KagemushaV4FrontierBuildFn = @convention(c) (
         UInt32,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -787,8 +842,7 @@ extension NoritoNativeBridge {
               let rawSignature,
               rawSignatureLength == CUnsignedLong(KagemushaDeviceSignatureV2.rawByteCount),
               let authenticatorData,
-              (KagemushaRecursiveSpend.minimumIosAppAttestAuthenticatorDataBytesV2...
-                  KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2)
+              (KagemushaRecursiveSpend.minimumIosAppAttestAuthenticatorDataBytesV2...KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2)
                 .contains(Int(authenticatorDataLength)) else {
             throw NativeBridgeError.kagemushaProve
         }
@@ -865,6 +919,319 @@ extension NoritoNativeBridge {
         try callKagemushaV2Archive(
             symbol: "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
             archive: paymentArchive
+        )
+    }
+
+    func offlineDeviceAttestationPolicyViewVerifyV1(
+        policyViewArchive: Data,
+        expectedNetworkId: Data,
+        trustedContextId: Data,
+        evaluationTimeMilliseconds: UInt64
+    ) throws -> Data? {
+        try callKagemushaV4ThreeArchivesAtTime(
+            symbol: "connect_norito_offline_device_attestation_policy_view_verify_v1",
+            first: policyViewArchive,
+            second: expectedNetworkId,
+            third: trustedContextId,
+            milliseconds: evaluationTimeMilliseconds
+        )
+    }
+
+    func offlineDeviceAttestationPolicyViewClaimsV1(
+        policyViewArchive: Data,
+        expectedNetworkId: Data,
+        trustedContextId: Data,
+        evaluationTimeMilliseconds: UInt64
+    ) throws -> Data? {
+        try callKagemushaV4ThreeArchivesAtTime(
+            symbol: "connect_norito_offline_device_attestation_policy_view_claims_v1",
+            first: policyViewArchive,
+            second: expectedNetworkId,
+            third: trustedContextId,
+            milliseconds: evaluationTimeMilliseconds
+        )
+    }
+
+    func offlineDevicePolicyProofRequestV1(
+        trustedCheckpointHeight: UInt64,
+        trustedCheckpointContextId: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_offline_device_policy_proof_request_v1",
+            as: OfflineDevicePolicyProofRequestV1Fn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = trustedCheckpointContextId.withUnsafeBytes { context in
+            function(
+                trustedCheckpointHeight,
+                context.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(context.count),
+                &output,
+                &outputLength
+            )
+        }
+        return try copyKagemushaV2Output(
+            status: status,
+            pointer: output,
+            length: outputLength
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func offlineDevicePolicyProofVerifyV1(
+        proofPageArchive: Data,
+        expectedNetworkId: Data,
+        trustedCheckpointHeight: UInt64,
+        trustedCheckpointContextId: Data,
+        evaluationTimeMilliseconds: UInt64
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_offline_device_policy_proof_verify_v1",
+            as: OfflineDevicePolicyProofVerifyV1Fn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = proofPageArchive.withUnsafeBytes { proof in
+            expectedNetworkId.withUnsafeBytes { network in
+                trustedCheckpointContextId.withUnsafeBytes { context in
+                    function(
+                        proof.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(proof.count),
+                        network.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(network.count),
+                        trustedCheckpointHeight,
+                        context.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(context.count),
+                        evaluationTimeMilliseconds,
+                        &output,
+                        &outputLength
+                    )
+                }
+            }
+        }
+        return try copyKagemushaV2Output(
+            status: status,
+            pointer: output,
+            length: outputLength
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func offlineDeviceEligibilityRequestV1(
+        registrationHash: Data,
+        deviceId: Data,
+        attestationKeyId: Data,
+        requestedTtlMilliseconds: UInt64
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_offline_device_eligibility_request_v1",
+            as: OfflineDeviceEligibilityRequestV1Fn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = registrationHash.withUnsafeBytes { registration in
+            deviceId.withUnsafeBytes { device in
+                attestationKeyId.withUnsafeBytes { key in
+                    function(
+                        registration.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(registration.count),
+                        device.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(device.count),
+                        key.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(key.count),
+                        requestedTtlMilliseconds,
+                        &output,
+                        &outputLength
+                    )
+                }
+            }
+        }
+        return try copyKagemushaV2Output(
+            status: status,
+            pointer: output,
+            length: outputLength
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func offlineDeviceEligibilityResponseVerifyV1(
+        responseArchive: Data,
+        expectedRegistrationHash: Data,
+        expectedIssuerArchive: Data,
+        expectedNetworkId: Data,
+        trustedContextId: Data,
+        evaluationTimeMilliseconds: UInt64
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_offline_device_eligibility_response_verify_v1",
+            as: OfflineDeviceEligibilityResponseVerifyV1Fn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = responseArchive.withUnsafeBytes { response in
+            expectedRegistrationHash.withUnsafeBytes { registration in
+                expectedIssuerArchive.withUnsafeBytes { issuer in
+                    expectedNetworkId.withUnsafeBytes { network in
+                        trustedContextId.withUnsafeBytes { context in
+                            function(
+                                response.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(response.count),
+                                registration.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(registration.count),
+                                issuer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(issuer.count),
+                                network.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(network.count),
+                                context.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(context.count),
+                                evaluationTimeMilliseconds,
+                                &output,
+                                &outputLength
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        return try copyKagemushaV2Output(
+            status: status,
+            pointer: output,
+            length: outputLength
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    func offlineDeviceEligibilityCredentialVerifyV1(
+        credentialArchive: Data,
+        expectedIssuerArchive: Data,
+        policyViewArchive: Data,
+        expectedNetworkId: Data,
+        trustedContextId: Data,
+        evaluationTimeMilliseconds: UInt64
+    ) throws -> Data? {
+        try callKagemushaV4FiveArchivesAtTime(
+            symbol: "connect_norito_offline_device_eligibility_credential_verify_v1",
+            first: credentialArchive,
+            second: expectedIssuerArchive,
+            third: policyViewArchive,
+            fourth: expectedNetworkId,
+            fifth: trustedContextId,
+            milliseconds: evaluationTimeMilliseconds
+        )
+    }
+
+    func offlineDeviceEligibilityPeerCertificateVerifyV1(
+        credentialArchive: Data,
+        expectedIssuerArchive: Data,
+        policyViewArchive: Data,
+        expectedNetworkId: Data,
+        trustedContextId: Data,
+        evaluationTimeMilliseconds: UInt64
+    ) throws -> Data? {
+        try callKagemushaV4FiveArchivesAtTime(
+            symbol:
+                "connect_norito_offline_device_eligibility_peer_certificate_verify_v1",
+            first: credentialArchive,
+            second: expectedIssuerArchive,
+            third: policyViewArchive,
+            fourth: expectedNetworkId,
+            fifth: trustedContextId,
+            milliseconds: evaluationTimeMilliseconds
+        )
+    }
+
+    func kagemushaEligibilityPaymentPrepareV1(
+        paymentArchive: Data,
+        credentialArchive: Data,
+        requestArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2ThreeArchives(
+            symbol: "connect_norito_kagemusha_eligibility_payment_prepare_v1",
+            first: paymentArchive,
+            second: credentialArchive,
+            third: requestArchive
+        )
+    }
+
+    func kagemushaEligibilityPaymentSigningBytesV1(
+        payloadArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_eligibility_payment_signing_bytes_v1",
+            archive: payloadArchive
+        )
+    }
+
+    func kagemushaEligibilityPaymentFinalizeV1(
+        payloadArchive: Data,
+        signature: Data
+    ) throws -> Data? {
+        try callKagemushaV2TwoArchives(
+            symbol: "connect_norito_kagemusha_eligibility_payment_finalize_v1",
+            first: payloadArchive,
+            second: signature
+        )
+    }
+
+    func kagemushaEligibilityPaymentValidateStaticV1(
+        envelopeArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_eligibility_payment_validate_static_v1",
+            archive: envelopeArchive
+        )
+    }
+
+    func kagemushaEligibilityPaymentValidateFirstDeliveryV1(
+        envelopeArchive: Data,
+        requestArchive: Data,
+        expectedIssuerArchive: Data,
+        policyViewArchive: Data,
+        receivedAtMilliseconds: UInt64
+    ) throws -> Data? {
+        try callKagemushaV4FourArchivesAtTime(
+            symbol:
+                "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1",
+            first: envelopeArchive,
+            second: requestArchive,
+            third: expectedIssuerArchive,
+            fourth: policyViewArchive,
+            milliseconds: receivedAtMilliseconds
+        )
+    }
+
+    func kagemushaEligibilityPaymentValidateFirstDeliveryFinalizedV1(
+        envelopeArchive: Data,
+        requestArchive: Data,
+        expectedIssuerArchive: Data,
+        policyViewArchive: Data,
+        expectedNetworkId: Data,
+        trustedContextId: Data,
+        receivedAtMilliseconds: UInt64
+    ) throws -> Data? {
+        try callKagemushaV4SixArchivesAtTime(
+            symbol:
+                "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1",
+            first: envelopeArchive,
+            second: requestArchive,
+            third: expectedIssuerArchive,
+            fourth: policyViewArchive,
+            fifth: expectedNetworkId,
+            sixth: trustedContextId,
+            milliseconds: receivedAtMilliseconds
         )
     }
 
@@ -1600,6 +1967,188 @@ extension NoritoNativeBridge {
                             &output,
                             &outputLength
                         )
+                    }
+                }
+            }
+        }
+        return try copyKagemushaV2Output(status: status, pointer: output, length: outputLength)
+        #else
+        return nil
+        #endif
+    }
+
+    private func callKagemushaV4FourArchivesAtTime(
+        symbol: String,
+        first: Data,
+        second: Data,
+        third: Data,
+        fourth: Data,
+        milliseconds: UInt64
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            symbol,
+            as: KagemushaV4FourArchiveTimeOutFn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = first.withUnsafeBytes { firstBuffer in
+            second.withUnsafeBytes { secondBuffer in
+                third.withUnsafeBytes { thirdBuffer in
+                    fourth.withUnsafeBytes { fourthBuffer in
+                        function(
+                            firstBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(firstBuffer.count),
+                            secondBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(secondBuffer.count),
+                            thirdBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(thirdBuffer.count),
+                            fourthBuffer.bindMemory(to: UInt8.self).baseAddress,
+                            CUnsignedLong(fourthBuffer.count),
+                            milliseconds,
+                            &output,
+                            &outputLength
+                        )
+                    }
+                }
+            }
+        }
+        return try copyKagemushaV2Output(
+            status: status,
+            pointer: output,
+            length: outputLength
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    private func callKagemushaV4ThreeArchivesAtTime(
+        symbol: String,
+        first: Data,
+        second: Data,
+        third: Data,
+        milliseconds: UInt64
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            symbol,
+            as: KagemushaV4ThreeArchiveTimeOutFn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = first.withUnsafeBytes { firstBuffer in
+            second.withUnsafeBytes { secondBuffer in
+                third.withUnsafeBytes { thirdBuffer in
+                    function(
+                        firstBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(firstBuffer.count),
+                        secondBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(secondBuffer.count),
+                        thirdBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(thirdBuffer.count),
+                        milliseconds,
+                        &output,
+                        &outputLength
+                    )
+                }
+            }
+        }
+        return try copyKagemushaV2Output(status: status, pointer: output, length: outputLength)
+        #else
+        return nil
+        #endif
+    }
+
+    private func callKagemushaV4FiveArchivesAtTime(
+        symbol: String,
+        first: Data,
+        second: Data,
+        third: Data,
+        fourth: Data,
+        fifth: Data,
+        milliseconds: UInt64
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            symbol,
+            as: KagemushaV4FiveArchiveTimeOutFn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = first.withUnsafeBytes { firstBuffer in
+            second.withUnsafeBytes { secondBuffer in
+                third.withUnsafeBytes { thirdBuffer in
+                    fourth.withUnsafeBytes { fourthBuffer in
+                        fifth.withUnsafeBytes { fifthBuffer in
+                            function(
+                                firstBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(firstBuffer.count),
+                                secondBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(secondBuffer.count),
+                                thirdBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(thirdBuffer.count),
+                                fourthBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(fourthBuffer.count),
+                                fifthBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(fifthBuffer.count),
+                                milliseconds,
+                                &output,
+                                &outputLength
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        return try copyKagemushaV2Output(status: status, pointer: output, length: outputLength)
+        #else
+        return nil
+        #endif
+    }
+
+    private func callKagemushaV4SixArchivesAtTime(
+        symbol: String,
+        first: Data,
+        second: Data,
+        third: Data,
+        fourth: Data,
+        fifth: Data,
+        sixth: Data,
+        milliseconds: UInt64
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            symbol,
+            as: KagemushaV4SixArchiveTimeOutFn.self
+        ) else { return nil }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = first.withUnsafeBytes { firstBuffer in
+            second.withUnsafeBytes { secondBuffer in
+                third.withUnsafeBytes { thirdBuffer in
+                    fourth.withUnsafeBytes { fourthBuffer in
+                        fifth.withUnsafeBytes { fifthBuffer in
+                            sixth.withUnsafeBytes { sixthBuffer in
+                                function(
+                                    firstBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                    CUnsignedLong(firstBuffer.count),
+                                    secondBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                    CUnsignedLong(secondBuffer.count),
+                                    thirdBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                    CUnsignedLong(thirdBuffer.count),
+                                    fourthBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                    CUnsignedLong(fourthBuffer.count),
+                                    fifthBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                    CUnsignedLong(fifthBuffer.count),
+                                    sixthBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                    CUnsignedLong(sixthBuffer.count),
+                                    milliseconds,
+                                    &output,
+                                    &outputLength
+                                )
+                            }
+                        }
                     }
                 }
             }

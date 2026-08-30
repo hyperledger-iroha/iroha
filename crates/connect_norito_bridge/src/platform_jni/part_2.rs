@@ -1000,6 +1000,788 @@ pub(super) fn java_native_kagemusha_project_peer_payment_v4(
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
+
+pub(super) fn java_native_kagemusha_prepare_eligibility_payment_v1(
+    env: &mut jni::JNIEnv<'_>,
+    payment: jni::objects::JByteArray<'_>,
+    credential: jni::objects::JByteArray<'_>,
+    request: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "eligibility payment preparation", |env| {
+        let payment_bytes = read_java_byte_array_bounded(
+            env,
+            &payment,
+            "payment",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
+        )
+        .ok_or_else(|| "payment must be a bounded nonempty archive".to_owned())?;
+        let payment = decode_canonical_kagemusha_recursive_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
+        >(&payment_bytes)
+        .map_err(|_| "payment is not a canonical V4 payment".to_owned())?;
+        payment
+            .validate_public_binding()
+            .map_err(|_| "payment binding is invalid".to_owned())?;
+        let credential = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::OfflineDeviceEligibilityCredentialV1,
+        >(
+            env,
+            &credential,
+            "credential",
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1,
+        )?;
+        let request = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+        >(
+            env,
+            &request,
+            "request",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
+        )?;
+        let payload =
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopePayloadV1::prepare_v1(
+                payment_bytes,
+                credential,
+                &request,
+            )
+            .map_err(|_| "payment, request, or credential binding is invalid".to_owned())?;
+        let archive = norito::to_bytes(&payload)
+            .map_err(|error| format!("failed to encode eligibility payload: {error}"))?;
+        if kagemusha_archive_out_of_bounds_for(
+            archive.len(),
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1,
+        ) {
+            return Err("eligibility payload exceeds its canonical bound".to_owned());
+        }
+        env.byte_array_from_slice(&archive)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_offline_device_attestation_policy_view_verify_v1(
+    env: &mut jni::JNIEnv<'_>,
+    policy_view: jni::objects::JByteArray<'_>,
+    expected_network_id: jni::objects::JByteArray<'_>,
+    trusted_context_id: jni::objects::JByteArray<'_>,
+    evaluation_time_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "offline device policy finality verification", |env| {
+        let policy_view = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(
+            env,
+            &policy_view,
+            "policyView",
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1,
+        )?;
+        let network_bytes = read_java_byte_array_bounded(
+            env,
+            &expected_network_id,
+            "expectedNetworkId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "expectedNetworkId must contain exactly 32 bytes".to_owned())?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(str::to_owned)?;
+        let context_bytes = read_java_byte_array_bounded(
+            env,
+            &trusted_context_id,
+            "trustedContextId",
+            Hash::LENGTH,
+        )
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .ok_or_else(|| "trustedContextId must contain exactly 32 bytes".to_owned())?;
+        let evaluation_time_ms = u64::try_from(evaluation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "evaluationTimeMilliseconds must be positive".to_owned())?;
+        verify_offline_device_policy_view_finality_v1(
+            &policy_view,
+            &expected_network_id,
+            offline_device_trusted_context_id_v1(context_bytes)
+                .map_err(|_| "trustedContextId is not a canonical Iroha hash".to_owned())?,
+            evaluation_time_ms,
+            false,
+        )
+        .map_err(|_| "policy view, freshness, or finality proof is invalid".to_owned())?;
+        let archive = norito::to_bytes(&policy_view)
+            .map_err(|error| format!("failed to encode policy view: {error}"))?;
+        env.byte_array_from_slice(&archive)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_offline_device_attestation_policy_view_claims_v1(
+    env: &mut jni::JNIEnv<'_>,
+    policy_view: jni::objects::JByteArray<'_>,
+    expected_network_id: jni::objects::JByteArray<'_>,
+    trusted_context_id: jni::objects::JByteArray<'_>,
+    evaluation_time_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "offline device policy claims", |env| {
+        let policy_view = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(
+            env,
+            &policy_view,
+            "policyView",
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1,
+        )?;
+        let network_bytes = read_java_byte_array_bounded(
+            env,
+            &expected_network_id,
+            "expectedNetworkId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "expectedNetworkId must contain exactly 32 bytes".to_owned())?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(str::to_owned)?;
+        let context_bytes = read_java_byte_array_bounded(
+            env,
+            &trusted_context_id,
+            "trustedContextId",
+            Hash::LENGTH,
+        )
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .ok_or_else(|| "trustedContextId must contain exactly 32 bytes".to_owned())?;
+        let evaluation_time_ms = u64::try_from(evaluation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "evaluationTimeMilliseconds must be positive".to_owned())?;
+        let projection = offline_device_policy_view_claims_v1(
+            &policy_view,
+            &expected_network_id,
+            offline_device_trusted_context_id_v1(context_bytes)
+                .map_err(|_| "trustedContextId is not a canonical Iroha hash".to_owned())?,
+            evaluation_time_ms,
+        )
+        .map_err(|_| "policy view, freshness, or finality proof is invalid".to_owned())?;
+        env.byte_array_from_slice(&projection)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_offline_device_policy_proof_request_v1(
+    env: &mut jni::JNIEnv<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "offline device policy proof request", |env| {
+        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
+            .ok()
+            .filter(|height| *height != 0)
+            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
+        let trusted_checkpoint_context_id = read_java_byte_array_bounded(
+            env,
+            &trusted_checkpoint_context_id,
+            "trustedCheckpointContextId",
+            Hash::LENGTH,
+        )
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
+        let request = offline_device_policy_proof_request_create_v1(
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )
+        .map_err(|_| "trusted checkpoint is invalid".to_owned())?;
+        env.byte_array_from_slice(&request)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_offline_device_policy_proof_verify_v1(
+    env: &mut jni::JNIEnv<'_>,
+    proof_page: jni::objects::JByteArray<'_>,
+    expected_network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    evaluation_time_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "offline device policy proof verification", |env| {
+        let proof_page = read_java_byte_array_bounded(
+            env,
+            &proof_page,
+            "proofPage",
+            OFFLINE_DEVICE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+        )
+        .ok_or_else(|| "proofPage must be a bounded nonempty archive".to_owned())?;
+        let network_bytes = read_java_byte_array_bounded(
+            env,
+            &expected_network_id,
+            "expectedNetworkId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "expectedNetworkId must contain exactly 32 bytes".to_owned())?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(str::to_owned)?;
+        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
+            .ok()
+            .filter(|height| *height != 0)
+            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
+        let trusted_checkpoint_context_id = read_java_byte_array_bounded(
+            env,
+            &trusted_checkpoint_context_id,
+            "trustedCheckpointContextId",
+            Hash::LENGTH,
+        )
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
+        let evaluation_time_ms = u64::try_from(evaluation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "evaluationTimeMilliseconds must be positive".to_owned())?;
+        let verified = offline_device_policy_proof_verify_v1(
+            &proof_page,
+            expected_network_id,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+            evaluation_time_ms,
+        )
+        .map_err(|_| "proof page, finality, checkpoint, or policy is invalid".to_owned())?;
+        env.byte_array_from_slice(&verified)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_offline_device_eligibility_request_v1(
+    env: &mut jni::JNIEnv<'_>,
+    registration_hash: jni::objects::JByteArray<'_>,
+    device_id: jni::objects::JByteArray<'_>,
+    attestation_key_id: jni::objects::JByteArray<'_>,
+    requested_ttl_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "offline device eligibility request", |env| {
+        let registration_hash =
+            read_java_byte_array_bounded(env, &registration_hash, "registrationHash", Hash::LENGTH)
+                .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+                .ok_or_else(|| "registrationHash must contain exactly 32 bytes".to_owned())?;
+        let device_id = read_java_byte_array_bounded(
+            env,
+            &device_id,
+            "deviceId",
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1,
+        )
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .ok_or_else(|| "deviceId must be bounded UTF-8".to_owned())?;
+        let attestation_key_id = read_java_byte_array_bounded(
+            env,
+            &attestation_key_id,
+            "attestationKeyId",
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1,
+        )
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .ok_or_else(|| "attestationKeyId must be bounded UTF-8".to_owned())?;
+        let requested_ttl_ms = u64::try_from(requested_ttl_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "requestedTtlMilliseconds must be positive".to_owned())?;
+        let request = offline_device_eligibility_request_create_v1(
+            registration_hash,
+            &device_id,
+            &attestation_key_id,
+            requested_ttl_ms,
+        )
+        .map_err(|_| "device eligibility selector or lifetime is invalid".to_owned())?;
+        env.byte_array_from_slice(&request)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_offline_device_eligibility_response_verify_v1(
+    env: &mut jni::JNIEnv<'_>,
+    response: jni::objects::JByteArray<'_>,
+    expected_registration_hash: jni::objects::JByteArray<'_>,
+    expected_issuer: jni::objects::JByteArray<'_>,
+    expected_network_id: jni::objects::JByteArray<'_>,
+    trusted_context_id: jni::objects::JByteArray<'_>,
+    evaluation_time_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "offline device eligibility response", |env| {
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "response",
+            OFFLINE_DEVICE_ELIGIBILITY_MAX_RESPONSE_BYTES,
+        )
+        .ok_or_else(|| "response must be a bounded nonempty archive".to_owned())?;
+        let expected_registration_hash = read_java_byte_array_bounded(
+            env,
+            &expected_registration_hash,
+            "expectedRegistrationHash",
+            Hash::LENGTH,
+        )
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .ok_or_else(|| "expectedRegistrationHash must contain exactly 32 bytes".to_owned())?;
+        let expected_issuer = java_kagemusha_decode_archive_bounded::<PublicKey>(
+            env,
+            &expected_issuer,
+            "expectedIssuer",
+            4 * 1024,
+        )?;
+        let network_bytes = read_java_byte_array_bounded(
+            env,
+            &expected_network_id,
+            "expectedNetworkId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "expectedNetworkId must contain exactly 32 bytes".to_owned())?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(str::to_owned)?;
+        let trusted_context_id = read_java_byte_array_bounded(
+            env,
+            &trusted_context_id,
+            "trustedContextId",
+            Hash::LENGTH,
+        )
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .ok_or_else(|| "trustedContextId must contain exactly 32 bytes".to_owned())?;
+        let evaluation_time_ms = u64::try_from(evaluation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "evaluationTimeMilliseconds must be positive".to_owned())?;
+        let verified = offline_device_eligibility_response_verify_v1(
+            &response,
+            expected_registration_hash,
+            expected_issuer,
+            expected_network_id,
+            trusted_context_id,
+            evaluation_time_ms,
+        )
+        .map_err(|_| {
+            "response, request binding, policy finality, credential, or provenance is invalid"
+                .to_owned()
+        })?;
+        env.byte_array_from_slice(&verified)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_offline_device_eligibility_credential_verify_v1(
+    env: &mut jni::JNIEnv<'_>,
+    credential: jni::objects::JByteArray<'_>,
+    expected_issuer: jni::objects::JByteArray<'_>,
+    policy_view: jni::objects::JByteArray<'_>,
+    expected_network_id: jni::objects::JByteArray<'_>,
+    trusted_context_id: jni::objects::JByteArray<'_>,
+    evaluation_time_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "offline eligibility credential verification", |env| {
+        let credential = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::OfflineDeviceEligibilityCredentialV1,
+        >(
+            env,
+            &credential,
+            "credential",
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1,
+        )?;
+        let expected_issuer = java_kagemusha_decode_archive_bounded::<PublicKey>(
+            env,
+            &expected_issuer,
+            "expectedIssuer",
+            4 * 1024,
+        )?;
+        let policy_view = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(
+            env,
+            &policy_view,
+            "policyView",
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1,
+        )?;
+        let network_bytes = read_java_byte_array_bounded(
+            env,
+            &expected_network_id,
+            "expectedNetworkId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "expectedNetworkId must contain exactly 32 bytes".to_owned())?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(str::to_owned)?;
+        let context_bytes = read_java_byte_array_bounded(
+            env,
+            &trusted_context_id,
+            "trustedContextId",
+            Hash::LENGTH,
+        )
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .ok_or_else(|| "trustedContextId must contain exactly 32 bytes".to_owned())?;
+        let evaluation_time_ms = u64::try_from(evaluation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "evaluationTimeMilliseconds must be positive".to_owned())?;
+        verify_offline_device_policy_view_finality_v1(
+            &policy_view,
+            &expected_network_id,
+            offline_device_trusted_context_id_v1(context_bytes)
+                .map_err(|_| "trustedContextId is not a canonical Iroha hash".to_owned())?,
+            evaluation_time_ms,
+            false,
+        )
+        .map_err(|_| "policy view, freshness, or finality proof is invalid".to_owned())?;
+        credential
+            .verify_against_policy_view_v1(&expected_issuer, &policy_view, evaluation_time_ms)
+            .map_err(|_| "credential issuer or policy binding is invalid".to_owned())?;
+        let archive = norito::to_bytes(&credential)
+            .map_err(|error| format!("failed to encode eligibility credential: {error}"))?;
+        env.byte_array_from_slice(&archive)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_offline_device_eligibility_peer_certificate_verify_v1(
+    env: &mut jni::JNIEnv<'_>,
+    credential: jni::objects::JByteArray<'_>,
+    expected_issuer: jni::objects::JByteArray<'_>,
+    policy_view: jni::objects::JByteArray<'_>,
+    expected_network_id: jni::objects::JByteArray<'_>,
+    trusted_context_id: jni::objects::JByteArray<'_>,
+    evaluation_time_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "offline eligibility peer certificate", |env| {
+        let credential = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::OfflineDeviceEligibilityCredentialV1,
+        >(
+            env,
+            &credential,
+            "credential",
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1,
+        )?;
+        let expected_issuer = java_kagemusha_decode_archive_bounded::<PublicKey>(
+            env,
+            &expected_issuer,
+            "expectedIssuer",
+            4 * 1024,
+        )?;
+        let policy_view = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(
+            env,
+            &policy_view,
+            "policyView",
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1,
+        )?;
+        let network_bytes = read_java_byte_array_bounded(
+            env,
+            &expected_network_id,
+            "expectedNetworkId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "expectedNetworkId must contain exactly 32 bytes".to_owned())?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(str::to_owned)?;
+        let context_bytes = read_java_byte_array_bounded(
+            env,
+            &trusted_context_id,
+            "trustedContextId",
+            Hash::LENGTH,
+        )
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .ok_or_else(|| "trustedContextId must contain exactly 32 bytes".to_owned())?;
+        let evaluation_time_ms = u64::try_from(evaluation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "evaluationTimeMilliseconds must be positive".to_owned())?;
+        verify_offline_device_policy_view_finality_v1(
+            &policy_view,
+            &expected_network_id,
+            offline_device_trusted_context_id_v1(context_bytes)
+                .map_err(|_| "trustedContextId is not a canonical Iroha hash".to_owned())?,
+            evaluation_time_ms,
+            false,
+        )
+        .map_err(|_| "policy view, freshness, or finality proof is invalid".to_owned())?;
+        credential
+            .verify_against_policy_view_v1(&expected_issuer, &policy_view, evaluation_time_ms)
+            .map_err(|_| "credential issuer or policy binding is invalid".to_owned())?;
+        env.byte_array_from_slice(credential.payload.device_public_key.as_sec1_bytes())
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_kagemusha_eligibility_payment_signing_bytes_v1(
+    env: &mut jni::JNIEnv<'_>,
+    payload: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "eligibility payment signing bytes", |env| {
+        let payload = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopePayloadV1,
+        >(
+            env,
+            &payload,
+            "payload",
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1,
+        )?;
+        let payment = decode_canonical_kagemusha_recursive_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
+        >(&payload.payment_v4_norito)
+        .map_err(|_| "inner payment is not a canonical V4 payment".to_owned())?;
+        payment
+            .validate_public_binding()
+            .map_err(|_| "inner payment binding is invalid".to_owned())?;
+        let bytes = payload
+            .signing_bytes_v1()
+            .map_err(|_| "eligibility payload binding is invalid".to_owned())?;
+        env.byte_array_from_slice(&bytes)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_kagemusha_finalize_eligibility_payment_v1(
+    env: &mut jni::JNIEnv<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "eligibility payment finalization", |env| {
+        let payload = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopePayloadV1,
+        >(
+            env,
+            &payload,
+            "payload",
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1,
+        )?;
+        let payment = decode_canonical_kagemusha_recursive_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
+        >(&payload.payment_v4_norito)
+        .map_err(|_| "inner payment is not a canonical V4 payment".to_owned())?;
+        payment
+            .validate_public_binding()
+            .map_err(|_| "inner payment binding is invalid".to_owned())?;
+        let signature = read_java_byte_array_bounded(
+            env,
+            &signature,
+            "signature",
+            iroha_data_model::offline::KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2,
+        )
+        .filter(|bytes| {
+            bytes.len() == iroha_data_model::offline::KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2
+        })
+        .ok_or_else(|| "signature must be exactly 64 raw-low-S bytes".to_owned())?;
+        let signature =
+            iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(&signature)
+                .map_err(|_| "signature is not canonical raw-low-S P-256".to_owned())?;
+        let envelope =
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1::finalize_v1(
+                payload, signature,
+            )
+            .map_err(|_| "eligibility device signature is invalid".to_owned())?;
+        let archive = norito::to_bytes(&envelope)
+            .map_err(|error| format!("failed to encode eligibility envelope: {error}"))?;
+        env.byte_array_from_slice(&archive)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_kagemusha_validate_eligibility_payment_static_v1(
+    env: &mut jni::JNIEnv<'_>,
+    envelope: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "eligibility payment static validation", |env| {
+        let envelope = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1,
+        >(
+            env,
+            &envelope,
+            "envelope",
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1,
+        )?;
+        validate_kagemusha_eligibility_envelope_inner_payment_v1(&envelope)
+            .map_err(|_| "inner payment is invalid".to_owned())?;
+        envelope
+            .validate_static_binding_v1()
+            .map_err(|_| "eligibility envelope binding is invalid".to_owned())?;
+        let archive = norito::to_bytes(&envelope)
+            .map_err(|error| format!("failed to encode eligibility envelope: {error}"))?;
+        env.byte_array_from_slice(&archive)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) fn java_native_kagemusha_validate_eligibility_payment_first_delivery_v1(
+    env: &mut jni::JNIEnv<'_>,
+    envelope: jni::objects::JByteArray<'_>,
+    request: jni::objects::JByteArray<'_>,
+    expected_issuer: jni::objects::JByteArray<'_>,
+    policy_view: jni::objects::JByteArray<'_>,
+    received_at_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "eligibility first-delivery validation", |env| {
+        let envelope = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1,
+        >(
+            env,
+            &envelope,
+            "envelope",
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1,
+        )?;
+        validate_kagemusha_eligibility_envelope_inner_payment_v1(&envelope)
+            .map_err(|_| "inner payment is invalid".to_owned())?;
+        let request = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+        >(
+            env,
+            &request,
+            "request",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
+        )?;
+        let expected_issuer = java_kagemusha_decode_archive_bounded::<PublicKey>(
+            env,
+            &expected_issuer,
+            "expectedIssuer",
+            4 * 1024,
+        )?;
+        let policy_view = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(
+            env,
+            &policy_view,
+            "policyView",
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1,
+        )?;
+        let received_at_ms = u64::try_from(received_at_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "receivedAtMilliseconds must be positive".to_owned())?;
+        envelope
+            .validate_for_first_delivery_v1(
+                &request,
+                &expected_issuer,
+                &policy_view,
+                received_at_ms,
+            )
+            .map_err(|_| {
+                "request, credential, or current policy rejected first delivery".to_owned()
+            })?;
+        env.byte_array_from_slice(&envelope.payload.payment_v4_norito)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub(super) struct JavaKagemushaFinalizedFirstDeliveryV1<'local> {
+    envelope: jni::objects::JByteArray<'local>,
+    request: jni::objects::JByteArray<'local>,
+    expected_issuer: jni::objects::JByteArray<'local>,
+    policy_view: jni::objects::JByteArray<'local>,
+    expected_network_id: jni::objects::JByteArray<'local>,
+    trusted_context_id: jni::objects::JByteArray<'local>,
+    received_at_ms: jni::sys::jlong,
+}
+
+pub(super) fn java_native_kagemusha_validate_eligibility_payment_first_delivery_finalized_v1(
+    env: &mut jni::JNIEnv<'_>,
+    inputs: JavaKagemushaFinalizedFirstDeliveryV1<'_>,
+) -> jni::sys::jbyteArray {
+    let JavaKagemushaFinalizedFirstDeliveryV1 {
+        envelope,
+        request,
+        expected_issuer,
+        policy_view,
+        expected_network_id,
+        trusted_context_id,
+        received_at_ms,
+    } = inputs;
+    java_kagemusha_archive_array_result(
+        env,
+        "finalized eligibility first-delivery validation",
+        |env| {
+            let envelope = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1,
+        >(
+            env,
+            &envelope,
+            "envelope",
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1,
+        )?;
+            validate_kagemusha_eligibility_envelope_inner_payment_v1(&envelope)
+                .map_err(|_| "inner payment is invalid".to_owned())?;
+            let request = java_kagemusha_decode_archive_bounded::<
+                iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+            >(
+                env,
+                &request,
+                "request",
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
+            )?;
+            let expected_issuer = java_kagemusha_decode_archive_bounded::<PublicKey>(
+                env,
+                &expected_issuer,
+                "expectedIssuer",
+                4 * 1024,
+            )?;
+            let policy_view = java_kagemusha_decode_archive_bounded::<
+                iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+            >(
+                env,
+                &policy_view,
+                "policyView",
+                iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1,
+            )?;
+            let network_bytes = read_java_byte_array_bounded(
+                env,
+                &expected_network_id,
+                "expectedNetworkId",
+                Hash::LENGTH,
+            )
+            .filter(|bytes| bytes.len() == Hash::LENGTH)
+            .ok_or_else(|| "expectedNetworkId must contain exactly 32 bytes".to_owned())?;
+            let expected_network_id =
+                network_id_from_raw_bytes(&network_bytes).map_err(str::to_owned)?;
+            let context_bytes = read_java_byte_array_bounded(
+                env,
+                &trusted_context_id,
+                "trustedContextId",
+                Hash::LENGTH,
+            )
+            .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+            .ok_or_else(|| "trustedContextId must contain exactly 32 bytes".to_owned())?;
+            let received_at_ms = u64::try_from(received_at_ms)
+                .ok()
+                .filter(|value| *value != 0)
+                .ok_or_else(|| "receivedAtMilliseconds must be positive".to_owned())?;
+            verify_offline_device_policy_view_finality_v1(
+                &policy_view,
+                &expected_network_id,
+                offline_device_trusted_context_id_v1(context_bytes)
+                    .map_err(|_| "trustedContextId is not a canonical Iroha hash".to_owned())?,
+                received_at_ms,
+                false,
+            )
+            .map_err(|_| "policy view, freshness, or finality proof is invalid".to_owned())?;
+            envelope
+                .validate_for_first_delivery_v1(
+                    &request,
+                    &expected_issuer,
+                    &policy_view,
+                    received_at_ms,
+                )
+                .map_err(|_| {
+                    "request, credential, or current policy rejected first delivery".to_owned()
+                })?;
+            env.byte_array_from_slice(&envelope.payload.payment_v4_norito)
+                .map(jni::objects::JByteArray::into_raw)
+                .map_err(|error| error.to_string())
+        },
+    )
+}
 pub(super) fn java_native_kagemusha_project_init_result_v4(
     env: &mut jni::JNIEnv<'_>,
     result: jni::objects::JByteArray<'_>,
@@ -1468,6 +2250,78 @@ pub(super) fn java_native_kagemusha_build_init_request_v4(
         env.byte_array_from_slice(archive.as_slice())
             .map(jni::objects::JByteArray::into_raw)
             .map_err(|error| error.to_string())
+    })
+}
+
+/// Verify and expose the exact block identity authenticated by the compact V4 top-up proof.
+///
+/// This is deliberately a projection of the existing native verifier result. It does not add a
+/// second finality algorithm or allow Java/Kotlin to interpret proof-controlled fields directly.
+pub(super) fn java_native_kagemusha_project_verified_topup_finality_v4(
+    env: &mut jni::JNIEnv<'_>,
+    anchor: jni::objects::JByteArray<'_>,
+    finality_proof: jni::objects::JByteArray<'_>,
+    roster_artifact: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_kagemusha_archive_array_result(env, "V4 top-up finality projection", |env| {
+        let anchor = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
+        >(
+            env,
+            &anchor,
+            "topUpAnchor",
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2 as usize,
+        )?;
+        let finality_proof = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaTopUpFinalityProofV2,
+        >(
+            env,
+            &finality_proof,
+            "topUpFinalityProof",
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize,
+        )?;
+        let roster_artifact = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
+        >(
+            env,
+            &roster_artifact,
+            "topUpFinalityRosterArtifact",
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+                as usize,
+        )?;
+        anchor
+            .validate_public_binding()
+            .map_err(|_| "top-up anchor binding is invalid".to_owned())?;
+        let installed =
+            require_kagemusha_recursive_spend_artifact_binding_v4(&anchor.artifact_binding)
+                .map_err(|_| "top-up anchor does not select the installed V4 release".to_owned())?;
+        installed
+            .verify_topup_roster_binding(&roster_artifact)
+            .map_err(|_| "top-up finality roster is not selected by the release".to_owned())?;
+        let verified = iroha_core::zk::kagemusha_finality::verify_kagemusha_topup_finality_v4(
+            &finality_proof,
+            &roster_artifact,
+            &anchor,
+            installed.manifest(),
+            installed.manifest_sha256(),
+        )
+        .map_err(|_| "top-up finality proof is invalid".to_owned())?;
+        if verified.height() != anchor.finalized_height
+            || verified.anchor().topup_operation_id != anchor.topup_operation_id
+        {
+            return Err("verified top-up finality projection changed anchor identity".to_owned());
+        }
+        authenticated_finality_mobile_height_v1(verified.height()).map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                anchor.topup_operation_id.to_vec(),
+                hex::encode(anchor.finalized_tx_hash).into_bytes(),
+                verified.height().to_string().into_bytes(),
+                verified.block_hash().to_string().into_bytes(),
+                verified.context_id().0.as_ref().to_vec(),
+            ],
+        )
     })
 }
 pub(super) fn java_native_kagemusha_build_topup_provenance_v4(
@@ -2189,6 +3043,14 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
             "cash handoff capability must be the exact cash_handoff_v1 contract".to_owned(),
         );
     }
+    if readiness.eligibility_cash_handoff_capability
+        != iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1
+    {
+        return Err(
+            "eligibility cash handoff capability must be the exact cash_handoff_eligibility_v1 contract"
+                .to_owned(),
+        );
+    }
     if readiness.required_bridge_abi_version
         != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
     {
@@ -2424,6 +3286,7 @@ pub(super) fn java_kagemusha_project_readiness_v4_fields(
     }
     let mut fields = vec![
         readiness.cash_handoff_capability.into_bytes(),
+        readiness.eligibility_cash_handoff_capability.into_bytes(),
         readiness
             .required_bridge_abi_version
             .to_string()
@@ -2607,6 +3470,192 @@ pub(super) fn java_native_kagemusha_prepare_authorization_v2(
         )
     })
 }
+#[allow(clippy::too_many_arguments)]
+pub(super) fn java_native_kagemusha_finalize_drain_only_redemption_authorization_v1(
+    env: &mut jni::JNIEnv<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
+    device_id: jni::objects::JByteArray<'_>,
+    asset_definition_id: jni::objects::JByteArray<'_>,
+    operation_id: jni::objects::JByteArray<'_>,
+    issued_at_ms: jni::sys::jlong,
+    expires_at_ms: jni::sys::jlong,
+    nonce: jni::objects::JByteArray<'_>,
+    payload_digest: jni::objects::JByteArray<'_>,
+    policy_view: jni::objects::JByteArray<'_>,
+    expected_network_id: jni::objects::JByteArray<'_>,
+    trusted_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "drain-only redemption authorization", |env| {
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
+        let authority = parse_account_id_for_chain(
+            java_kagemusha_text(env, &authority, "authority")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "authority must be a canonical account address".to_owned())?;
+        let device_id = java_kagemusha_text(env, &device_id, "deviceId")?;
+        if device_id.len() > 128 {
+            return Err("deviceId exceeds 128 bytes".to_owned());
+        }
+        let asset_definition_id = parse_asset_definition(java_kagemusha_text(
+            env,
+            &asset_definition_id,
+            "assetDefinitionId",
+        )?)
+        .map_err(|_| "assetDefinitionId must be canonical".to_owned())?;
+        let operation_id = java_kagemusha_fixed32(env, &operation_id, "operationId")?;
+        let issued_at_ms = u64::try_from(issued_at_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "issuedAtMilliseconds must be positive".to_owned())?;
+        let expires_at_ms = u64::try_from(expires_at_ms)
+            .ok()
+            .filter(|value| {
+                *value > issued_at_ms
+                    && *value - issued_at_ms
+                        <= iroha_data_model::offline::KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2
+            })
+            .ok_or_else(|| "expiresAtMilliseconds is outside the authorization TTL".to_owned())?;
+        let nonce = java_kagemusha_fixed32(env, &nonce, "nonce")?;
+        let payload_digest = java_kagemusha_fixed32(env, &payload_digest, "payloadDigest")?;
+        let policy_view = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(
+            env,
+            &policy_view,
+            "policyView",
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1,
+        )?;
+        let network_bytes = read_java_byte_array_bounded(
+            env,
+            &expected_network_id,
+            "expectedNetworkId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "expectedNetworkId must contain exactly 32 bytes".to_owned())?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(str::to_owned)?;
+        let context_bytes = read_java_byte_array_bounded(
+            env,
+            &trusted_context_id,
+            "trustedContextId",
+            Hash::LENGTH,
+        )
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .ok_or_else(|| "trustedContextId must contain exactly 32 bytes".to_owned())?;
+        verify_offline_device_policy_view_finality_v1(
+            &policy_view,
+            &expected_network_id,
+            offline_device_trusted_context_id_v1(context_bytes)
+                .map_err(|_| "trustedContextId is not a canonical Iroha hash".to_owned())?,
+            issued_at_ms,
+            false,
+        )
+        .map_err(|_| "policy view, freshness, or finality proof is invalid".to_owned())?;
+        let mut finalized_block_hash = [0_u8; Hash::LENGTH];
+        finalized_block_hash.copy_from_slice(policy_view.finality.finalized_block_hash.as_ref());
+        let mut finality_evidence_hash = [0_u8; Hash::LENGTH];
+        finality_evidence_hash
+            .copy_from_slice(policy_view.finality.finality_evidence_hash.as_ref());
+        let authorization = iroha_data_model::offline::KagemushaRequestAuthorizationV2 {
+            authority,
+            device_id,
+            asset_definition_id,
+            operation_id,
+            issued_at_ms,
+            expires_at_ms,
+            nonce,
+            payload_digest,
+            registration_hash: [0; 32],
+            hardware_assertion:
+                iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(
+                    iroha_data_model::offline::KagemushaDrainOnlyRedemptionPolicyBindingV1 {
+                        policy_epoch: policy_view.policy_epoch,
+                        policy_hash: policy_view.policy_hash,
+                        freshness_deadline_ms: policy_view.freshness_deadline_ms,
+                        finalized_block_height: policy_view.finality.finalized_block_height,
+                        finalized_block_hash,
+                        finalized_block_timestamp_ms:
+                            policy_view.finality.finalized_block_timestamp_ms,
+                        finality_evidence_hash,
+                    },
+                ),
+        };
+        authorization
+            .validate_for_payload(payload_digest)
+            .map_err(|_| "drain-only redemption authorization is invalid".to_owned())?;
+        let archive = norito::to_bytes(&authorization)
+            .map_err(|error| format!("failed to encode drain-only authorization: {error}"))?;
+        if archive.len() > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2 {
+            return Err("drain-only authorization exceeds its canonical bound".to_owned());
+        }
+        env.byte_array_from_slice(&archive)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+pub(super) fn java_native_kagemusha_build_drain_only_redeem_instruction_v4(
+    env: &mut jni::JNIEnv<'_>,
+    request: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
+) -> jni::sys::jobjectArray {
+    java_kagemusha_archive_array_result(env, "drain-only redemption instruction", |env| {
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
+        let authority = parse_account_id_for_chain(
+            java_kagemusha_text(env, &authority, "authority")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "authority must be a canonical account address".to_owned())?;
+        let request = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV4,
+        >(
+            env,
+            &request,
+            "redeemRequest",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
+        )?;
+        request
+            .validate_public_binding()
+            .map_err(|_| "redeemRequest is not a valid exact V4 request".to_owned())?;
+        if request.recipient != authority || request.authorization.authority != authority {
+            return Err(
+                "drain-only redemption recipient, embedded authority, and outer authority differ"
+                    .to_owned(),
+            );
+        }
+        if !matches!(
+            request.authorization.hardware_assertion,
+            iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_)
+        ) {
+            return Err("redeemRequest does not carry the closed drain-only variant".to_owned());
+        }
+        let operation_id = request.operation_id;
+        let issued_at_ms = request.authorization.issued_at_ms;
+        let expires_at_ms = request.authorization.expires_at_ms;
+        let instruction = iroha_data_model::isi::InstructionBox::from(
+            iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4::new(request),
+        );
+        let (wire_id, framed_payload) = framed_instruction_payload(&instruction)
+            .ok_or_else(|| "native registry omitted the redemption instruction".to_owned())?;
+        if wire_id != "iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4" {
+            return Err("native registry returned another redemption wire id".to_owned());
+        }
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                wire_id.as_bytes().to_vec(),
+                framed_payload,
+                operation_id.to_vec(),
+                issued_at_ms.to_string().into_bytes(),
+                expires_at_ms.to_string().into_bytes(),
+            ],
+        )
+    })
+}
 pub(super) fn java_native_kagemusha_finalize_hardware_authorization_v2(
     env: &mut jni::JNIEnv<'_>,
     preparation: jni::objects::JByteArray<'_>,
@@ -2675,6 +3724,1257 @@ pub(super) fn java_native_kagemusha_finalize_ios_app_attest_authorization_v2(
             })?;
         java_kagemusha_byte_arrays(env, &[archive, signature_raw, authenticator_data])
     })
+}
+
+pub(super) fn java_native_authenticated_transaction_details_prepare_v1(
+    env: &mut jni::JNIEnv<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    transaction_hash_hex: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    nonce: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let network_id = read_java_byte_array_bounded(env, &network_id, "networkId", Hash::LENGTH)
+            .ok_or_else(|| "networkId must contain exactly 32 bytes".to_owned())?;
+        let authority = read_java_byte_array_bounded(
+            env,
+            &authority,
+            "authorityAccountId",
+            AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "authorityAccountId must be bounded UTF-8".to_owned())?;
+        let authority = std::str::from_utf8(&authority)
+            .map_err(|_| "authorityAccountId must be UTF-8".to_owned())?;
+        let transaction_hash_hex = read_java_byte_array_bounded(
+            env,
+            &transaction_hash_hex,
+            "transactionHashHex",
+            Hash::LENGTH * 2,
+        )
+        .ok_or_else(|| "transactionHashHex must contain exactly 64 bytes".to_owned())?;
+        let transaction_hash_hex = std::str::from_utf8(&transaction_hash_hex)
+            .map_err(|_| "transactionHashHex must be UTF-8".to_owned())?;
+        let creation_time_ms = u64::try_from(creation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "creationTimeMs must be positive".to_owned())?;
+        let nonce: [u8; 32] = read_java_byte_array_bounded(env, &nonce, "nonce", 32)
+            .ok_or_else(|| "nonce must contain exactly 32 bytes".to_owned())?
+            .try_into()
+            .map_err(|_| "nonce must contain exactly 32 bytes".to_owned())?;
+        let (preparation, digest) = authenticated_transaction_details_prepare_v1(
+            &network_id,
+            authority,
+            transaction_hash_hex,
+            creation_time_ms,
+            nonce,
+        )
+        .map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(env, &[preparation, digest.to_vec()])
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated transaction-details query: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_transaction_details_prepare_v2(
+    env: &mut jni::JNIEnv<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    query_authority: jni::objects::JByteArray<'_>,
+    expected_transaction_authority: jni::objects::JByteArray<'_>,
+    transaction_hash_hex: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    nonce: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let network_id = read_java_byte_array_bounded(env, &network_id, "networkId", Hash::LENGTH)
+            .ok_or_else(|| "networkId must contain exactly 32 bytes".to_owned())?;
+        let query_authority = read_java_byte_array_bounded(
+            env,
+            &query_authority,
+            "queryAuthorityAccountId",
+            AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "queryAuthorityAccountId must be bounded UTF-8".to_owned())?;
+        let query_authority = std::str::from_utf8(&query_authority)
+            .map_err(|_| "queryAuthorityAccountId must be UTF-8".to_owned())?;
+        let expected_transaction_authority = read_java_byte_array_bounded(
+            env,
+            &expected_transaction_authority,
+            "expectedTransactionAuthorityAccountId",
+            AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "expectedTransactionAuthorityAccountId must be bounded UTF-8".to_owned())?;
+        let expected_transaction_authority =
+            std::str::from_utf8(&expected_transaction_authority)
+                .map_err(|_| "expectedTransactionAuthorityAccountId must be UTF-8".to_owned())?;
+        let transaction_hash_hex = read_java_byte_array_bounded(
+            env,
+            &transaction_hash_hex,
+            "transactionHashHex",
+            Hash::LENGTH * 2,
+        )
+        .ok_or_else(|| "transactionHashHex must contain exactly 64 bytes".to_owned())?;
+        let transaction_hash_hex = std::str::from_utf8(&transaction_hash_hex)
+            .map_err(|_| "transactionHashHex must be UTF-8".to_owned())?;
+        let creation_time_ms = u64::try_from(creation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "creationTimeMs must be positive".to_owned())?;
+        let nonce: [u8; 32] = read_java_byte_array_bounded(env, &nonce, "nonce", 32)
+            .ok_or_else(|| "nonce must contain exactly 32 bytes".to_owned())?
+            .try_into()
+            .map_err(|_| "nonce must contain exactly 32 bytes".to_owned())?;
+        let (preparation, digest) = authenticated_transaction_details_prepare_v2(
+            &network_id,
+            query_authority,
+            expected_transaction_authority,
+            transaction_hash_hex,
+            creation_time_ms,
+            nonce,
+        )
+        .map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(env, &[preparation, digest.to_vec()])
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated transaction-details V2 query: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_transaction_details_finalize_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let signature = read_java_byte_array_bounded(
+            env,
+            &signature,
+            "signature",
+            AUTHENTICATED_TRANSACTION_DETAILS_SIGNATURE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "signature must be bounded and nonempty".to_owned())?;
+        let body = authenticated_transaction_details_finalize_v1(&preparation, &signature)
+            .map_err(str::to_owned)?;
+        env.byte_array_from_slice(&body)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated transaction-details query: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_transaction_details_finalize_v2(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let signature = read_java_byte_array_bounded(
+            env,
+            &signature,
+            "signature",
+            AUTHENTICATED_TRANSACTION_DETAILS_SIGNATURE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "signature must be bounded and nonempty".to_owned())?;
+        let body = authenticated_transaction_details_finalize_v2(&preparation, &signature)
+            .map_err(str::to_owned)?;
+        env.byte_array_from_slice(&body)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated transaction-details V2 query: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_transaction_details_project_rejection_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "responseNorito",
+            AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be a bounded nonempty archive".to_owned())?;
+        let projection =
+            authenticated_transaction_details_project_rejection_v1(&preparation, &response)
+                .map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                projection.transaction_hash_hex.into_bytes(),
+                projection.transaction_authority.into_bytes(),
+                projection.block_hash_hex.into_bytes(),
+                projection.result_hash_hex.into_bytes(),
+                projection.rejection_code.as_bytes().to_vec(),
+                projection.rejection_message.into_bytes(),
+                projection.committed_block_height.to_string().into_bytes(),
+            ],
+        )
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated transaction-details response: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_transaction_details_project_rejection_v2(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_transaction_details_project_kagemusha_or_generic_rejection_v2(
+        env,
+        preparation,
+        response,
+        None,
+    )
+}
+
+pub(super) fn java_native_authenticated_kagemusha_rejection_project_v2(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+    expected_operation_id: jni::objects::JByteArray<'_>,
+    expected_kind: jni::objects::JByteArray<'_>,
+    expected_request: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let expected_operation_id = read_java_byte_array_bounded(
+        env,
+        &expected_operation_id,
+        "expectedOperationId",
+        Hash::LENGTH,
+    )
+    .and_then(|bytes| bytes.try_into().ok());
+    let expected_kind = read_java_byte_array_bounded(env, &expected_kind, "expectedKind", 16)
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+    let expected_request = read_java_byte_array_bounded(
+        env,
+        &expected_request,
+        "expectedRequest",
+        KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+    );
+    let Some(expected_operation_id) = expected_operation_id else {
+        throw_java_illegal_argument(
+            env,
+            "expected Kagemusha operation id must contain 32 bytes".to_owned(),
+        );
+        return std::ptr::null_mut();
+    };
+    let Some(expected_kind) = expected_kind else {
+        throw_java_illegal_argument(
+            env,
+            "expected Kagemusha kind must be bounded UTF-8".to_owned(),
+        );
+        return std::ptr::null_mut();
+    };
+    let Some(expected_request) = expected_request else {
+        throw_java_illegal_argument(
+            env,
+            "expected Kagemusha request must be bounded and nonempty".to_owned(),
+        );
+        return std::ptr::null_mut();
+    };
+    java_native_authenticated_transaction_details_project_kagemusha_or_generic_rejection_v2(
+        env,
+        preparation,
+        response,
+        Some((expected_operation_id, expected_kind, expected_request)),
+    )
+}
+
+fn java_native_authenticated_transaction_details_project_kagemusha_or_generic_rejection_v2(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+    kagemusha: Option<([u8; 32], String, Vec<u8>)>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "responseNorito",
+            AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be a bounded nonempty archive".to_owned())?;
+        let projection = match kagemusha {
+            Some((operation_id, kind, request)) => authenticated_kagemusha_rejection_project_v2(
+                &preparation,
+                &response,
+                operation_id,
+                &kind,
+                &request,
+            ),
+            None => authenticated_transaction_details_project_rejection_v2(&preparation, &response),
+        }
+        .map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                projection.transaction_hash_hex.into_bytes(),
+                projection.query_authority.into_bytes(),
+                projection.transaction_authority.into_bytes(),
+                projection.block_hash_hex.into_bytes(),
+                projection.result_hash_hex.into_bytes(),
+                projection.rejection_code.as_bytes().to_vec(),
+                projection.rejection_message.into_bytes(),
+                projection.committed_block_height.to_string().into_bytes(),
+            ],
+        )
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated transaction-details V2 response: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_transaction_details_project_result_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "responseNorito",
+            AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be a bounded nonempty archive".to_owned())?;
+        let projection =
+            authenticated_transaction_details_project_result_v1(&preparation, &response)
+                .map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                projection.transaction_hash_hex.into_bytes(),
+                projection.transaction_authority.into_bytes(),
+                projection.block_hash_hex.into_bytes(),
+                projection.result_hash_hex.into_bytes(),
+                if projection.result_ok {
+                    b"true".to_vec()
+                } else {
+                    b"false".to_vec()
+                },
+                projection
+                    .rejection_message
+                    .unwrap_or_default()
+                    .into_bytes(),
+                projection.committed_block_height.to_string().into_bytes(),
+            ],
+        )
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated transaction-details response: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_transaction_details_project_result_v2(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "responseNorito",
+            AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be a bounded nonempty archive".to_owned())?;
+        let projection =
+            authenticated_transaction_details_project_result_v2(&preparation, &response)
+                .map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                projection.transaction_hash_hex.into_bytes(),
+                projection.query_authority.into_bytes(),
+                projection.transaction_authority.into_bytes(),
+                projection.block_hash_hex.into_bytes(),
+                projection.result_hash_hex.into_bytes(),
+                if projection.result_ok {
+                    b"true".to_vec()
+                } else {
+                    b"false".to_vec()
+                },
+                projection
+                    .rejection_message
+                    .unwrap_or_default()
+                    .into_bytes(),
+                projection.committed_block_height.to_string().into_bytes(),
+            ],
+        )
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated transaction-details V2 response: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_finality_proof_page_bind_v1(
+    env: &mut jni::JNIEnv<'_>,
+    proof_archives: jni::objects::JObjectArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let proof_archives = read_java_sorafs_reference_byte_array_vector(
+            env,
+            &proof_archives,
+            "finalityProofsNorito",
+            None,
+            AUTHENTICATED_FINALITY_PAGE_MAX_PROOFS_V1,
+            AUTHENTICATED_FINALITY_PROOF_MAX_BYTES_V1,
+        )?;
+        let projection =
+            authenticated_finality_proof_page_bind_v1(&proof_archives).map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(env, &[projection.archive, projection.hash_hex.into_bytes()])
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated finality proof page: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_finality_page_verify_v1(
+    env: &mut jni::JNIEnv<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    finality_page_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let network_id = read_java_byte_array_bounded(env, &network_id, "networkId", Hash::LENGTH)
+            .filter(|bytes| bytes.len() == Hash::LENGTH)
+            .ok_or_else(|| "networkId must contain exactly 32 bytes".to_owned())?;
+        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
+            .ok()
+            .filter(|height| *height != 0)
+            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
+        let trusted_checkpoint_context_id = read_java_byte_array_bounded(
+            env,
+            &trusted_checkpoint_context_id,
+            "trustedCheckpointContextId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
+        let finality_page_archive = read_java_byte_array_bounded(
+            env,
+            &finality_page_archive,
+            "finalityPageArchive",
+            AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "finalityPageArchive must be bounded and nonempty".to_owned())?;
+        let checkpoint = authenticated_finality_page_verify_v1(
+            &network_id,
+            trusted_checkpoint_height,
+            &trusted_checkpoint_context_id,
+            &finality_page_archive,
+        )
+        .map_err(str::to_owned)?;
+        let checkpoint = checkpoint.encode().map_err(str::to_owned)?;
+        env.byte_array_from_slice(&checkpoint)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated finality proof page: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn java_native_authenticated_finalized_kagemusha_outcome_project_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+    expected_operation_id: jni::objects::JByteArray<'_>,
+    expected_kind: jni::objects::JByteArray<'_>,
+    expected_request: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    finality_page_archive: jni::objects::JByteArray<'_>,
+    executed_block_wire: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "responseNorito",
+            AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be a bounded nonempty archive".to_owned())?;
+        let expected_operation_id: [u8; 32] =
+            read_java_byte_array_bounded(env, &expected_operation_id, "expectedOperationId", 32)
+                .ok_or_else(|| "expectedOperationId must contain exactly 32 bytes".to_owned())?
+                .try_into()
+                .map_err(|_| "expectedOperationId must contain exactly 32 bytes".to_owned())?;
+        let expected_kind = read_java_byte_array_bounded(env, &expected_kind, "expectedKind", 16)
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .ok_or_else(|| "expectedKind must be bounded UTF-8".to_owned())?;
+        let expected_request_max_bytes = match expected_kind.as_str() {
+            "top_up" => {
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4
+            }
+            "redeem" => {
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+            }
+            _ => return Err("expectedKind must be top_up or redeem".to_owned()),
+        };
+        let expected_request = read_java_byte_array_bounded(
+            env,
+            &expected_request,
+            "expectedRequestNorito",
+            expected_request_max_bytes,
+        )
+        .ok_or_else(|| "expectedRequestNorito must be bounded and nonempty".to_owned())?;
+        let network_id = read_java_byte_array_bounded(env, &network_id, "networkId", Hash::LENGTH)
+            .filter(|bytes| bytes.len() == Hash::LENGTH)
+            .ok_or_else(|| "networkId must contain exactly 32 bytes".to_owned())?;
+        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
+            .ok()
+            .filter(|height| *height != 0)
+            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
+        let trusted_checkpoint_context_id = read_java_byte_array_bounded(
+            env,
+            &trusted_checkpoint_context_id,
+            "trustedCheckpointContextId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
+        let finality_page_archive = read_java_byte_array_bounded(
+            env,
+            &finality_page_archive,
+            "finalityPageArchive",
+            AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "finalityPageArchive must be bounded and nonempty".to_owned())?;
+        let executed_block_wire = read_java_byte_array_bounded(
+            env,
+            &executed_block_wire,
+            "executedBlockWire",
+            iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+        )
+        .ok_or_else(|| "executedBlockWire must be bounded and nonempty".to_owned())?;
+        let projection = authenticated_finalized_kagemusha_outcome_project_v1(
+            &preparation,
+            &response,
+            expected_operation_id,
+            &expected_kind,
+            &expected_request,
+            &network_id,
+            trusted_checkpoint_height,
+            &trusted_checkpoint_context_id,
+            &finality_page_archive,
+            &executed_block_wire,
+        )
+        .map_err(str::to_owned)?;
+        let terminal_state = match projection.terminal_state {
+            AuthenticatedFinalizedKagemushaTerminalStateV1::Applied => b"applied".to_vec(),
+            AuthenticatedFinalizedKagemushaTerminalStateV1::Rejected => b"rejected".to_vec(),
+        };
+        let finalized_checkpoint = projection
+            .finalized_checkpoint
+            .encode()
+            .map_err(str::to_owned)?
+            .to_vec();
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                terminal_state,
+                projection.operation_id.to_vec(),
+                projection.operation_kind.into_bytes(),
+                projection.transaction_hash_hex.into_bytes(),
+                projection.query_authority.into_bytes(),
+                projection.transaction_authority.into_bytes(),
+                projection.block_hash_hex.into_bytes(),
+                projection.result_hash_hex.into_bytes(),
+                projection.committed_block_height.to_string().into_bytes(),
+                finalized_checkpoint,
+                projection.executed_block_wire_hash_hex.into_bytes(),
+                projection.rejection_code.unwrap_or_default().into_bytes(),
+                projection
+                    .rejection_message
+                    .unwrap_or_default()
+                    .into_bytes(),
+                projection.evidence_id_hex.into_bytes(),
+                projection.transaction_details_hash_hex.into_bytes(),
+                projection.finality_page_hash_hex.into_bytes(),
+            ],
+        )
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated finalized Kagemusha outcome: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn java_native_authenticated_finalized_privacy_action_rejection_project_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+    operation_index: jni::sys::jint,
+    action_index: jni::sys::jint,
+    requested_action_binding: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    finality_page_archive: jni::objects::JByteArray<'_>,
+    executed_block_wire: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "responseNorito",
+            AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be a bounded nonempty archive".to_owned())?;
+        let action_index = u32::try_from(action_index)
+            .map_err(|_| "actionIndex must be non-negative".to_owned())?;
+        let requested_action_binding = read_java_byte_array_bounded(
+            env,
+            &requested_action_binding,
+            "requestedActionBinding",
+            AUTHENTICATED_ACTION_RECEIPT_BINDING_BYTES_V1,
+        )
+        .filter(|bytes| bytes.len() == AUTHENTICATED_ACTION_RECEIPT_BINDING_BYTES_V1)
+        .ok_or_else(|| "requestedActionBinding must contain exactly 96 bytes".to_owned())?;
+        let network_id = read_java_byte_array_bounded(env, &network_id, "networkId", Hash::LENGTH)
+            .filter(|bytes| bytes.len() == Hash::LENGTH)
+            .ok_or_else(|| "networkId must contain exactly 32 bytes".to_owned())?;
+        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
+            .ok()
+            .filter(|height| *height != 0)
+            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
+        let trusted_checkpoint_context_id = read_java_byte_array_bounded(
+            env,
+            &trusted_checkpoint_context_id,
+            "trustedCheckpointContextId",
+            Hash::LENGTH,
+        )
+        .filter(|bytes| bytes.len() == Hash::LENGTH)
+        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
+        let finality_page_archive = read_java_byte_array_bounded(
+            env,
+            &finality_page_archive,
+            "finalityPageArchive",
+            AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "finalityPageArchive must be bounded and nonempty".to_owned())?;
+        let executed_block_wire = read_java_byte_array_bounded(
+            env,
+            &executed_block_wire,
+            "executedBlockWire",
+            iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+        )
+        .ok_or_else(|| "executedBlockWire must be bounded and nonempty".to_owned())?;
+        let projection = authenticated_finalized_privacy_action_rejection_project_v1(
+            &preparation,
+            &response,
+            operation_index,
+            action_index,
+            &requested_action_binding,
+            &network_id,
+            trusted_checkpoint_height,
+            &trusted_checkpoint_context_id,
+            &finality_page_archive,
+            &executed_block_wire,
+        )
+        .map_err(str::to_owned)?;
+        let finalized_checkpoint = projection
+            .finalized_checkpoint
+            .encode()
+            .map_err(str::to_owned)?
+            .to_vec();
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                b"1".to_vec(),
+                projection.network_id_hex.into_bytes(),
+                projection.protocol_id.canonical_label().as_bytes().to_vec(),
+                projection
+                    .operation_schema
+                    .canonical_label()
+                    .as_bytes()
+                    .to_vec(),
+                projection
+                    .ledger_effect_kind
+                    .canonical_label()
+                    .as_bytes()
+                    .to_vec(),
+                projection.transaction_hash_hex.into_bytes(),
+                projection.action_index.to_string().into_bytes(),
+                projection.transaction_intent_digest_hex.into_bytes(),
+                projection.statement_digest_hex.into_bytes(),
+                projection.proof_envelope_hash_hex.into_bytes(),
+                projection.query_authority.into_bytes(),
+                projection.transaction_authority.into_bytes(),
+                projection.block_hash_hex.into_bytes(),
+                projection.result_hash_hex.into_bytes(),
+                projection
+                    .rejection_code
+                    .canonical_label()
+                    .as_bytes()
+                    .to_vec(),
+                projection.rejection_message.into_bytes(),
+                projection.committed_block_height.to_string().into_bytes(),
+                finalized_checkpoint,
+                projection.executed_block_wire_hash_hex.into_bytes(),
+                projection.evidence_id_hex.into_bytes(),
+                projection.transaction_details_hash_hex.into_bytes(),
+                projection.finality_page_hash_hex.into_bytes(),
+            ],
+        )
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated finalized Exact12 rejection: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_offline_device_registration_result_project_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "responseNorito",
+            AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be a bounded nonempty archive".to_owned())?;
+        let json =
+            authenticated_offline_device_registration_result_json_v1(&preparation, &response)
+                .map_err(|_| "committed registration result is invalid".to_owned())?;
+        env.byte_array_from_slice(&json)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated offline-device registration result: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn java_native_authenticated_privacy_action_receipt_prepare_v1(
+    env: &mut jni::JNIEnv<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    operation_index: jni::sys::jint,
+    transaction_hash_hex: jni::objects::JByteArray<'_>,
+    action_index: jni::sys::jint,
+    requested_action_binding: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    nonce: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let network_id = read_java_byte_array_bounded(env, &network_id, "networkId", Hash::LENGTH)
+            .ok_or_else(|| "networkId must contain exactly 32 bytes".to_owned())?;
+        let authority = read_java_byte_array_bounded(
+            env,
+            &authority,
+            "authorityAccountId",
+            AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "authorityAccountId must be bounded UTF-8".to_owned())?;
+        let authority = std::str::from_utf8(&authority)
+            .map_err(|_| "authorityAccountId must be UTF-8".to_owned())?;
+        let transaction_hash_hex = read_java_byte_array_bounded(
+            env,
+            &transaction_hash_hex,
+            "transactionHashHex",
+            Hash::LENGTH * 2,
+        )
+        .ok_or_else(|| "transactionHashHex must contain exactly 64 bytes".to_owned())?;
+        let transaction_hash_hex = std::str::from_utf8(&transaction_hash_hex)
+            .map_err(|_| "transactionHashHex must be UTF-8".to_owned())?;
+        let action_index = u32::try_from(action_index)
+            .map_err(|_| "actionIndex must be non-negative".to_owned())?;
+        let requested_action_binding = read_java_byte_array_bounded(
+            env,
+            &requested_action_binding,
+            "requestedActionBinding",
+            AUTHENTICATED_ACTION_RECEIPT_BINDING_BYTES_V1,
+        )
+        .ok_or_else(|| "requestedActionBinding must contain exactly 96 bytes".to_owned())?;
+        let creation_time_ms = u64::try_from(creation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "creationTimeMs must be positive".to_owned())?;
+        let nonce: [u8; 32] = read_java_byte_array_bounded(env, &nonce, "nonce", Hash::LENGTH)
+            .ok_or_else(|| "nonce must contain exactly 32 bytes".to_owned())?
+            .try_into()
+            .map_err(|_| "nonce must contain exactly 32 bytes".to_owned())?;
+        let (preparation, digest) = authenticated_privacy_action_receipt_prepare_v1(
+            &network_id,
+            authority,
+            operation_index,
+            transaction_hash_hex,
+            action_index,
+            &requested_action_binding,
+            creation_time_ms,
+            nonce,
+        )
+        .map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(env, &[preparation, digest.to_vec()])
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated Exact12 action-receipt query: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_privacy_action_receipt_finalize_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_ACTION_RECEIPT_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let signature = read_java_byte_array_bounded(
+            env,
+            &signature,
+            "signature",
+            AUTHENTICATED_ACTION_RECEIPT_SIGNATURE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "signature must be bounded and nonempty".to_owned())?;
+        let body = authenticated_privacy_action_receipt_finalize_v1(&preparation, &signature)
+            .map_err(str::to_owned)?;
+        env.byte_array_from_slice(&body)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated Exact12 action-receipt query: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_privacy_action_receipt_project_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_ACTION_RECEIPT_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "responseNorito",
+            AUTHENTICATED_ACTION_RECEIPT_RESPONSE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be a bounded nonempty archive".to_owned())?;
+        let projection =
+            authenticated_privacy_action_receipt_project_result_v1(&preparation, &response)
+                .map_err(str::to_owned)?;
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                projection.version.to_string().into_bytes(),
+                projection.network_id_hex.into_bytes(),
+                projection.protocol_id.as_bytes().to_vec(),
+                projection.operation_schema.as_bytes().to_vec(),
+                projection.ledger_effect_kind.as_bytes().to_vec(),
+                projection.transaction_hash_hex.into_bytes(),
+                projection.action_index.to_string().into_bytes(),
+                projection.transaction_intent_digest_hex.into_bytes(),
+                projection.statement_digest_hex.into_bytes(),
+                projection.proof_envelope_hash_hex.into_bytes(),
+                projection.capability_manifest_digest_hex.into_bytes(),
+                projection
+                    .capability_committed_height
+                    .to_string()
+                    .into_bytes(),
+                projection.admitted_at_height.to_string().into_bytes(),
+                projection.finalized_height.to_string().into_bytes(),
+                projection.finalized_block_hash_hex.into_bytes(),
+            ],
+        )
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated Exact12 action-receipt response: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn java_native_authenticated_privacy_state_query_prepare_v1(
+    env: &mut jni::JNIEnv<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    query_id: jni::sys::jint,
+    protocol_index: jni::sys::jint,
+    request_binding: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    nonce: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let network_id = read_java_byte_array_bounded(env, &network_id, "networkId", Hash::LENGTH)
+            .filter(|bytes| bytes.len() == Hash::LENGTH)
+            .ok_or_else(|| "networkId must contain exactly 32 bytes".to_owned())?;
+        let authority = read_java_byte_array_bounded(
+            env,
+            &authority,
+            "authorityAccountId",
+            AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "authorityAccountId must be bounded UTF-8".to_owned())?;
+        let authority = std::str::from_utf8(&authority)
+            .map_err(|_| "authorityAccountId must be UTF-8".to_owned())?;
+        let query_id =
+            u32::try_from(query_id).map_err(|_| "queryId must be non-negative".to_owned())?;
+        let protocol_index = u32::try_from(protocol_index)
+            .map_err(|_| "protocolIndex must be non-negative".to_owned())?;
+        let request_binding = read_java_byte_array_bounded(
+            env,
+            &request_binding,
+            "requestBinding",
+            AUTHENTICATED_PRIVACY_STATE_QUERY_BINDING_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "requestBinding must be bounded and nonempty".to_owned())?;
+        let creation_time_ms = u64::try_from(creation_time_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "creationTimeMs must be positive".to_owned())?;
+        let nonce: [u8; 32] = read_java_byte_array_bounded(env, &nonce, "nonce", Hash::LENGTH)
+            .filter(|bytes| bytes.len() == Hash::LENGTH)
+            .ok_or_else(|| "nonce must contain exactly 32 bytes".to_owned())?
+            .try_into()
+            .map_err(|_| "nonce must contain exactly 32 bytes".to_owned())?;
+        let (preparation, digest) = authenticated_privacy_state_query_prepare_v1(
+            &network_id,
+            authority,
+            query_id,
+            protocol_index,
+            &request_binding,
+            creation_time_ms,
+            nonce,
+        )?;
+        java_kagemusha_byte_arrays(env, &[preparation, digest.to_vec()])
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated finalized privacy-state query: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_privacy_state_query_finalize_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_PRIVACY_STATE_QUERY_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let signature = read_java_byte_array_bounded(
+            env,
+            &signature,
+            "signature",
+            AUTHENTICATED_PRIVACY_STATE_QUERY_SIGNATURE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "signature must be bounded and nonempty".to_owned())?;
+        let body = authenticated_privacy_state_query_finalize_v1(&preparation, &signature)?;
+        env.byte_array_from_slice(&body)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated finalized privacy-state query: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_authenticated_privacy_state_query_project_v1(
+    env: &mut jni::JNIEnv<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let preparation = read_java_byte_array_bounded(
+            env,
+            &preparation,
+            "preparation",
+            AUTHENTICATED_PRIVACY_STATE_QUERY_PREPARATION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "preparation must be a bounded nonempty archive".to_owned())?;
+        let response = read_java_byte_array_bounded(
+            env,
+            &response,
+            "responseNorito",
+            AUTHENTICATED_PRIVACY_STATE_QUERY_RESPONSE_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "responseNorito must be a bounded nonempty archive".to_owned())?;
+        let projection =
+            authenticated_privacy_state_query_project_result_v1(&preparation, &response)?;
+        env.byte_array_from_slice(&projection)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(
+                env,
+                format!("authenticated finalized privacy-state response: {message}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_privacy_inspect_signed_exact12_action_v1(
+    env: &mut jni::JNIEnv<'_>,
+    signed_transaction: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    operation_index: jni::sys::jint,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let signed_transaction = read_java_byte_array_bounded(
+            env,
+            &signed_transaction,
+            "signedTransactionVersioned",
+            PRIVACY_EXACT12_SIGNED_ACTION_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "signed transaction must be bounded and nonempty".to_owned())?;
+        let network_id = read_java_byte_array_bounded(env, &network_id, "networkId", Hash::LENGTH)
+            .filter(|bytes| bytes.len() == Hash::LENGTH)
+            .ok_or_else(|| "networkId must contain exactly 32 bytes".to_owned())?;
+        let authority = read_java_byte_array_bounded(
+            env,
+            &authority,
+            "authorityAccountId",
+            AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1,
+        )
+        .ok_or_else(|| "authorityAccountId must be bounded UTF-8".to_owned())?;
+        let authority = std::str::from_utf8(&authority)
+            .map_err(|_| "authorityAccountId must be UTF-8".to_owned())?;
+        let projection = inspect_signed_privacy_exact12_action_v1(
+            &signed_transaction,
+            &network_id,
+            authority,
+            operation_index,
+        )
+        .map_err(str::to_owned)?
+        .to_fixed_bytes();
+        env.byte_array_from_slice(&projection)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, format!("Exact12 signed action: {message}"));
+            std::ptr::null_mut()
+        }
+    }
 }
 pub(super) fn java_native_kagemusha_finalize_top_up_v4(
     env: &mut jni::JNIEnv<'_>,
@@ -3055,6 +5355,47 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
             }
         };
         java_kagemusha_byte_arrays(env, &fields)
+    })
+}
+
+pub(super) fn java_native_kagemusha_project_operation_reference_v1(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+    expected_operation_id: jni::objects::JByteArray<'_>,
+    expected_kind: jni::objects::JByteArray<'_>,
+    expected_submitted_at_ms: jni::sys::jlong,
+) -> jni::sys::jobjectArray {
+    java_kagemusha_archive_array_result(env, "operation reference projection", |env| {
+        use iroha_torii_shared::offline_api::OfflineOperationReference;
+        let reference = java_kagemusha_decode_archive::<OfflineOperationReference>(
+            env,
+            &archive,
+            "operationReference",
+        )?;
+        let expected_operation_id =
+            java_kagemusha_text(env, &expected_operation_id, "expectedOperationId")?;
+        let expected_kind = java_kagemusha_text(env, &expected_kind, "expectedKind")?;
+        let expected_submitted_at_ms = u64::try_from(expected_submitted_at_ms)
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "expectedSubmittedAtMilliseconds must be positive".to_owned())?;
+        let projection = project_kagemusha_operation_reference_v1(
+            reference,
+            &expected_operation_id,
+            &expected_kind,
+            expected_submitted_at_ms,
+        )?;
+        java_kagemusha_byte_arrays(
+            env,
+            &[
+                b"pending".to_vec(),
+                projection.kind.as_bytes().to_vec(),
+                projection.operation_id.to_vec(),
+                projection.transaction_hash.to_vec(),
+                projection.status_uri.into_bytes(),
+                projection.submitted_at_ms.to_string().into_bytes(),
+            ],
+        )
     })
 }
 pub(super) fn java_privacy_compiled_profile_catalog_archive() -> Result<Vec<u8>, String> {

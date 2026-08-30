@@ -30,23 +30,26 @@ public enum PrivacyOperationSchemaV1: UInt32, CaseIterable, Sendable {
     case zkAceAuthorizationActionV1 = 0
     case anonymousPgcPaymentActionV1 = 1
     case veRangeRangeProofV1 = 2
-    case zkAmsAdmissionAndProvisioningV1 = 3
-    case vegaCredentialPresentationV1 = 4
-    case zkX509IdentityPresentationV1 = 5
-    case jindoPolynomialEvaluationV1 = 6
-    case bootleLanternCredentialPresentationV1 = 7
-    case orchardNoteActionV1 = 8
-    case fcmpMembershipPaymentV1 = 9
-    case ivmPrivateNoteActionV1 = 10
-    case pqMaspNoteActionV1 = 11
+    case zkAmsBatchAdmissionActionV1 = 3
+    case zkAmsProvisionAccountActionV1 = 4
+    case vegaCredentialPresentationV1 = 5
+    case zkX509IdentityPresentationV1 = 6
+    case jindoPolynomialEvaluationV1 = 7
+    case bootleLanternCredentialPresentationV1 = 8
+    case orchardNoteActionV1 = 9
+    case fcmpMembershipPaymentV1 = 10
+    case ivmPrivateNoteActionV1 = 11
+    case pqMaspNoteActionV1 = 12
 
     public var canonicalLabel: String {
         switch self {
         case .zkAceAuthorizationActionV1: return "zk_ace_authorization_action_v1"
         case .anonymousPgcPaymentActionV1: return "anonymous_pgc_payment_action_v1"
         case .veRangeRangeProofV1: return "verange_range_proof_v1"
-        case .zkAmsAdmissionAndProvisioningV1:
-            return "zk_ams_admission_and_provisioning_v1"
+        case .zkAmsBatchAdmissionActionV1:
+            return "zk_ams_batch_admission_action_v1"
+        case .zkAmsProvisionAccountActionV1:
+            return "zk_ams_provision_account_action_v1"
         case .vegaCredentialPresentationV1: return "vega_credential_presentation_v1"
         case .zkX509IdentityPresentationV1: return "zk_x509_identity_presentation_v1"
         case .jindoPolynomialEvaluationV1: return "jindo_polynomial_evaluation_v1"
@@ -198,7 +201,8 @@ public struct PrivacyProtocolActivationRecordV1: Equatable, Sendable {
 
 public struct PrivacyExact12CapabilityRowV1: Equatable, Sendable {
     public let protocolId: PrivacyProtocolIdV1
-    public let operationSchema: PrivacyOperationSchemaV1
+    /// One canonical action schema, except for ZK-AMS's ordered pair.
+    public let operationSchemas: [PrivacyOperationSchemaV1]
     public let executionMode: PrivacyExecutionModeV1
     public let privacyFeatureMask: UInt8
     public let compiledProfile: PrivacyCompiledProfileResultV1
@@ -264,7 +268,7 @@ public final class PrivacyExact12CapabilityTupleAdmissionV1: @unchecked Sendable
     public let protocolId: PrivacyProtocolIdV1
     public let committedHeight: UInt64
     public let manifestDigest: Data
-    public let operationSchema: PrivacyOperationSchemaV1
+    public let operationSchemas: [PrivacyOperationSchemaV1]
 
     private final class Seal: @unchecked Sendable {}
     private static let authenticSeal = Seal()
@@ -278,7 +282,7 @@ public final class PrivacyExact12CapabilityTupleAdmissionV1: @unchecked Sendable
         protocolId = row.protocolId
         committedHeight = manifest.committedHeight
         manifestDigest = Data(manifest.manifestDigest)
-        operationSchema = row.operationSchema
+        operationSchemas = row.operationSchemas
         manifestArchive = manifest.canonicalBytes()
         seal = Self.authenticSeal
     }
@@ -361,8 +365,23 @@ public enum PrivacyExact12CapabilityAdmissionV1 {
 }
 
 extension PrivacyProtocolIdV1 {
-    fileprivate var expectedOperationSchemaV1: PrivacyOperationSchemaV1 {
-        PrivacyOperationSchemaV1(rawValue: noritoDiscriminant)!
+    fileprivate var expectedOperationSchemasV1: [PrivacyOperationSchemaV1] {
+        switch self {
+        case .zkAcePqAuthorizationV0: return [.zkAceAuthorizationActionV1]
+        case .anonymousPgcKOutOfNV1: return [.anonymousPgcPaymentActionV1]
+        case .veRangeTransparentRangeV1: return [.veRangeRangeProofV1]
+        case .irohaZkAmsV1:
+            return [.zkAmsBatchAdmissionActionV1, .zkAmsProvisionAccountActionV1]
+        case .vegaExistingCredentialZkV0: return [.vegaCredentialPresentationV1]
+        case .irohaZkX509StarkP256V0: return [.zkX509IdentityPresentationV1]
+        case .irohaJindoPolynomialCommitmentV0: return [.jindoPolynomialEvaluationV1]
+        case .irohaBootleLanternAnoncredV1:
+            return [.bootleLanternCredentialPresentationV1]
+        case .orchardHalo2ActionsV1: return [.orchardNoteActionV1]
+        case .moneroFcmpPlusPlusV1: return [.fcmpMembershipPaymentV1]
+        case .irohaIvmPrivateNoteStarkV1: return [.ivmPrivateNoteActionV1]
+        case .pqMaspStarkV0: return [.pqMaspNoteActionV1]
+        }
     }
 
     fileprivate var expectedExecutionModeV1: PrivacyExecutionModeV1 {
@@ -538,14 +557,10 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
             == protocolId else {
             throw invalid("protocol rows are missing, duplicated, or reordered")
         }
-        let operation = try unitEnum(
-            row.readField(maximum: 4, label: "operation schema"),
-            as: PrivacyOperationSchemaV1.self,
-            label: "operation schema"
+        let operationSchemas = try decodeOperationSchemas(
+            row.readField(maximum: 16, label: "operation schemas"),
+            expected: protocolId.expectedOperationSchemasV1
         )
-        guard operation == protocolId.expectedOperationSchemaV1 else {
-            throw invalid("operation schema differs from the closed protocol mapping")
-        }
         let execution = try unitEnum(
             row.readField(maximum: 4, label: "execution mode"),
             as: PrivacyExecutionModeV1.self,
@@ -629,7 +644,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
 
         return PrivacyExact12CapabilityRowV1(
             protocolId: protocolId,
-            operationSchema: operation,
+            operationSchemas: operationSchemas,
             executionMode: execution,
             privacyFeatureMask: protocolId.expectedPrivacyFeatureMaskV1,
             compiledProfile: compiled,
@@ -640,6 +655,35 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
             localCompiledTupleMatches: true,
             compiledProfileCanonicalNorito: compiledBytes
         )
+    }
+
+    private static func decodeOperationSchemas(
+        _ bytes: Data,
+        expected: [PrivacyOperationSchemaV1]
+    ) throws -> [PrivacyOperationSchemaV1] {
+        var schemas = WireReader(bytes)
+        let primary = try unitEnum(
+            schemas.readField(maximum: 4, label: "primary operation schema"),
+            as: PrivacyOperationSchemaV1.self,
+            label: "primary operation schema"
+        )
+        let secondaryBytes = try decodeOption(
+            schemas.readField(maximum: 8, label: "secondary operation schema"),
+            label: "secondary operation schema"
+        )
+        let secondary = try secondaryBytes.map {
+            try unitEnum(
+                $0,
+                as: PrivacyOperationSchemaV1.self,
+                label: "secondary operation schema"
+            )
+        }
+        try schemas.requireFinished("operation schemas")
+        let decoded = [primary] + (secondary.map { [$0] } ?? [])
+        guard decoded == expected else {
+            throw invalid("operation schemas differ from the closed protocol mapping")
+        }
+        return decoded
     }
 
     private static func decodeCompiledProfile(

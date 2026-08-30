@@ -832,11 +832,42 @@ pub struct ZkAmsMkheDirectEvaluatedKeySetAdmissionV1 {
     resource_certificate_digest: [u8; 32],
     admission_digest: [u8; 32],
 }
+
+/// Ordered Phase-23 admission, collective-key, and roster-key digests.
+pub(super) type ZkAmsMkhePhase23ContextAxesV1 = ([u8; 32], [u8; 32], [u8; 32]);
+
 impl ZkAmsMkheDirectEvaluatedKeySetAdmissionV1 {
     /// Consensus identity of the complete admitted evaluated-key set.
     #[must_use]
     pub const fn digest(self) -> [u8; 32] {
         self.admission_digest
+    }
+    /// Validate and project the exact axes needed by the private Phase-23
+    /// context owner.
+    ///
+    /// The returned tuple is ordered as `(admission, collective public key,
+    /// roster key material)`.  It is intentionally crate-private and only
+    /// becomes useful while retained by the move-only RNS-Link context owner.
+    pub(super) fn validated_phase23_context_axes_v1(
+        &self,
+        profile_digest: [u8; 32],
+        roster_digest: [u8; 32],
+        epoch: u64,
+        transcript_digest: [u8; 32],
+    ) -> Result<ZkAmsMkhePhase23ContextAxesV1, ZkAmsMkheErrorV1> {
+        (*self).validate()?;
+        if self.profile_digest != profile_digest
+            || self.roster_digest != roster_digest
+            || self.epoch != epoch
+            || self.transcript_digest != transcript_digest
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        Ok((
+            self.admission_digest,
+            self.collective_public_key_digest,
+            self.key_material_digest,
+        ))
     }
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         let profile = release_profile_v1();
@@ -886,6 +917,49 @@ fn direct_evaluated_key_set_admission_digest(
     frame.extend_from_slice(&admission.direct_algebra_digest);
     frame.extend_from_slice(&admission.resource_certificate_digest);
     hash_domain_parts(DIRECT_EVALUATED_KEY_SET_ADMISSION_DOMAIN_V1, &[&frame])
+}
+#[cfg(test)]
+pub(super) fn test_direct_evaluated_key_set_admission_v1(
+    roster_digest: [u8; 32],
+    key_material_digest: [u8; 32],
+    epoch: u64,
+    transcript_digest: [u8; 32],
+    collective_public_key_digest: [u8; 32],
+) -> Result<ZkAmsMkheDirectEvaluatedKeySetAdmissionV1, ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    let noise = zk_ams_mkhe_direct_noise_certificate_v1()?;
+    let resources = zk_ams_mkhe_direct_resource_certificate_v1()?;
+    let mut admission = ZkAmsMkheDirectEvaluatedKeySetAdmissionV1 {
+        version: MKHE_VERSION_V1,
+        profile_digest: profile.digest()?,
+        roster_digest,
+        key_material_digest,
+        epoch,
+        transcript_digest,
+        collective_public_key_digest,
+        secret_lineage_root: hash_domain_parts(
+            DIRECT_EVALUATED_KEY_SET_ADMISSION_DOMAIN_V1,
+            &[b"test-only-phase23-secret-lineage-root"],
+        ),
+        evaluated_key_count: u8::try_from(ZK_AMS_T256_GALOIS_KEY_COUNT_V1 + 1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+        gadget_digit_count: u8::try_from(profile.gadget_digits)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?,
+        ordered_complete_key_set_digest: hash_domain_parts(
+            DIRECT_EVALUATED_KEY_SET_ADMISSION_DOMAIN_V1,
+            &[b"test-only-complete-1216-digit-key-set"],
+        ),
+        exact_proof_admission_digest: hash_domain_parts(
+            DIRECT_EVALUATED_KEY_SET_ADMISSION_DOMAIN_V1,
+            &[b"test-only-exact-proof-admission"],
+        ),
+        direct_algebra_digest: noise.certificate_digest,
+        resource_certificate_digest: resources.certificate_digest,
+        admission_digest: [0; 32],
+    };
+    admission.admission_digest = direct_evaluated_key_set_admission_digest(admission);
+    admission.validate()?;
+    Ok(admission)
 }
 /// Conditional integration of direct-key intrinsic noise with the retired
 /// evaluated-key CKS correction.

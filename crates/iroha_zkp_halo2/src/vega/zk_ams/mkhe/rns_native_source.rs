@@ -17,6 +17,8 @@ use crate::vega::sponge::Keccak256;
 const SOURCE_BINDING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-source-binding";
 const SOURCE_CONTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-source-context";
 const SOURCE_RECEIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-source-receipt";
+const SOURCE_REPEATABILITY_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-source-repeatability-evidence";
 
 /// Source-boundary schema version.
 pub const ZK_AMS_MKHE_RNS_NATIVE_SOURCE_VERSION_V1: u8 = 1;
@@ -387,11 +389,181 @@ pub trait ZkAmsMkheRnsNativeSourceSnapshotV1 {
 /// authentication failure.  Concrete implementations must not implement
 /// `Clone` or `Copy`.
 ///
-/// The current crate declares no production implementation.  In particular,
-/// the one-pass source-statement fixture does not satisfy this contract.  A
-/// future confidential-spool adapter must provide separate conformance
-/// evidence before any downstream replay or release gate can use it.
+/// Implementations must be backed by executable conformance evidence.  The
+/// Core confidential-spool adapter implements this capability after exercising
+/// repeated same-slot reads, descending-order reads, immutable snapshot
+/// digests, pure preflight failures, and poison-on-operational-failure behavior.
+/// This marker and its evidence remain non-authorizing.
 pub trait ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1: ZkAmsMkheRnsNativeSourceSnapshotV1 {}
+
+/// Deterministic, plaintext-free evidence from the fixed repeatability probe.
+///
+/// The runner compares authenticated chunks only while their move-only owners
+/// are live.  Neither plaintext bytes nor a digest derived from plaintext is
+/// retained in this record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkAmsMkheRnsNativeRepeatableSourceEvidenceV1 {
+    version: u8,
+    source_binding_digest: [u8; 32],
+    structural_receipt_digest: [u8; 32],
+    main_snapshot_digest: [u8; 32],
+    nonce_snapshot_digest: [u8; 32],
+    authenticated_read_count: u8,
+    same_slot_main_equal: bool,
+    same_slot_nonce_equal: bool,
+    descending_order_complete: bool,
+    structural_receipt_unchanged: bool,
+    evidence_digest: [u8; 32],
+}
+
+impl ZkAmsMkheRnsNativeRepeatableSourceEvidenceV1 {
+    /// Validate the fixed probe shape and every public binding.
+    pub fn validate(
+        self,
+        layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+        receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
+    ) -> Result<(), ZkAmsMkheRnsNativeSourceErrorV1> {
+        layout.validate()?;
+        receipt.validate(layout)?;
+        if self.version != ZK_AMS_MKHE_RNS_NATIVE_SOURCE_VERSION_V1
+            || self.source_binding_digest != layout.source_binding_digest()
+            || self.structural_receipt_digest != receipt.receipt_digest
+            || self.main_snapshot_digest != receipt.main_snapshot_digest
+            || self.nonce_snapshot_digest != receipt.nonce_snapshot_digest
+            || self.authenticated_read_count != 6
+            || !self.same_slot_main_equal
+            || !self.same_slot_nonce_equal
+            || !self.descending_order_complete
+            || !self.structural_receipt_unchanged
+            || self.evidence_digest == [0; 32]
+            || self.evidence_digest != repeatability_evidence_digest_v1(self)
+        {
+            return Err(ZkAmsMkheRnsNativeSourceErrorV1::Authentication);
+        }
+        Ok(())
+    }
+
+    /// Digest of the plaintext-free conformance record.
+    #[must_use]
+    pub const fn evidence_digest(self) -> [u8; 32] {
+        self.evidence_digest
+    }
+}
+
+/// Execute the canonical authenticated repeatability probe.
+///
+/// Reads intentionally begin at each arena's last slot and then move to slot
+/// zero before repeating slot zero.  Successful reads must leave the exact
+/// layout and structural receipt unchanged.  Secret chunks are compared in
+/// place and immediately dropped; no secret-derived digest or detached buffer
+/// is produced.
+pub fn verify_zk_ams_mkhe_rns_native_source_repeatability_v1<S>(
+    snapshot: &mut S,
+) -> Result<ZkAmsMkheRnsNativeRepeatableSourceEvidenceV1, ZkAmsMkheRnsNativeSourceErrorV1>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1 + ?Sized,
+{
+    let layout_before = snapshot.layout();
+    layout_before.validate()?;
+    let receipt_before = snapshot.structural_receipt()?;
+    receipt_before.validate(layout_before)?;
+
+    let last_main = snapshot.read_slot(
+        ZkAmsMkheRnsNativeSourceArenaV1::Main,
+        ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_SLOTS_V1 - 1,
+    )?;
+    validate_secret_chunk_v1(&last_main, ZkAmsMkheRnsNativeSourceArenaV1::Main)?;
+    drop(last_main);
+    let main_first = snapshot.read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0)?;
+    validate_secret_chunk_v1(&main_first, ZkAmsMkheRnsNativeSourceArenaV1::Main)?;
+    let main_repeat = snapshot.read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0)?;
+    validate_secret_chunk_v1(&main_repeat, ZkAmsMkheRnsNativeSourceArenaV1::Main)?;
+    let same_slot_main_equal = secret_chunks_equal_v1(&main_first, &main_repeat);
+    drop((main_first, main_repeat));
+
+    let last_nonce = snapshot.read_slot(
+        ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+        ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1 - 1,
+    )?;
+    validate_secret_chunk_v1(&last_nonce, ZkAmsMkheRnsNativeSourceArenaV1::Nonce)?;
+    drop(last_nonce);
+    let nonce_first = snapshot.read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Nonce, 0)?;
+    validate_secret_chunk_v1(&nonce_first, ZkAmsMkheRnsNativeSourceArenaV1::Nonce)?;
+    let nonce_repeat = snapshot.read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Nonce, 0)?;
+    validate_secret_chunk_v1(&nonce_repeat, ZkAmsMkheRnsNativeSourceArenaV1::Nonce)?;
+    let same_slot_nonce_equal = secret_chunks_equal_v1(&nonce_first, &nonce_repeat);
+    drop((nonce_first, nonce_repeat));
+
+    let layout_after = snapshot.layout();
+    let receipt_after = snapshot.structural_receipt()?;
+    let structural_receipt_unchanged =
+        layout_after == layout_before && receipt_after == receipt_before;
+    if !same_slot_main_equal || !same_slot_nonce_equal || !structural_receipt_unchanged {
+        return Err(ZkAmsMkheRnsNativeSourceErrorV1::Authentication);
+    }
+    let mut evidence = ZkAmsMkheRnsNativeRepeatableSourceEvidenceV1 {
+        version: ZK_AMS_MKHE_RNS_NATIVE_SOURCE_VERSION_V1,
+        source_binding_digest: layout_before.source_binding_digest(),
+        structural_receipt_digest: receipt_before.receipt_digest,
+        main_snapshot_digest: receipt_before.main_snapshot_digest,
+        nonce_snapshot_digest: receipt_before.nonce_snapshot_digest,
+        authenticated_read_count: 6,
+        same_slot_main_equal,
+        same_slot_nonce_equal,
+        descending_order_complete: true,
+        structural_receipt_unchanged,
+        evidence_digest: [0; 32],
+    };
+    evidence.evidence_digest = repeatability_evidence_digest_v1(evidence);
+    evidence.validate(layout_before, receipt_before)?;
+    Ok(evidence)
+}
+
+fn validate_secret_chunk_v1<C: ZkAmsMkheRnsNativeSecretChunkV1 + ?Sized>(
+    chunk: &C,
+    arena: ZkAmsMkheRnsNativeSourceArenaV1,
+) -> Result<(), ZkAmsMkheRnsNativeSourceErrorV1> {
+    if chunk.arena() != arena || chunk.as_slice().len() as u64 != arena.plaintext_bytes() {
+        return Err(ZkAmsMkheRnsNativeSourceErrorV1::Authentication);
+    }
+    Ok(())
+}
+
+fn secret_chunks_equal_v1<C: ZkAmsMkheRnsNativeSecretChunkV1 + ?Sized>(
+    left: &C,
+    right: &C,
+) -> bool {
+    if left.arena() != right.arena() || left.as_slice().len() != right.as_slice().len() {
+        return false;
+    }
+    left.as_slice()
+        .iter()
+        .zip(right.as_slice())
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
+}
+
+fn repeatability_evidence_digest_v1(
+    evidence: ZkAmsMkheRnsNativeRepeatableSourceEvidenceV1,
+) -> [u8; 32] {
+    let mut hash = Keccak256::new();
+    hash.update(SOURCE_REPEATABILITY_EVIDENCE_DOMAIN_V1);
+    hash.update(&[evidence.version]);
+    hash.update(&evidence.source_binding_digest);
+    hash.update(&evidence.structural_receipt_digest);
+    hash.update(&evidence.main_snapshot_digest);
+    hash.update(&evidence.nonce_snapshot_digest);
+    hash.update(&[
+        evidence.authenticated_read_count,
+        evidence.same_slot_main_equal.into(),
+        evidence.same_slot_nonce_equal.into(),
+        evidence.descending_order_complete.into(),
+        evidence.structural_receipt_unchanged.into(),
+    ]);
+    hash.finalize()
+}
 
 /// Move-only sequential source writer.
 pub trait ZkAmsMkheRnsNativeSourceWriterV1: Sized {
@@ -399,6 +571,9 @@ pub trait ZkAmsMkheRnsNativeSourceWriterV1: Sized {
     type Chunk: ZkAmsMkheRnsNativeSecretChunkV1;
     /// Immutable snapshot returned only after every slot is present.
     type Snapshot: ZkAmsMkheRnsNativeSourceSnapshotV1<Chunk = Self::Chunk>;
+
+    /// Return the exact validated layout retained by this writer.
+    fn layout(&self) -> ZkAmsMkheRnsNativeSourceLayoutV1;
 
     /// Allocate one exact-size, initially zeroed secret record.
     fn allocate_chunk(

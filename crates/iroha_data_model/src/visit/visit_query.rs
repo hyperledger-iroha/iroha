@@ -88,6 +88,15 @@ fn try_visit_non_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_musubi_ordered_prefix_v1(FindMusubiOrderedPrefixV1),
         visit_find_domain_by_id(FindDomainById),
         visit_find_fee_sponsor_program_by_id(FindFeeSponsorProgramById),
+        visit_find_privacy_zk_ace_replay_nullifier_v1(FindPrivacyZkAceReplayNullifierV1),
+        visit_find_privacy_proof_managed_pool_state_v1(FindPrivacyProofManagedPoolStateV1),
+        visit_find_privacy_orchard_pool_state_v1(FindPrivacyOrchardPoolStateV1),
+        visit_find_privacy_orchard_nullifier_v1(FindPrivacyOrchardNullifierV1),
+        visit_find_privacy_anonymous_pgc_pool_state_v1(FindPrivacyAnonymousPgcPoolStateV1),
+        visit_find_privacy_zk_ams_admission_v1(FindPrivacyZkAmsAdmissionV1),
+        visit_find_privacy_zk_ams_provision_v1(FindPrivacyZkAmsProvisionV1),
+        visit_find_privacy_zk_x509_certificate_nullifier_v1(FindPrivacyZkX509CertificateNullifierV1),
+        visit_find_privacy_action_execution_receipt_v1(FindPrivacyActionExecutionReceiptV1),
     }
 }
 fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
@@ -551,6 +560,33 @@ macro_rules! query_visitors {
             visit_find_fee_sponsor_program_by_id(
                 &$crate::query::nexus::prelude::FindFeeSponsorProgramById
             ),
+            visit_find_privacy_zk_ace_replay_nullifier_v1(
+                &$crate::query::privacy::prelude::FindPrivacyZkAceReplayNullifierV1
+            ),
+            visit_find_privacy_proof_managed_pool_state_v1(
+                &$crate::query::privacy::prelude::FindPrivacyProofManagedPoolStateV1
+            ),
+            visit_find_privacy_orchard_pool_state_v1(
+                &$crate::query::privacy::prelude::FindPrivacyOrchardPoolStateV1
+            ),
+            visit_find_privacy_orchard_nullifier_v1(
+                &$crate::query::privacy::prelude::FindPrivacyOrchardNullifierV1
+            ),
+            visit_find_privacy_anonymous_pgc_pool_state_v1(
+                &$crate::query::privacy::prelude::FindPrivacyAnonymousPgcPoolStateV1
+            ),
+            visit_find_privacy_zk_ams_admission_v1(
+                &$crate::query::privacy::prelude::FindPrivacyZkAmsAdmissionV1
+            ),
+            visit_find_privacy_zk_ams_provision_v1(
+                &$crate::query::privacy::prelude::FindPrivacyZkAmsProvisionV1
+            ),
+            visit_find_privacy_zk_x509_certificate_nullifier_v1(
+                &$crate::query::privacy::prelude::FindPrivacyZkX509CertificateNullifierV1
+            ),
+            visit_find_privacy_action_execution_receipt_v1(
+                &$crate::query::privacy::prelude::FindPrivacyActionExecutionReceiptV1
+            ),
             // Iterable Query visitors
             visit_find_domains(&$crate::query::ErasedIterQuery<$crate::domain::Domain>),
             visit_find_accounts(&$crate::query::ErasedIterQuery<$crate::account::Account>),
@@ -606,107 +642,121 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+    macro_rules! assert_singular_query_variant_match {
+        ($query:expr) => {{
+            match $query {
+                SingularQueryBox::FindExecutorDataModel(_) => {}
+                SingularQueryBox::FindParameters(_) => {}
+                SingularQueryBox::FindAccountById(_) => {}
+                SingularQueryBox::FindAccountByAlias(_) => {}
+                SingularQueryBox::FindAliasesByAccountId(_) => {}
+                SingularQueryBox::FindAccountRecoveryPolicyByAlias(_) => {}
+                SingularQueryBox::FindAccountRecoveryRequestByAlias(_) => {}
+                SingularQueryBox::FindProofRecordById(_) => {}
+                SingularQueryBox::FindContractManifestByCodeHash(_) => {}
+                SingularQueryBox::FindAbiVersion(_) => {}
+                SingularQueryBox::FindAssetById(_) => {}
+                SingularQueryBox::FindAssetDefinitionById(_) => {}
+                SingularQueryBox::FindNftById(_) => {}
+                SingularQueryBox::FindAssetEscrowById(_) => {}
+                SingularQueryBox::FindTriggerById(_) => {}
+                SingularQueryBox::FindOracleFeedById(_) => {}
+                SingularQueryBox::FindOracleDisputeById(_) => {}
+                SingularQueryBox::FindOracleChangeById(_) => {}
+                SingularQueryBox::FindOracleProviderStatsByKey(_) => {}
+                SingularQueryBox::FindLatestDefiOracleAttestation(_) => {}
+                SingularQueryBox::FindTwitterBindingByHash(_) => {}
+                SingularQueryBox::FindDaPinIntentByTicket(_) => {}
+                SingularQueryBox::FindDaPinIntentByManifest(_) => {}
+                SingularQueryBox::FindDaPinIntentByAlias(_) => {}
+                SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_) => {}
+                SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {}
+                SingularQueryBox::FindSorafsProviderOwner(_) => {}
+                SingularQueryBox::FindSorafsOrderbookPolicy(_) => {}
+                SingularQueryBox::FindSorafsOrderbookOrderById(_) => {}
+                SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_) => {}
+                SingularQueryBox::FindSorafsOrderbookReceiptById(_) => {}
+                SingularQueryBox::FindSorafsOrderbookTradeById(_) => {}
+                SingularQueryBox::FindSorafsOrderbookChannelById(_) => {}
+                SingularQueryBox::FindSorafsOrderbookStatus(_) => {}
+                SingularQueryBox::FindSorafsOrderbookOrders(_) => {}
+                SingularQueryBox::FindSorafsOrderbookReceipts(_) => {}
+                SingularQueryBox::FindSorafsOrderbookTrades(_) => {}
+                SingularQueryBox::FindSorafsOrderbookChannels(_) => {}
+                SingularQueryBox::FindSorafsOrderbookEvents(_) => {}
+                SingularQueryBox::FindSorafsReservePolicy(_) => {}
+                SingularQueryBox::FindSorafsReserveProviderById(_) => {}
+                SingularQueryBox::FindSorafsReserveMovementById(_) => {}
+                SingularQueryBox::FindSorafsReserveAppealById(_) => {}
+                SingularQueryBox::FindSorafsReserveProviders(_) => {}
+                SingularQueryBox::FindSorafsReserveMovements(_) => {}
+                SingularQueryBox::FindSorafsReserveAppeals(_) => {}
+                SingularQueryBox::FindSorafsReserveEvents(_) => {}
+                SingularQueryBox::FindSorafsPopIssuerPolicy(_) => {}
+                SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_) => {}
+                SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_) => {}
+                SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(_) => {}
+                SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_) => {}
+                SingularQueryBox::FindSorafsPopAuditDigestBySequence(_) => {}
+                SingularQueryBox::FindSorafsPopRegistryStatus(_) => {}
+                SingularQueryBox::FindSorafsPinManifest(_) => {}
+                SingularQueryBox::FindSorafsPinManifests(_) => {}
+                SingularQueryBox::FindSorafsRepairTask(_) => {}
+                SingularQueryBox::FindSorafsRepairTasks(_) => {}
+                SingularQueryBox::FindSorafsRepairStatus(_) => {}
+                SingularQueryBox::FindSorafsRepairEvents(_) => {}
+                SingularQueryBox::FindSorafsProofOutcome(_) => {}
+                SingularQueryBox::FindSorafsProofOutcomeEvents(_) => {}
+                SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(_) => {}
+                SingularQueryBox::FindSorafsReputationJournalEventBySourceId(_) => {}
+                SingularQueryBox::FindSorafsReputationJournalEvents(_) => {}
+                SingularQueryBox::FindSorafsModerationPolicy(_) => {}
+                SingularQueryBox::FindSorafsModerationAppeal(_) => {}
+                SingularQueryBox::FindSorafsModerationJurorEligibility(_) => {}
+                SingularQueryBox::FindSorafsModerationCase(_) => {}
+                SingularQueryBox::FindSorafsModerationCommit(_) => {}
+                SingularQueryBox::FindSorafsModerationReveal(_) => {}
+                SingularQueryBox::FindSorafsModerationChallenge(_) => {}
+                SingularQueryBox::FindSorafsModerationOutcome(_) => {}
+                SingularQueryBox::FindSorafsModerationNoShow(_) => {}
+                SingularQueryBox::FindSorafsModerationStatus(_) => {}
+                SingularQueryBox::FindSorafsModerationSnapshot(_) => {}
+                SingularQueryBox::FindSorafsModerationEvents(_) => {}
+                SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
+                SingularQueryBox::FindMusubiExactPackageV1(_) => {}
+                SingularQueryBox::FindMusubiExactReleaseV1(_) => {}
+                SingularQueryBox::FindMusubiProviderBundleAttestationV1(_) => {}
+                SingularQueryBox::FindMusubiResolverIndexV1(_) => {}
+                SingularQueryBox::FindMusubiVersionsV1(_) => {}
+                SingularQueryBox::FindMusubiMaintainersV1(_) => {}
+                SingularQueryBox::FindMusubiArchiveLocationsV1(_) => {}
+                SingularQueryBox::FindMusubiArchiveRetentionV1(_) => {}
+                SingularQueryBox::FindMusubiAliasV1(_) => {}
+                SingularQueryBox::FindMusubiAliasHistoryV1(_) => {}
+                SingularQueryBox::FindMusubiOrderedPrefixV1(_) => {}
+                SingularQueryBox::FindDomainById(_) => {}
+                SingularQueryBox::FindFeeSponsorProgramById(_) => {}
+                SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {}
+                SingularQueryBox::FindFxCorridorPolicyById(_) => {}
+                SingularQueryBox::FindDomainEndorsements(_) => {}
+                SingularQueryBox::FindDomainEndorsementPolicy(_) => {}
+                SingularQueryBox::FindDomainCommittee(_) => {}
+                SingularQueryBox::FindPrivacyZkAceReplayNullifierV1(_) => {}
+                SingularQueryBox::FindPrivacyProofManagedPoolStateV1(_) => {}
+                SingularQueryBox::FindPrivacyOrchardPoolStateV1(_) => {}
+                SingularQueryBox::FindPrivacyOrchardNullifierV1(_) => {}
+                SingularQueryBox::FindPrivacyAnonymousPgcPoolStateV1(_) => {}
+                SingularQueryBox::FindPrivacyZkAmsAdmissionV1(_) => {}
+                SingularQueryBox::FindPrivacyZkAmsProvisionV1(_) => {}
+                SingularQueryBox::FindPrivacyZkX509CertificateNullifierV1(_) => {}
+                SingularQueryBox::FindPrivacyActionExecutionReceiptV1(_) => {}
+                #[cfg(test)]
+                SingularQueryBox::__TestFallback => {}
+            }
+        }};
+    }
     fn assert_singular_query_variant(query: &SingularQueryBox) {
-        match query {
-            SingularQueryBox::FindExecutorDataModel(_) => {}
-            SingularQueryBox::FindParameters(_) => {}
-            SingularQueryBox::FindAccountById(_) => {}
-            SingularQueryBox::FindAccountByAlias(_) => {}
-            SingularQueryBox::FindAliasesByAccountId(_) => {}
-            SingularQueryBox::FindAccountRecoveryPolicyByAlias(_) => {}
-            SingularQueryBox::FindAccountRecoveryRequestByAlias(_) => {}
-            SingularQueryBox::FindProofRecordById(_) => {}
-            SingularQueryBox::FindContractManifestByCodeHash(_) => {}
-            SingularQueryBox::FindAbiVersion(_) => {}
-            SingularQueryBox::FindAssetById(_) => {}
-            SingularQueryBox::FindAssetDefinitionById(_) => {}
-            SingularQueryBox::FindNftById(_) => {}
-            SingularQueryBox::FindAssetEscrowById(_) => {}
-            SingularQueryBox::FindTriggerById(_) => {}
-            SingularQueryBox::FindOracleFeedById(_) => {}
-            SingularQueryBox::FindOracleDisputeById(_) => {}
-            SingularQueryBox::FindOracleChangeById(_) => {}
-            SingularQueryBox::FindOracleProviderStatsByKey(_) => {}
-            SingularQueryBox::FindLatestDefiOracleAttestation(_) => {}
-            SingularQueryBox::FindTwitterBindingByHash(_) => {}
-            SingularQueryBox::FindDaPinIntentByTicket(_) => {}
-            SingularQueryBox::FindDaPinIntentByManifest(_) => {}
-            SingularQueryBox::FindDaPinIntentByAlias(_) => {}
-            SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_) => {}
-            SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {}
-            SingularQueryBox::FindSorafsProviderOwner(_) => {}
-            SingularQueryBox::FindSorafsOrderbookPolicy(_) => {}
-            SingularQueryBox::FindSorafsOrderbookOrderById(_) => {}
-            SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_) => {}
-            SingularQueryBox::FindSorafsOrderbookReceiptById(_) => {}
-            SingularQueryBox::FindSorafsOrderbookTradeById(_) => {}
-            SingularQueryBox::FindSorafsOrderbookChannelById(_) => {}
-            SingularQueryBox::FindSorafsOrderbookStatus(_) => {}
-            SingularQueryBox::FindSorafsOrderbookOrders(_) => {}
-            SingularQueryBox::FindSorafsOrderbookReceipts(_) => {}
-            SingularQueryBox::FindSorafsOrderbookTrades(_) => {}
-            SingularQueryBox::FindSorafsOrderbookChannels(_) => {}
-            SingularQueryBox::FindSorafsOrderbookEvents(_) => {}
-            SingularQueryBox::FindSorafsReservePolicy(_) => {}
-            SingularQueryBox::FindSorafsReserveProviderById(_) => {}
-            SingularQueryBox::FindSorafsReserveMovementById(_) => {}
-            SingularQueryBox::FindSorafsReserveAppealById(_) => {}
-            SingularQueryBox::FindSorafsReserveProviders(_) => {}
-            SingularQueryBox::FindSorafsReserveMovements(_) => {}
-            SingularQueryBox::FindSorafsReserveAppeals(_) => {}
-            SingularQueryBox::FindSorafsReserveEvents(_) => {}
-            SingularQueryBox::FindSorafsPopIssuerPolicy(_) => {}
-            SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_) => {}
-            SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_) => {}
-            SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(_) => {}
-            SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_) => {}
-            SingularQueryBox::FindSorafsPopAuditDigestBySequence(_) => {}
-            SingularQueryBox::FindSorafsPopRegistryStatus(_) => {}
-            SingularQueryBox::FindSorafsPinManifest(_) => {}
-            SingularQueryBox::FindSorafsPinManifests(_) => {}
-            SingularQueryBox::FindSorafsRepairTask(_) => {}
-            SingularQueryBox::FindSorafsRepairTasks(_) => {}
-            SingularQueryBox::FindSorafsRepairStatus(_) => {}
-            SingularQueryBox::FindSorafsRepairEvents(_) => {}
-            SingularQueryBox::FindSorafsProofOutcome(_) => {}
-            SingularQueryBox::FindSorafsProofOutcomeEvents(_) => {}
-            SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(_) => {}
-            SingularQueryBox::FindSorafsReputationJournalEventBySourceId(_) => {}
-            SingularQueryBox::FindSorafsReputationJournalEvents(_) => {}
-            SingularQueryBox::FindSorafsModerationPolicy(_) => {}
-            SingularQueryBox::FindSorafsModerationAppeal(_) => {}
-            SingularQueryBox::FindSorafsModerationJurorEligibility(_) => {}
-            SingularQueryBox::FindSorafsModerationCase(_) => {}
-            SingularQueryBox::FindSorafsModerationCommit(_) => {}
-            SingularQueryBox::FindSorafsModerationReveal(_) => {}
-            SingularQueryBox::FindSorafsModerationChallenge(_) => {}
-            SingularQueryBox::FindSorafsModerationOutcome(_) => {}
-            SingularQueryBox::FindSorafsModerationNoShow(_) => {}
-            SingularQueryBox::FindSorafsModerationStatus(_) => {}
-            SingularQueryBox::FindSorafsModerationSnapshot(_) => {}
-            SingularQueryBox::FindSorafsModerationEvents(_) => {}
-            SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
-            SingularQueryBox::FindMusubiExactPackageV1(_) => {}
-            SingularQueryBox::FindMusubiExactReleaseV1(_) => {}
-            SingularQueryBox::FindMusubiProviderBundleAttestationV1(_) => {}
-            SingularQueryBox::FindMusubiResolverIndexV1(_) => {}
-            SingularQueryBox::FindMusubiVersionsV1(_) => {}
-            SingularQueryBox::FindMusubiMaintainersV1(_) => {}
-            SingularQueryBox::FindMusubiArchiveLocationsV1(_) => {}
-            SingularQueryBox::FindMusubiArchiveRetentionV1(_) => {}
-            SingularQueryBox::FindMusubiAliasV1(_) => {}
-            SingularQueryBox::FindMusubiAliasHistoryV1(_) => {}
-            SingularQueryBox::FindMusubiOrderedPrefixV1(_) => {}
-            SingularQueryBox::FindDomainById(_) => {}
-            SingularQueryBox::FindFeeSponsorProgramById(_) => {}
-            SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {}
-            SingularQueryBox::FindFxCorridorPolicyById(_) => {}
-            SingularQueryBox::FindDomainEndorsements(_) => {}
-            SingularQueryBox::FindDomainEndorsementPolicy(_) => {}
-            SingularQueryBox::FindDomainCommittee(_) => {}
-            #[cfg(test)]
-            SingularQueryBox::__TestFallback => {}
-        }
+        assert_singular_query_variant_match!(query);
     }
     struct CountingVisitor {
         params: usize,
@@ -994,11 +1044,7 @@ mod tests {
         visit_query(&mut visitor, &query);
         assert_eq!(visitor.domains, 0);
     }
-    #[test]
-    fn singular_query_fallback_never_triggers_for_known_variants() {
-        let _guard = singular_query_tests_guard();
-        reset_singular_query_fallback_guard();
-        let mut visitor = NoopVisitor;
+    fn base_known_singular_queries() -> Vec<SingularQueryBox> {
         let proof_id = crate::proof::ProofId {
             backend: "test.backend".into(),
             proof_hash: [0x11; 32],
@@ -1014,7 +1060,7 @@ mod tests {
             );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
         let nft_id: NftId = "ticket$wonderland.universal".parse().expect("valid NFT id");
-        let queries = vec![
+        vec![
             SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),
             SingularQueryBox::FindParameters(FindParameters),
             SingularQueryBox::FindAccountById(
@@ -1085,7 +1131,79 @@ mod tests {
             SingularQueryBox::FindDomainById(crate::query::domain::prelude::FindDomainById::new(
                 DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             )),
-        ];
+        ]
+    }
+
+    fn privacy_known_singular_queries() -> Vec<SingularQueryBox> {
+        vec![
+            SingularQueryBox::FindPrivacyZkAceReplayNullifierV1(
+                crate::query::privacy::prelude::FindPrivacyZkAceReplayNullifierV1::new(
+                    crate::privacy::PrivacyPolicyIdV1::new([0xA1; 32]),
+                    crate::privacy::PrivacyNullifierV1::new([0xB1; 32]),
+                ),
+            ),
+            SingularQueryBox::FindPrivacyProofManagedPoolStateV1(
+                crate::query::privacy::prelude::FindPrivacyProofManagedPoolStateV1::new(
+                    crate::privacy::PrivacyProtocolIdV1::PqMaspStarkV0,
+                    crate::privacy::PrivacyPoolIdV1::new([0xC1; 32]),
+                ),
+            ),
+            SingularQueryBox::FindPrivacyOrchardPoolStateV1(
+                crate::query::privacy::prelude::FindPrivacyOrchardPoolStateV1::new(
+                    crate::privacy::PrivacyPoolIdV1::new([0xD1; 32]),
+                ),
+            ),
+            SingularQueryBox::FindPrivacyOrchardNullifierV1(
+                crate::query::privacy::prelude::FindPrivacyOrchardNullifierV1::new(
+                    crate::privacy::PrivacyPoolIdV1::new([0xD1; 32]),
+                    [0xD2; 32],
+                ),
+            ),
+            SingularQueryBox::FindPrivacyAnonymousPgcPoolStateV1(
+                crate::query::privacy::prelude::FindPrivacyAnonymousPgcPoolStateV1::new(
+                    crate::privacy::PrivacyPoolIdV1::new([0xE1; 32]),
+                ),
+            ),
+            SingularQueryBox::FindPrivacyZkAmsAdmissionV1(
+                crate::query::privacy::prelude::FindPrivacyZkAmsAdmissionV1::new(
+                    crate::privacy::PrivacyIssuerIdV1::new([0xE2; 32]),
+                    crate::privacy::PrivacyZkAmsRegistryIdV1::new([0xE3; 32]),
+                    crate::privacy::PrivacyPolicyIdV1::new([0xE4; 32]),
+                    crate::privacy::PrivacyZkAmsPhcHashV1::new([0xE5; 32]),
+                ),
+            ),
+            SingularQueryBox::FindPrivacyZkAmsProvisionV1(
+                crate::query::privacy::prelude::FindPrivacyZkAmsProvisionV1::new(
+                    crate::privacy::PrivacyIssuerIdV1::new([0xE2; 32]),
+                    crate::privacy::PrivacyZkAmsRegistryIdV1::new([0xE3; 32]),
+                    crate::privacy::PrivacyPolicyIdV1::new([0xE4; 32]),
+                    crate::privacy::PrivacyZkAmsKeyImageV1::new([0xE6; 32]),
+                ),
+            ),
+            SingularQueryBox::FindPrivacyZkX509CertificateNullifierV1(
+                crate::query::privacy::prelude::FindPrivacyZkX509CertificateNullifierV1::new(
+                    crate::privacy::PrivacyIssuerIdV1::new([0xE7; 32]),
+                    crate::privacy::PrivacyPolicyIdV1::new([0xE8; 32]),
+                    crate::privacy::PrivacyNullifierV1::new([0xE9; 32]),
+                ),
+            ),
+            SingularQueryBox::FindPrivacyActionExecutionReceiptV1(
+                crate::query::privacy::prelude::FindPrivacyActionExecutionReceiptV1::new(
+                    crate::privacy::PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                    [0xEA; 32],
+                    0,
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn singular_query_fallback_never_triggers_for_known_variants() {
+        let _guard = singular_query_tests_guard();
+        reset_singular_query_fallback_guard();
+        let mut visitor = NoopVisitor;
+        let mut queries = base_known_singular_queries();
+        queries.extend(privacy_known_singular_queries());
         for query in &queries {
             assert_singular_query_variant(query);
             visit_singular_query(&mut visitor, query);

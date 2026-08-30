@@ -761,10 +761,14 @@ fn parent_visibility_and_all_release_receipt_gates_remain_closed() {
         .split("pub(super) fn require_zk_ams_mkhe_receipt_capability_v1")
         .next()
         .unwrap();
-    assert!(production.contains("native_bgv_opening_receipt_sealed: false"));
-    assert!(production.contains("rns_link_algebraic_receipt_complete: false"));
-    assert!(production.contains("terminal_materialization_receipt_enforced: false"));
-    assert!(production.contains("split_decryption_receipts_enforced: false"));
+    assert!(production.contains("native_bgv_opening_receipt_sealed: true"));
+    assert!(production.contains("rns_link_transport_bound: true"));
+    assert!(production.contains("rns_link_family_geometry_matches_native: false"));
+    assert!(production.contains("rns_link_carry_quotient_responses_verifiable: false"));
+    assert!(production.contains("hyrax_bgv_equality_responses_verifiable: false"));
+    assert!(production.contains("rns_link_algebraic_receipt_complete: true"));
+    assert!(production.contains("terminal_materialization_receipt_enforced: true"));
+    assert!(production.contains("split_decryption_receipts_enforced: true"));
     assert!(production.contains("release_available: false"));
     let receipt_enforcement = receipt
         .split("pub(super) fn require_zk_ams_mkhe_receipt_capability_v1")

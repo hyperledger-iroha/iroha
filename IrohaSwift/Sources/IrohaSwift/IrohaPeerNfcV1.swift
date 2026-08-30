@@ -15,7 +15,13 @@ public enum IrohaPeerNfcV1 {
     public static let sessionIDBytes = 16
     public static let hashBytes = 32
     public static let maximumChunkBytes = 4_096
-    public static let maximumMessageBytes = IrohaPeerWireMessageV1.headerBytes + 24_576
+    /// Frozen NFC V1 ceiling for every legacy `0x0102` IPM1 message.
+    public static let maximumMessageBytes = IrohaPeerWireMessageV1.headerBytes
+        + IrohaPeerWireLimitsV1.maximumKagemushaProfileBytes
+    /// Exact NFC ceiling reserved solely for eligibility PAYMENT `0x0103`.
+    public static let maximumEligibilityPaymentMessageBytes =
+        IrohaPeerWireMessageV1.headerBytes
+            + IrohaPeerWireLimitsV1.maximumKagemushaEligibilityEnvelopeBytes
     public static let infoBytes = 98
     public static let statusBytes = 174
 
@@ -88,22 +94,29 @@ public struct IrohaPeerNfcLimitsV1: Equatable, Sendable {
     public let maximumMessageBytes: Int
     public let maximumReadChunkBytes: Int
     public let maximumWriteChunkBytes: Int
+    public let maximumEligibilityPaymentMessageBytes: Int
 
     public init(
         maximumMessageBytes: Int = IrohaPeerNfcV1.maximumMessageBytes,
         maximumReadChunkBytes: Int = IrohaPeerNfcV1.maximumChunkBytes,
-        maximumWriteChunkBytes: Int = IrohaPeerNfcV1.maximumChunkBytes
+        maximumWriteChunkBytes: Int = IrohaPeerNfcV1.maximumChunkBytes,
+        maximumEligibilityPaymentMessageBytes: Int =
+            IrohaPeerNfcV1.maximumEligibilityPaymentMessageBytes
     ) {
         precondition(
             Self.areValid(
                 maximumMessageBytes: maximumMessageBytes,
                 maximumReadChunkBytes: maximumReadChunkBytes,
-                maximumWriteChunkBytes: maximumWriteChunkBytes
+                maximumWriteChunkBytes: maximumWriteChunkBytes,
+                maximumEligibilityPaymentMessageBytes:
+                    maximumEligibilityPaymentMessageBytes
             )
         )
         self.maximumMessageBytes = maximumMessageBytes
         self.maximumReadChunkBytes = maximumReadChunkBytes
         self.maximumWriteChunkBytes = maximumWriteChunkBytes
+        self.maximumEligibilityPaymentMessageBytes =
+            maximumEligibilityPaymentMessageBytes
     }
 
     public static let `default` = IrohaPeerNfcLimitsV1()
@@ -111,12 +124,41 @@ public struct IrohaPeerNfcLimitsV1: Equatable, Sendable {
     static func areValid(
         maximumMessageBytes: Int,
         maximumReadChunkBytes: Int,
-        maximumWriteChunkBytes: Int
+        maximumWriteChunkBytes: Int,
+        maximumEligibilityPaymentMessageBytes: Int =
+            IrohaPeerNfcV1.maximumEligibilityPaymentMessageBytes
     ) -> Bool {
         (IrohaPeerWireMessageV1.headerBytes...IrohaPeerNfcV1.maximumMessageBytes)
             .contains(maximumMessageBytes) &&
+            (IrohaPeerWireMessageV1.headerBytes...IrohaPeerNfcV1.maximumEligibilityPaymentMessageBytes)
+                .contains(maximumEligibilityPaymentMessageBytes) &&
             (1...IrohaPeerNfcV1.maximumChunkBytes).contains(maximumReadChunkBytes) &&
             (1...IrohaPeerNfcV1.maximumChunkBytes).contains(maximumWriteChunkBytes)
+    }
+
+    func maximumMessageBytes(
+        profile: IrohaPeerWireProfileV1,
+        kind: IrohaPeerWireKindV1,
+        schemaVersion: UInt16
+    ) throws -> Int {
+        guard profile.admits(schemaVersion: schemaVersion, kind: kind) else {
+            throw IrohaPeerNfcErrorV1.invalidIPM1
+        }
+        if profile == .kagemusha,
+           kind == .payment,
+           schemaVersion
+            == IrohaPeerWireMessageV1.kagemushaEligibilityPaymentSchemaVersion {
+            return maximumEligibilityPaymentMessageBytes
+        }
+        return maximumMessageBytes
+    }
+
+    func maximumMessageBytes(for message: IrohaPeerWireMessageV1) throws -> Int {
+        try maximumMessageBytes(
+            profile: message.profile,
+            kind: message.kind,
+            schemaVersion: message.schemaVersion
+        )
     }
 }
 
@@ -382,7 +424,8 @@ public struct IrohaPeerNfcStatusV1: Equatable, Sendable {
             isValid = paymentProfile != nil
                 && paymentProfile != .reject
                 && paymentLength > IrohaPeerWireMessageV1.headerBytes
-                && paymentLength <= IrohaPeerNfcV1.maximumMessageBytes
+                && paymentLength
+                    <= IrohaPeerNfcV1.maximumEligibilityPaymentMessageBytes
                 && receivedPaymentBytes >= 0
                 && receivedPaymentBytes <= paymentLength
                 && paymentWireHash.count == IrohaPeerNfcV1.hashBytes
@@ -395,7 +438,8 @@ public struct IrohaPeerNfcStatusV1: Equatable, Sendable {
             isValid = paymentProfile != nil
                 && paymentProfile != .reject
                 && paymentLength > IrohaPeerWireMessageV1.headerBytes
-                && paymentLength <= IrohaPeerNfcV1.maximumMessageBytes
+                && paymentLength
+                    <= IrohaPeerNfcV1.maximumEligibilityPaymentMessageBytes
                 && receivedPaymentBytes == paymentLength
                 && paymentWireHash.count == IrohaPeerNfcV1.hashBytes
                 && paymentWireHash != zeroHash
@@ -963,12 +1007,17 @@ public struct IrohaPeerNfcPaymentDescriptorV1: Equatable, Sendable {
             throw IrohaPeerNfcErrorV1.invalidIPM1
         }
         let messageLength = IrohaPeerWireMessageV1.headerBytes + inspected.encodedLength
+        let maximum = try limits.maximumMessageBytes(
+            profile: inspected.profile,
+            kind: inspected.kind,
+            schemaVersion: inspected.schemaVersion
+        )
         guard inspected.canonicalLength > 0,
               inspected.encodedLength > 0,
-              messageLength <= limits.maximumMessageBytes else {
+              messageLength <= maximum else {
             throw IrohaPeerNfcErrorV1.messageTooLarge(
                 actual: messageLength,
-                maximum: limits.maximumMessageBytes
+                maximum: maximum
             )
         }
         self.profile = inspected.profile
@@ -1144,10 +1193,11 @@ public struct IrohaPeerNfcDurableAcknowledgementV1: Equatable, Sendable {
         acknowledgement: Data,
         limits: IrohaPeerNfcLimitsV1 = .default
     ) throws {
-        guard context.payment.encoded.count <= limits.maximumMessageBytes else {
+        let maximumPaymentBytes = try limits.maximumMessageBytes(for: context.payment)
+        guard context.payment.encoded.count <= maximumPaymentBytes else {
             throw IrohaPeerNfcErrorV1.messageTooLarge(
                 actual: context.payment.encoded.count,
-                maximum: limits.maximumMessageBytes
+                maximum: maximumPaymentBytes
             )
         }
         let decoded = try nfcDecodeMessage(
@@ -1176,7 +1226,7 @@ public struct IrohaPeerNfcDurableAcknowledgementV1: Equatable, Sendable {
     ) throws {
         guard paymentProfile != .reject,
               paymentLength > IrohaPeerWireMessageV1.headerBytes,
-              paymentLength <= limits.maximumMessageBytes else {
+              paymentLength <= limits.maximumEligibilityPaymentMessageBytes else {
             throw IrohaPeerNfcErrorV1.invalidLength
         }
         try nfcRequireHash(paymentWireHash)
@@ -1962,7 +2012,7 @@ public struct IrohaPeerNfcSenderCheckpointV1: Equatable, Sendable {
               acknowledgementLength == 0
                 || acknowledgementLength > IrohaPeerWireMessageV1.headerBytes,
               requestLength <= limits.maximumMessageBytes,
-              paymentLength <= limits.maximumMessageBytes,
+              paymentLength <= limits.maximumEligibilityPaymentMessageBytes,
               acknowledgementLength <= limits.maximumMessageBytes,
               fixedBytes <= data.count - requestLength,
               fixedBytes + requestLength <= data.count - paymentLength,
@@ -2256,13 +2306,27 @@ private func nfcDecodeMessage(
     guard data.count > IrohaPeerWireMessageV1.headerBytes else {
         throw IrohaPeerNfcErrorV1.invalidLength
     }
-    guard data.count <= limits.maximumMessageBytes else {
+    guard data.count <= limits.maximumEligibilityPaymentMessageBytes else {
         throw IrohaPeerNfcErrorV1.messageTooLarge(
             actual: data.count,
-            maximum: limits.maximumMessageBytes
+            maximum: limits.maximumEligibilityPaymentMessageBytes
         )
     }
     do {
+        let header = try IrohaPeerWireMessageV1.inspectHeader(
+            Data(data.prefix(IrohaPeerWireMessageV1.headerBytes))
+        )
+        let maximum = try limits.maximumMessageBytes(
+            profile: header.profile,
+            kind: header.kind,
+            schemaVersion: header.schemaVersion
+        )
+        guard data.count <= maximum else {
+            throw IrohaPeerNfcErrorV1.messageTooLarge(
+                actual: data.count,
+                maximum: maximum
+            )
+        }
         let message = try IrohaPeerWireMessageV1.decode(
             data,
             expectedProfile: expectedProfile,
@@ -2336,7 +2400,8 @@ public enum IrohaPeerNfcReaderExchangeV1 {
     /// Covers three protocol-maximum messages at the minimum one-byte chunk,
     /// plus SELECT/INFO, phase probes, controls, and durable transitions.
     public static let defaultMaximumActions =
-        3 * IrohaPeerNfcV1.maximumMessageBytes + 16
+        IrohaPeerNfcV1.maximumEligibilityPaymentMessageBytes
+            + 2 * IrohaPeerNfcV1.maximumMessageBytes + 16
 
     private struct ActionBudget {
         var remaining: Int

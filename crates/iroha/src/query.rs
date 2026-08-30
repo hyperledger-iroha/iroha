@@ -478,18 +478,20 @@ mod tests {
     }
 }
 impl Client {
-    /// Fetch the exact successful committed transaction selected by its entrypoint hash.
+    /// Fetch the exact committed transaction selected by its entrypoint hash.
     ///
     /// This uses the dedicated authenticated transaction-details route with the one canonical
     /// `FindTransactions` equality predicate accepted by Torii. The response must be canonical
     /// bounded Norito and must repeat the requested entrypoint hash, a self-consistent entrypoint
-    /// and result hash, and a successful execution result.
+    /// and result hash. Both successful and rejected committed results are returned so callers can
+    /// authenticate an exact rejection reason instead of treating a public pipeline-status label
+    /// as sufficient evidence.
     ///
     /// # Errors
     ///
     /// Returns an error if request binding or signing fails, Torii rejects the query, the response
     /// violates the strict transport/codec contract, or any requested hash/result binding differs.
-    pub fn get_successful_transaction_details(
+    pub fn get_transaction_details(
         &self,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<PipelineTransactionDetailsResponse, QueryError> {
@@ -526,16 +528,38 @@ impl Client {
         .map_err(QueryError::from)?;
         let expected_hash = entrypoint_hash.to_string();
         let transaction = &details.transaction;
-        if details.hash != expected_hash
+        if details.block_height == 0
+            || details.hash != expected_hash
             || transaction.entrypoint_hash() != &entrypoint_hash
             || transaction.entrypoint().hash() != entrypoint_hash
             || transaction.result_hash() != &transaction.result().hash()
+            || transaction.entrypoint_proof().leaf_index()
+                != transaction.result_proof().leaf_index()
         {
             return Err(QueryError::Other(eyre!(
-                "transaction-details response does not match the requested entrypoint/result hash"
+                "transaction-details response is not a committed result for the requested entrypoint/result hash"
             )));
         }
-        if transaction.result().is_err() {
+        Ok(details)
+    }
+
+    /// Fetch the exact successfully committed transaction selected by its entrypoint hash.
+    ///
+    /// This compatibility wrapper applies the historical success-only constraint after the
+    /// authenticated, canonical details response has been validated. Call
+    /// [`Self::get_transaction_details`] when a committed rejection and its typed reason are the
+    /// expected terminal result.
+    ///
+    /// # Errors
+    ///
+    /// Returns every error from [`Self::get_transaction_details`] and rejects a committed
+    /// transaction whose execution result is an error.
+    pub fn get_successful_transaction_details(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<PipelineTransactionDetailsResponse, QueryError> {
+        let details = self.get_transaction_details(entrypoint_hash)?;
+        if details.transaction.result().is_err() {
             return Err(QueryError::Other(eyre!(
                 "transaction-details response contains a rejected transaction result"
             )));
@@ -1100,6 +1124,7 @@ mod query_errors_handling {
             entrypoint_hash,
             PipelineTransactionDetailsResponse {
                 hash: entrypoint_hash.to_string(),
+                block_height: 1,
                 transaction,
                 trigger_completions: Vec::new(),
             },
@@ -1183,6 +1208,50 @@ mod query_errors_handling {
         assert_eq!(actual, details);
     }
     #[test]
+    fn transaction_details_reader_preserves_authenticated_rejection_reason() {
+        use iroha_data_model::transaction::{TransactionResult, error::TransactionRejectionReason};
+
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (entrypoint_hash, mut details) = successful_transaction_details_fixture();
+        let reason = TransactionRejectionReason::Validation(ValidationFail::InternalError(
+            "privacy action rejected by committed native execution".to_owned(),
+        ));
+        details.transaction.result = TransactionResult::new(Err(reason.clone()));
+        details.transaction.result_hash = details.transaction.result.hash();
+        let encoded = norito::to_bytes(&details).expect("encode rejected transaction details");
+        let actual = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("rejected transaction-details response"))
+            },
+            || client.get_transaction_details(entrypoint_hash),
+        )
+        .expect("authenticated rejection details must remain readable");
+        assert_eq!(actual.transaction.result().as_ref().unwrap_err(), &reason);
+
+        let client = compatible_client_with_conflicting_wire_headers();
+        let encoded = norito::to_bytes(&details).expect("encode rejected transaction details");
+        let error = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("rejected transaction-details response"))
+            },
+            || client.get_successful_transaction_details(entrypoint_hash),
+        )
+        .expect_err("success-only compatibility reader must still reject failed execution");
+        let diagnostic = format!("{error:?}");
+        assert!(
+            diagnostic.contains("rejected transaction result"),
+            "unexpected compatibility-reader error: {diagnostic}"
+        );
+    }
+    #[test]
     fn transaction_details_reader_rejects_noncanonical_or_non_norito_success() {
         let client = compatible_client_with_conflicting_wire_headers();
         let (entrypoint_hash, details) = successful_transaction_details_fixture();
@@ -1199,7 +1268,11 @@ mod query_errors_handling {
             || client.get_successful_transaction_details(entrypoint_hash),
         )
         .expect_err("trailing bytes must be rejected");
-        assert!(error.to_string().contains("canonical Norito"));
+        let diagnostic = format!("{error:?}");
+        assert!(
+            diagnostic.contains("canonical Norito"),
+            "unexpected trailing-byte error: {diagnostic}"
+        );
 
         let client = compatible_client_with_conflicting_wire_headers();
         let encoded = norito::to_bytes(&details).expect("encode transaction-details response");
@@ -1214,7 +1287,26 @@ mod query_errors_handling {
             || client.get_successful_transaction_details(entrypoint_hash),
         )
         .expect_err("non-Norito success must be rejected");
-        assert!(error.to_string().contains("invalid content-type"));
+        assert!(format!("{error:?}").contains("invalid content-type"));
+
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (proof_hash, mut mismatched_proof) = successful_transaction_details_fixture();
+        mismatched_proof.transaction.result_proof =
+            crate::crypto::MerkleProof::from_audit_path(1, Vec::new());
+        let encoded =
+            norito::to_bytes(&mismatched_proof).expect("encode mismatched result proof index");
+        let error = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("mismatched result proof response"))
+            },
+            || client.get_transaction_details(proof_hash),
+        )
+        .expect_err("entrypoint/result proof leaf indexes must match");
+        assert!(format!("{error:?}").contains("entrypoint/result hash"));
 
         let client = compatible_client_with_conflicting_wire_headers();
         let mut mismatched = details;
@@ -1233,7 +1325,24 @@ mod query_errors_handling {
             || client.get_successful_transaction_details(entrypoint_hash),
         )
         .expect_err("result hash mismatch must be rejected");
-        assert!(error.to_string().contains("entrypoint/result hash"));
+        assert!(format!("{error:?}").contains("entrypoint/result hash"));
+
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (_, mut uncommitted) = successful_transaction_details_fixture();
+        uncommitted.block_height = 0;
+        let encoded = norito::to_bytes(&uncommitted).expect("encode height-zero details");
+        let error = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("height-zero response"))
+            },
+            || client.get_transaction_details(entrypoint_hash),
+        )
+        .expect_err("height zero must not authenticate as a committed result");
+        assert!(format!("{error:?}").contains("not a committed result"));
     }
     fn with_mock_http<R>(
         responder: impl Fn(RequestSnapshot) -> Result<Response<Vec<u8>>> + Send + Sync + 'static,

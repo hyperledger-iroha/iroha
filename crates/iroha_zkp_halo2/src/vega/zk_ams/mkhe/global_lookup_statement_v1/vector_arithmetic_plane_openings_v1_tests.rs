@@ -287,8 +287,10 @@ fn one_snapshot_geometry_uses_only_the_exact_purpose_specific_cap_exception() {
     assert_eq!(SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1, 4_905_648);
     assert_eq!(SNAPSHOT_FILE_BYTES_V1, 5_028_289_200);
     assert_eq!(SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1, 1_198_764_720);
-    assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
-    assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
+    const {
+        assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
+        assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
+    };
     assert_eq!(
         SNAPSHOT_SLOT_COUNT_V1,
         CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1
@@ -332,7 +334,7 @@ fn one_snapshot_geometry_uses_only_the_exact_purpose_specific_cap_exception() {
             .windows(b"shard".len())
             .any(|window| window == b"shard")
     );
-    assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    const { assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1) };
 }
 
 #[test]
@@ -425,8 +427,8 @@ fn every_permit_is_one_shot_and_full_consumption_releases_no_authority() {
     }
     let consumed = owner.finish_v1().unwrap();
     assert_ne!(consumed.binding_digest, [0; 32]);
-    assert!(TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst) >= before + 1);
-    assert!(!AUTHORITY_MINTED_V1 && !RELEASE_READY_V1);
+    assert!(TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst) > before);
+    const { assert!(!AUTHORITY_MINTED_V1 && !RELEASE_READY_V1) };
 }
 
 #[test]
@@ -540,7 +542,7 @@ fn production_source_and_release_guards_are_static() {
         assert!(production.contains(field));
     }
     assert_eq!((TRANSCRIPT_FRAMES_ADDED_V1, WIRE_BYTES_ADDED_V1), (0, 0));
-    assert!(!KAT_ORDINALS_CHANGED_V1);
+    const { assert!(!KAT_ORDINALS_CHANGED_V1) };
     for gate in [
         CURRENT_UPSTREAM_COMPLETE_V1,
         PLANE_OPENING_MATERIALIZED_V1,
@@ -554,5 +556,5 @@ fn production_source_and_release_guards_are_static() {
     ] {
         assert!(!gate);
     }
-    assert!(CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    const { assert!(CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1) };
 }

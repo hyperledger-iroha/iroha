@@ -162,9 +162,12 @@ The JavaScript package exposes the four stable Kagemusha Torii routes through
 `getOfflineCapability`, `submitKagemushaTopUpV4`,
 `submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
 an asset-neutral protocol capability compiled into every deployment. Discovery
-accepts only the exact `cash_handoff_v1`, bridge ABI 22, eight-hop universal
-`OfflineStatus` with `mandatory: false`, `ready: true`, and empty asset and
-blocker lists. No selector-taking readiness alias is exported.
+accepts only the exact ABI-21/V4 `cash_handoff_v1` proof contract plus the
+distinct `cash_handoff_eligibility_v1` ABI-22 transport-envelope capability,
+bridge ABI 22, and the eight-hop universal `OfflineStatus` with `mandatory:
+false`, `ready: true`, and empty asset and blocker lists. Both capability fields
+are required and fail closed independently. No selector-taking readiness alias
+is exported.
 
 This is deliberately a transport-only boundary. Command helpers require an
 externally produced `{ version: 4, operationId, norito }` archive and never
@@ -196,6 +199,20 @@ There is no browser, JSON, or mock authorization fallback. The legacy
 not an admission object. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
+
+Exact12 submission is paired with the authenticated finalized-state helpers
+`getPrivacyZkAceReplayNullifierV1`, `getPrivacyProofManagedPoolStateV1`,
+`getPrivacyOrchardPoolStateV1`, `getPrivacyOrchardNullifierV1`,
+`getPrivacyAnonymousPgcPoolStateV1`, `getPrivacyZkAmsAdmissionV1`,
+`getPrivacyZkAmsProvisionV1`, and
+`getPrivacyZkX509CertificateNullifierV1`. These are the closed native query
+IDs 97–104: each requires HTTPS, canonical Torii authentication, the client's
+exact `NetworkId`, and non-zero fixed-width identifiers. A `404` means the
+requested state is not yet present and returns `null`; it is never converted
+into successful execution evidence. Responses must be canonical Norito and
+are validated and request-bound natively before JavaScript receives a deeply
+frozen projection. Numeric scalar leaves are canonical decimal strings so a
+finalized `u64` height or count is never rounded by JavaScript.
 
 Private Kaigi entrypoint builders require a caller-supplied `feeSpend` produced
 by a production confidential wallet or prover. The JavaScript SDK does not

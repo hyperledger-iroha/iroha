@@ -10,13 +10,19 @@
 //! ```text
 //! TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 \
 //! IROHA_TEST_SERIALIZE_NETWORKS=1 \
-//! cargo test --locked -p integration_tests --test network_functional \
+//! cargo test --locked -p integration_tests --test privacy_release_network \
 //! --features 'zk-stark privacy-release-evidence' \
 //! privacy_exact12_zk_x509_network::canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart \
 //! -- --exact --nocapture --test-threads=1
 //! ```
 use eyre::{Result, WrapErr as _, ensure, eyre};
-use integration_tests::sandbox;
+use integration_tests::{
+    privacy_exact12_controller::{
+        require_applied_privacy_action_v1, require_privacy_action_receipt_on_peer_v1,
+        submit_signed_privacy_action_and_wait_async_v1,
+    },
+    sandbox,
+};
 use iroha::{
     client::Client,
     crypto::HashOf,
@@ -40,12 +46,15 @@ use iroha::{
             IrohaZkX509StarkP256StatementV1, PrivacyActiveLifecycleV1,
             PrivacyCapabilityActivationStateV1, PrivacyCapabilityReadinessV1,
             PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
-            PrivacyExact12CapabilityManifestV1, PrivacyExecutionModeV1, PrivacyOperationSchemaV1,
-            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
-            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementV1,
+            PrivacyExact12CapabilityManifestV1, PrivacyExecutionModeV1,
+            PrivacyOperationSchemaSetV1, PrivacyOperationSchemaV1, PrivacyProofV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyStatementV1,
+            PrivacyZkX509CertificateNullifierProvenanceV1,
         },
         query::{
             CommittedTransaction, block::prelude::FindBlocks,
+            privacy::prelude::FindPrivacyZkX509CertificateNullifierV1,
             transaction::prelude::FindTransactions,
         },
         transaction::{
@@ -732,6 +741,53 @@ fn assert_all_exact_duplicate_certificate_nullifier_results(
     }
     Ok(())
 }
+fn assert_zk_x509_nullifier_state(
+    client: &Client,
+    actions: &PrivacyReleaseZkX509NetworkActionsV1,
+    handle: &iroha::client::privacy_exact12_action::AuthenticatedPrivacyActionHandleV1,
+    context: &str,
+) -> Result<()> {
+    let statement = &actions.statement;
+    let view: PrivacyZkX509CertificateNullifierProvenanceV1 = client
+        .query_single(FindPrivacyZkX509CertificateNullifierV1::new(
+            statement.trust_anchor_id,
+            statement.certificate_policy_id,
+            statement.certificate_nullifier,
+        ))
+        .wrap_err_with(|| format!("{context}: query finalized ZK-X509 nullifier provenance"))?;
+    view.validate()
+        .map_err(|error| eyre!("{context}: invalid finalized ZK-X509 provenance: {error}"))?;
+    let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
+        .digest()
+        .wrap_err_with(|| format!("{context}: digest canonical ZK-X509 statement"))?;
+    ensure!(
+        view.network_id == client.network_id
+            && view.trust_anchor_id == statement.trust_anchor_id
+            && view.policy_id == statement.certificate_policy_id
+            && view.nullifier == statement.certificate_nullifier
+            && view.trust_anchor_record_digest == statement.trust_anchor_record_digest
+            && view.trust_anchor_record_epoch == statement.trust_anchor_record_epoch
+            && view.certificate_policy_record_digest == statement.certificate_policy_record_digest
+            && view.certificate_policy_record_epoch == statement.certificate_policy_record_epoch
+            && view.crl_record_digest == statement.crl_record_digest
+            && view.crl_record_epoch == statement.crl_record_epoch
+            && view.statement_digest == statement_digest
+            && statement.trust_anchor_id == actions.trust_anchor.trust_anchor_id
+            && statement.trust_anchor_record_digest == actions.trust_anchor.record_digest
+            && statement.trust_anchor_record_epoch == actions.trust_anchor.record_epoch
+            && statement.certificate_policy_id == actions.certificate_policy.policy_id
+            && statement.certificate_policy_record_digest
+                == actions.certificate_policy.record_digest
+            && statement.certificate_policy_record_epoch == actions.certificate_policy.record_epoch
+            && statement.crl_record_digest == actions.crl.record_digest
+            && statement.crl_record_epoch == actions.crl.record_epoch
+            && Some(view.admitted_at_height) == handle.view().committed_height()
+            && view.action_index == statement.context.action_index
+            && view.finalized_height >= view.admitted_at_height,
+        "{context}: finalized ZK-X509 nullifier provenance differs from the exact governed native ledger effect: {view:?}"
+    );
+    Ok(())
+}
 fn assert_zk_x509_available(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     expected_height: u64,
@@ -770,7 +826,10 @@ fn assert_zk_x509_available(
         row.activation_state
     );
     ensure!(
-        row.operation_schema == PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1
+        row.operation_schemas
+            == PrivacyOperationSchemaSetV1::one(
+                PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1,
+            )
             && row.execution_mode == PrivacyExecutionModeV1::PresentationAction
             && row.privacy_feature_mask.bits() == 2
             && row.limitation.is_none(),
@@ -1306,15 +1365,22 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             &actions.statement,
             "pre-submit canonical native ZK-X509 action",
         )?;
-        let submitted_hash = submit_signed_transaction(
+        let canonical_handle = submit_signed_privacy_action_and_wait_async_v1(
             &client,
+            PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1,
             &actions.canonical_transaction,
-            "submit canonical native ZK-X509 action through three-validator DA/RBC",
+            SUBMISSION_TIMEOUT,
+            POLL_INTERVAL,
         )
         .await?;
+        let canonical_view = require_applied_privacy_action_v1(
+            &canonical_handle,
+            PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1,
+        )?;
         ensure!(
-            *submitted_hash.as_ref() == *actions.canonical_transaction.hash().as_ref(),
-            "submitted native ZK-X509 hash differs from the signed transaction"
+            canonical_view.transaction_hash()
+                == *actions.canonical_transaction.hash().as_ref(),
+            "authenticated controller native ZK-X509 hash differs from the signed transaction"
         );
         let canonical_action_block = wait_for_all_signed_tip(
             &healthy_clients,
@@ -1340,6 +1406,18 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "healthy-peer direct query of canonical native ZK-X509 finality",
         )
         .await?;
+        for (index, healthy_client) in healthy_clients.iter().enumerate() {
+            require_privacy_action_receipt_on_peer_v1(healthy_client, &canonical_handle)
+                .wrap_err_with(|| {
+                    format!("healthy peer {index} finalized native ZK-X509 execution receipt")
+                })?;
+            assert_zk_x509_nullifier_state(
+                healthy_client,
+                &actions,
+                &canonical_handle,
+                &format!("healthy peer {index} native ZK-X509 nullifier state"),
+            )?;
+        }
         for (index, replay_client) in healthy_clients.iter().enumerate() {
             let replay_error = replay_client
                 .submit_transaction(&actions.canonical_transaction)
@@ -1453,6 +1531,18 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "post-restart all-four canonical native ZK-X509 visibility",
         )
         .await?;
+        for (index, recovered_client) in recovered_clients.iter().enumerate() {
+            require_privacy_action_receipt_on_peer_v1(recovered_client, &canonical_handle)
+                .wrap_err_with(|| {
+                    format!("recovered peer {index} finalized native ZK-X509 execution receipt")
+                })?;
+            assert_zk_x509_nullifier_state(
+                recovered_client,
+                &actions,
+                &canonical_handle,
+                &format!("recovered peer {index} native ZK-X509 nullifier state"),
+            )?;
+        }
         let restarted_client = recovered_clients[restart_index].clone();
         let semantic_base_block = timeout(
             SEMANTIC_TIME_ADVANCE_TIMEOUT,

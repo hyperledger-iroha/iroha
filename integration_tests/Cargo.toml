@@ -35,6 +35,11 @@ name = "network_functional"
 path = "tests/network_functional.rs"
 
 [[test]]
+name = "privacy_release_network"
+path = "tests/privacy_release_network.rs"
+required-features = ["zk-stark", "privacy-release-evidence"]
+
+[[test]]
 name = "consensus_and_da"
 path = "tests/consensus_and_da.rs"
 

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.io.UnsupportedEncodingException;
+import java.lang.ref.WeakReference;
 import java.math.BigInteger;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -64,6 +65,7 @@ import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
 import org.hyperledger.iroha.android.privacy.PrivacyNativeBridge;
+import org.hyperledger.iroha.android.privacy.PrivacyExact12ActionInspectionV1;
 import org.hyperledger.iroha.android.privacy.PrivacyProtocolIdV1;
 import org.hyperledger.iroha.android.telemetry.DeviceProfile;
 import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
@@ -74,6 +76,29 @@ import org.hyperledger.iroha.android.telemetry.TelemetrySink;
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityAdmissionV1;
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityManifestV1;
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityTupleAdmissionV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionLocalStateV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionOperationViewV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionTerminalChainStateV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12ActionContractV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12ActionRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyFinalizedStateRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyFinalizedStateViewV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAceReplayNullifierRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAceReplayNullifierProvenanceV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyProofManagedPoolStateRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyProofManagedPoolStateViewV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyOrchardPoolStateRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyOrchardPoolStateViewV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyOrchardNullifierRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyOrchardNullifierProvenanceV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyAnonymousPgcPoolStateRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyAnonymousPgcPoolStateViewV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAmsAdmissionRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAmsAdmissionViewV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAmsProvisionRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAmsProvisionViewV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkX509CertificateNullifierRequestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkX509CertificateNullifierProvenanceV1;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
@@ -102,6 +127,9 @@ public final class HttpClientTransport implements IrohaClient {
   private final ClientConfig config;
   private volatile SorafsGatewayClient sorafsGatewayClient;
   private final AtomicBoolean deviceProfileEmitted = new AtomicBoolean(false);
+  private final Object privacyActionProvenanceLockV1 = new Object();
+  private final List<WeakReference<PrivacyActionOperationViewV1>>
+      authenticatedPrivacyActionViewsV1 = new ArrayList<>();
 
   public HttpClientTransport(final HttpTransportExecutor executor, final ClientConfig config) {
     this.executor = Objects.requireNonNull(executor, "executor");
@@ -478,6 +506,135 @@ public final class HttpClientTransport implements IrohaClient {
     return getLedgerExecutedBlockWire(BigInteger.valueOf(height));
   }
 
+  /** Fetch the exact self-contained bridge finality proof for {@code height}. */
+  public CompletableFuture<byte[]> getBridgeFinalityProofV1(final BigInteger height) {
+    if (height == null || height.signum() <= 0 || height.bitLength() > 64) {
+      throw new IllegalArgumentException("height must be a positive u64");
+    }
+    final TransportRequest request =
+        buildExactNoritoGetRequest(
+            "/v1/bridge/finality/" + height.toString(),
+            AuthenticatedTransactionDetailsNativeBridge.FINALITY_PROOF_MAX_BYTES);
+    return fetchExactNoritoBytes(request, "bridge finality proof");
+  }
+
+  /** Convenience overload for positive signed heights. */
+  public CompletableFuture<byte[]> getBridgeFinalityProofV1(final long height) {
+    return getBridgeFinalityProofV1(BigInteger.valueOf(height));
+  }
+
+  /**
+   * Submit one fresh signed {@code FindTransactions} query and return its native-verified terminal
+   * rejection.
+   *
+   * <p>The request is one-shot and is never retried by the SDK. {@code signer} receives only the
+   * native 32-byte query digest; a KeyMint/Keystore implementation need not export private bytes.
+   */
+  public CompletableFuture<AuthenticatedCommittedRejectionV1>
+      getAuthenticatedCommittedRejectionV1(
+          final String transactionHashHex,
+          final NetworkId networkId,
+          final String authorityAccountId,
+          final IrohaQuerySignatureProvider signer) {
+    final AuthenticatedTransactionDetailsNativeBridge.SignedQueryV1 signedQuery =
+        AuthenticatedTransactionDetailsNativeBridge.buildSignedRejectedTransactionQueryV1(
+            transactionHashHex,
+            Objects.requireNonNull(networkId, "networkId"),
+            authorityAccountId,
+            Objects.requireNonNull(signer, "signer"));
+    final TransportRequest request =
+        buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES);
+    return fetchExactNoritoBytes(request, "authenticated committed transaction rejection")
+        .thenApply(
+            response ->
+                AuthenticatedTransactionDetailsNativeBridge.projectCommittedRejectionV1(
+                    signedQuery, response));
+  }
+
+  /** Query with one account while pinning a separately trusted transaction authority. */
+  public CompletableFuture<AuthenticatedCommittedRejectionV2>
+      getAuthenticatedCommittedRejectionV2(
+          final String transactionHashHex,
+          final NetworkId networkId,
+          final String queryAuthorityAccountId,
+          final String expectedTransactionAuthorityAccountId,
+          final IrohaQuerySignatureProvider signer) {
+    return getAuthenticatedCommittedRejectionV2Internal(
+        transactionHashHex,
+        networkId,
+        queryAuthorityAccountId,
+        expectedTransactionAuthorityAccountId,
+        signer,
+        null,
+        null,
+        null);
+  }
+
+  /**
+   * Authority-split lookup which additionally binds the signed transaction to one exact retained
+   * Kagemusha request. HTTP acceptance and public operation status are never rejection evidence.
+   */
+  public CompletableFuture<AuthenticatedCommittedRejectionV2>
+      getAuthenticatedKagemushaCommittedRejectionV2(
+          final String transactionHashHex,
+          final NetworkId networkId,
+          final String queryAuthorityAccountId,
+          final String expectedTransactionAuthorityAccountId,
+          final IrohaQuerySignatureProvider signer,
+          final byte[] expectedOperationId,
+          final String expectedKind,
+          final byte[] expectedRequestNorito) {
+    return getAuthenticatedCommittedRejectionV2Internal(
+        transactionHashHex,
+        networkId,
+        queryAuthorityAccountId,
+        expectedTransactionAuthorityAccountId,
+        signer,
+        Objects.requireNonNull(expectedOperationId, "expectedOperationId").clone(),
+        Objects.requireNonNull(expectedKind, "expectedKind"),
+        Objects.requireNonNull(expectedRequestNorito, "expectedRequestNorito").clone());
+  }
+
+  private CompletableFuture<AuthenticatedCommittedRejectionV2>
+      getAuthenticatedCommittedRejectionV2Internal(
+          final String transactionHashHex,
+          final NetworkId networkId,
+          final String queryAuthorityAccountId,
+          final String expectedTransactionAuthorityAccountId,
+          final IrohaQuerySignatureProvider signer,
+          final byte[] expectedOperationId,
+          final String expectedKind,
+          final byte[] expectedRequestNorito) {
+    final AuthenticatedTransactionDetailsNativeBridge.SignedQueryV2 signedQuery =
+        AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV2(
+            transactionHashHex,
+            Objects.requireNonNull(networkId, "networkId"),
+            queryAuthorityAccountId,
+            expectedTransactionAuthorityAccountId,
+            Objects.requireNonNull(signer, "signer"));
+    final TransportRequest request =
+        buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES);
+    return fetchExactNoritoBytes(request, "authenticated committed transaction rejection V2")
+        .thenApply(
+            response ->
+                expectedOperationId == null
+                    ? AuthenticatedTransactionDetailsNativeBridge.projectCommittedRejectionV2(
+                        signedQuery, response)
+                    : AuthenticatedTransactionDetailsNativeBridge
+                        .projectKagemushaCommittedRejectionV2(
+                            signedQuery,
+                            response,
+                            expectedOperationId,
+                            expectedKind,
+                            expectedRequestNorito));
+  }
+
   /** Fetch the exact committed Exact12 manifest with one-shot canonical account authentication. */
   public CompletableFuture<PrivacyExact12CapabilityManifestV1> getPrivacyCapabilities(
       final ToriiCanonicalRequestAuth canonicalAuth) {
@@ -488,6 +645,387 @@ public final class HttpClientTransport implements IrohaClient {
                 Objects.requireNonNull(canonicalAuth, "canonicalAuth")),
             "privacy capabilities")
         .thenApply(PrivacyNativeBridge::decodeExact12CapabilityManifestV1);
+  }
+
+  /**
+   * Authenticates, fresh-gates, and submits one member of the closed 13-operation Exact12 union.
+   *
+   * <p>Native inspection verifies the exact signed transaction before any network call. HTTP 202
+   * is dispatch admission only; when {@code wait} is true, the returned terminal view is resolved
+   * through authenticated global status and committed transaction-details queries; Applied
+   * additionally requires the native-verified finalized ID105 execution receipt.
+   */
+  public CompletableFuture<PrivacyActionOperationViewV1> submitSignedPrivacyActionV1(
+      final PrivacyExact12ActionRequestV1 request,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final boolean wait,
+      final PipelineStatusOptions options) {
+    Objects.requireNonNull(request, "request");
+    requireAutomaticCanonicalFreshness(canonicalAuth, "Exact12 action submission");
+    final NetworkId networkId = config.requireLocalSigningContext().networkId();
+    final PrivacyExact12ActionInspectionV1 inspection =
+        PrivacyNativeBridge.inspectSignedExact12ActionV1(
+            request, networkId, canonicalAuth.accountId());
+    final String transactionHashHex = lowerHex(inspection.transactionHash());
+
+    return getPrivacyCapabilities(canonicalAuth)
+        .thenCompose(
+            manifest -> {
+              final byte[] manifestDigest = manifest.manifestDigest.bytes();
+              final byte[] expectedDigest = request.expectedManifestDigestBytes();
+              if (expectedDigest != null
+                  && !MessageDigest.isEqual(expectedDigest, manifestDigest)) {
+                throw new IllegalStateException(
+                    "fresh Exact12 capability manifest does not match expectedManifestDigest");
+              }
+              final org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 protocolId =
+                  PrivacyExact12ActionContractV1.protocolId(request.operation);
+              final PrivacyExact12CapabilityTupleAdmissionV1 admission =
+                  PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
+                      manifest, protocolId);
+              if (!admission.operationSchemas.equals(manifest.rowFor(protocolId).operationSchemas)
+                  || !admission.operationSchemas.contains(request.operation)) {
+                throw new IllegalStateException(
+                    "Exact12 capability admission does not contain the requested operation schema");
+              }
+              if (!MessageDigest.isEqual(admission.manifestDigest.bytes(), manifestDigest)) {
+                throw new IllegalStateException(
+                    "Exact12 capability admission does not bind the fresh manifest digest");
+              }
+              if (admission.committedHeight.signum() <= 0) {
+                throw new IllegalStateException(
+                    "Exact12 capability admission must be committed at a positive height");
+              }
+              final PrivacyActionOperationViewV1 submitted =
+                  new PrivacyActionOperationViewV1(
+                      protocolId,
+                      request.operation,
+                      inspection.transactionHash(),
+                      inspection.transactionIntentDigest(),
+                      inspection.statementDigest(),
+                      inspection.proofEnvelopeHash(),
+                      PrivacyActionLocalStateV1.SUBMITTED,
+                      null,
+                      null,
+                      null,
+                      PrivacyExact12ActionContractV1.ledgerEffectKind(request.operation),
+                      manifestDigest,
+                      admission.committedHeight);
+              return submitExactPrivacyActionWire(
+                      request.signedTransactionVersionedBytes(),
+                      canonicalAuth,
+                      transactionHashHex)
+                  .thenCompose(
+                      ignored -> {
+                        bindAuthenticatedPrivacyActionViewV1(submitted);
+                        return wait
+                            ? waitForPrivacyActionTerminalV1(
+                                submitted, canonicalAuth, options)
+                            : CompletableFuture.completedFuture(submitted);
+                      });
+            });
+  }
+
+  /** Convenience overload using the standard bounded terminal wait. */
+  public CompletableFuture<PrivacyActionOperationViewV1> submitSignedPrivacyActionV1(
+      final PrivacyExact12ActionRequestV1 request,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return submitSignedPrivacyActionV1(request, canonicalAuth, true, null);
+  }
+
+  /** Convenience overload selecting whether to wait with the standard bounded options. */
+  public CompletableFuture<PrivacyActionOperationViewV1> submitSignedPrivacyActionV1(
+      final PrivacyExact12ActionRequestV1 request,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final boolean wait) {
+    return submitSignedPrivacyActionV1(request, canonicalAuth, wait, null);
+  }
+
+  /** Refreshes one typed Exact12 action without allowing terminal regression or reason elision. */
+  public CompletableFuture<PrivacyActionOperationViewV1> getPrivacyActionStatusV1(
+      final PrivacyActionOperationViewV1 operation,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return fetchPrivacyActionStatusSnapshotV1(operation, canonicalAuth)
+        .thenApply(snapshot -> snapshot.view);
+  }
+
+  /** Returns native-verified committed success or rejection for one exact transaction hash. */
+  public CompletableFuture<AuthenticatedCommittedTransactionResultV1>
+      getAuthenticatedCommittedTransactionResultV1(
+          final String transactionHashHex,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final AuthenticatedTransactionDetailsNativeBridge.SignedQueryV1 signedQuery =
+        AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV1(
+            transactionHashHex,
+            config.requireLocalSigningContext().networkId(),
+            canonicalAuth.accountId(),
+            canonicalAuth::sign);
+    final TransportRequest request =
+        buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES);
+    return fetchExactNoritoBytes(request, "authenticated committed transaction result")
+        .thenApply(
+            response ->
+                AuthenticatedTransactionDetailsNativeBridge.projectCommittedTransactionResultV1(
+                    signedQuery, response));
+  }
+
+  /** Returns a committed result with independent query and transaction-authority bindings. */
+  public CompletableFuture<AuthenticatedCommittedTransactionResultV2>
+      getAuthenticatedCommittedTransactionResultV2(
+          final String transactionHashHex,
+          final NetworkId networkId,
+          final String queryAuthorityAccountId,
+          final String expectedTransactionAuthorityAccountId,
+          final IrohaQuerySignatureProvider signer) {
+    final AuthenticatedTransactionDetailsNativeBridge.SignedQueryV2 signedQuery =
+        AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV2(
+            transactionHashHex,
+            Objects.requireNonNull(networkId, "networkId"),
+            queryAuthorityAccountId,
+            expectedTransactionAuthorityAccountId,
+            Objects.requireNonNull(signer, "signer"));
+    final TransportRequest request =
+        buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES);
+    return fetchExactNoritoBytes(request, "authenticated committed transaction result V2")
+        .thenApply(
+            response ->
+                AuthenticatedTransactionDetailsNativeBridge.projectCommittedTransactionResultV2(
+                    signedQuery, response));
+  }
+
+  /**
+   * Return the exact authenticated transaction-details carrier, or {@code null} only for HTTP 404.
+   * Its height/result fields remain routing hints until finalized outcome projection succeeds.
+   */
+  public CompletableFuture<AuthenticatedTransactionDetailsCarrierV2>
+      getAuthenticatedTransactionDetailsCarrierV2(
+          final String transactionHashHex,
+          final NetworkId networkId,
+          final String queryAuthorityAccountId,
+          final String expectedTransactionAuthorityAccountId,
+          final IrohaQuerySignatureProvider signer) {
+    final AuthenticatedTransactionDetailsNativeBridge.SignedQueryV2 signedQuery =
+        AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV2(
+            transactionHashHex,
+            Objects.requireNonNull(networkId, "networkId"),
+            queryAuthorityAccountId,
+            expectedTransactionAuthorityAccountId,
+            Objects.requireNonNull(signer, "signer"));
+    final TransportRequest request =
+        buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES);
+    return fetchExactNoritoBytesAllowingNotFound(
+            request, "authenticated transaction-details carrier V2")
+        .thenApply(
+            response ->
+                response == null
+                    ? null
+                    : AuthenticatedTransactionDetailsNativeBridge
+                        .bindTransactionDetailsCarrierV2(signedQuery, response));
+  }
+
+  /**
+   * Returns the native-verified committed result for exactly one offline-device registration.
+   *
+   * <p>The authenticated lookup is identical to the generic transaction-details flow, while the
+   * native projector additionally requires exactly one {@code RegisterOfflineDeviceAttestation}
+   * instruction and preserves a closed typed eligibility rejection.
+   */
+  public CompletableFuture<AuthenticatedOfflineDeviceRegistrationResultV1>
+      getAuthenticatedOfflineDeviceRegistrationResultV1(
+          final String transactionHashHex,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final AuthenticatedTransactionDetailsNativeBridge.SignedQueryV1 signedQuery =
+        AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV1(
+            transactionHashHex,
+            config.requireLocalSigningContext().networkId(),
+            canonicalAuth.accountId(),
+            canonicalAuth::sign);
+    final TransportRequest request =
+        buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES);
+    return fetchExactNoritoBytes(request, "authenticated offline-device registration result")
+        .thenApply(
+            response ->
+                AuthenticatedTransactionDetailsNativeBridge
+                    .projectCommittedOfflineDeviceRegistrationResultV1(signedQuery, response));
+  }
+
+  /**
+   * Returns the native-verified finalized ID105 receipt for one authenticated Exact12 action.
+   * Only an exact HTTP 404 means that the typed receipt is not available yet.
+   */
+  public CompletableFuture<
+          AuthenticatedPrivacyActionReceiptNativeBridge.AuthenticatedActionExecutionReceiptV1>
+      getAuthenticatedPrivacyActionExecutionReceiptV1(
+          final PrivacyActionOperationViewV1 operation,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(operation, "operation");
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    requireAuthenticatedPrivacyActionViewV1(operation);
+    final AuthenticatedPrivacyActionReceiptNativeBridge.SignedQueryV1 signedQuery =
+        AuthenticatedPrivacyActionReceiptNativeBridge.buildSignedPrivacyActionReceiptQueryV1(
+            operation,
+            config.requireLocalSigningContext().networkId(),
+            canonicalAuth.accountId(),
+            canonicalAuth::sign);
+    final TransportRequest request =
+        buildExactSignedQueryPostRequest(
+            "/v1/query",
+            signedQuery.requestBody(),
+            AuthenticatedPrivacyActionReceiptNativeBridge.RESPONSE_MAX_BYTES);
+    return fetchExactNoritoBytesAllowingNotFound(
+            request, "authenticated Exact12 action receipt")
+        .thenApply(
+            response ->
+                response == null
+                    ? null
+                    : AuthenticatedPrivacyActionReceiptNativeBridge
+                        .projectPrivacyActionReceiptV1(signedQuery, response));
+  }
+
+  /** Returns finalized ZK-ACE replay provenance, or null only for an exact HTTP 404. */
+  public CompletableFuture<PrivacyZkAceReplayNullifierProvenanceV1>
+      getPrivacyZkAceReplayNullifierV1(
+          final PrivacyZkAceReplayNullifierRequestV1 request,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getPrivacyFinalizedStateV1(
+        request, canonicalAuth, PrivacyZkAceReplayNullifierProvenanceV1.class);
+  }
+
+  /** Returns finalized FCMP++, private-IVM, or PQ-MASP pool state, or null only on 404. */
+  public CompletableFuture<PrivacyProofManagedPoolStateViewV1>
+      getPrivacyProofManagedPoolStateV1(
+          final PrivacyProofManagedPoolStateRequestV1 request,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getPrivacyFinalizedStateV1(
+        request, canonicalAuth, PrivacyProofManagedPoolStateViewV1.class);
+  }
+
+  /** Returns finalized governed Orchard pool state, or null only on 404. */
+  public CompletableFuture<PrivacyOrchardPoolStateViewV1> getPrivacyOrchardPoolStateV1(
+      final PrivacyOrchardPoolStateRequestV1 request,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getPrivacyFinalizedStateV1(
+        request, canonicalAuth, PrivacyOrchardPoolStateViewV1.class);
+  }
+
+  /** Returns finalized consumed Orchard-nullifier provenance, or null only on 404. */
+  public CompletableFuture<PrivacyOrchardNullifierProvenanceV1> getPrivacyOrchardNullifierV1(
+      final PrivacyOrchardNullifierRequestV1 request,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getPrivacyFinalizedStateV1(
+        request, canonicalAuth, PrivacyOrchardNullifierProvenanceV1.class);
+  }
+
+  /** Returns finalized Anonymous PGC pool state, or null only on 404. */
+  public CompletableFuture<PrivacyAnonymousPgcPoolStateViewV1>
+      getPrivacyAnonymousPgcPoolStateV1(
+          final PrivacyAnonymousPgcPoolStateRequestV1 request,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getPrivacyFinalizedStateV1(
+        request, canonicalAuth, PrivacyAnonymousPgcPoolStateViewV1.class);
+  }
+
+  /** Returns finalized ZK-AMS admission provenance, or null only on 404. */
+  public CompletableFuture<PrivacyZkAmsAdmissionViewV1> getPrivacyZkAmsAdmissionV1(
+      final PrivacyZkAmsAdmissionRequestV1 request,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getPrivacyFinalizedStateV1(request, canonicalAuth, PrivacyZkAmsAdmissionViewV1.class);
+  }
+
+  /** Returns finalized ZK-AMS provisioning provenance, or null only on 404. */
+  public CompletableFuture<PrivacyZkAmsProvisionViewV1> getPrivacyZkAmsProvisionV1(
+      final PrivacyZkAmsProvisionRequestV1 request,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getPrivacyFinalizedStateV1(request, canonicalAuth, PrivacyZkAmsProvisionViewV1.class);
+  }
+
+  /** Returns finalized ZK-X509 certificate-nullifier provenance, or null only on 404. */
+  public CompletableFuture<PrivacyZkX509CertificateNullifierProvenanceV1>
+      getPrivacyZkX509CertificateNullifierV1(
+          final PrivacyZkX509CertificateNullifierRequestV1 request,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getPrivacyFinalizedStateV1(
+        request,
+        canonicalAuth,
+        PrivacyZkX509CertificateNullifierProvenanceV1.class);
+  }
+
+  private <T extends PrivacyFinalizedStateViewV1> CompletableFuture<T>
+      getPrivacyFinalizedStateV1(
+          final PrivacyFinalizedStateRequestV1 request,
+          final ToriiCanonicalRequestAuth canonicalAuth,
+          final Class<T> expectedType) {
+    final PrivacyFinalizedStateRequestV1 exactRequest =
+        Objects.requireNonNull(request, "request");
+    final ToriiCanonicalRequestAuth exactAuth =
+        Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final AuthenticatedPrivacyStateQueryNativeBridge.SignedQueryV1 signedQuery =
+        AuthenticatedPrivacyStateQueryNativeBridge.buildSignedPrivacyStateQueryV1(
+            exactRequest,
+            config.requireLocalSigningContext().networkId(),
+            exactAuth.accountId(),
+            exactAuth::sign);
+    final TransportRequest transportRequest =
+        buildExactSignedQueryPostRequest(
+            "/v1/query",
+            signedQuery.requestBody(),
+            AuthenticatedPrivacyStateQueryNativeBridge.RESPONSE_MAX_BYTES);
+    return fetchExactNoritoBytesAllowingNotFound(
+            transportRequest,
+            "authenticated finalized privacy-state query " + exactRequest.getQueryId())
+        .thenApply(
+            response -> {
+              if (response == null) {
+                return null;
+              }
+              final PrivacyFinalizedStateViewV1 view =
+                  AuthenticatedPrivacyStateQueryNativeBridge.projectPrivacyStateQueryV1(
+                      signedQuery, response);
+              if (!expectedType.isInstance(view)) {
+                throw new IllegalStateException(
+                    "authenticated finalized privacy-state query returned a different typed view");
+              }
+              return expectedType.cast(view);
+            });
+  }
+
+  private CompletableFuture<AuthenticatedCommittedTransactionResultV1>
+      getOptionalAuthenticatedCommittedTransactionResultV1(
+          final String transactionHashHex,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    final AuthenticatedTransactionDetailsNativeBridge.SignedQueryV1 signedQuery =
+        AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV1(
+            transactionHashHex,
+            config.requireLocalSigningContext().networkId(),
+            canonicalAuth.accountId(),
+            canonicalAuth::sign);
+    final TransportRequest request =
+        buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES);
+    return fetchExactNoritoBytesAllowingNotFound(
+            request, "authenticated committed transaction result")
+        .thenApply(
+            response ->
+                response == null
+                    ? null
+                    : AuthenticatedTransactionDetailsNativeBridge
+                        .projectCommittedTransactionResultV1(signedQuery, response));
   }
 
   /**
@@ -1562,6 +2100,529 @@ public final class HttpClientTransport implements IrohaClient {
             "reason", reason));
   }
 
+  private static final class PrivacyActionStatusSnapshotV1 {
+    private final PrivacyActionOperationViewV1 view;
+    private final Map<String, Object> payload;
+    private final String statusKind;
+
+    private PrivacyActionStatusSnapshotV1(
+        final PrivacyActionOperationViewV1 view,
+        final Map<String, Object> payload,
+        final String statusKind) {
+      this.view = view;
+      this.payload = payload;
+      this.statusKind = statusKind;
+    }
+  }
+
+  private CompletableFuture<PrivacyActionStatusSnapshotV1>
+      fetchPrivacyActionStatusSnapshotV1(
+          final PrivacyActionOperationViewV1 operation,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(operation, "operation");
+    requireAuthenticatedPrivacyActionViewV1(operation);
+    final String transactionHashHex = lowerHex(operation.transactionHashBytes());
+    return fetchAuthenticatedPrivacyPublicStatusV1(transactionHashHex, canonicalAuth)
+        .thenCompose(
+            payload -> {
+              if (payload == null) {
+                if (operation.localState == PrivacyActionLocalStateV1.TERMINAL) {
+                  throw new IllegalStateException(
+                      "terminal Exact12 action disappeared from pipeline status");
+                }
+                return CompletableFuture.completedFuture(
+                    new PrivacyActionStatusSnapshotV1(operation, null, null));
+              }
+              final String kind =
+                  PipelineStatusExtractor.requireAuthoritativeStatus(
+                      payload, transactionHashHex);
+              if ("Queued".equals(kind)
+                  || "Approved".equals(kind)
+                  || "Committed".equals(kind)) {
+                if (operation.localState == PrivacyActionLocalStateV1.TERMINAL) {
+                  throw new IllegalStateException("terminal Exact12 action status regressed");
+                }
+                return CompletableFuture.completedFuture(
+                    new PrivacyActionStatusSnapshotV1(operation, payload, kind));
+              }
+              if ("Expired".equals(kind)) {
+                if ("cache".equals(payload.get("resolved_from"))) {
+                  if (operation.localState == PrivacyActionLocalStateV1.TERMINAL) {
+                    throw new IllegalStateException(
+                        "terminal Exact12 action status regressed to cache-only expiry");
+                  }
+                  return CompletableFuture.completedFuture(
+                      new PrivacyActionStatusSnapshotV1(operation, payload, kind));
+                }
+                if (!"state".equals(payload.get("resolved_from"))
+                    || privacyStatusBlockHeightV1(payload) != null) {
+                  throw new IllegalStateException(
+                      "expired Exact12 action requires state-resolved evidence without a committed height");
+                }
+                final PrivacyActionOperationViewV1 refreshed =
+                    withTerminalPrivacyStatusV1(
+                        operation, PrivacyActionTerminalChainStateV1.EXPIRED, null, null);
+                requireStableTerminalPrivacyView(operation, refreshed);
+                bindAuthenticatedPrivacyActionViewV1(refreshed);
+                return CompletableFuture.completedFuture(
+                    new PrivacyActionStatusSnapshotV1(refreshed, payload, kind));
+              }
+              if (!"Applied".equals(kind) && !"Rejected".equals(kind)) {
+                throw new IllegalStateException("Exact12 action status kind is unsupported");
+              }
+              if (!"state".equals(payload.get("resolved_from"))
+                  && !"cache".equals(payload.get("resolved_from"))) {
+                throw new IllegalStateException(
+                    "committed Exact12 action status must be resolved from state or cache");
+              }
+              final BigInteger publicHeight = privacyStatusBlockHeightV1(payload);
+              final CompletableFuture<AuthenticatedCommittedTransactionResultV1> detailsFuture =
+                  getOptionalAuthenticatedCommittedTransactionResultV1(
+                      transactionHashHex, canonicalAuth);
+              final CompletableFuture<
+                      AuthenticatedPrivacyActionReceiptNativeBridge
+                          .AuthenticatedActionExecutionReceiptV1>
+                  receiptFuture =
+                      getAuthenticatedPrivacyActionExecutionReceiptV1(
+                          operation, canonicalAuth);
+              return detailsFuture.thenCombine(
+                  receiptFuture,
+                  (details, receipt) -> {
+                    if (publicHeight != null
+                        && receipt != null
+                        && !publicHeight.equals(receipt.admittedAtHeight())) {
+                      throw new IllegalStateException(
+                          "Exact12 status height differs from authenticated receipt admission");
+                    }
+                    if ("Rejected".equals(kind)) {
+                      if (receipt != null) {
+                        throw new IllegalStateException(
+                            "rejected Exact12 action contradicts an authenticated execution receipt");
+                      }
+                      if (details == null) {
+                        return new PrivacyActionStatusSnapshotV1(operation, payload, kind);
+                      }
+                      if (!transactionHashHex.equals(details.transactionHashHex())) {
+                        throw new IllegalStateException(
+                            "authenticated Exact12 transaction result changed the transaction hash");
+                      }
+                      if (publicHeight != null
+                          && !publicHeight.equals(details.committedBlockHeight())) {
+                        throw new IllegalStateException(
+                            "Exact12 status height differs from authenticated committed height");
+                      }
+                      if (details.resultOk() || details.rejectionMessage() == null) {
+                        throw new IllegalStateException(
+                            "rejected Exact12 action omitted its authenticated committed rejection");
+                      }
+                      final PrivacyActionOperationViewV1 refreshed =
+                          withTerminalPrivacyStatusV1(
+                              operation,
+                              PrivacyActionTerminalChainStateV1.REJECTED,
+                              details.committedBlockHeight(),
+                              details.rejectionMessage());
+                      requireStableTerminalPrivacyView(operation, refreshed);
+                      bindAuthenticatedPrivacyActionViewV1(refreshed);
+                      return new PrivacyActionStatusSnapshotV1(refreshed, payload, kind);
+                    }
+
+                    if (details != null) {
+                      if (!transactionHashHex.equals(details.transactionHashHex())) {
+                        throw new IllegalStateException(
+                            "authenticated Exact12 transaction result changed the transaction hash");
+                      }
+                      if (publicHeight != null
+                          && !publicHeight.equals(details.committedBlockHeight())) {
+                        throw new IllegalStateException(
+                            "Exact12 status height differs from authenticated committed height");
+                      }
+                      if (!details.resultOk()) {
+                        throw new IllegalStateException(
+                            "Applied Exact12 action resolved to a committed rejection");
+                      }
+                    }
+                    if (details == null || receipt == null) {
+                      return new PrivacyActionStatusSnapshotV1(operation, payload, kind);
+                    }
+                    if (!receipt.admittedAtHeight().equals(details.committedBlockHeight())) {
+                      throw new IllegalStateException(
+                          "authenticated Exact12 receipt differs from the committed transaction height");
+                    }
+                    final PrivacyActionOperationViewV1 refreshed =
+                        withTerminalPrivacyStatusV1(
+                            operation,
+                            PrivacyActionTerminalChainStateV1.APPLIED,
+                            details.committedBlockHeight(),
+                            null,
+                            receipt.capabilityManifestDigest(),
+                            receipt.capabilityCommittedHeight(),
+                            receipt.finalizedHeight(),
+                            receipt.finalizedBlockHash());
+                    requireStableTerminalPrivacyView(operation, refreshed);
+                    bindAuthenticatedPrivacyActionViewV1(refreshed);
+                    return new PrivacyActionStatusSnapshotV1(refreshed, payload, kind);
+                  });
+            });
+  }
+
+  private void bindAuthenticatedPrivacyActionViewV1(
+      final PrivacyActionOperationViewV1 operation) {
+    synchronized (privacyActionProvenanceLockV1) {
+      boolean alreadyBound = false;
+      for (int index = authenticatedPrivacyActionViewsV1.size() - 1; index >= 0; index--) {
+        final PrivacyActionOperationViewV1 candidate =
+            authenticatedPrivacyActionViewsV1.get(index).get();
+        if (candidate == null) {
+          authenticatedPrivacyActionViewsV1.remove(index);
+        } else if (candidate == operation) {
+          alreadyBound = true;
+        }
+      }
+      if (!alreadyBound) {
+        authenticatedPrivacyActionViewsV1.add(new WeakReference<>(operation));
+      }
+    }
+  }
+
+  private void requireAuthenticatedPrivacyActionViewV1(
+      final PrivacyActionOperationViewV1 operation) {
+    synchronized (privacyActionProvenanceLockV1) {
+      for (int index = authenticatedPrivacyActionViewsV1.size() - 1; index >= 0; index--) {
+        final PrivacyActionOperationViewV1 candidate =
+            authenticatedPrivacyActionViewsV1.get(index).get();
+        if (candidate == null) {
+          authenticatedPrivacyActionViewsV1.remove(index);
+        } else if (candidate == operation) {
+          return;
+        }
+      }
+    }
+    throw new IllegalStateException(
+        "Exact12 status requires a view returned by this client's authenticated submission");
+  }
+
+  private CompletableFuture<Map<String, Object>> fetchAuthenticatedPrivacyPublicStatusV1(
+      final String transactionHashHex,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    if (transactionHashHex == null || !transactionHashHex.matches("[0-9a-f]{64}")) {
+      throw new IllegalArgumentException(
+          "transactionHashHex must be an exact lowercase 32-byte hash");
+    }
+    final LinkedHashMap<String, String> query = new LinkedHashMap<>();
+    query.put("hash", transactionHashHex);
+    query.put("scope", "global");
+    final TransportRequest request =
+        buildCanonicalJsonGetRequest(
+            "/v1/pipeline/transactions/status",
+            query,
+            PRIVACY_STATUS_RESPONSE_MAX_BYTES,
+            canonicalAuth);
+    notifyRequest(request);
+    final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause = unwrapCompletion(throwable);
+                notifyFailure(request, cause);
+                future.completeExceptionally(
+                    new RuntimeException(
+                        "authenticated Exact12 status request failed", cause));
+                return;
+              }
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              try {
+                if (response.statusCode() == 204 || response.statusCode() == 404) {
+                  notifyResponse(request, clientResponse);
+                  future.complete(null);
+                } else if (response.statusCode() == 200 || response.statusCode() == 202) {
+                  requireExactHeader(
+                      response.headers(),
+                      "Content-Type",
+                      APPLICATION_JSON,
+                      "authenticated Exact12 status");
+                  if (response.body().length == 0) {
+                    throw new IllegalStateException(
+                        "authenticated Exact12 status response must not be empty");
+                  }
+                  if ((long) response.body().length > PRIVACY_STATUS_RESPONSE_MAX_BYTES) {
+                    throw new IllegalStateException(
+                        "authenticated Exact12 status response exceeds its byte bound");
+                  }
+                  requireExactOptionalContentLength(
+                      response.headers(),
+                      response.body().length,
+                      "authenticated Exact12 status");
+                  final Map<String, Object> payload =
+                      parsePipelineStatusPayload(response.body());
+                  notifyResponse(request, clientResponse);
+                  future.complete(payload);
+                } else {
+                  throw new IllegalStateException(
+                      "authenticated Exact12 status request failed with status "
+                          + response.statusCode());
+                }
+              } catch (final RuntimeException error) {
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+              }
+            });
+    return future;
+  }
+
+  private CompletableFuture<PrivacyActionOperationViewV1> waitForPrivacyActionTerminalV1(
+      final PrivacyActionOperationViewV1 submitted,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final PipelineStatusOptions options) {
+    final PipelineStatusOptions resolved = PipelineStatusOptions.resolve(options);
+    final long deadline = saturatedDeadline(resolved.timeoutMillis());
+    final CompletableFuture<PrivacyActionOperationViewV1> result = new CompletableFuture<>();
+    pollPrivacyActionStatusV1(
+        submitted, canonicalAuth, resolved, deadline, 0, null, result);
+    return result;
+  }
+
+  private void pollPrivacyActionStatusV1(
+      final PrivacyActionOperationViewV1 submitted,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final PipelineStatusOptions options,
+      final long deadline,
+      final int attempts,
+      final Map<String, Object> lastPayload,
+      final CompletableFuture<PrivacyActionOperationViewV1> result) {
+    if (result.isDone()) {
+      return;
+    }
+    if (options.maxAttempts() != null && attempts >= options.maxAttempts()) {
+      result.completeExceptionally(
+          new TransactionTimeoutException(
+              "Exact12 transaction "
+                  + lowerHex(submitted.transactionHashBytes())
+                  + " did not reach terminal state after "
+                  + attempts
+                  + " attempts",
+              lowerHex(submitted.transactionHashBytes()),
+              attempts,
+              lastPayload));
+      return;
+    }
+    fetchPrivacyActionStatusSnapshotV1(submitted, canonicalAuth)
+        .whenComplete(
+            (snapshot, throwable) -> {
+              if (throwable != null) {
+                result.completeExceptionally(unwrapCompletion(throwable));
+                return;
+              }
+              final int nextAttempts = attempts + 1;
+              if (options.observer() != null) {
+                try {
+                  options
+                      .observer()
+                      .onStatus(
+                          snapshot.statusKind == null ? "" : snapshot.statusKind,
+                          snapshot.payload == null ? Collections.emptyMap() : snapshot.payload,
+                          nextAttempts);
+                } catch (final RuntimeException observerError) {
+                  result.completeExceptionally(observerError);
+                  return;
+                }
+              }
+              if (snapshot.view.localState == PrivacyActionLocalStateV1.TERMINAL) {
+                result.complete(snapshot.view);
+                return;
+              }
+              if ((options.maxAttempts() != null
+                      && nextAttempts >= options.maxAttempts())
+                  || (deadline != Long.MAX_VALUE
+                      && System.currentTimeMillis() >= deadline)) {
+                result.completeExceptionally(
+                    new TransactionTimeoutException(
+                        "Exact12 transaction "
+                            + lowerHex(submitted.transactionHashBytes())
+                            + " did not reach terminal state within the configured bounds",
+                        lowerHex(submitted.transactionHashBytes()),
+                        nextAttempts,
+                        snapshot.payload));
+                return;
+              }
+              final Runnable task =
+                  () ->
+                      pollPrivacyActionStatusV1(
+                          submitted,
+                          canonicalAuth,
+                          options,
+                          deadline,
+                          nextAttempts,
+                          snapshot.payload,
+                          result);
+              if (options.intervalMillis() <= 0L) {
+                task.run();
+              } else {
+                CompletableFuture.runAsync(
+                    task,
+                    CompletableFuture.delayedExecutor(
+                        options.intervalMillis(), TimeUnit.MILLISECONDS));
+              }
+            });
+  }
+
+  private CompletableFuture<Void> submitExactPrivacyActionWire(
+      final byte[] wire,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final String transactionHashHex) {
+    final TransportRequest request =
+        buildExactNoritoPostRequest(
+            "/v1/pipeline/transactions",
+            wire,
+            PRIVACY_SUBMIT_RESPONSE_MAX_BYTES,
+            canonicalAuth);
+    notifyRequest(request);
+    final CompletableFuture<Void> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final AmbiguousTransactionSubmissionException error =
+                    new AmbiguousTransactionSubmissionException(
+                        transactionHashHex, null, unwrapCompletion(throwable));
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+                return;
+              }
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      transactionHashHex,
+                      extractRejectCode(response));
+              if (response.statusCode() == 202) {
+                notifyResponse(request, clientResponse);
+                future.complete(null);
+                return;
+              }
+              final RuntimeException error =
+                  submissionOutcomeIsAmbiguous(response.statusCode())
+                      ? new AmbiguousTransactionSubmissionException(
+                          transactionHashHex, response.statusCode(), null)
+                      : new IllegalStateException(
+                          "Exact12 transaction dispatch failed with status "
+                              + response.statusCode());
+              notifyFailure(request, error);
+              future.completeExceptionally(error);
+            });
+    return future;
+  }
+
+  private static PrivacyActionOperationViewV1 withTerminalPrivacyStatusV1(
+      final PrivacyActionOperationViewV1 operation,
+      final PrivacyActionTerminalChainStateV1 terminal,
+      final BigInteger height,
+      final String rejection) {
+    return withTerminalPrivacyStatusV1(
+        operation, terminal, height, rejection, null, null, null, null);
+  }
+
+  private static PrivacyActionOperationViewV1 withTerminalPrivacyStatusV1(
+      final PrivacyActionOperationViewV1 operation,
+      final PrivacyActionTerminalChainStateV1 terminal,
+      final BigInteger height,
+      final String rejection,
+      final byte[] executionCapabilityManifestDigest,
+      final BigInteger executionCapabilityCommittedHeight,
+      final BigInteger executionReceiptFinalizedHeight,
+      final byte[] executionReceiptFinalizedBlockHash) {
+    return new PrivacyActionOperationViewV1(
+        operation.protocolId,
+        operation.operationSchema,
+        operation.transactionHashBytes(),
+        operation.transactionIntentDigestBytes(),
+        operation.statementDigestBytes(),
+        operation.proofEnvelopeHashBytes(),
+        PrivacyActionLocalStateV1.TERMINAL,
+        terminal,
+        height,
+        rejection,
+        operation.ledgerEffectKind,
+        operation.capabilityManifestDigestBytes(),
+        operation.capabilityCommittedHeight,
+        executionCapabilityManifestDigest,
+        executionCapabilityCommittedHeight,
+        executionReceiptFinalizedHeight,
+        executionReceiptFinalizedBlockHash);
+  }
+
+  private static void requireStableTerminalPrivacyView(
+      final PrivacyActionOperationViewV1 previous,
+      final PrivacyActionOperationViewV1 refreshed) {
+    if (previous.localState == PrivacyActionLocalStateV1.TERMINAL
+        && !previous.equals(refreshed)) {
+      throw new IllegalStateException("terminal Exact12 action status changed");
+    }
+  }
+
+  private static BigInteger privacyStatusBlockHeightV1(
+      final Map<String, Object> payload) {
+    final Object rawStatus = payload.get("status");
+    if (!(rawStatus instanceof Map)) {
+      throw new IllegalStateException("Exact12 pipeline status omitted its typed status");
+    }
+    final Object raw = ((Map<?, ?>) rawStatus).get("block_height");
+    if (raw == null) {
+      return null;
+    }
+    final BigInteger height;
+    if (raw instanceof BigInteger) {
+      height = (BigInteger) raw;
+    } else if (raw instanceof Byte
+        || raw instanceof Short
+        || raw instanceof Integer
+        || raw instanceof Long) {
+      height = BigInteger.valueOf(((Number) raw).longValue());
+    } else if (raw instanceof java.math.BigDecimal) {
+      try {
+        height = ((java.math.BigDecimal) raw).toBigIntegerExact();
+      } catch (final ArithmeticException error) {
+        throw new IllegalStateException(
+            "Exact12 status block height is not an integer", error);
+      }
+    } else {
+      throw new IllegalStateException(
+          "Exact12 status block height has an unsupported numeric type");
+    }
+    if (height.signum() <= 0 || height.bitLength() > 64) {
+      throw new IllegalStateException(
+          "Exact12 status block height must be a positive u64");
+    }
+    return height;
+  }
+
+  private static String lowerHex(final byte[] value) {
+    final StringBuilder output = new StringBuilder(value.length * 2);
+    for (final byte current : value) {
+      output.append(String.format(java.util.Locale.ROOT, "%02x", current & 0xff));
+    }
+    return output.toString();
+  }
+
+  private static void requireAutomaticCanonicalFreshness(
+      final ToriiCanonicalRequestAuth canonicalAuth, final String context) {
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    if (canonicalAuth.timestampMs() != null || canonicalAuth.nonce() != null) {
+      throw new IllegalArgumentException(
+          context
+              + " performs multiple authenticated requests and requires generated freshness");
+    }
+  }
+
   private void pollPipelineStatus(
       final String hashHex,
       final PipelineStatusOptions options,
@@ -1805,6 +2866,43 @@ public final class HttpClientTransport implements IrohaClient {
     return builder.build();
   }
 
+  private TransportRequest buildCanonicalJsonGetRequest(
+      final String path,
+      final Map<String, String> queryParams,
+      final long maximumResponseBytes,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    for (final String name : config.defaultHeaders().keySet()) {
+      if (name.equalsIgnoreCase("Accept")) {
+        throw new IllegalArgumentException(
+            "Accept must not be overridden for canonical JSON requests");
+      }
+    }
+    requireCanonicalHeadersUnset();
+    final URI target = appendQuery(resolvePath(path), queryParams);
+    final Map<String, String> canonicalHeaders =
+        buildCanonicalHeaders("GET", target, null, canonicalAuth);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("GET")
+            .addHeader("Accept", APPLICATION_JSON)
+            .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    for (final Map.Entry<String, String> entry : canonicalHeaders.entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport canonical JSON GET",
+        config.baseUri(),
+        target,
+        canonicalHeaders,
+        null);
+    return builder.build();
+  }
+
   private TransportRequest buildJsonPostRequest(final String path, final byte[] body) {
     return buildJsonPostRequest(path, body, null);
   }
@@ -1903,6 +3001,78 @@ public final class HttpClientTransport implements IrohaClient {
       TransportSecurity.requireHttpRequestAllowed(
           "HttpClientTransport", config.baseUri(), target, canonicalHeaders, null);
     }
+    return builder.build();
+  }
+
+  private TransportRequest buildExactSignedQueryPostRequest(
+      final String path, final byte[] body, final long maximumResponseBytes) {
+    if (body == null || body.length == 0) {
+      throw new IllegalArgumentException("signed query POST body must not be empty");
+    }
+    for (final String name : config.defaultHeaders().keySet()) {
+      if (name.equalsIgnoreCase("Accept") || name.equalsIgnoreCase("Content-Type")) {
+        throw new IllegalArgumentException(
+            "Accept and Content-Type must not be overridden for exact signed queries");
+      }
+    }
+    requireCanonicalHeadersUnset();
+    final URI target = resolvePath(path);
+    TransportSecurity.requireAuthenticatedHttpRequestAllowed(
+        "HttpClientTransport authenticated signed query", config.baseUri(), target);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Accept", APPLICATION_NORITO)
+            .addHeader("Content-Type", APPLICATION_NORITO)
+            .setBody(body)
+            .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    return builder.build();
+  }
+
+  private TransportRequest buildExactNoritoPostRequest(
+      final String path,
+      final byte[] body,
+      final long maximumResponseBytes,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    if (body == null || body.length == 0) {
+      throw new IllegalArgumentException("exact Norito POST body must not be empty");
+    }
+    for (final String name : config.defaultHeaders().keySet()) {
+      if (name.equalsIgnoreCase("Accept") || name.equalsIgnoreCase("Content-Type")) {
+        throw new IllegalArgumentException(
+            "Accept and Content-Type must not be overridden for exact Norito requests");
+      }
+    }
+    requireCanonicalHeadersUnset();
+    final URI target = resolvePath(path);
+    final Map<String, String> canonicalHeaders =
+        buildCanonicalHeaders("POST", target, body, canonicalAuth);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Accept", APPLICATION_NORITO)
+            .addHeader("Content-Type", APPLICATION_NORITO)
+            .setBody(body)
+            .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    for (final Map.Entry<String, String> entry : canonicalHeaders.entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport exact Norito POST",
+        config.baseUri(),
+        target,
+        canonicalHeaders,
+        body);
     return builder.build();
   }
 
@@ -2352,6 +3522,66 @@ public final class HttpClientTransport implements IrohaClient {
                           + " response exceeds "
                           + maximumResponseBytes
                           + " bytes");
+                }
+                requireExactOptionalContentLength(response.headers(), body.length, errorContext);
+                notifyResponse(request, clientResponse);
+                future.complete(body.clone());
+              } catch (final RuntimeException error) {
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+              }
+            });
+    return future;
+  }
+
+  /** Executes an exact Norito request where, and only where, HTTP 404 means typed absence. */
+  CompletableFuture<byte[]> fetchExactNoritoBytesAllowingNotFound(
+      final TransportRequest request, final String errorContext) {
+    notifyRequest(request);
+    final CompletableFuture<byte[]> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                notifyFailure(request, cause);
+                future.completeExceptionally(
+                    new RuntimeException(errorContext + " request failed", cause));
+                return;
+              }
+              final byte[] body = response.body();
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      body,
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              try {
+                if (response.statusCode() == 404) {
+                  notifyResponse(request, clientResponse);
+                  future.complete(null);
+                  return;
+                }
+                if (response.statusCode() != 200) {
+                  throw new IllegalStateException(
+                      errorContext + " request failed with status " + response.statusCode());
+                }
+                requireExactHeader(
+                    response.headers(), "Content-Type", APPLICATION_NORITO, errorContext);
+                if (body.length == 0) {
+                  throw new IllegalStateException(errorContext + " response must not be empty");
+                }
+                final Long maximumResponseBytes = request.maximumResponseBytes();
+                if (maximumResponseBytes == null) {
+                  throw new IllegalStateException(
+                      errorContext + " request must declare a response-body limit");
+                }
+                if ((long) body.length > maximumResponseBytes.longValue()) {
+                  throw new IllegalStateException(
+                      errorContext + " response exceeds " + maximumResponseBytes + " bytes");
                 }
                 requireExactOptionalContentLength(response.headers(), body.length, errorContext);
                 notifyResponse(request, clientResponse);
@@ -3562,6 +4792,8 @@ public final class HttpClientTransport implements IrohaClient {
   private static final long SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L;
   private static final long SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L;
   private static final long EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L;
+  private static final long PRIVACY_STATUS_RESPONSE_MAX_BYTES = 64L * 1024L;
+  private static final long PRIVACY_SUBMIT_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final String APPLICATION_JSON = "application/json";
   private static final String APPLICATION_NORITO = "application/x-norito";
 

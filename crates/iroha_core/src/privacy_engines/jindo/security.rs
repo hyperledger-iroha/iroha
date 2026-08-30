@@ -46,7 +46,7 @@ pub enum JindoSecurityCertificateErrorV1 {
 /// until all requirements in [`JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1`] are pinned and checked.
 pub const fn jindo_security_certificate_v1()
 -> Result<JindoSecurityCertificateV1, JindoSecurityCertificateErrorV1> {
-    // TODO(jindo-security): issue the sealed capability only after a pinned,
+    // This release gate intentionally stays closed until a pinned,
     // machine-checked distribution theorem and its concrete extractor,
     // composition, and Fiat--Shamir losses meet the release target.
     Err(JindoSecurityCertificateErrorV1::MissingDistributionWideKnowledgeSoundnessEvidence)

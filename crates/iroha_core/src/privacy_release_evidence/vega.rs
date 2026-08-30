@@ -9,8 +9,10 @@ pub(super) const VEGA_RELEASE_NONCE_V1: u32 = 26;
 pub(super) const VEGA_RELEASE_MC_MAX_CIRCUIT_VARIABLES_V1: u64 = 1_048_576;
 pub(super) const VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1: u64 = 2_359_296;
 pub(super) const VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1: u64 = 21;
+#[cfg(test)]
 pub(super) const VEGA_RELEASE_MC_UPSTREAM_COMMIT_V1: &str =
     "c0ee259053cd12eaf43ed71b5cde375452b3ee4d";
+#[cfg(test)]
 pub(super) const VEGA_RELEASE_MC_WIRE_DESCRIPTOR_V1: &str = "canonical-mc-2-plus-6-sha256-steps";
 const VEGA_RELEASE_MC_STEP_COUNT_V1: usize = 8;
 const VEGA_RELEASE_MC_SHARED_VARIABLES_V1: usize = 524_288;
@@ -101,7 +103,7 @@ pub(super) fn run_vega_stage_v1(
         b"figure9-proof-randomness",
     )?;
     let mut proof_rng = EvidenceRng06::new(proof_seed);
-    let prepared = prepare_vega_privacy_action_with_rng_v1(
+    let prepared = prepare_vega_release_candidate_privacy_action_with_rng_v1(
         vega_release_transaction_context_v1()?,
         public_input,
         witness_material,
@@ -564,7 +566,7 @@ pub(super) fn verify_vega_release_production_envelope_v1(
     authoritative_action_index: u32,
     block_timestamp_ms: u64,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
+    let profile = vega_release_candidate_profile_material_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
         PrivacyActiveLifecycleV1 {
@@ -591,7 +593,7 @@ pub(super) fn verify_vega_release_production_envelope_v1(
         proof: PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(proof.to_vec())),
     };
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let effects = verify_privacy_envelope_v1(
+    let effects = verify_vega_release_candidate_envelope_v1(
         &envelope,
         PrivacyVerificationContextV1 {
             activation: &activation,

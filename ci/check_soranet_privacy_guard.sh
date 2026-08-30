@@ -14,18 +14,26 @@ DOC_PATH="specs/references/configuration.md"
 RUNBOOK_PATH="specs/sorafs_authz_runbook.md"
 OPS_PLAYBOOK_PATH="specs/sorafs_ops_playbook.md"
 
-endpoints=(
-	"handler_post_soranet_privacy_event"
-	"handler_post_soranet_privacy_share"
+endpoint_witnesses=(
+	"handler_post_soranet_privacy_event:_collector"
+	"handler_post_soranet_privacy_share:collector"
 )
 
-for fn in "${endpoints[@]}"; do
-	pattern="(?s)fn[[:space:]]+${fn}.*Extension\(_collector\):[[:space:]]+Extension<VerifiedSoranetPrivacyCollector>"
+for endpoint_witness in "${endpoint_witnesses[@]}"; do
+	fn="${endpoint_witness%%:*}"
+	witness="${endpoint_witness#*:}"
+	pattern="(?s)fn[[:space:]]+${fn}\\([^\\{]*Extension\\(${witness}\\):[[:space:]]+Extension<VerifiedSoranetPrivacyCollector>[^\\{]*\\{"
 	if ! rg --pcre2 --multiline -n "${pattern}" "${INGRESS_TARGET}" >/dev/null; then
 		echo "error: ${fn} must require the verified SoraNet collector witness." >&2
 		exit 1
 	fi
 done
+
+share_identity_pattern="(?s)fn[[:space:]]+handler_post_soranet_privacy_share\\([^\\{]*Extension\\(collector\\):[[:space:]]+Extension<VerifiedSoranetPrivacyCollector>[^\\{]*\\{.*?request\\.0\\.share\\.collector_id[[:space:]]*!=[[:space:]]*collector\\.0"
+if ! rg --pcre2 --multiline -n "${share_identity_pattern}" "${INGRESS_TARGET}" >/dev/null; then
+	echo "error: SoraNet privacy shares must bind the submitted collector_id to the verified collector witness." >&2
+	exit 1
+fi
 
 collector_auth_pattern="(?s)fn[[:space:]]+authenticated_soranet_privacy_collector\(.*enforce_soranet_privacy_collector_authentication.*enforce_operator_access.*AuthenticationPolicy::OperatorSignature"
 if ! rg --pcre2 --multiline -n "${collector_auth_pattern}" "${BUILDER_TARGET}" >/dev/null; then

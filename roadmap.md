@@ -501,11 +501,12 @@ must not increase. The include manifest contains 66 parents and 398 entries.
 The exact proof-ledger checker has only the separately
 recorded task-start Cargo.lock mismatch outstanding. Still outstanding are
 strict four-validator, current-source release, and broader workspace/Clippy
-evidence. `Cargo.lock` changed concurrently
+evidence. At that archived Sumeragi checkpoint, `Cargo.lock` changed
+concurrently
 from task-start SHA-256 `0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222`
 to `c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b`;
-the Sumeragi task did not edit it, but no byte-identity or old-lock validation
-claim applies to the current candidate.
+the Sumeragi task did not edit it. This historical digest does not authorize
+the active Exact12 release candidate, which requires its own reviewed lock pin.
 
 The outstanding revision-4 work includes:
 

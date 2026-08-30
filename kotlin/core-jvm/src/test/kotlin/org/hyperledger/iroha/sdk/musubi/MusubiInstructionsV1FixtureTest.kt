@@ -421,7 +421,7 @@ class MusubiInstructionsV1FixtureTest {
         readField(transactionDecoder, "authority")
         readField(transactionDecoder, "creation_time_ms")
         val executablePayload = readField(transactionDecoder, "executable")
-        repeat(5) { index -> readField(transactionDecoder, "tail[$index]") }
+        repeat(6) { index -> readField(transactionDecoder, "tail[$index]") }
         assertEquals(0, transactionDecoder.remaining())
 
         val executableDecoder = canonicalDecoder(executablePayload)

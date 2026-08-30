@@ -6,6 +6,7 @@ package org.hyperledger.iroha.android.offline;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -58,6 +59,11 @@ public final class KagemushaAndroidKeyMintTests {
             KagemushaAndroidKeyMint.StrongBoxPolicy.NOT_REQUESTED);
     final DeviceAttestationRegistration registration = generated.registration();
     assertArrayEquals(parameters.attestationChallenge(), backend.request.challenge());
+    assertTrue(backend.request.requiresDevicePropertiesProjection());
+    assertEquals("org.hyperledger.iroha.pk3", backend.request.expectedPackageName());
+    assertArrayEquals(
+        signingCertificateSha256,
+        backend.request.expectedSigningCertificateSha256());
     assertArrayEquals(parameters.attestationChallenge(), registration.challengeHash());
     assertArrayEquals(
         generated.material().assertionPublicKeySec1(), registration.assertionPublicKey());
@@ -65,6 +71,7 @@ public final class KagemushaAndroidKeyMintTests {
     assertEquals(1, registration.assertionUsageCountLimit().intValue());
     assertTrue(registration.oneUse());
     assertEquals(generated.material().keyId(), registration.keyId());
+    assertEquals(androidProperties(false), registration.androidAttestedDeviceProperties());
   }
 
   @Test
@@ -85,7 +92,7 @@ public final class KagemushaAndroidKeyMintTests {
     assertEquals("secp256r1", backend.request.curveName());
     assertEquals(android.security.keystore.KeyProperties.PURPOSE_SIGN, backend.request.purposes());
     assertEquals("SHA-256", backend.request.digest());
-    assertEquals(1, backend.request.maxUsageCount());
+    assertEquals(Integer.valueOf(1), backend.request.maxUsageCount());
     assertFalse(backend.request.strongBoxRequired());
     assertArrayEquals(challenge, backend.request.challenge());
     assertEquals(65, material.assertionPublicKeySec1().length);
@@ -138,6 +145,107 @@ public final class KagemushaAndroidKeyMintTests {
             canonicalHash(0x41),
             KagemushaAndroidKeyMint.StrongBoxPolicy.NOT_REQUESTED));
     assertEquals(0, softwareUsageLimit.generateCalls);
+  }
+
+  @Test
+  public void managedPre12StrongBoxUsesDistinctReceiptFirstProfileWithoutTag405()
+      throws Exception {
+    final FakeBackend backend = new FakeBackend();
+    backend.apiLevel = 30;
+    backend.strongBox = true;
+    backend.managedDeviceProperties = true;
+    backend.remainingUsageCount = null;
+    final KagemushaAndroidKeyMint keyMint = new KagemushaAndroidKeyMint(backend);
+    final byte[] accountSeed = new byte[32];
+    Arrays.fill(accountSeed, (byte) 0x32);
+    final byte[] accountPublicKey =
+        new Ed25519PrivateKeyParameters(accountSeed, 0).generatePublicKey().getEncoded();
+    final String accountId =
+        AccountAddress.fromAccount(accountPublicKey, "ed25519").toI105(0x02f1);
+    final KagemushaAndroidKeyMint.RegistrationParameters parameters =
+        new KagemushaAndroidKeyMint.RegistrationParameters(
+            "managed-pre12-device",
+            accountId,
+            null,
+            "org.hyperledger.iroha.pk3",
+            canonicalHash(0x33),
+            new KagemushaDevicePublicKeyV2(
+                uncompressed((ECPublicKey) backend.keyPair.getPublic())),
+            43,
+            canonicalHash(0x35),
+            2_000_000_000_000L);
+
+    final KagemushaAndroidKeyMint.GeneratedRegistration generated =
+        keyMint.generateRegistration(
+            "managed-pre12-alias",
+            parameters,
+            KagemushaAndroidKeyMint.StrongBoxPolicy.REQUIRED);
+
+    assertEquals(
+        KagemushaAndroidKeyMint.AssertionProfile
+            .MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST,
+        backend.request.assertionProfile());
+    assertNull(backend.request.maxUsageCount());
+    assertNull(generated.registration().assertionUsageCountLimit());
+    assertEquals(
+        DeviceAttestationRegistration.ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME,
+        generated.registration().assertionScheme());
+    assertEquals(androidProperties(true, 110_000),
+        generated.registration().androidAttestedDeviceProperties());
+    assertArrayEquals(backend.request.challenge(), generated.registration().challengeHash());
+    assertFalse(Arrays.equals(parameters.attestationChallenge(), backend.request.challenge()));
+  }
+
+  @Test
+  public void pre12StrongBoxFailsClosedWithoutManagedOwnershipOrCompleteStrongBoxEvidence()
+      throws Exception {
+    final FakeBackend ordinary = new FakeBackend();
+    ordinary.apiLevel = 30;
+    ordinary.strongBox = true;
+    final KagemushaAndroidKeyMint ordinaryKeyMint = new KagemushaAndroidKeyMint(ordinary);
+    assertThrows(
+        GeneralSecurityException.class,
+        () -> ordinaryKeyMint.generateRegistrationMaterial(
+            "ordinary-pre12",
+            canonicalHash(0x36),
+            KagemushaAndroidKeyMint.StrongBoxPolicy.REQUIRED));
+    assertEquals(0, ordinary.generateCalls);
+
+    final FakeBackend managed = new FakeBackend();
+    managed.apiLevel = 30;
+    managed.strongBox = true;
+    managed.managedDeviceProperties = true;
+    managed.remainingUsageCount = null;
+    managed.projectedProperties = androidProperties(false, 110_000);
+    final KagemushaAndroidKeyMint managedKeyMint = new KagemushaAndroidKeyMint(managed);
+    final byte[] accountSeed = new byte[32];
+    Arrays.fill(accountSeed, (byte) 0x37);
+    final String accountId =
+        AccountAddress.fromAccount(
+                new Ed25519PrivateKeyParameters(accountSeed, 0)
+                    .generatePublicKey()
+                    .getEncoded(),
+                "ed25519")
+            .toI105(0x02f1);
+    final KagemushaAndroidKeyMint.RegistrationParameters parameters =
+        new KagemushaAndroidKeyMint.RegistrationParameters(
+            "managed-invalid-evidence",
+            accountId,
+            null,
+            "org.hyperledger.iroha.pk3",
+            canonicalHash(0x39),
+            new KagemushaDevicePublicKeyV2(
+                uncompressed((ECPublicKey) managed.keyPair.getPublic())),
+            44,
+            canonicalHash(0x3b),
+            2_000_000_000_000L);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> managedKeyMint.generateRegistration(
+            "managed-tee-evidence",
+            parameters,
+            KagemushaAndroidKeyMint.StrongBoxPolicy.REQUIRED));
+    assertEquals("managed-tee-evidence", managed.deletedAlias);
   }
 
   @Test
@@ -226,6 +334,33 @@ public final class KagemushaAndroidKeyMintTests {
     return hash;
   }
 
+  private static OfflineAndroidAttestedDevicePropertiesV2 androidProperties(
+      final boolean strongBox) {
+    return androidProperties(strongBox, 140_000);
+  }
+
+  private static OfflineAndroidAttestedDevicePropertiesV2 androidProperties(
+      final boolean strongBox, final long osVersion) {
+    return new OfflineAndroidAttestedDevicePropertiesV2(
+        OfflineAndroidAttestedDevicePropertiesV2.VERSION_V2,
+        300,
+        300,
+        strongBox
+            ? OfflineAndroidAttestedDevicePropertiesV2.SecurityLevel.STRONG_BOX
+            : OfflineAndroidAttestedDevicePropertiesV2.SecurityLevel.TRUSTED_ENVIRONMENT,
+        "google",
+        "husky",
+        "husky",
+        "Google",
+        "Pixel 8 Pro",
+        osVersion,
+        202_608,
+        20_260_805,
+        20_260_801,
+        canonicalHash(0x42),
+        canonicalHash(0x24));
+  }
+
   private static byte[] uncompressed(final ECPublicKey publicKey) {
     final byte[] result = new byte[65];
     result[0] = 0x04;
@@ -246,9 +381,11 @@ public final class KagemushaAndroidKeyMintTests {
     private int apiLevel = 31;
     private boolean hardwareSingleUse = true;
     private boolean strongBox;
+    private boolean managedDeviceProperties;
     private boolean failGeneration;
     private boolean generatedInsideHardware = true;
-    private int remainingUsageCount = 1;
+    private Integer remainingUsageCount = 1;
+    private OfflineAndroidAttestedDevicePropertiesV2 projectedProperties;
     private int generateCalls;
     private KagemushaAndroidKeyMint.GenerationRequest request;
     private String signatureAlgorithm;
@@ -278,6 +415,11 @@ public final class KagemushaAndroidKeyMintTests {
     }
 
     @Override
+    public boolean supportsManagedDevicePropertiesAttestation() {
+      return managedDeviceProperties;
+    }
+
+    @Override
     public KagemushaAndroidKeyMint.GeneratedKey generate(
         final KagemushaAndroidKeyMint.GenerationRequest request)
         throws GeneralSecurityException {
@@ -285,7 +427,7 @@ public final class KagemushaAndroidKeyMintTests {
       this.request = request;
       if (failGeneration) {
         try {
-          delete(request.alias());
+          delete(request.alias(), request.assertionProfile());
         } catch (final GeneralSecurityException impossible) {
           throw new AssertionError(impossible);
         }
@@ -296,11 +438,24 @@ public final class KagemushaAndroidKeyMintTests {
           List.of(new byte[] {0x30, 0x01, 0x01}),
           generatedInsideHardware,
           request.strongBoxRequired(),
-          remainingUsageCount);
+          remainingUsageCount,
+          request.requiresDevicePropertiesProjection()
+              ? projectedProperties != null
+                  ? projectedProperties
+                  : request.assertionProfile()
+                          == KagemushaAndroidKeyMint.AssertionProfile
+                              .MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST
+                      ? androidProperties(true, 110_000)
+                      : androidProperties(request.strongBoxRequired())
+              : null);
     }
 
     @Override
-    public byte[] sign(final String alias, final String algorithm, final byte[] message)
+    public byte[] sign(
+        final String alias,
+        final String algorithm,
+        final byte[] message,
+        final KagemushaAndroidKeyMint.AssertionProfile assertionProfile)
         throws GeneralSecurityException {
       signatureAlgorithm = algorithm;
       signedMessage = message.clone();
@@ -311,7 +466,10 @@ public final class KagemushaAndroidKeyMintTests {
     }
 
     @Override
-    public void delete(final String alias) throws GeneralSecurityException {
+    public void delete(
+        final String alias,
+        final KagemushaAndroidKeyMint.AssertionProfile assertionProfile)
+        throws GeneralSecurityException {
       deleted = true;
       deletedAlias = alias;
     }

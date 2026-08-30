@@ -19,6 +19,17 @@ public final class TransactionBuilder {
   private final NoritoCodecAdapter codecAdapter;
   private final IrohaKeyManager keyManager;
 
+  /**
+   * Creates an external-signer-only builder.
+   *
+   * <p>This form has no key provider and therefore cannot generate, import, rotate, or substitute a
+   * signing key. Calls to the alias-based overload fail closed.
+   */
+  public TransactionBuilder(final NoritoCodecAdapter codecAdapter) {
+    this.codecAdapter = Objects.requireNonNull(codecAdapter, "codecAdapter");
+    this.keyManager = null;
+  }
+
   public TransactionBuilder(final NoritoCodecAdapter codecAdapter, final IrohaKeyManager keyManager) {
     this.codecAdapter = Objects.requireNonNull(codecAdapter, "codecAdapter");
     this.keyManager = Objects.requireNonNull(keyManager, "keyManager");
@@ -36,6 +47,10 @@ public final class TransactionBuilder {
       final String alias,
       final IrohaKeyManager.KeySecurityPreference preference)
       throws NoritoException, KeyManagementException, SigningException {
+    if (keyManager == null) {
+      throw new KeyManagementException(
+          "This TransactionBuilder requires the caller's exact external signer");
+    }
     final Signer signer = keyManager.signerForAlias(alias, preference);
     return encodeAndSignInternal(withQueuePlanSyncedAdmission(payload), signer, alias);
   }

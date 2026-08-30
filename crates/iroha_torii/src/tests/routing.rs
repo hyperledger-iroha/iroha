@@ -474,6 +474,7 @@ mod tests {
         let offline = OfflineStatus {
             mandatory: false,
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
+            eligibility_cash_handoff_capability: "cash_handoff_eligibility_v1".to_owned(),
             required_bridge_abi_version: 22,
             max_hops: 8,
             ready: true,
@@ -507,6 +508,12 @@ mod tests {
         );
         assert_eq!(
             projected
+                .get("eligibility_cash_handoff_capability")
+                .and_then(norito::json::Value::as_str),
+            Some("cash_handoff_eligibility_v1")
+        );
+        assert_eq!(
+            projected
                 .get("required_bridge_abi_version")
                 .and_then(norito::json::Value::as_u64),
             Some(22)
@@ -517,7 +524,7 @@ mod tests {
             Some("offline/cash_handoff_capability"),
             ActualLaneRoutingPolicy::default(),
             None,
-            Some(offline),
+            Some(offline.clone()),
         )
         .await
         .expect("offline status tail succeeds");
@@ -530,6 +537,25 @@ mod tests {
         let payload: norito::json::Value =
             norito::json::from_slice(&body).expect("decode status tail");
         assert_eq!(payload.as_str(), Some("cash_handoff_v1"));
+        let response = super::handle_status(
+            &telemetry,
+            None,
+            Some("offline/eligibility_cash_handoff_capability"),
+            ActualLaneRoutingPolicy::default(),
+            None,
+            Some(offline),
+        )
+        .await
+        .expect("eligibility-envelope status tail succeeds");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect eligibility-envelope status tail")
+            .to_bytes();
+        let payload: norito::json::Value = norito::json::from_slice(&body)
+            .expect("decode eligibility-envelope status tail");
+        assert_eq!(payload.as_str(), Some("cash_handoff_eligibility_v1"));
     }
     #[cfg(feature = "telemetry")]
     #[tokio::test]

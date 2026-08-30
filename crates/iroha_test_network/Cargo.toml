@@ -9,6 +9,15 @@ license.workspace = true
 
 [features]
 default = []
+# Explicit release-runner edge for core's deterministic evidence API. The
+# integration-test package and non-shipping daemon have separate explicit
+# opt-in forwarding gates.
+privacy-release-evidence = ["iroha_core/privacy-release-evidence"]
+
+[[bin]]
+name = "taira_privacy_release_runner"
+path = "src/bin/taira_privacy_release_runner.rs"
+required-features = ["privacy-release-evidence"]
 
 [dependencies]
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

@@ -891,9 +891,14 @@ export function createToriiGovernanceNormalizers({
     payload,
     options,
     localSigningContext,
+    defaultCanonicalAuth,
     context,
   ) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      defaultCanonicalAuth,
+      options,
+      context,
+    );
     if (canonicalAuth.accountId !== payload.authority) {
       throw new TypeError(
         `${context} canonicalAuth.accountId must equal the exact payload authority`,

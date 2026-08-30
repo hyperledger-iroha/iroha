@@ -280,7 +280,13 @@ fn capability_tuple_dict(
     )?;
     output.set_item("committed_height", manifest.committed_height)?;
     output.set_item("protocol_id", row.protocol_id.canonical_label())?;
-    output.set_item("operation_schema", row.operation_schema.canonical_label())?;
+    output.set_item(
+        "operation_schemas",
+        row.operation_schemas
+            .iter()
+            .map(|operation| operation.canonical_label())
+            .collect::<Vec<_>>(),
+    )?;
     output.set_item("execution_mode", row.execution_mode.canonical_label())?;
     output.set_item("privacy_feature_mask", row.privacy_feature_mask.bits())?;
     output.set_item("readiness", readiness_label(row.readiness))?;

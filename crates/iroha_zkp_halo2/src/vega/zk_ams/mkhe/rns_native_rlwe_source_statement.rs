@@ -181,6 +181,8 @@ const RLWE_FORMULA_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-sou
 const PUBLIC_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.public-key";
 const PUBLIC_RECORD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.public-record";
 const PUBLIC_BUNDLE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.public-bundle";
+const PUBLIC_CIPHERTEXT_IDENTITY_MANIFEST_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.public-ciphertext-identity-manifest";
 const PUBLIC_STATEMENT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.public-statement";
 const NONCE_BINDING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-rlwe-source.nonce-binding";
@@ -1332,6 +1334,181 @@ fn validate_public_artifact_without_transcript_v1(
         public_key_digest,
         public_bundle_digest: expected_bundle,
     })
+}
+
+/// Opaque exact-43 identity manifest derived from a fully validated public
+/// artifact view.
+///
+/// This value defines the record-granularity handoff between the public RLWE
+/// statement and the split-decryption equality input.  It authenticates the
+/// canonical record order and every public record digest against the aggregate
+/// public-bundle digest.  It deliberately contains no claim that a separately
+/// supplied native ciphertext digest satisfies the corresponding RLWE
+/// equations; only the later equality verifier may establish that fact. Its
+/// constructor remains private to the validated-artifact corridor, and live
+/// publication-owner integration is still a separate unavailable gate.
+#[must_use = "the public ciphertext identity manifest must remain paired with its equality input"]
+pub struct ZkAmsMkheRnsNativePublicCiphertextIdentityManifestV1 {
+    version: u8,
+    profile_digest: [u8; DIGEST_BYTES_V1],
+    topology_digest: [u8; DIGEST_BYTES_V1],
+    release_candidate_digest: [u8; DIGEST_BYTES_V1],
+    source_binding_digest: [u8; DIGEST_BYTES_V1],
+    statement_digest: [u8; DIGEST_BYTES_V1],
+    operational_context_digest: [u8; DIGEST_BYTES_V1],
+    epoch: u64,
+    governed_roster_digest: [u8; DIGEST_BYTES_V1],
+    public_key_digest: [u8; DIGEST_BYTES_V1],
+    public_bundle_digest: [u8; DIGEST_BYTES_V1],
+    records: [RnsNativePublicRecordMetadataV1; OPENING_COUNT_V1],
+    manifest_digest: [u8; DIGEST_BYTES_V1],
+}
+
+impl core::fmt::Debug for ZkAmsMkheRnsNativePublicCiphertextIdentityManifestV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ZkAmsMkheRnsNativePublicCiphertextIdentityManifestV1")
+            .field("record_count", &self.records.len())
+            .field(
+                "public_bundle_digest",
+                &hex::encode(self.public_bundle_digest),
+            )
+            .field("manifest_digest", &hex::encode(self.manifest_digest))
+            .finish_non_exhaustive()
+    }
+}
+
+impl ZkAmsMkheRnsNativePublicCiphertextIdentityManifestV1 {
+    pub(super) fn validate_v1(
+        &self,
+        transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
+        layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    ) -> Result<(), RnsNativeRlweSourceStatementErrorV1> {
+        layout
+            .validate()
+            .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidContext)?;
+        if self.version != STATEMENT_VERSION_V1
+            || self.profile_digest != layout.profile_digest()
+            || self.topology_digest != layout.topology_digest()
+            || self.release_candidate_digest != layout.release_candidate_digest()
+            || self.source_binding_digest != layout.source_binding_digest()
+            || self.statement_digest != layout.statement_digest()
+            || self.operational_context_digest != layout.operational_context_digest()
+            || self.governed_roster_digest != transcript.governed_roster_digest()
+            || self.public_bundle_digest != transcript.public_ciphertext_digest()
+            || self.public_key_digest == [0; DIGEST_BYTES_V1]
+            || self.manifest_digest == [0; DIGEST_BYTES_V1]
+        {
+            return Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact);
+        }
+        let expected_bundle = public_bundle_digest_v1(
+            layout,
+            self.epoch,
+            self.governed_roster_digest,
+            self.public_key_digest,
+            &self.records,
+        )?;
+        let mut registry = DigestRegistryV1::with_capacity_v1(3 + 2 * OPENING_COUNT_V1)?;
+        registry.insert_v1(self.governed_roster_digest)?;
+        registry.insert_v1(self.public_key_digest)?;
+        for record in self.records {
+            registry.insert_v1(record.nonce_binding_digest)?;
+            registry.insert_v1(record.record_digest)?;
+        }
+        registry.insert_v1(expected_bundle)?;
+        if self.public_bundle_digest != expected_bundle
+            || self.manifest_digest != public_ciphertext_identity_manifest_digest_v1(self)
+        {
+            return Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact);
+        }
+        Ok(())
+    }
+
+    /// Aggregate public-ciphertext identity already bound by the transcript.
+    #[must_use]
+    pub const fn public_bundle_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.public_bundle_digest
+    }
+
+    /// Digest of the exact canonical 43-record identity manifest.
+    #[must_use]
+    pub const fn manifest_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.manifest_digest
+    }
+
+    pub(super) fn record_digests_v1(
+        &self,
+    ) -> impl ExactSizeIterator<Item = [u8; DIGEST_BYTES_V1]> + '_ {
+        self.records.iter().map(|record| record.record_digest)
+    }
+}
+
+/// Mint an opaque identity manifest only after validating the complete
+/// 40-limb artifact view.  The returned value is record-granularity evidence,
+/// not an RLWE-equation or release receipt.
+pub(super) fn bind_rns_native_public_ciphertext_identity_manifest_v1(
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    public: RnsNativePublicArtifactViewV1<'_>,
+) -> Result<ZkAmsMkheRnsNativePublicCiphertextIdentityManifestV1, RnsNativeRlweSourceStatementErrorV1>
+{
+    layout
+        .validate()
+        .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidContext)?;
+    let validated = validate_public_artifact_without_transcript_v1(layout, public)?;
+    let records = public
+        .records
+        .try_into()
+        .map_err(|_| RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact)?;
+    let mut manifest = ZkAmsMkheRnsNativePublicCiphertextIdentityManifestV1 {
+        version: STATEMENT_VERSION_V1,
+        profile_digest: layout.profile_digest(),
+        topology_digest: layout.topology_digest(),
+        release_candidate_digest: layout.release_candidate_digest(),
+        source_binding_digest: layout.source_binding_digest(),
+        statement_digest: layout.statement_digest(),
+        operational_context_digest: layout.operational_context_digest(),
+        epoch: public.epoch,
+        governed_roster_digest: public.governed_roster_digest,
+        public_key_digest: validated.public_key_digest,
+        public_bundle_digest: validated.public_bundle_digest,
+        records,
+        manifest_digest: [0; DIGEST_BYTES_V1],
+    };
+    manifest.manifest_digest = public_ciphertext_identity_manifest_digest_v1(&manifest);
+    if manifest.manifest_digest == [0; DIGEST_BYTES_V1] {
+        return Err(RnsNativeRlweSourceStatementErrorV1::InvalidPublicArtifact);
+    }
+    Ok(manifest)
+}
+
+fn public_ciphertext_identity_manifest_digest_v1(
+    manifest: &ZkAmsMkheRnsNativePublicCiphertextIdentityManifestV1,
+) -> [u8; DIGEST_BYTES_V1] {
+    let mut hash = Keccak256::new();
+    hash.update(PUBLIC_CIPHERTEXT_IDENTITY_MANIFEST_DOMAIN_V1);
+    hash.update(&[manifest.version]);
+    for digest in [
+        manifest.profile_digest,
+        manifest.topology_digest,
+        manifest.release_candidate_digest,
+        manifest.source_binding_digest,
+        manifest.statement_digest,
+        manifest.operational_context_digest,
+    ] {
+        hash.update(&digest);
+    }
+    hash.update(&manifest.epoch.to_be_bytes());
+    hash.update(&manifest.governed_roster_digest);
+    hash.update(&manifest.public_key_digest);
+    hash.update(&manifest.public_bundle_digest);
+    hash.update(&(OPENING_COUNT_V1 as u16).to_be_bytes());
+    for record in manifest.records {
+        hash.update(&[record.ordinal, record.family as u8, record.family_index]);
+        hash.update(&record.sample_index.to_be_bytes());
+        hash.update(&record.nonce_binding_digest);
+        hash.update(&record.record_digest);
+    }
+    hash.finalize()
 }
 
 /// Revalidate public facts without constructing a transcript or returning a

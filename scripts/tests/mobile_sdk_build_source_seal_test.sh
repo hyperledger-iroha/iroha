@@ -6,9 +6,13 @@ test_build_source_seal() {
   local bridge_build="$TMP_DIR/source-seal-bridge-build"
   local bridge_output="$TMP_DIR/source-seal-bridge-output"
   local exact_rustc exact_rustdoc
-  mkdir -p "$root/scripts" "$root/IrohaSwift" \
+  mkdir -p "$root/scripts" "$root/ci" "$root/IrohaSwift" \
     "$root/crates/connect_norito_bridge/src" \
     "$root/crates/unrelated/src" "$cargo_target" "$bridge_build" "$bridge_output"
+  cp "$SCRIPT_DIR/../ci/privacy_sdk_cargo_wrapper.sh" \
+    "$root/ci/privacy_sdk_cargo_wrapper.sh"
+  cp "$SCRIPT_DIR/../ci/privacy_sdk_cargo_lockfile.sh" \
+    "$root/ci/privacy_sdk_cargo_lockfile.sh"
   cp "$SCRIPT_DIR/build_norito_xcframework.sh" \
     "$root/scripts/build_norito_xcframework.sh"
   cp "$SCRIPT_DIR/exec_with_file_lock.py" \

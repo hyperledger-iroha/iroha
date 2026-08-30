@@ -3,7 +3,7 @@ const PRODUCTION_SOURCE_V1: &str = include_str!("global_lookup_source_replay_v1.
 const PARENT_SOURCE_V1: &str = include_str!("../incremental_source_phase23_source_algebra.rs");
 const EXTERNAL_SOURCE_V1: &str = include_str!("../../phase23_rns_link_external_source.rs");
 const LEAF_SOURCE_V1: &str =
-    include_str!("../../../../../../../iroha_confidential_spool/src/lib.rs");
+    include_str!("../../../../../../../iroha_crypto/src/confidential_spool.rs");
 fn context_axes_v1() -> SourceReplayContextAxesV1 {
     SourceReplayContextAxesV1 {
         source_receipt_digest: [0x11; 32],
@@ -74,13 +74,15 @@ fn exact_read_plane_and_file_accounting_is_frozen() {
         SOURCE_AUTHENTICATED_READ_BYTES_V1 + COMPACT_SPOOL_WRITE_AND_SEAL_READ_BYTES_V1
     );
     assert_eq!(TOTAL_REPLAY_IO_BYTES_V1, 350_087_424);
-    assert!(AUTHENTICATED_SOURCE_REPLAY_COMPLETE_V1);
-    assert!(!SOURCE_SAME_OPENING_PROVED_V1);
-    assert!(!GLOBAL_LOOKUP_PROOF_VERIFIED_V1);
-    assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1);
-    assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V1);
-    assert!(!RELEASE_READY_V1);
-    assert!(!RELEASE_COMPLETE_V1);
+    const {
+        assert!(AUTHENTICATED_SOURCE_REPLAY_COMPLETE_V1);
+        assert!(!SOURCE_SAME_OPENING_PROVED_V1);
+        assert!(!GLOBAL_LOOKUP_PROOF_VERIFIED_V1);
+        assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1);
+        assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V1);
+        assert!(!RELEASE_READY_V1);
+        assert!(!RELEASE_COMPLETE_V1);
+    };
 }
 #[test]
 fn replay_receipt_kat_binds_plaintext_authenticated_and_total_io_separately() {

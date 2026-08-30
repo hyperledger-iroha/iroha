@@ -1073,7 +1073,9 @@ mod tests {
         payload.instructions =
             Executable::Instructions(vec![cancel_instruction(), cancel_instruction()].into());
         assert!(require_lifecycle_payload(&payload, LifecycleKind::Cancel).is_err());
-        assert!(require_lifecycle_payload(&cancel_payload(&signers), LifecycleKind::Enable).is_err());
+        assert!(
+            require_lifecycle_payload(&cancel_payload(&signers), LifecycleKind::Enable).is_err()
+        );
     }
 
     #[test]
@@ -1109,9 +1111,6 @@ mod tests {
             publish_no_replace(&path, b"replacement", "test lifecycle payload").is_err(),
             "an existing archive must never be replaced"
         );
-        assert_eq!(
-            fs::read(path).expect("published bytes"),
-            b"exact-payload"
-        );
+        assert_eq!(fs::read(path).expect("published bytes"), b"exact-payload");
     }
 }

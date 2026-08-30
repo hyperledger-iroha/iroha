@@ -87,7 +87,8 @@ fn header() -> BlockHeader {
 }
 fn valid_policy() -> OfflineDeviceAttestationPolicy {
     OfflineDeviceAttestationPolicy {
-        version: 1,
+        version: 2,
+        policy_epoch: 1,
         trusted_roots: vec![OfflineDeviceAttestationTrustedRoot {
             platform: "ios-appattest".to_owned(),
             der: include_bytes!("../../../certs/apple_app_attestation_root.der").to_vec(),
@@ -98,6 +99,7 @@ fn valid_policy() -> OfflineDeviceAttestationPolicy {
         ios_apps: Vec::new(),
         android_apps: Vec::new(),
         android_status_snapshot: None,
+        android_vulnerability_rules: Vec::new(),
         require_ios_app_policy: false,
         require_android_app_policy: false,
     }
@@ -234,6 +236,7 @@ fn invalid_registration(account_id: AccountId) -> OfflineDeviceAttestationRegist
         ios_environment: None,
         android_package_name: None,
         android_signing_certificate_sha256: None,
+        android_attested_device_properties: None,
         public_key,
         assertion_scheme: "ios-appattest".to_owned(),
         assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),

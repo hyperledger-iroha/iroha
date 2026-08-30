@@ -13,7 +13,9 @@ import requests
 
 import iroha_python.client as client_module
 import iroha_python.crypto as crypto_module
+from client_expensive_query_test_support import authenticated_query_client
 from iroha_python import (
+    AccountAddress,
     AccountAsset,
     AccountAssetsPage,
     AssetHolderRecord,
@@ -26,6 +28,7 @@ from iroha_python import (
     LocalSigningContext,
     NetworkId,
     RwaListItem,
+    ToriiCanonicalRequestAuth,
     ToriiClient,
     TransactionConfig,
     TransactionDraft,
@@ -39,7 +42,6 @@ from iroha_python._privacy_backends import (
     _verifier_backend_registry_tag_v1,
 )
 from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
-from client_expensive_query_test_support import authenticated_query_client
 from iroha_python.repo import (
     RepoAgreementListPage,
     RepoAgreementRecord,
@@ -116,6 +118,7 @@ def test_signed_pipeline_details_is_exact_network_bound_and_one_shot(
                 200,
                 {
                     "hash": transaction_hash,
+                    "block_height": 17,
                     "transaction": {"entrypoint_hash": transaction_hash},
                     "trigger_completions": [],
                 },
@@ -136,6 +139,7 @@ def test_signed_pipeline_details_is_exact_network_bound_and_one_shot(
     )
 
     assert details["hash"] == transaction_hash
+    assert details["block_height"] == 17
     assert captured == {
         "authority": "alice@wonderland",
         "private_key": b"private-key",
@@ -150,6 +154,130 @@ def test_signed_pipeline_details_is_exact_network_bound_and_one_shot(
         "Content-Type": "application/x-norito",
         "Accept": "application/json",
     }
+
+
+def test_callback_signed_pipeline_details_is_native_bound_and_one_shot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction_hash = "bc" * 32
+    account_id = AccountAddress.from_account(
+        domain="wonderland",
+        public_key=bytes([0x31]) * 32,
+    ).to_i105(0x02F1)
+    def signer(_message: bytes) -> bytes:
+        return bytes([0x44]) * 64
+    auth = ToriiCanonicalRequestAuth(
+        network_id=NETWORK_ID.literal,
+        account_id=account_id,
+        signer=signer,
+    )
+    captured: dict[str, object] = {}
+
+    def build_query(
+        authority: str,
+        callback: object,
+        network_id: NetworkId,
+        entrypoint_hash: str,
+    ) -> bytes:
+        captured.update(
+            authority=authority,
+            callback=callback,
+            network_id=network_id,
+            entrypoint_hash=entrypoint_hash,
+        )
+        return b"callback-signed-find-transactions"
+
+    inspected = {
+        "transaction_hash": transaction_hash,
+        "block_hash": "bd" * 32,
+        "block_height": 19,
+        "result_hash": "be" * 32,
+        "result_ok": False,
+        "rejection_code": "PolicyRejected",
+        "rejection_message": "policy epoch is stale",
+        "trigger_completion_count": 0,
+    }
+    monkeypatch.setattr(
+        crypto_module,
+        "build_find_committed_transaction_query_with_signer",
+        build_query,
+    )
+    monkeypatch.setattr(
+        crypto_module,
+        "inspect_pipeline_transaction_details",
+        lambda observed_hash, wire: (
+            inspected
+            if observed_hash == transaction_hash and wire == b"canonical-details-wire"
+            else pytest.fail("transaction details were not natively bound")
+        ),
+    )
+    torii_response = response(
+        200,
+        text="",
+        headers={"Content-Type": "application/x-norito"},
+    )
+    torii_response._content = b"canonical-details-wire"
+    session = FakeSession([torii_response])
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        max_retries=4,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
+    )
+
+    details = client.get_pipeline_transaction_details_with_canonical_auth(
+        transaction_hash,
+        canonical_auth=auth,
+    )
+
+    assert details == inspected
+    assert captured == {
+        "authority": account_id,
+        "callback": signer,
+        "network_id": NETWORK_ID,
+        "entrypoint_hash": transaction_hash,
+    }
+    assert len(session.calls) == 1
+    assert session.calls[0]["path"] == "/v1/pipeline/transactions/details"
+    assert session.calls[0]["data"] == b"callback-signed-find-transactions"
+    assert session.calls[0]["allow_redirects"] is False
+    assert session.calls[0]["headers"] == {
+        "Content-Type": "application/x-norito",
+        "Accept": "application/x-norito",
+    }
+
+
+def test_callback_signed_pipeline_details_rejects_network_drift_before_signing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foreign = NetworkId.from_bytes(bytes([0xA7]) * 32)
+    auth = ToriiCanonicalRequestAuth(
+        network_id=foreign.literal,
+        account_id=AccountAddress.from_account(
+            domain="wonderland",
+            public_key=bytes([0x31]) * 32,
+        ).to_i105(0x02F1),
+        signer=lambda _message: bytes([0x44]) * 64,
+    )
+    monkeypatch.setattr(
+        crypto_module,
+        "build_find_committed_transaction_query_with_signer",
+        lambda *_args: pytest.fail("network drift reached the native query signer"),
+    )
+    session = FakeSession([])
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
+    )
+
+    with pytest.raises(ValueError, match="network_id does not match"):
+        client.get_pipeline_transaction_details_with_canonical_auth(
+            "bf" * 32,
+            canonical_auth=auth,
+        )
+
+    assert session.calls == []
 
 
 @pytest.mark.parametrize("redirect_status", [307, 308])

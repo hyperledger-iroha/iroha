@@ -4,7 +4,7 @@ use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     ProverFriQueriesV2, ProverFriRoundsReadyV2,
 };
 use core::{array, convert::Infallible};
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use iroha_crypto::confidential_spool::ConfidentialSpoolChunkV1;
 use std::path::Path;
 const FRI_CONTINUATION_LAYERS_V2: usize = 17;
 const FRI_CONTINUATION_READ_BYTES_V2: u64 = 3_190_802_240;

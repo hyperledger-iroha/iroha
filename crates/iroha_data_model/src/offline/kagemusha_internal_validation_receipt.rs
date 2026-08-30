@@ -1367,7 +1367,8 @@ pub enum KagemushaInternalValidationReceiptErrorV1 {
 }
 
 #[cfg(test)]
-pub mod tests {
+/// Shared constructors for release-validation tests that need signed internal receipts.
+pub mod internal_validation_receipt_test_support {
     use super::super::{
         KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
     };
@@ -1510,6 +1511,7 @@ pub mod tests {
         .expect("sign valid receipt")
     }
 
+    /// Build a signed receipt for `candidate` using the workspace Cargo.lock evidence.
     pub fn signed_receipt_for_v4_candidate(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -1526,6 +1528,7 @@ pub mod tests {
         )
     }
 
+    /// Build a signed receipt with an explicitly supplied tracked Cargo.lock binding.
     pub fn signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,

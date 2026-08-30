@@ -149,7 +149,7 @@ fn parse_android_attestation_application_id(
     })
 }
 
-fn validate_android_root_of_trust(input: &[u8]) -> Result<(), Error> {
+fn validate_android_root_of_trust(input: &[u8]) -> Result<AndroidRootOfTrust, Error> {
     let mut reader = DerReader::sequence(input)?;
     let verified_boot_key = reader.read_octet_string()?;
     let device_locked = match reader.read_expected(0x01)? {
@@ -200,26 +200,55 @@ fn validate_android_root_of_trust(input: &[u8]) -> Result<(), Error> {
         )
         .into());
     }
+    let mut verified_boot_hash_bytes = [0_u8; 32];
+    verified_boot_hash_bytes.copy_from_slice(&verified_boot_hash);
+    Ok(AndroidRootOfTrust {
+        verified_boot_key,
+        verified_boot_hash: verified_boot_hash_bytes,
+    })
+}
+
+fn parse_android_attested_property(value: &[u8], field: &str) -> Result<String, Error> {
+    let bytes = der_single_octet_string(value)?;
+    let property = String::from_utf8(bytes).map_err(|_| {
+        labeled_invariant(
+            "invalid_attestation",
+            format!("Android KeyMint {field} must be UTF-8"),
+        )
+    })?;
+    if property.len() > iroha_data_model::offline::OFFLINE_ANDROID_ATTESTED_PROPERTY_MAX_BYTES_V2
+        || property.chars().any(char::is_control)
+        || property.trim() != property
+    {
+        return Err(labeled_invariant(
+            "invalid_attestation",
+            format!("Android KeyMint {field} is outside canonical bounds"),
+        )
+        .into());
+    }
+    Ok(property)
+}
+
+fn require_hardware_enforced_android_property(
+    hardware_enforced: bool,
+    field: &str,
+) -> Result<(), Error> {
+    if !hardware_enforced {
+        return Err(labeled_invariant(
+            "invalid_attestation",
+            format!("Android KeyMint {field} must be hardwareEnforced"),
+        )
+        .into());
+    }
     Ok(())
 }
 
 fn parse_android_authorization_list(
     input: &[u8],
     hardware_enforced: bool,
-) -> Result<
-    (
-        Option<i64>,
-        bool,
-        Option<AndroidAttestationApplicationId>,
-        bool,
-    ),
-    Error,
-> {
+) -> Result<AndroidAuthorizationList, Error> {
     let mut reader = DerReader::new(input);
-    let mut usage_count_limit = None;
-    let mut all_applications = false;
-    let mut application_id = None;
-    let mut root_of_trust = false;
+    let mut parsed = AndroidAuthorizationList::default();
     let mut seen_tags = HashSet::new();
     while reader.has_remaining() {
         let (tag, value) = reader.read_tlv_full()?;
@@ -239,35 +268,90 @@ fn parse_android_authorization_list(
         }
         match tag.number {
             OFFLINE_ATTESTATION_ANDROID_TAG_USAGE_COUNT_LIMIT => {
-                usage_count_limit = Some(der_single_integer(value)?);
+                parsed.usage_count_limit = Some(der_single_integer(value)?);
             }
             OFFLINE_ATTESTATION_ANDROID_TAG_ALL_APPLICATIONS => {
                 let mut null_reader = DerReader::new(value);
                 null_reader.read_null()?;
-                all_applications = true;
+                parsed.all_applications = true;
             }
             OFFLINE_ATTESTATION_ANDROID_TAG_ROOT_OF_TRUST => {
-                if !hardware_enforced {
-                    return Err(labeled_invariant(
-                        "invalid_attestation",
-                        "Android KeyMint rootOfTrust must be hardwareEnforced",
-                    )
-                    .into());
-                }
-                validate_android_root_of_trust(value)?;
-                root_of_trust = true;
+                require_hardware_enforced_android_property(hardware_enforced, "rootOfTrust")?;
+                parsed.root_of_trust = Some(validate_android_root_of_trust(value)?);
+            }
+            OFFLINE_ATTESTATION_ANDROID_TAG_OS_VERSION => {
+                require_hardware_enforced_android_property(hardware_enforced, "osVersion")?;
+                parsed.os_version = Some(der_single_integer(value)?);
+            }
+            OFFLINE_ATTESTATION_ANDROID_TAG_OS_PATCH_LEVEL => {
+                require_hardware_enforced_android_property(hardware_enforced, "osPatchLevel")?;
+                parsed.os_patch_level = Some(der_single_integer(value)?);
             }
             OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_APPLICATION_ID => {
                 let app_id_der = der_single_octet_string(value)?;
-                application_id = Some(parse_android_attestation_application_id(&app_id_der)?);
+                parsed.application_id =
+                    Some(parse_android_attestation_application_id(&app_id_der)?);
+            }
+            OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_BRAND => {
+                require_hardware_enforced_android_property(
+                    hardware_enforced,
+                    "attestationIdBrand",
+                )?;
+                parsed.brand = Some(parse_android_attested_property(
+                    value,
+                    "attestationIdBrand",
+                )?);
+            }
+            OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_DEVICE => {
+                require_hardware_enforced_android_property(
+                    hardware_enforced,
+                    "attestationIdDevice",
+                )?;
+                parsed.device = Some(parse_android_attested_property(
+                    value,
+                    "attestationIdDevice",
+                )?);
+            }
+            OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_PRODUCT => {
+                require_hardware_enforced_android_property(
+                    hardware_enforced,
+                    "attestationIdProduct",
+                )?;
+                parsed.product = Some(parse_android_attested_property(
+                    value,
+                    "attestationIdProduct",
+                )?);
+            }
+            OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_MANUFACTURER => {
+                require_hardware_enforced_android_property(
+                    hardware_enforced,
+                    "attestationIdManufacturer",
+                )?;
+                parsed.manufacturer = Some(parse_android_attested_property(
+                    value,
+                    "attestationIdManufacturer",
+                )?);
+            }
+            OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_ID_MODEL => {
+                require_hardware_enforced_android_property(
+                    hardware_enforced,
+                    "attestationIdModel",
+                )?;
+                parsed.model = Some(parse_android_attested_property(
+                    value,
+                    "attestationIdModel",
+                )?);
+            }
+            OFFLINE_ATTESTATION_ANDROID_TAG_VENDOR_PATCH_LEVEL => {
+                require_hardware_enforced_android_property(hardware_enforced, "vendorPatchLevel")?;
+                parsed.vendor_patch_level = Some(der_single_integer(value)?);
+            }
+            OFFLINE_ATTESTATION_ANDROID_TAG_BOOT_PATCH_LEVEL => {
+                require_hardware_enforced_android_property(hardware_enforced, "bootPatchLevel")?;
+                parsed.boot_patch_level = Some(der_single_integer(value)?);
             }
             _ => {}
         }
     }
-    Ok((
-        usage_count_limit,
-        all_applications,
-        application_id,
-        root_of_trust,
-    ))
+    Ok(parsed)
 }

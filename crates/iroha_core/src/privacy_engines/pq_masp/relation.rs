@@ -4,11 +4,14 @@
 //! key committed in the public statement, output commitments, and checked value conservation.
 //! ML-DSA verification and the ML-KEM/XChaCha output codec are separate native proof-wire checks;
 //! neither is represented by a caller-selectable backend tag.
-use iroha_data_model::privacy::{
-    PQ_MASP_MAX_INPUTS_V1, PQ_MASP_MAX_OUTPUTS_V1, PqMaspStarkStatementV1,
-    PrivacyAuthorizationKeyDigestV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
-    PrivacyNamespaceV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyNullifierV1,
-    PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyRecipientIdV1, PrivacyRootV1,
+use iroha_data_model::{
+    asset::AssetDefinitionId,
+    privacy::{
+        PQ_MASP_MAX_INPUTS_V1, PQ_MASP_MAX_OUTPUTS_V1, PqMaspStarkStatementV1,
+        PrivacyAuthorizationKeyDigestV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
+        PrivacyNamespaceV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyNullifierV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyRecipientIdV1, PrivacyRootV1,
+    },
 };
 use sha2::{Digest as _, Sha256};
 use std::{collections::BTreeSet, fmt};
@@ -446,15 +449,28 @@ fn note_commitment_invocation_v1(
     statement: &PqMaspStarkStatementV1,
     note: &PqMaspNotePlaintextV1,
 ) -> Result<PqMaspSha256InvocationV1, PqMaspRelationErrorV1> {
+    note_commitment_invocation_for_pool_v1(
+        role,
+        &statement.asset_definition_id,
+        statement.pool_id,
+        note,
+    )
+}
+fn note_commitment_invocation_for_pool_v1(
+    role: PqMaspSha256RoleV1,
+    asset_definition_id: &AssetDefinitionId,
+    pool_id: PrivacyPoolIdV1,
+    note: &PqMaspNotePlaintextV1,
+) -> Result<PqMaspSha256InvocationV1, PqMaspRelationErrorV1> {
     validate_note_v1(note)?;
-    let asset = norito::to_bytes(&statement.asset_definition_id)
-        .map_err(|_| PqMaspRelationErrorV1::Encoding)?;
+    let asset =
+        norito::to_bytes(asset_definition_id).map_err(|_| PqMaspRelationErrorV1::Encoding)?;
     sha256_invocation_v1(
         role,
         NOTE_COMMITMENT_DOMAIN_V1,
         &[
             &asset,
-            statement.pool_id.as_bytes(),
+            pool_id.as_bytes(),
             &note.value.to_be_bytes(),
             note.authorization_key_digest.as_bytes(),
             note.recipient_key_digest.as_bytes(),
@@ -465,13 +481,14 @@ fn note_commitment_invocation_v1(
         ],
     )
 }
-pub(super) fn namespace_v1(statement: &PqMaspStarkStatementV1) -> PrivacyNamespaceV1 {
+fn wallet_namespace_v1(pool_id: PrivacyPoolIdV1) -> PrivacyNamespaceV1 {
     PrivacyNamespaceV1::new(
         PrivacyProtocolIdV1::PqMaspStarkV0,
-        PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
-            pool_id: statement.pool_id,
-        }),
+        PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
     )
+}
+pub(super) fn namespace_v1(statement: &PqMaspStarkStatementV1) -> PrivacyNamespaceV1 {
+    wallet_namespace_v1(statement.pool_id)
 }
 fn validate_note_v1(note: &PqMaspNotePlaintextV1) -> Result<(), PqMaspRelationErrorV1> {
     if note.value == 0
@@ -577,8 +594,15 @@ pub(super) fn accumulator_leaf_invocation_v1(
     input: u8,
     commitment: PrivacyCommitmentV1,
 ) -> Result<PqMaspSha256InvocationV1, PqMaspRelationErrorV1> {
-    let namespace =
-        norito::to_bytes(&namespace_v1(statement)).map_err(|_| PqMaspRelationErrorV1::Encoding)?;
+    accumulator_leaf_invocation_for_pool_v1(statement.pool_id, input, commitment)
+}
+fn accumulator_leaf_invocation_for_pool_v1(
+    pool_id: PrivacyPoolIdV1,
+    input: u8,
+    commitment: PrivacyCommitmentV1,
+) -> Result<PqMaspSha256InvocationV1, PqMaspRelationErrorV1> {
+    let namespace = norito::to_bytes(&wallet_namespace_v1(pool_id))
+        .map_err(|_| PqMaspRelationErrorV1::Encoding)?;
     let mut preimage = Vec::new();
     preimage
         .try_reserve_exact(ACCUMULATOR_LEAF_DOMAIN_V1.len() + 8 + namespace.len() + 32)
@@ -617,6 +641,110 @@ pub(super) fn accumulator_node_invocation_v1(
         preimage,
     })
 }
+
+/// Preflight every relation constraint determined by an owner-only PQ-MASP
+/// wallet bundle before the worker advertises that bundle as ready.
+///
+/// ML-DSA authorization and encrypted-output construction still happen in the
+/// native action builder, but their bundle-selected key digests are checked by
+/// the caller before this relation preflight is invoked.
+pub fn preflight_pq_masp_wallet_request_v1(
+    asset_definition_id: &AssetDefinitionId,
+    pool_id: PrivacyPoolIdV1,
+    anchor: PrivacyRootV1,
+    authorization_key_digest: PrivacyAuthorizationKeyDigestV1,
+    inputs: &[PqMaspInputWitnessV1],
+    outputs: &[&PqMaspOutputWitnessV1],
+) -> Result<(), PqMaspRelationErrorV1> {
+    if pool_id.is_zero() || anchor.is_zero() || authorization_key_digest.is_zero() {
+        return Err(PqMaspRelationErrorV1::InvalidStatement);
+    }
+    if inputs.is_empty()
+        || inputs.len() > PQ_MASP_INPUT_BOUND_V1
+        || outputs.is_empty()
+        || outputs.len() > PQ_MASP_OUTPUT_BOUND_V1
+    {
+        return Err(PqMaspRelationErrorV1::WitnessShape);
+    }
+    let mut commitments = BTreeSet::new();
+    let mut nullifier_secrets = BTreeSet::new();
+    let mut positions = BTreeSet::new();
+    let mut input_sum = 0_u128;
+    for (index, input) in inputs.iter().enumerate() {
+        validate_note_v1(&input.note)?;
+        if input.note.authorization_key_digest != authorization_key_digest {
+            return Err(PqMaspRelationErrorV1::AuthorizationKeyMismatch);
+        }
+        if derive_pq_masp_nullifier_key_digest_v1(&input.nullifier_secret)?
+            != input.note.nullifier_key_digest
+        {
+            return Err(PqMaspRelationErrorV1::NullifierKeyMismatch);
+        }
+        if !nullifier_secrets.insert(input.nullifier_secret)
+            || !positions.insert(input.leaf_position)
+        {
+            return Err(PqMaspRelationErrorV1::Duplicate);
+        }
+        let input_u8 = u8::try_from(index).map_err(|_| PqMaspRelationErrorV1::WitnessShape)?;
+        let commitment = PrivacyCommitmentV1::new(
+            note_commitment_invocation_for_pool_v1(
+                PqMaspSha256RoleV1::InputCommitment { input: input_u8 },
+                asset_definition_id,
+                pool_id,
+                &input.note,
+            )?
+            .digest,
+        );
+        if !commitments.insert(commitment) {
+            return Err(PqMaspRelationErrorV1::Duplicate);
+        }
+        let mut current =
+            accumulator_leaf_invocation_for_pool_v1(pool_id, input_u8, commitment)?.digest;
+        for (level, sibling) in input.authentication_path.iter().enumerate() {
+            if is_zero(sibling) {
+                return Err(PqMaspRelationErrorV1::ZeroWitnessComponent);
+            }
+            let level_u8 = u8::try_from(level).map_err(|_| PqMaspRelationErrorV1::WitnessShape)?;
+            current = if input.leaf_position & (1_u32 << level_u8) == 0 {
+                accumulator_node_invocation_v1(input_u8, level_u8, &current, sibling)?
+            } else {
+                accumulator_node_invocation_v1(input_u8, level_u8, sibling, &current)?
+            }
+            .digest;
+        }
+        if PrivacyRootV1::new(current) != anchor {
+            return Err(PqMaspRelationErrorV1::Membership);
+        }
+        input_sum = input_sum
+            .checked_add(input.note.value)
+            .ok_or(PqMaspRelationErrorV1::ValueOverflow)?;
+    }
+    let mut output_sum = 0_u128;
+    for (index, output) in outputs.iter().enumerate() {
+        validate_note_v1(&output.note)?;
+        let output_u8 = u8::try_from(index).map_err(|_| PqMaspRelationErrorV1::WitnessShape)?;
+        let commitment = PrivacyCommitmentV1::new(
+            note_commitment_invocation_for_pool_v1(
+                PqMaspSha256RoleV1::OutputCommitment { output: output_u8 },
+                asset_definition_id,
+                pool_id,
+                &output.note,
+            )?
+            .digest,
+        );
+        if !commitments.insert(commitment) {
+            return Err(PqMaspRelationErrorV1::Duplicate);
+        }
+        output_sum = output_sum
+            .checked_add(output.note.value)
+            .ok_or(PqMaspRelationErrorV1::ValueOverflow)?;
+    }
+    if input_sum != output_sum {
+        return Err(PqMaspRelationErrorV1::ValueConservation);
+    }
+    Ok(())
+}
+
 pub(super) fn validate_statement_v1(
     statement: &PqMaspStarkStatementV1,
 ) -> Result<(), PqMaspRelationErrorV1> {

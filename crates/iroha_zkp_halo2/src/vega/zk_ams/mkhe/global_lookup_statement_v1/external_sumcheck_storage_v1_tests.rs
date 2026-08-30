@@ -102,7 +102,7 @@ fn release_geometry_accounting_and_false_claims_are_exact() {
     assert_eq!(RELEASE_NEXT_WRITE_AND_SEAL_RECORDS_V1, 1_048_604);
     assert_eq!(RELEASE_SCALAR_FOLDS_V1, 134_217_726);
     assert_eq!(FOLD_NAMED_CHUNK_HEAP_BYTES_V1, 16_384);
-    assert!(STORAGE_MECHANICS_COMPLETE_V1);
+    const { assert!(STORAGE_MECHANICS_COMPLETE_V1) };
     for gate in [
         AUTHENTICATED_M_TABLE_WIRED_V1,
         EQUATION_CORRECTNESS_VERIFIED_V1,

@@ -156,6 +156,22 @@ fn production_device_policy_constructor_binds_explicit_apps_and_builtin_roots() 
         policy.android_apps[0].signing_certificate_sha256,
         vec![vec![0x55; 32], vec![0x66; 32]]
     );
+    assert_eq!(
+        policy.android_vulnerability_rules,
+        reviewed_samsung_android_vulnerability_rules_v2(),
+    );
+    let fabric_keymaster_rule = policy
+        .android_vulnerability_rules
+        .iter()
+        .find(|rule| rule.cve_ids.iter().any(|cve| cve == "CVE-2026-21046"))
+        .expect("production policy retains the reviewed fabricKeymaster rule");
+    assert_eq!(fabric_keymaster_rule.cve_ids, vec!["CVE-2026-21046"]);
+    assert!(
+        fabric_keymaster_rule
+            .minimum_safe_vendor_patch_level
+            .is_none(),
+        "the month-granular Samsung SMR floor must not become a fabricated vendor-patch day",
+    );
 }
 #[test]
 fn production_device_policy_constructor_rejects_duplicate_operator_input() {
@@ -286,28 +302,144 @@ fn offline_device_attestation_policy_shape_bounds_are_exact() {
     assert!(validate_offline_attestation_policy_bounds(&android_nested).is_err());
 
     let mut canonical = baseline;
-    canonical.trusted_roots = vec![canonical.trusted_roots[0].clone(); 4];
+    let ios_root = canonical
+        .trusted_roots
+        .iter()
+        .find(|root| root.platform == OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST)
+        .cloned()
+        .expect("the built-in policy contains an iOS root");
+    let android_root = canonical
+        .trusted_roots
+        .iter()
+        .find(|root| root.platform == OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT)
+        .cloned()
+        .expect("the built-in policy contains an Android root");
+    canonical.trusted_roots = (0..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1)
+        .map(|index| {
+            if index.is_multiple_of(2) {
+                ios_root.clone()
+            } else {
+                android_root.clone()
+            }
+        })
+        .collect();
     for root in &mut canonical.trusted_roots {
         root.der = vec![0xA5; OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1];
     }
-    while norito::encode_canonical(&canonical)
-        .expect("boundary policy encodes")
-        .len()
-        > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
-    {
-        canonical.trusted_roots[3]
+
+    let rule_template = reviewed_samsung_android_vulnerability_rules_v2()
+        .into_iter()
+        .next()
+        .expect("the reviewed policy contains a vulnerability rule");
+    canonical.android_vulnerability_rules = (0
+        ..iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_VULNERABILITY_RULES_V2)
+        .map(|index| {
+            let mut rule = rule_template.clone();
+            rule.rule_id = format!("boundary-rule-{index:03}");
+            rule.source_ids = vec![format!(
+                "{index:03}-{}",
+                "x".repeat(
+                    iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_SOURCE_BYTES_V2
+                        - 4
+                )
+            )];
+            rule
+        })
+        .collect();
+    validate_offline_attestation_policy_bounds(&canonical)
+        .expect_err("the individually valid maximum shape must exceed the aggregate byte bound");
+
+    let mut encoded_len = norito::encode_canonical(&canonical)
+        .expect("maximum-shape boundary policy encodes")
+        .len();
+    assert!(
+        encoded_len > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
+        "the maximum nested shape must exercise the independent aggregate bound",
+    );
+
+    // Keep one source in a length-prefix range with at least 64 single-byte
+    // adjustments available. Bulk trimming may cross compact-length framing
+    // boundaries, so its encoded delta is deliberately recomputed rather than
+    // inferred from the payload delta.
+    const CANONICAL_TUNING_SOURCE_BYTES: usize = 400;
+    const CANONICAL_TUNING_RESERVE_BYTES: usize = 64;
+    canonical.android_vulnerability_rules[0].source_ids[0].truncate(CANONICAL_TUNING_SOURCE_BYTES);
+    encoded_len = norito::encode_canonical(&canonical)
+        .expect("tunable maximum-shape boundary policy encodes")
+        .len();
+    for index in (1..canonical.android_vulnerability_rules.len()).rev() {
+        if encoded_len
+            <= OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
+                + CANONICAL_TUNING_RESERVE_BYTES
+        {
+            break;
+        }
+        let source_len = canonical.android_vulnerability_rules[index].source_ids[0].len();
+        let removable = source_len - 1;
+        let removed = removable.min(
+            encoded_len
+                - OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
+                - CANONICAL_TUNING_RESERVE_BYTES,
+        );
+        canonical.android_vulnerability_rules[index].source_ids[0].truncate(source_len - removed);
+        encoded_len = norito::encode_canonical(&canonical)
+            .expect("source-trimmed boundary policy encodes")
+            .len();
+    }
+    for index in (0..canonical.trusted_roots.len()).rev() {
+        if encoded_len
+            <= OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
+                + CANONICAL_TUNING_RESERVE_BYTES
+        {
+            break;
+        }
+        let der_len = canonical.trusted_roots[index].der.len();
+        let removable = der_len;
+        let removed = removable.min(
+            encoded_len
+                - OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
+                - CANONICAL_TUNING_RESERVE_BYTES,
+        );
+        canonical.trusted_roots[index]
             .der
+            .truncate(der_len - removed);
+        encoded_len = norito::encode_canonical(&canonical)
+            .expect("root-trimmed boundary policy encodes")
+            .len();
+    }
+    assert!(
+        encoded_len > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
+            && encoded_len
+                <= OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
+                    + CANONICAL_TUNING_RESERVE_BYTES,
+        "bulk trimming must leave a small positive exact-boundary delta",
+    );
+    while encoded_len > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1 {
+        canonical.android_vulnerability_rules[0].source_ids[0]
             .pop()
-            .expect("four maximum roots exceed the canonical policy limit");
+            .expect("the reserved tuning source has sufficient bytes");
+        let next_len = norito::encode_canonical(&canonical)
+            .expect("fine-tuned boundary policy encodes")
+            .len();
+        assert_eq!(
+            next_len + 1,
+            encoded_len,
+            "the reserved tuning source must remain within one compact-length range",
+        );
+        encoded_len = next_len;
     }
     assert_eq!(
-        norito::encode_canonical(&canonical)
-            .expect("exact-boundary policy encodes")
-            .len(),
+        encoded_len,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
     );
     validate_offline_attestation_policy_bounds(&canonical)
         .expect("the exact canonical policy limit is admitted");
-    canonical.trusted_roots[3].der.push(0xA5);
+    canonical.android_vulnerability_rules[0].source_ids[0].push('x');
+    assert_eq!(
+        norito::encode_canonical(&canonical)
+            .expect("one-byte-overflow policy encodes")
+            .len(),
+        OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1 + 1,
+    );
     assert!(validate_offline_attestation_policy_bounds(&canonical).is_err());
 }

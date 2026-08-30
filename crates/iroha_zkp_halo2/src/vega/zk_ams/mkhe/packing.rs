@@ -229,9 +229,8 @@ impl Drop for ClearingPackingFp2BorrowV1<'_> {
         let _ = core::hint::black_box(&mut *values);
     }
 }
-/// Test-only exact release-RNS plaintext owner used while hashing a native binding.
+/// Exact release-RNS plaintext owner used while hashing a native binding.
 /// Deliberately neither `Clone` nor `Debug`.
-#[cfg(test)]
 struct ZeroizingPackedRnsBindingV1(RnsPolynomial);
 #[cfg(test)]
 std::thread_local! {
@@ -245,7 +244,6 @@ fn packed_rns_binding_zeroized_drop_count_v1() -> usize {
         .try_with(std::cell::Cell::get)
         .unwrap_or(0)
 }
-#[cfg(test)]
 impl Drop for ZeroizingPackedRnsBindingV1 {
     fn drop(&mut self) {
         let coefficients = core::hint::black_box(&mut self.0.coefficients);
@@ -1436,15 +1434,14 @@ pub(super) fn packed_plaintext_to_rns_v1(
     validate_packed(layout, packed)?;
     RnsPolynomial::from_t256_plaintext_bytes(&release_profile_v1(), &packed.coefficients)
 }
-/// Test-only recomputation of the exact release-RNS image of one canonical packed chunk and
-/// return its limb-major digest.
+/// Recompute the exact release-RNS image of one canonical packed chunk and
+/// return its limb-major digest for private in-process relation preflight.
 ///
 /// This is a native equality check, not a proof verifier: the caller supplies
 /// the plaintext coefficients, and this function derives every residue under
 /// all release moduli after rechecking the packed artifact.  It is useful to
 /// bind an in-process verified capability to the real 38-limb representation, but cannot replace
 /// the missing RNS-Link carry/quotient proof on untrusted wire bytes.
-#[cfg(test)]
 pub(super) fn packed_plaintext_rns_binding_digest_v1(
     layout: ZkAmsT256PackingLayoutV1,
     packed: &ZkAmsT256PackedPlaintextV1,

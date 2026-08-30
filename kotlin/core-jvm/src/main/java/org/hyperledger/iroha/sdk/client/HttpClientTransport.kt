@@ -6,6 +6,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.security.Signature
 import java.time.Duration
 import java.util.LinkedHashMap
 import java.util.Locale
@@ -25,11 +26,44 @@ import org.hyperledger.iroha.sdk.consensus.SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES
 import org.hyperledger.iroha.sdk.consensus.SUMERAGI_STATUS_JSON_MAX_BYTES
 import org.hyperledger.iroha.sdk.consensus.SumeragiV2Status
 import org.hyperledger.iroha.sdk.nexus.*
+import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver
+import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver.DeviceAttestationPolicyViewV1
+import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver.OfflineDeviceFinalityTrustAnchorV1
+import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver.OfflineDevicePolicyCheckpointV1
+import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver.OfflineDevicePolicyVerifiedPageV1
+import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver.EligibilityIssuerPublicKeyV1
+import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver.OfflineDeviceEligibilityRequestV1
+import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver.OfflineDeviceEligibilityResponseV1
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityAdmissionV1
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityManifestV1
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityTupleAdmissionV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionLocalStateV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionOperationViewV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionOperationProvenanceOwnerV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionTerminalChainStateV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12ActionRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyFinalizedStateRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyFinalizedStateViewV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAceReplayNullifierRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAceReplayNullifierProvenanceV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyProofManagedPoolStateRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyProofManagedPoolStateViewV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyOrchardPoolStateRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyOrchardPoolStateViewV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyOrchardNullifierRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyOrchardNullifierProvenanceV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyAnonymousPgcPoolStateRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyAnonymousPgcPoolStateViewV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAmsAdmissionRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAmsAdmissionViewV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAmsProvisionRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkAmsProvisionViewV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkX509CertificateNullifierRequestV1
+import org.hyperledger.iroha.sdk.privacy.PrivacyZkX509CertificateNullifierProvenanceV1
 import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 import org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1
+import org.hyperledger.iroha.sdk.privacy.ledgerEffectKind
+import org.hyperledger.iroha.sdk.privacy.protocolId
 import org.hyperledger.iroha.sdk.sorafs.GatewayFetchRequest
 import org.hyperledger.iroha.sdk.sorafs.GatewayFetchSummary
 import org.hyperledger.iroha.sdk.sorafs.SorafsGatewayClient
@@ -72,6 +106,8 @@ class HttpClientTransport(
     private val executor: HttpTransportExecutor,
     private val config: ClientConfig
 ) : IrohaClient {
+
+    private val privacyActionProvenanceOwnerV1 = PrivacyActionOperationProvenanceOwnerV1()
 
     private val sorafsGatewayClient: SorafsGatewayClient by lazy {
         SorafsGatewayClient(
@@ -245,6 +281,135 @@ class HttpClientTransport(
     fun getLedgerExecutedBlockWire(height: Long): CompletableFuture<ByteArray> =
         getLedgerExecutedBlockWire(BigInteger.valueOf(height))
 
+    /** Fetch the exact self-contained bridge finality proof for [height]. */
+    fun getBridgeFinalityProofV1(height: BigInteger): CompletableFuture<ByteArray> {
+        require(height.signum() > 0 && height.bitLength() <= 64) {
+            "height must be a positive u64"
+        }
+        val request = buildExactNoritoGetRequest(
+            "/v1/bridge/finality/$height",
+            AuthenticatedTransactionDetailsNativeBridge.FINALITY_PROOF_MAX_BYTES,
+        )
+        return fetchExactNoritoBytes(request, "bridge finality proof")
+    }
+
+    /** Convenience overload for positive signed heights. */
+    fun getBridgeFinalityProofV1(height: Long): CompletableFuture<ByteArray> =
+        getBridgeFinalityProofV1(BigInteger.valueOf(height))
+
+    /**
+     * Submit one fresh signed `FindTransactions` query and return its native-verified terminal
+     * rejection. The request is one-shot; [signer] receives only the native 32-byte query digest.
+     */
+    fun getAuthenticatedCommittedRejectionV1(
+        transactionHashHex: String,
+        networkId: NetworkId,
+        authorityAccountId: String,
+        signer: IrohaQuerySignatureProvider,
+    ): CompletableFuture<AuthenticatedCommittedRejectionV1> {
+        val signedQuery =
+            AuthenticatedTransactionDetailsNativeBridge.buildSignedRejectedTransactionQueryV1(
+                transactionHashHex,
+                networkId,
+                authorityAccountId,
+                signer,
+            )
+        val request = buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytes(
+            request,
+            "authenticated committed transaction rejection",
+        ).thenApply { response ->
+            AuthenticatedTransactionDetailsNativeBridge.projectCommittedRejectionV1(
+                signedQuery,
+                response,
+            )
+        }
+    }
+
+    /** Query with one account while pinning a different expected transaction authority. */
+    fun getAuthenticatedCommittedRejectionV2(
+        transactionHashHex: String,
+        networkId: NetworkId,
+        queryAuthorityAccountId: String,
+        expectedTransactionAuthorityAccountId: String,
+        signer: IrohaQuerySignatureProvider,
+    ): CompletableFuture<AuthenticatedCommittedRejectionV2> =
+        getAuthenticatedCommittedRejectionV2Internal(
+            transactionHashHex,
+            networkId,
+            queryAuthorityAccountId,
+            expectedTransactionAuthorityAccountId,
+            signer,
+            null,
+        )
+
+    /**
+     * Authority-split lookup which also binds the committed transaction to the exact locally
+     * retained Kagemusha request. Neither HTTP 202 nor operation status supplies rejection proof.
+     */
+    fun getAuthenticatedKagemushaCommittedRejectionV2(
+        transactionHashHex: String,
+        networkId: NetworkId,
+        queryAuthorityAccountId: String,
+        expectedTransactionAuthorityAccountId: String,
+        signer: IrohaQuerySignatureProvider,
+        expectedOperationId: ByteArray,
+        expectedKind: String,
+        expectedRequestNorito: ByteArray,
+    ): CompletableFuture<AuthenticatedCommittedRejectionV2> =
+        getAuthenticatedCommittedRejectionV2Internal(
+            transactionHashHex,
+            networkId,
+            queryAuthorityAccountId,
+            expectedTransactionAuthorityAccountId,
+            signer,
+            Triple(expectedOperationId.copyOf(), expectedKind, expectedRequestNorito.copyOf()),
+        )
+
+    private fun getAuthenticatedCommittedRejectionV2Internal(
+        transactionHashHex: String,
+        networkId: NetworkId,
+        queryAuthorityAccountId: String,
+        expectedTransactionAuthorityAccountId: String,
+        signer: IrohaQuerySignatureProvider,
+        kagemusha: Triple<ByteArray, String, ByteArray>?,
+    ): CompletableFuture<AuthenticatedCommittedRejectionV2> {
+        val signedQuery =
+            AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV2(
+                transactionHashHex,
+                networkId,
+                queryAuthorityAccountId,
+                expectedTransactionAuthorityAccountId,
+                signer,
+            )
+        val request = buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytes(
+            request,
+            "authenticated committed transaction rejection V2",
+        ).thenApply { response ->
+            kagemusha?.let { (operationId, kind, expectedRequest) ->
+                AuthenticatedTransactionDetailsNativeBridge.projectKagemushaCommittedRejectionV2(
+                    signedQuery,
+                    response,
+                    operationId,
+                    kind,
+                    expectedRequest,
+                )
+            } ?: AuthenticatedTransactionDetailsNativeBridge.projectCommittedRejectionV2(
+                signedQuery,
+                response,
+            )
+        }
+    }
+
     /** Fetch the exact committed Exact12 manifest with one-shot canonical account authentication. */
     fun getPrivacyCapabilities(
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -257,6 +422,524 @@ class HttpClientTransport(
             ),
             "privacy capabilities",
         ).thenApply(PrivacyNativeBridge::decodeExact12CapabilityManifestV1)
+
+    /**
+     * Authenticate, fresh-gate, and submit one member of the closed 13-operation Exact12 union.
+     *
+     * Native inspection of the exact signed transaction completes before the capability request.
+     * The inspection verifies the transaction signature, NetworkId, privacy intent binding, and
+     * requested statement/proof shape; it never treats a local proof check as acceptance. HTTP
+     * 202 is only dispatch admission. When [wait] is true, the returned terminal state is resolved
+     * through authenticated global status and committed transaction-details queries; Applied
+     * additionally requires the native-verified finalized ID105 execution receipt.
+     */
+    @JvmOverloads
+    fun submitSignedPrivacyActionV1(
+        request: PrivacyExact12ActionRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        wait: Boolean = true,
+        options: PipelineStatusOptions? = null,
+    ): CompletableFuture<PrivacyActionOperationViewV1> {
+        requireAutomaticCanonicalFreshness(canonicalAuth, "Exact12 action submission")
+        val networkId = config.requireLocalSigningContext().networkId()
+        val inspection = PrivacyNativeBridge.inspectSignedExact12ActionV1(
+            request,
+            networkId,
+            canonicalAuth.accountId,
+        )
+        val transactionHashHex = inspection.transactionHash.toLowerHex()
+
+        return getPrivacyCapabilities(canonicalAuth).thenCompose { manifest ->
+            val manifestDigest = manifest.manifestDigest.bytes()
+            request.expectedManifestDigest?.let { expected ->
+                require(MessageDigest.isEqual(expected, manifestDigest)) {
+                    "fresh Exact12 capability manifest does not match expectedManifestDigest"
+                }
+            }
+            val admission = PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
+                manifest,
+                request.operation.protocolId,
+            )
+            require(admission.operationSchemas == manifest.rowFor(request.operation.protocolId).operationSchemas &&
+                request.operation in admission.operationSchemas) {
+                "Exact12 capability admission does not contain the requested operation schema"
+            }
+            require(MessageDigest.isEqual(admission.manifestDigest.bytes(), manifestDigest)) {
+                "Exact12 capability admission does not bind the fresh manifest digest"
+            }
+            require(admission.committedHeight.signum() > 0) {
+                "Exact12 capability admission must be committed at a positive height"
+            }
+
+            val submitted = PrivacyActionOperationViewV1(
+                protocolId = request.operation.protocolId,
+                operationSchema = request.operation,
+                transactionHash = inspection.transactionHash,
+                transactionIntentDigest = inspection.transactionIntentDigest,
+                statementDigest = inspection.statementDigest,
+                proofEnvelopeHash = inspection.proofEnvelopeHash,
+                localState = PrivacyActionLocalStateV1.SUBMITTED,
+                terminalChainState = null,
+                committedHeight = null,
+                rejectionReason = null,
+                ledgerEffectKind = request.operation.ledgerEffectKind,
+                capabilityManifestDigest = manifestDigest,
+                capabilityCommittedHeight = admission.committedHeight,
+            ).bindAuthenticatedSubmissionV1(
+                privacyActionProvenanceOwnerV1,
+                networkId,
+            )
+            submitExactPrivacyActionWire(
+                request.signedTransactionVersioned,
+                canonicalAuth,
+                transactionHashHex,
+            ).thenCompose {
+                if (!wait) {
+                    CompletableFuture.completedFuture(submitted)
+                } else {
+                    waitForPrivacyActionTerminalV1(submitted, canonicalAuth, options)
+                }
+            }
+        }
+    }
+
+    /** Refresh one typed Exact12 action without allowing terminal regression or reason elision. */
+    fun getPrivacyActionStatusV1(
+        operation: PrivacyActionOperationViewV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyActionOperationViewV1> =
+        fetchPrivacyActionStatusSnapshotV1(operation, canonicalAuth).thenApply { it.view }
+
+    /**
+     * Fetch a native-verified committed success or rejection for one exact transaction hash.
+     *
+     * The signed query uses the same account identity and Ed25519 key as canonical Torii auth.
+     * Native code checks that the returned external transaction has that authority and NetworkId.
+     */
+    fun getAuthenticatedCommittedTransactionResultV1(
+        transactionHashHex: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AuthenticatedCommittedTransactionResultV1> {
+        val signedQuery =
+            AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV1(
+                transactionHashHex,
+                config.requireLocalSigningContext().networkId(),
+                canonicalAuth.accountId,
+                IrohaQuerySignatureProvider { digest ->
+                    try {
+                        Signature.getInstance("Ed25519").run {
+                            initSign(canonicalAuth.privateKey)
+                            update(digest)
+                            sign()
+                        }
+                    } catch (error: Exception) {
+                        throw IllegalStateException(
+                            "failed to sign authenticated transaction-details query",
+                            error,
+                        )
+                    }
+                },
+            )
+        val request = buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytes(
+            request,
+            "authenticated committed transaction result",
+        ).thenApply { response ->
+            AuthenticatedTransactionDetailsNativeBridge.projectCommittedTransactionResultV1(
+                signedQuery,
+                response,
+            )
+        }
+    }
+
+    /** Fetch a committed result while independently pinning query and transaction authorities. */
+    fun getAuthenticatedCommittedTransactionResultV2(
+        transactionHashHex: String,
+        networkId: NetworkId,
+        queryAuthorityAccountId: String,
+        expectedTransactionAuthorityAccountId: String,
+        signer: IrohaQuerySignatureProvider,
+    ): CompletableFuture<AuthenticatedCommittedTransactionResultV2> {
+        val signedQuery =
+            AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV2(
+                transactionHashHex,
+                networkId,
+                queryAuthorityAccountId,
+                expectedTransactionAuthorityAccountId,
+                signer,
+            )
+        val request = buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytes(
+            request,
+            "authenticated committed transaction result V2",
+        ).thenApply { response ->
+            AuthenticatedTransactionDetailsNativeBridge.projectCommittedTransactionResultV2(
+                signedQuery,
+                response,
+            )
+        }
+    }
+
+    /**
+     * Return the exact authenticated transaction-details carrier, or null only for HTTP 404.
+     * Its height/result fields remain routing hints until finalized outcome projection succeeds.
+     */
+    fun getAuthenticatedTransactionDetailsCarrierV2(
+        transactionHashHex: String,
+        networkId: NetworkId,
+        queryAuthorityAccountId: String,
+        expectedTransactionAuthorityAccountId: String,
+        signer: IrohaQuerySignatureProvider,
+    ): CompletableFuture<AuthenticatedTransactionDetailsCarrierV2?> {
+        val signedQuery =
+            AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV2(
+                transactionHashHex,
+                networkId,
+                queryAuthorityAccountId,
+                expectedTransactionAuthorityAccountId,
+                signer,
+            )
+        val request = buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytesAllowingNotFound(
+            request,
+            "authenticated transaction-details carrier V2",
+        ).thenApply { response ->
+            response?.let {
+                AuthenticatedTransactionDetailsNativeBridge.bindTransactionDetailsCarrierV2(
+                    signedQuery,
+                    it,
+                )
+            }
+        }
+    }
+
+    /**
+     * Fetch the native-verified committed result for exactly one offline-device registration.
+     *
+     * The query is identical to the generic authenticated transaction-details lookup, but the
+     * native projector additionally requires a single `RegisterOfflineDeviceAttestation`
+     * instruction and exposes a closed typed eligibility rejection when admission fails.
+     */
+    fun getAuthenticatedOfflineDeviceRegistrationResultV1(
+        transactionHashHex: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AuthenticatedOfflineDeviceRegistrationResultV1> {
+        val signedQuery =
+            AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV1(
+                transactionHashHex,
+                config.requireLocalSigningContext().networkId(),
+                canonicalAuth.accountId,
+                privacyActionQuerySignerV1(canonicalAuth, "offline-device registration result"),
+            )
+        val request = buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytes(
+            request,
+            "authenticated offline-device registration result",
+        ).thenApply { response ->
+            AuthenticatedTransactionDetailsNativeBridge
+                .projectCommittedOfflineDeviceRegistrationResultV1(
+                    signedQuery,
+                    response,
+                )
+        }
+    }
+
+    /**
+     * Fetch the native-verified finalized ID105 receipt for one authenticated Exact12 action.
+     *
+     * Only an exact HTTP 404 means that execution/finality material is not yet available. Every
+     * other transport or protocol failure is surfaced; no local proof check can synthesize a
+     * receipt.
+     */
+    fun getAuthenticatedPrivacyActionExecutionReceiptV1(
+        operation: PrivacyActionOperationViewV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AuthenticatedPrivacyActionExecutionReceiptV1?> {
+        operation.requireAuthenticatedProvenanceV1(
+            privacyActionProvenanceOwnerV1,
+            config.requireLocalSigningContext().networkId(),
+        )
+        val signedQuery =
+            AuthenticatedPrivacyActionReceiptNativeBridge
+                .buildSignedPrivacyActionReceiptQueryV1(
+                    operation,
+                    config.requireLocalSigningContext().networkId(),
+                    canonicalAuth.accountId,
+                    privacyActionQuerySignerV1(canonicalAuth, "action-receipt"),
+                )
+        val request = buildExactSignedQueryPostRequest(
+            "/v1/query",
+            signedQuery.requestBody(),
+            AuthenticatedPrivacyActionReceiptNativeBridge.RESPONSE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytesAllowingNotFound(
+            request,
+            "authenticated Exact12 action receipt",
+        ).thenApply { response ->
+            response?.let {
+                AuthenticatedPrivacyActionReceiptNativeBridge.projectPrivacyActionReceiptV1(
+                    signedQuery,
+                    it,
+                )
+            }
+        }
+    }
+
+    /** Return finalized ZK-ACE replay provenance, or null only for an exact HTTP 404. */
+    fun getPrivacyZkAceReplayNullifierV1(
+        request: PrivacyZkAceReplayNullifierRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyZkAceReplayNullifierProvenanceV1?> =
+        getPrivacyFinalizedStateV1(request, canonicalAuth)
+
+    /** Return finalized FCMP++, private-IVM, or PQ-MASP pool state, or null only on 404. */
+    fun getPrivacyProofManagedPoolStateV1(
+        request: PrivacyProofManagedPoolStateRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyProofManagedPoolStateViewV1?> =
+        getPrivacyFinalizedStateV1(request, canonicalAuth)
+
+    /** Return finalized governed Orchard pool state, or null only on 404. */
+    fun getPrivacyOrchardPoolStateV1(
+        request: PrivacyOrchardPoolStateRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyOrchardPoolStateViewV1?> =
+        getPrivacyFinalizedStateV1(request, canonicalAuth)
+
+    /** Return finalized consumed Orchard-nullifier provenance, or null only on 404. */
+    fun getPrivacyOrchardNullifierV1(
+        request: PrivacyOrchardNullifierRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyOrchardNullifierProvenanceV1?> =
+        getPrivacyFinalizedStateV1(request, canonicalAuth)
+
+    /** Return finalized Anonymous PGC pool state, or null only on 404. */
+    fun getPrivacyAnonymousPgcPoolStateV1(
+        request: PrivacyAnonymousPgcPoolStateRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyAnonymousPgcPoolStateViewV1?> =
+        getPrivacyFinalizedStateV1(request, canonicalAuth)
+
+    /** Return finalized ZK-AMS admission provenance, or null only on 404. */
+    fun getPrivacyZkAmsAdmissionV1(
+        request: PrivacyZkAmsAdmissionRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyZkAmsAdmissionViewV1?> =
+        getPrivacyFinalizedStateV1(request, canonicalAuth)
+
+    /** Return finalized ZK-AMS provisioning provenance, or null only on 404. */
+    fun getPrivacyZkAmsProvisionV1(
+        request: PrivacyZkAmsProvisionRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyZkAmsProvisionViewV1?> =
+        getPrivacyFinalizedStateV1(request, canonicalAuth)
+
+    /** Return finalized ZK-X509 certificate-nullifier provenance, or null only on 404. */
+    fun getPrivacyZkX509CertificateNullifierV1(
+        request: PrivacyZkX509CertificateNullifierRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyZkX509CertificateNullifierProvenanceV1?> =
+        getPrivacyFinalizedStateV1(request, canonicalAuth)
+
+    private inline fun <reified T : PrivacyFinalizedStateViewV1> getPrivacyFinalizedStateV1(
+        request: PrivacyFinalizedStateRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<T?> {
+        val networkId = config.requireLocalSigningContext().networkId()
+        val signedQuery =
+            AuthenticatedPrivacyStateQueryNativeBridge.buildSignedPrivacyStateQueryV1(
+                request,
+                networkId,
+                canonicalAuth.accountId,
+                privacyActionQuerySignerV1(canonicalAuth, "finalized privacy-state"),
+            )
+        val transportRequest = buildExactSignedQueryPostRequest(
+            "/v1/query",
+            signedQuery.requestBody(),
+            AuthenticatedPrivacyStateQueryNativeBridge.RESPONSE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytesAllowingNotFound(
+            transportRequest,
+            "authenticated finalized privacy-state query ${request.queryId}",
+        ).thenApply { response ->
+            response?.let {
+                val view = AuthenticatedPrivacyStateQueryNativeBridge.projectPrivacyStateQueryV1(
+                    signedQuery,
+                    it,
+                )
+                view as? T ?: error(
+                    "authenticated finalized privacy-state query returned a different typed view",
+                )
+            }
+        }
+    }
+
+    private fun getOptionalAuthenticatedCommittedTransactionResultV1(
+        transactionHashHex: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AuthenticatedCommittedTransactionResultV1?> {
+        val signedQuery =
+            AuthenticatedTransactionDetailsNativeBridge.buildSignedTransactionDetailsQueryV1(
+                transactionHashHex,
+                config.requireLocalSigningContext().networkId(),
+                canonicalAuth.accountId,
+                privacyActionQuerySignerV1(canonicalAuth, "transaction-details"),
+            )
+        val request = buildExactSignedQueryPostRequest(
+            "/v1/pipeline/transactions/details",
+            signedQuery.requestBody(),
+            AuthenticatedTransactionDetailsNativeBridge.RESPONSE_MAX_BYTES,
+        )
+        return fetchExactNoritoBytesAllowingNotFound(
+            request,
+            "authenticated committed transaction result",
+        ).thenApply { response ->
+            response?.let {
+                AuthenticatedTransactionDetailsNativeBridge.projectCommittedTransactionResultV1(
+                    signedQuery,
+                    it,
+                )
+            }
+        }
+    }
+
+    private fun privacyActionQuerySignerV1(
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        purpose: String,
+    ): IrohaQuerySignatureProvider = IrohaQuerySignatureProvider { digest ->
+        try {
+            Signature.getInstance("Ed25519").run {
+                initSign(canonicalAuth.privateKey)
+                update(digest)
+                sign()
+            }
+        } catch (error: Exception) {
+            throw IllegalStateException("failed to sign authenticated $purpose query", error)
+        }
+    }
+
+    /**
+     * Fetch the authenticated canonical finalized V2 device-attestation policy and admit it only
+     * after native policy/freshness/BridgeFinalityProof verification against caller-owned trust.
+     */
+    @JvmOverloads
+    fun getOfflineDeviceAttestationPolicyViewV1(
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+        evaluationTimeMilliseconds: Long = System.currentTimeMillis(),
+    ): CompletableFuture<DeviceAttestationPolicyViewV1> {
+        require(config.requireLocalSigningContext().networkId() == trustAnchor.networkId) {
+            "offline device policy trust must match LocalSigningContext.networkId"
+        }
+        require(evaluationTimeMilliseconds > 0) {
+            "evaluationTimeMilliseconds must be positive"
+        }
+        return fetchExactNoritoBytes(
+            buildExactNoritoGetRequest(
+                "/v1/offline/device-attestation-policy",
+                KagemushaRecursiveSpendProver.MAX_DEVICE_ATTESTATION_POLICY_VIEW_ARCHIVE_BYTES_V1
+                    .toLong(),
+                canonicalAuth,
+            ),
+            "offline device-attestation policy",
+        ).thenApply { archive ->
+            KagemushaRecursiveSpendProver.verifyDeviceAttestationPolicyViewV1(
+                archive,
+                trustAnchor,
+                evaluationTimeMilliseconds,
+            )
+        }
+    }
+
+    /**
+     * Acquire and natively verify one bounded checkpoint-to-policy proof page.
+     *
+     * This is the pagination primitive. The caller must atomically persist the returned evaluated
+     * checkpoint before invoking it again with fresh canonical authentication; the SDK neither
+     * invents storage nor reuses a one-shot nonce.
+     */
+    @JvmOverloads
+    fun getOfflineDeviceAttestationPolicyProofPageV1(
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        checkpoint: OfflineDevicePolicyCheckpointV1,
+        evaluationTimeMilliseconds: Long = System.currentTimeMillis(),
+    ): CompletableFuture<OfflineDevicePolicyVerifiedPageV1> {
+        require(config.requireLocalSigningContext().networkId() == checkpoint.networkId) {
+            "offline device policy checkpoint must match LocalSigningContext.networkId"
+        }
+        require(evaluationTimeMilliseconds > 0) {
+            "evaluationTimeMilliseconds must be positive"
+        }
+        val body = KagemushaRecursiveSpendProver.makeOfflineDevicePolicyProofRequestV1(checkpoint)
+        return fetchExactNoritoBytes(
+            buildExactNoritoPostRequest(
+                "/v1/offline/device-attestation-policy/proof",
+                body,
+                KagemushaRecursiveSpendProver.MAX_DEVICE_POLICY_PROOF_PAGE_ARCHIVE_BYTES_V1
+                    .toLong(),
+                canonicalAuth,
+            ),
+            "offline device policy finality proof",
+        ).thenApply { archive ->
+            KagemushaRecursiveSpendProver.verifyOfflineDevicePolicyProofPageV1(
+                archive,
+                checkpoint,
+                evaluationTimeMilliseconds,
+            )
+        }
+    }
+
+    /** Authenticated, bounded, native-verified offline device eligibility issuance. */
+    @JvmOverloads
+    fun postOfflineDeviceEligibilityV1(
+        request: OfflineDeviceEligibilityRequestV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        expectedIssuer: EligibilityIssuerPublicKeyV1,
+        trustAnchor: OfflineDeviceFinalityTrustAnchorV1,
+        evaluationTimeMilliseconds: Long = System.currentTimeMillis(),
+    ): CompletableFuture<OfflineDeviceEligibilityResponseV1> {
+        require(config.requireLocalSigningContext().networkId() == trustAnchor.networkId) {
+            "offline device eligibility trust must match LocalSigningContext.networkId"
+        }
+        require(evaluationTimeMilliseconds > 0) {
+            "evaluationTimeMilliseconds must be positive"
+        }
+        val body = KagemushaRecursiveSpendProver.makeOfflineDeviceEligibilityRequestV1(request)
+        return fetchExactNoritoBytes(
+            buildExactNoritoPostRequest(
+                "/v1/offline/device-eligibility",
+                body,
+                KagemushaRecursiveSpendProver.MAX_DEVICE_ELIGIBILITY_RESPONSE_ARCHIVE_BYTES_V1
+                    .toLong(),
+                canonicalAuth,
+            ),
+            "offline device eligibility",
+        ).thenApply { archive ->
+            KagemushaRecursiveSpendProver.verifyOfflineDeviceEligibilityResponseV1(
+                archive,
+                request,
+                expectedIssuer,
+                trustAnchor,
+                evaluationTimeMilliseconds,
+            )
+        }
+    }
 
     /**
      * Obtain the token required immediately before constructing a retained privacy action.
@@ -1044,6 +1727,419 @@ class HttpClientTransport(
         val hashed = redaction.hashAuthority(authority); if (hashed.isPresent) fields["authority_hash"] = hashed.get() else emitRedactionFailure(sink, signalId, "hash_failed")
     }
 
+    private data class PrivacyActionStatusSnapshotV1(
+        val view: PrivacyActionOperationViewV1,
+        val payload: Map<String, Any>?,
+        val statusKind: String?,
+    )
+
+    private fun fetchPrivacyActionStatusSnapshotV1(
+        operation: PrivacyActionOperationViewV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyActionStatusSnapshotV1> {
+        operation.requireAuthenticatedProvenanceV1(
+            privacyActionProvenanceOwnerV1,
+            config.requireLocalSigningContext().networkId(),
+        )
+        val transactionHashHex = operation.transactionHash.toLowerHex()
+        return fetchAuthenticatedPrivacyPublicStatusV1(transactionHashHex, canonicalAuth)
+            .thenCompose { payload ->
+                if (payload == null) {
+                    check(operation.localState != PrivacyActionLocalStateV1.TERMINAL) {
+                        "terminal Exact12 action disappeared from pipeline status"
+                    }
+                    return@thenCompose CompletableFuture.completedFuture(
+                        PrivacyActionStatusSnapshotV1(operation, null, null),
+                    )
+                }
+                val kind = PipelineStatusExtractor.requireAuthoritativeStatus(
+                    payload,
+                    transactionHashHex,
+                )
+                if (kind == "Queued" || kind == "Approved" || kind == "Committed") {
+                    check(operation.localState != PrivacyActionLocalStateV1.TERMINAL) {
+                        "terminal Exact12 action status regressed"
+                    }
+                    return@thenCompose CompletableFuture.completedFuture(
+                        PrivacyActionStatusSnapshotV1(operation, payload, kind),
+                    )
+                }
+                if (kind == "Expired") {
+                    if (payload["resolved_from"] == "cache") {
+                        check(operation.localState != PrivacyActionLocalStateV1.TERMINAL) {
+                            "terminal Exact12 action status regressed to cache-only expiry"
+                        }
+                        return@thenCompose CompletableFuture.completedFuture(
+                            PrivacyActionStatusSnapshotV1(operation, payload, kind),
+                        )
+                    }
+                    check(
+                        payload["resolved_from"] == "state" &&
+                            privacyStatusBlockHeightV1(payload) == null,
+                    ) {
+                        "expired Exact12 action requires state-resolved evidence without a committed height"
+                    }
+                    val refreshed = operation.withTerminalPrivacyStatusV1(
+                        PrivacyActionTerminalChainStateV1.EXPIRED,
+                        null,
+                        null,
+                    )
+                    requireStableTerminalPrivacyView(operation, refreshed)
+                    return@thenCompose CompletableFuture.completedFuture(
+                        PrivacyActionStatusSnapshotV1(refreshed, payload, kind),
+                    )
+                }
+                check(kind == "Applied" || kind == "Rejected") {
+                    "Exact12 action status kind is unsupported"
+                }
+                check(payload["resolved_from"] == "state" || payload["resolved_from"] == "cache") {
+                    "committed Exact12 action status must be resolved from state or cache"
+                }
+                val publicHeight = privacyStatusBlockHeightV1(payload)
+                val detailsFuture = getOptionalAuthenticatedCommittedTransactionResultV1(
+                    transactionHashHex,
+                    canonicalAuth,
+                )
+                val receiptFuture = getAuthenticatedPrivacyActionExecutionReceiptV1(
+                    operation,
+                    canonicalAuth,
+                )
+                detailsFuture.thenCombine(receiptFuture) { details, receipt ->
+                    if (publicHeight != null && receipt != null) {
+                        check(publicHeight == receipt.admittedAtHeight) {
+                            "Exact12 status height differs from authenticated receipt admission"
+                        }
+                    }
+                    if (kind == "Rejected") {
+                        check(receipt == null) {
+                            "rejected Exact12 action contradicts an authenticated execution receipt"
+                        }
+                        if (details == null) {
+                            return@thenCombine PrivacyActionStatusSnapshotV1(
+                                operation,
+                                payload,
+                                kind,
+                            )
+                        }
+                        check(details.transactionHashHex == transactionHashHex) {
+                            "authenticated Exact12 transaction result changed the transaction hash"
+                        }
+                        if (publicHeight != null) {
+                            check(publicHeight == details.committedBlockHeight) {
+                                "Exact12 status height differs from authenticated committed height"
+                            }
+                        }
+                        check(!details.resultOk && details.rejectionMessage != null) {
+                            "rejected Exact12 action omitted its authenticated committed reason"
+                        }
+                        val refreshed = operation.withTerminalPrivacyStatusV1(
+                            PrivacyActionTerminalChainStateV1.REJECTED,
+                            details.committedBlockHeight,
+                            details.rejectionMessage,
+                        )
+                        requireStableTerminalPrivacyView(operation, refreshed)
+                        return@thenCombine PrivacyActionStatusSnapshotV1(
+                            refreshed,
+                            payload,
+                            kind,
+                        )
+                    }
+
+                    if (details != null) {
+                        check(details.transactionHashHex == transactionHashHex) {
+                            "authenticated Exact12 transaction result changed the transaction hash"
+                        }
+                        if (publicHeight != null) {
+                            check(publicHeight == details.committedBlockHeight) {
+                                "Exact12 status height differs from authenticated committed height"
+                            }
+                        }
+                        check(details.resultOk) {
+                            "Applied Exact12 action resolved to a committed rejection"
+                        }
+                    }
+                    if (details == null || receipt == null) {
+                        return@thenCombine PrivacyActionStatusSnapshotV1(
+                            operation,
+                            payload,
+                            kind,
+                        )
+                    }
+                    check(receipt.admittedAtHeight == details.committedBlockHeight) {
+                        "authenticated Exact12 receipt differs from the committed transaction height"
+                    }
+                    val refreshed = operation.withTerminalPrivacyStatusV1(
+                        PrivacyActionTerminalChainStateV1.APPLIED,
+                        details.committedBlockHeight,
+                        null,
+                        receipt.capabilityManifestDigest,
+                        receipt.capabilityCommittedHeight,
+                        receipt.finalizedHeight,
+                        receipt.finalizedBlockHash,
+                    )
+                    requireStableTerminalPrivacyView(operation, refreshed)
+                    PrivacyActionStatusSnapshotV1(refreshed, payload, kind)
+                }
+            }
+    }
+
+    private fun fetchAuthenticatedPrivacyPublicStatusV1(
+        transactionHashHex: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Map<String, Any>?> {
+        require(transactionHashHex.matches(Regex("[0-9a-f]{64}"))) {
+            "transactionHashHex must be an exact lowercase 32-byte hash"
+        }
+        val request = buildCanonicalJsonGetRequest(
+            "/v1/pipeline/transactions/status",
+            linkedMapOf("hash" to transactionHashHex, "scope" to "global"),
+            PRIVACY_STATUS_RESPONSE_MAX_BYTES,
+            canonicalAuth,
+        )
+        notifyRequest(request)
+        val future = CompletableFuture<Map<String, Any>?>()
+        executor.execute(request).whenComplete { response, throwable ->
+            if (throwable != null) {
+                val cause = unwrapCompletion(throwable)
+                notifyFailure(request, cause)
+                future.completeExceptionally(
+                    RuntimeException("authenticated Exact12 status request failed", cause),
+                )
+                return@whenComplete
+            }
+            val clientResponse = ClientResponse(
+                response.statusCode,
+                response.body,
+                response.message,
+                null,
+                extractRejectCode(response),
+            )
+            try {
+                when (response.statusCode) {
+                    204, 404 -> {
+                        notifyResponse(request, clientResponse)
+                        future.complete(null)
+                    }
+                    200, 202 -> {
+                        requireExactHeader(
+                            response.headers,
+                            "Content-Type",
+                            APPLICATION_JSON,
+                            "authenticated Exact12 status",
+                        )
+                        check(response.body.isNotEmpty()) {
+                            "authenticated Exact12 status response must not be empty"
+                        }
+                        check(response.body.size.toLong() <= PRIVACY_STATUS_RESPONSE_MAX_BYTES) {
+                            "authenticated Exact12 status response exceeds its byte bound"
+                        }
+                        requireExactOptionalContentLength(
+                            response.headers,
+                            response.body.size,
+                            "authenticated Exact12 status",
+                        )
+                        val payload = parsePipelineStatusPayload(response.body)
+                        notifyResponse(request, clientResponse)
+                        future.complete(payload)
+                    }
+                    else -> error(
+                        "authenticated Exact12 status request failed with status " +
+                            response.statusCode,
+                    )
+                }
+            } catch (error: RuntimeException) {
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
+            }
+        }
+        return future
+    }
+
+    private fun waitForPrivacyActionTerminalV1(
+        submitted: PrivacyActionOperationViewV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        options: PipelineStatusOptions?,
+    ): CompletableFuture<PrivacyActionOperationViewV1> {
+        val resolved = PipelineStatusOptions.resolve(options)
+        val deadline = resolved.timeoutMillis?.let { timeout ->
+            val now = System.currentTimeMillis()
+            val delay = maxOf(0L, timeout)
+            if (delay > Long.MAX_VALUE - now) Long.MAX_VALUE else now + delay
+        } ?: Long.MAX_VALUE
+        val result = CompletableFuture<PrivacyActionOperationViewV1>()
+
+        fun poll(attempts: Int, lastPayload: Map<String, Any>?) {
+            if (result.isDone) return
+            if (resolved.maxAttempts != null && attempts >= resolved.maxAttempts) {
+                result.completeExceptionally(
+                    TransactionTimeoutException(
+                        "Exact12 transaction ${submitted.transactionHash.toLowerHex()} did not " +
+                            "reach terminal state after $attempts attempts",
+                        submitted.transactionHash.toLowerHex(),
+                        attempts,
+                        lastPayload,
+                    ),
+                )
+                return
+            }
+            fetchPrivacyActionStatusSnapshotV1(submitted, canonicalAuth)
+                .whenComplete { snapshot, throwable ->
+                    if (throwable != null) {
+                        result.completeExceptionally(unwrapCompletion(throwable))
+                        return@whenComplete
+                    }
+                    val nextAttempts = attempts + 1
+                    try {
+                        resolved.observer?.onStatus(
+                            snapshot.statusKind ?: "",
+                            snapshot.payload ?: emptyMap(),
+                            nextAttempts,
+                        )
+                    } catch (observerError: RuntimeException) {
+                        result.completeExceptionally(observerError)
+                        return@whenComplete
+                    }
+                    if (snapshot.view.localState == PrivacyActionLocalStateV1.TERMINAL) {
+                        result.complete(snapshot.view)
+                        return@whenComplete
+                    }
+                    if (resolved.maxAttempts != null && nextAttempts >= resolved.maxAttempts ||
+                        deadline != Long.MAX_VALUE && System.currentTimeMillis() >= deadline) {
+                        result.completeExceptionally(
+                            TransactionTimeoutException(
+                                "Exact12 transaction ${submitted.transactionHash.toLowerHex()} " +
+                                    "did not reach terminal state within the configured bounds",
+                                submitted.transactionHash.toLowerHex(),
+                                nextAttempts,
+                                snapshot.payload,
+                            ),
+                        )
+                        return@whenComplete
+                    }
+                    val task = Runnable { poll(nextAttempts, snapshot.payload) }
+                    if (resolved.intervalMillis <= 0L) {
+                        task.run()
+                    } else {
+                        scheduler.schedule(task, resolved.intervalMillis, TimeUnit.MILLISECONDS)
+                    }
+                }
+        }
+        poll(0, null)
+        return result
+    }
+
+    private fun submitExactPrivacyActionWire(
+        wire: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        transactionHashHex: String,
+    ): CompletableFuture<Unit> {
+        val request = buildExactNoritoPostRequest(
+            "/v1/pipeline/transactions",
+            wire,
+            PRIVACY_SUBMIT_RESPONSE_MAX_BYTES,
+            canonicalAuth,
+        )
+        notifyRequest(request)
+        val future = CompletableFuture<Unit>()
+        executor.execute(request).whenComplete { response, throwable ->
+            if (throwable != null) {
+                val error = AmbiguousTransactionSubmissionException(
+                    transactionHashHex,
+                    null,
+                    unwrapCompletion(throwable),
+                )
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
+                return@whenComplete
+            }
+            val clientResponse = ClientResponse(
+                response.statusCode,
+                response.body,
+                response.message,
+                transactionHashHex,
+                extractRejectCode(response),
+            )
+            if (response.statusCode == 202) {
+                notifyResponse(request, clientResponse)
+                future.complete(Unit)
+                return@whenComplete
+            }
+            val error = if (submissionOutcomeIsAmbiguous(response.statusCode)) {
+                AmbiguousTransactionSubmissionException(
+                    transactionHashHex,
+                    response.statusCode,
+                    null,
+                )
+            } else {
+                IllegalStateException(
+                    "Exact12 transaction dispatch failed with status ${response.statusCode}",
+                )
+            }
+            notifyFailure(request, error)
+            future.completeExceptionally(error)
+        }
+        return future
+    }
+
+    private fun PrivacyActionOperationViewV1.withTerminalPrivacyStatusV1(
+        terminal: PrivacyActionTerminalChainStateV1,
+        height: BigInteger?,
+        rejection: String?,
+        executionCapabilityManifestDigest: ByteArray? = null,
+        executionCapabilityCommittedHeight: BigInteger? = null,
+        executionReceiptFinalizedHeight: BigInteger? = null,
+        executionReceiptFinalizedBlockHash: ByteArray? = null,
+    ): PrivacyActionOperationViewV1 = withAuthenticatedTerminalStateV1(
+        terminal,
+        height,
+        rejection,
+        executionCapabilityManifestDigest,
+        executionCapabilityCommittedHeight,
+        executionReceiptFinalizedHeight,
+        executionReceiptFinalizedBlockHash,
+    )
+
+    private fun requireStableTerminalPrivacyView(
+        previous: PrivacyActionOperationViewV1,
+        refreshed: PrivacyActionOperationViewV1,
+    ) {
+        check(previous.localState != PrivacyActionLocalStateV1.TERMINAL || previous == refreshed) {
+            "terminal Exact12 action status changed"
+        }
+    }
+
+    private fun privacyStatusBlockHeightV1(payload: Map<String, Any>): BigInteger? {
+        val status = payload["status"] as? Map<*, *>
+            ?: error("Exact12 pipeline status omitted its typed status")
+        val raw = status["block_height"] ?: return null
+        val height = when (raw) {
+            is BigInteger -> raw
+            is Byte, is Short, is Int, is Long -> BigInteger.valueOf((raw as Number).toLong())
+            is java.math.BigDecimal -> try {
+                raw.toBigIntegerExact()
+            } catch (error: ArithmeticException) {
+                throw IllegalStateException("Exact12 status block height is not an integer", error)
+            }
+            else -> error("Exact12 status block height has an unsupported numeric type")
+        }
+        check(height.signum() > 0 && height.bitLength() <= 64) {
+            "Exact12 status block height must be a positive u64"
+        }
+        return height
+    }
+
+    private fun ByteArray.toLowerHex(): String =
+        joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+    private fun requireAutomaticCanonicalFreshness(
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        context: String,
+    ) {
+        require(canonicalAuth.timestampMs == null && canonicalAuth.nonce == null) {
+            "$context performs multiple authenticated requests and requires generated freshness"
+        }
+    }
+
     private fun pollPipelineStatus(hashHex: String, options: PipelineStatusOptions, deadline: Long, attemptsSoFar: Int, lastPayload: Map<String, Any>?, future: CompletableFuture<Map<String, Any>>) {
         if (future.isDone) return
         val configuredMaxAttempts = options.maxAttempts
@@ -1119,6 +2215,36 @@ class HttpClientTransport(
         val builder = TransportRequest.builder().setUri(target).setMethod("GET").addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
         if (maximumResponseBytes != null) builder.setMaximumResponseBytes(maximumResponseBytes)
         for ((k, v) in config.defaultHeaders()) builder.addHeader(k, v)
+        return builder.build()
+    }
+
+    private fun buildCanonicalJsonGetRequest(
+        path: String,
+        queryParams: Map<String, String>,
+        maximumResponseBytes: Long,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): TransportRequest {
+        require(config.defaultHeaders().keys.none { it.equals("Accept", ignoreCase = true) }) {
+            "Accept must not be overridden for canonical JSON requests"
+        }
+        requireCanonicalHeadersUnset()
+        val target = appendQuery(resolvePath(path), queryParams)
+        val canonicalHeaders = buildCanonicalHeaders("GET", target, null, canonicalAuth)
+        val builder = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("GET")
+            .addHeader("Accept", "application/json")
+            .setMaximumResponseBytes(maximumResponseBytes)
+            .setTimeout(config.requestTimeout())
+        for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
+        for ((key, value) in canonicalHeaders) builder.addHeader(key, value)
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport canonical JSON GET",
+            config.baseUri(),
+            target,
+            canonicalHeaders,
+            null,
+        )
         return builder.build()
     }
 
@@ -1211,6 +2337,69 @@ class HttpClientTransport(
                 null,
             )
         }
+        return builder.build()
+    }
+
+    private fun buildExactNoritoPostRequest(
+        path: String,
+        body: ByteArray,
+        maximumResponseBytes: Long,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): TransportRequest {
+        require(body.isNotEmpty()) { "exact Norito POST body must not be empty" }
+        require(config.defaultHeaders().keys.none {
+            it.equals("Accept", ignoreCase = true) ||
+                it.equals("Content-Type", ignoreCase = true)
+        }) { "Accept and Content-Type must not be overridden for exact Norito requests" }
+        requireCanonicalHeadersUnset()
+        val target = resolvePath(path)
+        val canonicalHeaders = buildCanonicalHeaders("POST", target, body, canonicalAuth)
+        val builder = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Accept", APPLICATION_NORITO)
+            .addHeader("Content-Type", APPLICATION_NORITO)
+            .setBody(body)
+            .setMaximumResponseBytes(maximumResponseBytes)
+            .setTimeout(config.requestTimeout())
+        for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
+        for ((key, value) in canonicalHeaders) builder.addHeader(key, value)
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport exact Norito POST",
+            config.baseUri(),
+            target,
+            canonicalHeaders,
+            body,
+        )
+        return builder.build()
+    }
+
+    private fun buildExactSignedQueryPostRequest(
+        path: String,
+        body: ByteArray,
+        maximumResponseBytes: Long,
+    ): TransportRequest {
+        require(body.isNotEmpty()) { "signed query POST body must not be empty" }
+        require(config.defaultHeaders().keys.none {
+            it.equals("Accept", ignoreCase = true) ||
+                it.equals("Content-Type", ignoreCase = true)
+        }) { "Accept and Content-Type must not be overridden for exact signed queries" }
+        requireCanonicalHeadersUnset()
+        val target = resolvePath(path)
+        TransportSecurity.requireAuthenticatedHttpRequestAllowed(
+            "HttpClientTransport authenticated signed query",
+            config.baseUri(),
+            target,
+        )
+        val builder = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Accept", APPLICATION_NORITO)
+            .addHeader("Content-Type", APPLICATION_NORITO)
+            .setBody(body)
+            .setMaximumResponseBytes(maximumResponseBytes)
+            .setTimeout(config.requestTimeout())
+        for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
         return builder.build()
     }
 
@@ -1446,6 +2635,56 @@ class HttpClientTransport(
         return future
     }
 
+    /** Execute an exact Norito request where, and only where, HTTP 404 means typed absence. */
+    internal fun fetchExactNoritoBytesAllowingNotFound(
+        request: TransportRequest,
+        errorContext: String,
+    ): CompletableFuture<ByteArray?> {
+        notifyRequest(request)
+        val future = CompletableFuture<ByteArray?>()
+        executor.execute(request).whenComplete { response, throwable ->
+            if (throwable != null) {
+                val cause = unwrapCompletion(throwable)
+                notifyFailure(request, cause)
+                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
+                return@whenComplete
+            }
+            val body = response.body
+            val clientResponse = ClientResponse(
+                response.statusCode,
+                body,
+                response.message,
+                null,
+                extractRejectCode(response),
+            )
+            try {
+                if (response.statusCode == 404) {
+                    notifyResponse(request, clientResponse)
+                    future.complete(null)
+                    return@whenComplete
+                }
+                require(response.statusCode == 200) {
+                    "$errorContext request failed with status ${response.statusCode}"
+                }
+                requireExactHeader(response.headers, "Content-Type", APPLICATION_NORITO, errorContext)
+                require(body.isNotEmpty()) { "$errorContext response must not be empty" }
+                val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
+                    "$errorContext request must declare a response-body limit"
+                }
+                require(body.size.toLong() <= maximumResponseBytes) {
+                    "$errorContext response exceeds $maximumResponseBytes bytes"
+                }
+                requireExactOptionalContentLength(response.headers, body.size, errorContext)
+                notifyResponse(request, clientResponse)
+                future.complete(body.copyOf())
+            } catch (error: RuntimeException) {
+                notifyFailure(request, error)
+                future.completeExceptionally(error)
+            }
+        }
+        return future
+    }
+
     private fun requireExactHeader(
         headers: Map<String, List<String>>,
         name: String,
@@ -1610,6 +2849,9 @@ class HttpClientTransport(
         private const val SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L
         private const val SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L
         private const val EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L
+        private const val PRIVACY_STATUS_RESPONSE_MAX_BYTES = 64L * 1024L
+        private const val PRIVACY_SUBMIT_RESPONSE_MAX_BYTES = 64L * 1024L
+        private const val APPLICATION_JSON = "application/json"
         private const val APPLICATION_NORITO = "application/x-norito"
         private val CANONICAL_AUTH_HEADERS = setOf(
             CanonicalRequestSigner.HEADER_ACCOUNT,

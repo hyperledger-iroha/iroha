@@ -169,9 +169,17 @@ macro_rules! named_route_policy_test {
 }
 
 named_route_policy_test!(
-    offline_receiver_lineage_requires_account_authentication_before_expensive_proof_work,
+    offline_finality_queries_require_account_authentication_before_expensive_proof_work,
     {
-        assert_route_policy(offline::RECIPIENT_LINEAGE, ACCOUNT_EXPENSIVE);
+        assert_route_policies(
+            [
+                offline::DEVICE_ATTESTATION_POLICY,
+                offline::DEVICE_ATTESTATION_POLICY_PROOF,
+                offline::DEVICE_ELIGIBILITY,
+                offline::RECIPIENT_LINEAGE,
+            ],
+            ACCOUNT_EXPENSIVE,
+        );
     }
 );
 

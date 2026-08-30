@@ -42,6 +42,21 @@ name = "privacy_exact12_action_driver"
 path = "src/bin/privacy_exact12_action_driver.rs"
 required-features = ["privacy-release-evidence"]
 
+[[bin]]
+name = "privacy_zk_ace_release_evidence"
+path = "src/bin/privacy_zk_ace_release_evidence.rs"
+required-features = ["privacy-release-evidence"]
+
+[[bin]]
+name = "vega_figure9_artifact_tool"
+path = "src/bin/vega_figure9_artifact_tool.rs"
+required-features = ["privacy-release-evidence"]
+
+[[bin]]
+name = "iroha_zk_x509_prover_worker"
+path = "src/bin/iroha_zk_x509_prover_worker.rs"
+required-features = ["privacy-release-evidence"]
+
 [lints]
 workspace = true
 
@@ -106,6 +121,7 @@ privacy-release-evidence = [
     "zk-stark",
     "json",
     "iroha_data_model/privacy-exact12-conformance",
+    "iroha_zkp_halo2/privacy-release-evidence",
 ]
 # Transparent Halo2 (IPA over Pasta). Default-on.
 zk-halo2-ipa = ["zk-ipa-native"]

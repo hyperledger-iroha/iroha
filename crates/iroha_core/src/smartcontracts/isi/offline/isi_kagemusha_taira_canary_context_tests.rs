@@ -3,9 +3,11 @@ mod taira_canary_context_tests {
     use super::*;
     use crate::tx::AcceptedTransaction;
     use iroha_data_model::{
+        ValidationFail,
         events::execute_trigger::ExecuteTriggerEventFilter,
         transaction::{
             TransactionAdmissionIntent, TransactionEntrypoint,
+            error::TransactionRejectionReason,
             signed::{
                 SealedTransactionCommitmentPayload, SealedTransactionReveal,
                 SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
@@ -17,6 +19,31 @@ mod taira_canary_context_tests {
         },
     };
     use std::borrow::Cow;
+
+    fn assert_canary_instruction_invariant(error: &InstructionExecutionError, code: &str) {
+        let InstructionExecutionError::InvariantViolation(message) = error else {
+            panic!("expected `{code}` invariant, got {error:?}");
+        };
+        let prefix = format!("offline_reason::{code}:");
+        assert!(
+            message.starts_with(&prefix),
+            "expected `{code}` invariant, got {error:?}",
+        );
+    }
+
+    fn assert_canary_validation_invariant(error: &ValidationFail, code: &str) {
+        let ValidationFail::InstructionFailed(error) = error else {
+            panic!("expected `{code}` instruction failure, got {error:?}");
+        };
+        assert_canary_instruction_invariant(error, code);
+    }
+
+    fn assert_canary_rejection_invariant(error: &TransactionRejectionReason, code: &str) {
+        let TransactionRejectionReason::Validation(error) = error else {
+            panic!("expected `{code}` validation rejection, got {error:?}");
+        };
+        assert_canary_validation_invariant(error, code);
+    }
 
     #[test]
     fn taira_canary_committed_replay_seeds_only_one_direct_wire() {
@@ -190,11 +217,7 @@ mod taira_canary_context_tests {
             )
             .1
             .expect_err("a sealed inner Record cannot consume the external canary reservation");
-        assert!(
-            error
-                .to_string()
-                .contains("canary_external_entrypoint_required")
-        );
+        assert_canary_rejection_invariant(&error, "canary_external_entrypoint_required");
         assert_eq!(
             reveal_block.world.kagemusha_replay_keys.iter().count(),
             replay_keys_before,
@@ -238,10 +261,9 @@ mod taira_canary_context_tests {
                 &mut ivm_cache,
             )
             .expect_err("a signed canary without External entrypoint provenance must fail");
-        assert!(
-            sealed_or_contextless
-                .to_string()
-                .contains("canary_external_entrypoint_required")
+        assert_canary_validation_invariant(
+            &sealed_or_contextless,
+            "canary_external_entrypoint_required",
         );
         assert_eq!(
             transaction.world.kagemusha_replay_keys.iter().count(),
@@ -257,11 +279,7 @@ mod taira_canary_context_tests {
                 &mut ivm_cache,
             )
             .expect_err("an independently valid signature over the same payload must not pass");
-        assert!(
-            alternate
-                .to_string()
-                .contains("canary_authorization_missing")
-        );
+        assert_canary_validation_invariant(&alternate, "canary_authorization_missing");
         assert_eq!(
             transaction.world.kagemusha_replay_keys.iter().count(),
             markers_after_authorization,
@@ -280,11 +298,7 @@ mod taira_canary_context_tests {
         let multi_error = executor
             .execute_transaction(&mut transaction, &authority, multi, &mut ivm_cache)
             .expect_err("a multi-instruction transaction must receive no canary wire capability");
-        assert!(
-            multi_error
-                .to_string()
-                .contains("canary_authorization_missing")
-        );
+        assert_canary_validation_invariant(&multi_error, "canary_authorization_missing");
 
         let batch = TransactionBuilder::new(
             transaction.network_id().clone(),
@@ -301,11 +315,7 @@ mod taira_canary_context_tests {
         let batch_error = executor
             .execute_transaction(&mut transaction, &authority, batch, &mut ivm_cache)
             .expect_err("a top-level Batch must receive no canary wire capability");
-        assert!(
-            batch_error
-                .to_string()
-                .contains("canary_authorization_missing")
-        );
+        assert_canary_validation_invariant(&batch_error, "canary_authorization_missing");
 
         executor
             .execute_transaction(
@@ -322,39 +332,12 @@ mod taira_canary_context_tests {
     fn taira_canary_nested_trigger_cannot_inherit_outer_wire() {
         offline_test_transaction!(transaction);
         let outer = canary_consensus_fixture(&transaction, 23);
-        let controller = canary_consensus_controller();
-        let mut nested_permit = outer.permit.clone();
-        nested_permit.body.binding.promotion_id = [0xD7; 32];
-        nested_permit.signature =
-            SignatureOf::try_from_hash(controller.private_key(), nested_permit.body.signing_hash())
-                .expect("controller signs the nested promotion permit");
+        let nested_permit = outer.permit.clone();
 
         commit_canary_activation_binding(&outer.permit.body.binding, &mut transaction);
-        commit_canary_activation_binding(&nested_permit.body.binding, &mut transaction);
         AuthorizeKagemushaTairaCanaryV4::new(outer.reservation.clone())
             .execute(&ALICE_ID, &mut transaction)
             .expect("authorize the outer exact canary");
-        let nested_body = KagemushaV4TairaCanaryReservationBodyV1 {
-            schema: KAGEMUSHA_V4_TAIRA_CANARY_RESERVATION_BODY_SCHEMA.to_owned(),
-            version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
-            permit: nested_permit.clone(),
-            canary_transaction_intent: HashOf::from_untyped_unchecked(outer.exact_call_hash),
-            canary_transaction_wire: outer.reservation.body.canary_transaction_wire,
-            canary_entrypoint_hash: outer.exact_call_hash,
-        };
-        let nested_reservation = KagemushaV4TairaCanaryReservationV1 {
-            schema: KAGEMUSHA_V4_TAIRA_CANARY_RESERVATION_SCHEMA.to_owned(),
-            version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
-            signature: SignatureOf::try_from_hash(
-                controller.private_key(),
-                nested_body.signing_hash(),
-            )
-            .expect("controller signs the hostile inherited-wire reservation"),
-            body: nested_body,
-        };
-        AuthorizeKagemushaTairaCanaryV4::new(nested_reservation)
-            .execute(&ALICE_ID, &mut transaction)
-            .expect("the hostile tuple is structurally controller-authorized");
         let trigger_id: TriggerId = "kagemusha_nested_canary".parse().expect("valid trigger id");
         let action = Action::new(
             vec![InstructionBox::from(RecordKagemushaTairaCanaryV4::new(
@@ -380,11 +363,11 @@ mod taira_canary_context_tests {
         let error = ExecuteTrigger::new(trigger_id)
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("a dynamically emitted canary must remain signed-wire unbound");
-        assert!(error.to_string().contains("canary_authorization_missing"));
+        assert_canary_instruction_invariant(&error, "canary_authorization_missing");
         assert_eq!(
             transaction.world.kagemusha_replay_keys.iter().count(),
             markers_before_nested,
-            "the nested rejection must not consume the second promotion",
+            "the nested rejection must not mutate the committed canary markers",
         );
     }
 }

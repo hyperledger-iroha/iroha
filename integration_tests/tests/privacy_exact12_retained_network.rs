@@ -1,10 +1,17 @@
 #![cfg(feature = "privacy-release-evidence")]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Enforced four-peer DA/RBC, activation, adversarial-proof, state-replay, exact-finality, and
-//! restart gate for five available retained exact-12 native engines, plus fail-closed ZK-ACE
-//! capability and production-builder coverage.
+//! restart gate for five retained exact-12 native engines. ZK-ACE capability and builder behavior
+//! are checked against its compiled native-stage evidence gate; its committed semantic canary is
+//! owned by the dedicated ZK-ACE release gate.
 use eyre::{Result, WrapErr as _, ensure, eyre};
-use integration_tests::sandbox;
+use integration_tests::{
+    privacy_exact12_controller::{
+        require_applied_privacy_action_v1, require_privacy_action_receipt_on_peer_v1,
+        submit_signed_privacy_action_and_wait_async_v1,
+    },
+    sandbox,
+};
 use iroha::{
     client::Client,
     data_model::{
@@ -25,18 +32,24 @@ use iroha::{
         parameter::{Parameter, TransactionParameter},
         permission::Permission,
         prelude::{
-            AccountId, AssetDefinitionId, AssetId, DomainId, FindAssets, Identifiable, Name,
-            Quantity, QueryBuilderExt,
+            AssetDefinitionId, AssetId, DomainId, FindAssets, Identifiable, Name, Quantity,
+            QueryBuilderExt,
         },
         privacy::{
-            PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1,
-            PrivacyCompiledProfileSnapshotV1, PrivacyCompiledProfileUnavailableReasonV1,
-            PrivacyConsensusLimitsV1, PrivacyExact12CapabilityManifestV1,
-            PrivacyExact12CapabilityRowV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-            PrivacyProtocolLifecycleV1, PrivacyStatementDigestV1,
+            PrivacyActiveLifecycleV1, PrivacyAnonymousPgcPoolStateViewV1,
+            PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+            PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusLimitsV1,
+            PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1,
+            PrivacyOperationSchemaV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+            PrivacyProofManagedPoolStateViewV1, PrivacyProposedLifecycleV1,
+            PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+            PrivacyRootRoleV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+            PrivacyVeRangeBitLengthV1,
         },
-        query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
+        query::{
+            block::prelude::FindBlocks, privacy::prelude::FindPrivacyAnonymousPgcPoolStateV1,
+            transaction::prelude::FindTransactions,
+        },
         transaction::{
             FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
         },
@@ -44,12 +57,16 @@ use iroha::{
 };
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+    privacy_engines::zk_ace::{
+        ZK_ACE_FULL_ENGINE_AVAILABLE_V1, zk_ace_nonshipping_release_candidate_available_v2,
+    },
     privacy_profiles::{
         CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
         compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
     },
     privacy_release_evidence::{
-        PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
+        PrivacyReleaseAnonymousPgcNetworkActionV1, PrivacyReleaseTransactionContextV1,
+        build_privacy_release_anonymous_pgc_network_action_v1,
         build_privacy_release_bootle_lantern_network_action_v1,
         build_privacy_release_fcmp_network_action_v1,
         build_privacy_release_ivm_private_note_network_action_v1,
@@ -164,16 +181,13 @@ fn assert_protocol_expectations(
     }
     let zk_ace = protocol_row(snapshot, ZK_ACE_PROTOCOL)?;
     ensure!(
-        zk_ace.compiled_profile
-            == PrivacyCompiledProfileResultV1::Unavailable(
-                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
-            ),
-        "{context}: ZK-ACE compiled status is not fail-closed: {:?}",
+        zk_ace.compiled_profile == compiled_privacy_profile_snapshot_result_v1(ZK_ACE_PROTOCOL),
+        "{context}: ZK-ACE compiled status differs from the local native-stage gate: {:?}",
         zk_ace.compiled_profile
     );
     ensure!(
         zk_ace.activation.is_none(),
-        "{context}: unavailable ZK-ACE unexpectedly has an activation: {:?}",
+        "{context}: retained-protocol gate unexpectedly activated ZK-ACE: {:?}",
         zk_ace.activation
     );
     Ok(())
@@ -705,6 +719,96 @@ async fn wait_for_exact_v2_commit_subject(
         sleep(POLL_INTERVAL).await;
     }
 }
+fn assert_proof_managed_transition_view(
+    client: &Client,
+    view: &PrivacyProofManagedPoolStateViewV1,
+    protocol_id: PrivacyProtocolIdV1,
+    pool_id: PrivacyPoolIdV1,
+    asset_definition_id: &AssetDefinitionId,
+    root_role: PrivacyRootRoleV1,
+    statement_digest: PrivacyStatementDigestV1,
+    parent_epoch: u64,
+    nullifier_count: usize,
+    appended_output_count: usize,
+    total_output_count: u64,
+    context: &str,
+) -> Result<()> {
+    view.validate()
+        .map_err(|error| eyre!("{context}: invalid finalized pool view: {error}"))?;
+    let transition = view
+        .latest_transition
+        .as_ref()
+        .ok_or_else(|| eyre!("{context}: finalized pool view omitted its latest transition"))?;
+    ensure!(
+        view.network_id == client.network_id
+            && view.protocol_id == protocol_id
+            && view.pool_id == pool_id
+            && &view.asset_definition_id == asset_definition_id
+            && view.root_role == root_role
+            && view.current_epoch == parent_epoch.saturating_add(1)
+            && view.output_count == total_output_count
+            && transition.statement_digest == statement_digest
+            && transition.successor_epoch == view.current_epoch
+            && transition.nullifier_count
+                == u32::try_from(nullifier_count).expect("native nullifier count fits u32")
+            && transition.output_count
+                == u32::try_from(appended_output_count).expect("native output count fits u32")
+            && transition.admitted_at_height <= view.finalized_height,
+        "{context}: finalized typed pool state differs from the exact committed ledger effect: {view:?}"
+    );
+    Ok(())
+}
+fn assert_anonymous_pgc_transition_view(
+    client: &Client,
+    action: &PrivacyReleaseAnonymousPgcNetworkActionV1,
+    handle: &iroha::client::privacy_exact12_action::AuthenticatedPrivacyActionHandleV1,
+    context: &str,
+) -> Result<()> {
+    let view: PrivacyAnonymousPgcPoolStateViewV1 = client
+        .query_single(FindPrivacyAnonymousPgcPoolStateV1::new(
+            action.statement.pool_id,
+        ))
+        .wrap_err_with(|| format!("{context}: query finalized Anonymous-PGC pool state"))?;
+    view.validate()
+        .map_err(|error| eyre!("{context}: invalid finalized Anonymous-PGC view: {error}"))?;
+    let statement_digest = PrivacyStatementV1::AnonymousPgcKOutOfNV1(action.statement.clone())
+        .digest()
+        .wrap_err_with(|| format!("{context}: digest canonical Anonymous-PGC statement"))?;
+    let bootstrap_digest = action
+        .bootstrap
+        .digest()
+        .wrap_err_with(|| format!("{context}: digest canonical Anonymous-PGC bootstrap"))?;
+    let bootstrap_proof_digest = action
+        .bootstrap_proof
+        .digest()
+        .wrap_err_with(|| format!("{context}: digest canonical Anonymous-PGC bootstrap proof"))?;
+    let transition = view
+        .latest_transition
+        .ok_or_else(|| eyre!("{context}: finalized Anonymous-PGC view omitted its transition"))?;
+    ensure!(
+        view.network_id == client.network_id
+            && view.pool_id == action.statement.pool_id
+            && view.total_supply == action.bootstrap.total_supply
+            && view.bootstrap_root == action.bootstrap.initial_root
+            && view.bootstrap_digest == bootstrap_digest
+            && view.bootstrap_proof_digest == bootstrap_proof_digest
+            && view.current_epoch == action.statement.next_account_state_root_epoch
+            && view.current_root == action.statement.next_account_state_root
+            && view.account_count
+                == u32::try_from(action.bootstrap.accounts.len())
+                    .expect("bounded Anonymous-PGC account count fits u32")
+            && view.current_state_admitted_at_height == transition.admitted_at_height
+            && Some(transition.admitted_at_height) == handle.view().committed_height()
+            && transition.statement_digest == statement_digest
+            && transition.parent_epoch == action.statement.account_state_root_epoch
+            && transition.parent_root == action.statement.account_state_root
+            && transition.successor_epoch == action.statement.next_account_state_root_epoch
+            && transition.action_index == 0
+            && view.finalized_height >= transition.admitted_at_height,
+        "{context}: finalized Anonymous-PGC account-table transition differs from the exact native ledger effect: {view:?}"
+    );
+    Ok(())
+}
 fn action_context(
     client: &Client,
     genesis_hash: [u8; 32],
@@ -726,20 +830,27 @@ fn action_context(
 async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart()
 -> Result<()> {
     init_instruction_registry();
-    ensure!(
-        compiled_privacy_profile_v1(ZK_ACE_PROTOCOL)
-            == Err(CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                protocol_id: ZK_ACE_PROTOCOL,
-            }),
-        "ZK-ACE unexpectedly became governance-available"
-    );
-    ensure!(
-        compiled_privacy_profile_snapshot_result_v1(ZK_ACE_PROTOCOL)
-            == PrivacyCompiledProfileResultV1::Unavailable(
-                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
-            ),
-        "local ZK-ACE capability result is not the exact fail-closed status"
-    );
+    if ZK_ACE_FULL_ENGINE_AVAILABLE_V1 {
+        ensure!(
+            compiled_privacy_profile_v1(ZK_ACE_PROTOCOL).is_ok(),
+            "closed ZK-ACE native-stage gate did not expose its compiled profile"
+        );
+    } else {
+        ensure!(
+            compiled_privacy_profile_v1(ZK_ACE_PROTOCOL)
+                == Err(CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                    protocol_id: ZK_ACE_PROTOCOL,
+                }),
+            "open ZK-ACE native-stage gate did not fail closed"
+        );
+        ensure!(
+            compiled_privacy_profile_snapshot_result_v1(ZK_ACE_PROTOCOL)
+                == PrivacyCompiledProfileResultV1::Unavailable(
+                    PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                ),
+            "local ZK-ACE capability result is not the exact fail-closed status"
+        );
+    }
     let context = stringify!(
         canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart
     );
@@ -842,9 +953,14 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             None,
         )))
         .with_genesis_instruction(Mint::asset_quantity(100_u32, zk_asset_at_alice.clone()));
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| {
+            eyre!(
+                "{context}: release-evidence qualification requires the four-peer localnet; \
+                 the retained Exact12 semantic gate cannot pass by skipping network execution"
+            )
+        })?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -988,6 +1104,12 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             creation_time + Duration::from_millis(11),
             211,
         );
+        let verange64_context = action_context(
+            &client,
+            genesis_hash,
+            creation_time + Duration::from_millis(12),
+            212,
+        );
         let pgc_pool = PrivacyPoolIdV1::new([0x21; 32]);
         let fcmp_pool = PrivacyPoolIdV1::new([0x22; 32]);
         let ivm_pool = PrivacyPoolIdV1::new([0x23; 32]);
@@ -999,20 +1121,24 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         let fcmp_asset_for_builder = fcmp_asset.clone();
         let ivm_asset_for_builder = ivm_asset.clone();
         let build_actions = tokio::task::spawn_blocking(move || {
-            ensure!(
-                build_privacy_release_zk_ace_network_action_v1(
-                    zk_context,
-                    ALICE_ID.clone(),
-                    reserve_for_builder.clone(),
-                    zk_asset_for_builder,
-                    19,
-                    [0x31; 32],
-                    [0x32; 32],
-                    &signing_key,
-                )
-                .is_err(),
-                "disabled ZK-ACE release builder admitted a production action"
-            );
+            if !ZK_ACE_FULL_ENGINE_AVAILABLE_V1
+                && !zk_ace_nonshipping_release_candidate_available_v2()
+            {
+                ensure!(
+                    build_privacy_release_zk_ace_network_action_v1(
+                        zk_context,
+                        ALICE_ID.clone(),
+                        reserve_for_builder.clone(),
+                        zk_asset_for_builder,
+                        19,
+                        [0x31; 32],
+                        [0x32; 32],
+                        &signing_key,
+                    )
+                    .is_err(),
+                    "release-gated ZK-ACE builder admitted a production action"
+                );
+            }
             let pgc = build_privacy_release_anonymous_pgc_network_action_v1(
                 pgc_context,
                 pgc_asset_for_builder.clone(),
@@ -1042,13 +1168,22 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .map_err(|error| eyre!("build pre-activation VeRange action: {error:?}"))?;
             let verange = build_privacy_release_verange_network_action_v1(
                 verange_context,
-                verange_asset_for_builder,
+                verange_asset_for_builder.clone(),
                 verange_policy,
                 vec![0, 1, 17, u64::from(u32::MAX)],
                 [0x52; 32],
                 &signing_key,
             )
-            .map_err(|error| eyre!("build canonical VeRange action: {error:?}"))?;
+            .map_err(|error| eyre!("build canonical 32-bit VeRange action: {error:?}"))?;
+            let verange64 = build_privacy_release_verange_network_action_v1(
+                verange64_context,
+                verange_asset_for_builder,
+                verange_policy,
+                vec![u64::from(u32::MAX) + 1, u64::MAX],
+                [0x53; 32],
+                &signing_key,
+            )
+            .map_err(|error| eyre!("build canonical 64-bit VeRange action: {error:?}"))?;
             let bootle = build_privacy_release_bootle_lantern_network_action_v1(
                 bootle_context,
                 [0x61; 32],
@@ -1109,6 +1244,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 pgc_replay,
                 pre_verange,
                 verange,
+                verange64,
                 bootle,
                 stale_bootle,
                 fcmp,
@@ -1122,6 +1258,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             pgc_replay,
             pre_verange,
             verange,
+            verange64,
             bootle,
             stale_bootle,
             fcmp,
@@ -1132,6 +1269,11 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .await
             .map_err(|_| eyre!("retained exact-12 proving exceeded {PROVER_TIMEOUT:?}"))?
             .map_err(|error| eyre!("retained exact-12 prover task failed: {error}"))??;
+        ensure!(
+            verange.statement.bit_length == PrivacyVeRangeBitLengthV1::Bits32
+                && verange64.statement.bit_length == PrivacyVeRangeBitLengthV1::Bits64,
+            "committed VeRange fixtures did not select the exact governed 32/64-bit profiles"
+        );
         ensure!(
             pgc.bootstrap == pgc_replay.bootstrap
                 && pgc.bootstrap_proof == pgc_replay.bootstrap_proof
@@ -1173,7 +1315,8 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             ("canonical Anonymous-PGC", &pgc.transaction),
             ("stale-head Anonymous-PGC", &pgc_replay.transaction),
             ("pre-activation VeRange", &pre_verange.transaction),
-            ("canonical VeRange", &verange.transaction),
+            ("canonical 32-bit VeRange", &verange.transaction),
+            ("canonical 64-bit VeRange", &verange64.transaction),
             ("canonical Bootle/Lantern", &bootle.transaction),
             ("stale-policy Bootle/Lantern", &stale_bootle.transaction),
             ("canonical FCMP++", &fcmp.transaction),
@@ -1497,7 +1640,8 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         .await?;
         for (label, transaction) in [
             ("Anonymous-PGC", &pgc.transaction),
-            ("VeRange", &verange.transaction),
+            ("VeRange 32-bit", &verange.transaction),
+            ("VeRange 64-bit", &verange64.transaction),
             ("Bootle/Lantern", &bootle.transaction),
             ("FCMP++", &fcmp.transaction),
             ("private-IVM", &ivm.transaction),
@@ -1521,19 +1665,51 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             .filter(|(index, _)| *index != restart_index)
             .map(|(_, peer)| bounded_client(peer.client()))
             .collect::<Vec<_>>();
-        for (label, transaction) in [
-            ("Anonymous-PGC", &pgc.transaction),
-            ("VeRange", &verange.transaction),
-            ("Bootle/Lantern", &bootle.transaction),
-            ("FCMP++", &fcmp.transaction),
-            ("private-IVM", &ivm.transaction),
+        let mut canonical_handles = Vec::new();
+        for (label, operation, transaction) in [
+            (
+                "Anonymous-PGC",
+                PrivacyOperationSchemaV1::AnonymousPgcPaymentActionV1,
+                &pgc.transaction,
+            ),
+            (
+                "VeRange 32-bit",
+                PrivacyOperationSchemaV1::VeRangeRangeProofV1,
+                &verange.transaction,
+            ),
+            (
+                "VeRange 64-bit",
+                PrivacyOperationSchemaV1::VeRangeRangeProofV1,
+                &verange64.transaction,
+            ),
+            (
+                "Bootle/Lantern",
+                PrivacyOperationSchemaV1::BootleLanternCredentialPresentationV1,
+                &bootle.transaction,
+            ),
+            (
+                "FCMP++",
+                PrivacyOperationSchemaV1::FcmpMembershipPaymentV1,
+                &fcmp.transaction,
+            ),
+            (
+                "private-IVM",
+                PrivacyOperationSchemaV1::IvmPrivateNoteActionV1,
+                &ivm.transaction,
+            ),
         ] {
-            submit_signed_transaction(
+            let handle = submit_signed_privacy_action_and_wait_async_v1(
                 &client,
+                operation,
                 transaction,
-                &format!("submit canonical {label} action through DA/RBC"),
+                SUBMISSION_TIMEOUT,
+                POLL_INTERVAL,
             )
-            .await?;
+            .await
+            .wrap_err_with(|| {
+                format!("submit canonical {label} through authenticated Exact12 controller")
+            })?;
+            require_applied_privacy_action_v1(&handle, operation)?;
             wait_for_transaction_result_on_peers(
                 &healthy_clients,
                 transaction,
@@ -1541,6 +1717,86 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 &format!("healthy-peer canonical {label} finality"),
             )
             .await?;
+            canonical_handles.push((label, operation, handle));
+        }
+        for (peer_index, peer) in healthy_clients.iter().enumerate() {
+            for (label, operation, handle) in &canonical_handles {
+                require_privacy_action_receipt_on_peer_v1(peer, handle).wrap_err_with(|| {
+                    format!("healthy peer {peer_index} finalized {label} execution receipt")
+                })?;
+                if *operation == PrivacyOperationSchemaV1::AnonymousPgcPaymentActionV1 {
+                    assert_anonymous_pgc_transition_view(
+                        peer,
+                        &pgc,
+                        handle,
+                        &format!("healthy peer {peer_index} finalized Anonymous-PGC transition"),
+                    )?;
+                }
+            }
+        }
+        let fcmp_statement_digest =
+            PrivacyStatementV1::MoneroFcmpPlusPlusV1(fcmp.statement.clone())
+                .digest()
+                .wrap_err("derive canonical FCMP++ statement digest")?;
+        let ivm_statement_digest =
+            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(ivm.statement.clone())
+                .digest()
+                .wrap_err("derive canonical private-IVM statement digest")?;
+        let fcmp_total_output_count = u64::try_from(
+            fcmp.bootstrap
+                .initial_fcmp_outputs()
+                .ok_or_else(|| eyre!("FCMP++ bootstrap omitted its complete output set"))?
+                .len()
+                .checked_add(fcmp.statement.outputs.len())
+                .ok_or_else(|| eyre!("FCMP++ output count overflow"))?,
+        )
+        .wrap_err("FCMP++ output count does not fit u64")?;
+        let ivm_total_output_count = u64::try_from(
+            ivm.bootstrap
+                .initial_note_commitments()
+                .ok_or_else(|| eyre!("private-IVM bootstrap omitted its note commitments"))?
+                .len()
+                .checked_add(ivm.statement.output_commitments.len())
+                .ok_or_else(|| eyre!("private-IVM output count overflow"))?,
+        )
+        .wrap_err("private-IVM output count does not fit u64")?;
+        for (peer_index, peer) in healthy_clients.iter().enumerate() {
+            let fcmp_state: PrivacyProofManagedPoolStateViewV1 = peer
+                .query_single(fcmp.state_query.clone())
+                .wrap_err_with(|| format!("query finalized FCMP++ state from peer {peer_index}"))?;
+            assert_proof_managed_transition_view(
+                peer,
+                &fcmp_state,
+                FCMP_PROTOCOL,
+                fcmp.statement.pool_id,
+                &fcmp.statement.asset_definition_id,
+                PrivacyRootRoleV1::OutputSet,
+                fcmp_statement_digest,
+                fcmp.statement.root_epoch,
+                fcmp.statement.inputs.len(),
+                fcmp.statement.outputs.len(),
+                fcmp_total_output_count,
+                &format!("healthy peer {peer_index} finalized FCMP++ transition"),
+            )?;
+            let ivm_state: PrivacyProofManagedPoolStateViewV1 = peer
+                .query_single(ivm.state_query.clone())
+                .wrap_err_with(|| {
+                    format!("query finalized private-IVM state from peer {peer_index}")
+                })?;
+            assert_proof_managed_transition_view(
+                peer,
+                &ivm_state,
+                IVM_PROTOCOL,
+                ivm.statement.pool_id,
+                &ivm.statement.asset_definition_id,
+                PrivacyRootRoleV1::ProgramState,
+                ivm_statement_digest,
+                ivm.statement.root_epoch,
+                ivm.statement.nullifiers.len(),
+                ivm.statement.output_commitments.len(),
+                ivm_total_output_count,
+                &format!("healthy peer {peer_index} finalized private-IVM transition"),
+            )?;
         }
         wait_for_asset_quantities(
             &healthy_clients,
@@ -1565,7 +1821,8 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         );
         for (label, transaction) in [
             ("Anonymous-PGC", &pgc.transaction),
-            ("VeRange", &verange.transaction),
+            ("VeRange 32-bit", &verange.transaction),
+            ("VeRange 64-bit", &verange64.transaction),
             ("Bootle/Lantern", &bootle.transaction),
             ("FCMP++", &fcmp.transaction),
             ("private-IVM", &ivm.transaction),
@@ -1622,7 +1879,8 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         .await?;
         for (label, transaction) in [
             ("Anonymous-PGC", &pgc.transaction),
-            ("VeRange", &verange.transaction),
+            ("VeRange 32-bit", &verange.transaction),
+            ("VeRange 64-bit", &verange64.transaction),
             ("Bootle/Lantern", &bootle.transaction),
             ("FCMP++", &fcmp.transaction),
             ("private-IVM", &ivm.transaction),
@@ -1634,6 +1892,61 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
                 &format!("post-restart canonical {label} byte-for-byte visibility"),
             )
             .await?;
+        }
+        for (peer_index, peer) in recovered_clients.iter().enumerate() {
+            for (label, operation, handle) in &canonical_handles {
+                require_privacy_action_receipt_on_peer_v1(peer, handle).wrap_err_with(|| {
+                    format!("recovered peer {peer_index} finalized {label} execution receipt")
+                })?;
+                if *operation == PrivacyOperationSchemaV1::AnonymousPgcPaymentActionV1 {
+                    assert_anonymous_pgc_transition_view(
+                        peer,
+                        &pgc,
+                        handle,
+                        &format!("recovered peer {peer_index} finalized Anonymous-PGC transition"),
+                    )?;
+                }
+            }
+        }
+        for (peer_index, peer) in recovered_clients.iter().enumerate() {
+            let fcmp_state: PrivacyProofManagedPoolStateViewV1 = peer
+                .query_single(fcmp.state_query.clone())
+                .wrap_err_with(|| {
+                    format!("query recovered finalized FCMP++ state from peer {peer_index}")
+                })?;
+            assert_proof_managed_transition_view(
+                peer,
+                &fcmp_state,
+                FCMP_PROTOCOL,
+                fcmp.statement.pool_id,
+                &fcmp.statement.asset_definition_id,
+                PrivacyRootRoleV1::OutputSet,
+                fcmp_statement_digest,
+                fcmp.statement.root_epoch,
+                fcmp.statement.inputs.len(),
+                fcmp.statement.outputs.len(),
+                fcmp_total_output_count,
+                &format!("recovered peer {peer_index} finalized FCMP++ transition"),
+            )?;
+            let ivm_state: PrivacyProofManagedPoolStateViewV1 = peer
+                .query_single(ivm.state_query.clone())
+                .wrap_err_with(|| {
+                    format!("query recovered finalized private-IVM state from peer {peer_index}")
+                })?;
+            assert_proof_managed_transition_view(
+                peer,
+                &ivm_state,
+                IVM_PROTOCOL,
+                ivm.statement.pool_id,
+                &ivm.statement.asset_definition_id,
+                PrivacyRootRoleV1::ProgramState,
+                ivm_statement_digest,
+                ivm.statement.root_epoch,
+                ivm.statement.nullifiers.len(),
+                ivm.statement.output_commitments.len(),
+                ivm_total_output_count,
+                &format!("recovered peer {peer_index} finalized private-IVM transition"),
+            )?;
         }
         ensure!(
             canonical_genesis_hash(&restarted_client)? == genesis_hash,

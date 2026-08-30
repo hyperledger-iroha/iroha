@@ -54,7 +54,7 @@ fn validate_offline_device_attestation_registration(
         authority,
         state_transaction,
     )?;
-    if registration.version != 1 {
+    if registration.version != 2 {
         return Err(labeled_invariant(
             "invalid_attestation",
             "offline device attestation registration version is unsupported",
@@ -105,6 +105,11 @@ fn validate_offline_device_attestation_registration(
     }
     let policy = effective_offline_device_attestation_policy(state_transaction)?;
     let admitted_at_ms = state_transaction.block_unix_timestamp_ms();
+    validate_offline_attestation_policy_freshness_for_registration(
+        &policy,
+        admitted_at_ms,
+        registration.expires_at_ms,
+    )?;
     validate_offline_attestation_policy(&policy, admitted_at_ms)?;
     let lifetime_policy = offline_attestation_policy_for_registration_lifetime(
         &policy,
@@ -118,14 +123,16 @@ fn validate_offline_device_attestation_registration(
         registration.expires_at_ms,
     )?;
     validate_offline_attestation_recent_block(registration, state_transaction)?;
-    validate_offline_attestation_report(registration, &lifetime_policy, admitted_at_ms)?;
+    validate_offline_attestation_report(registration, &lifetime_policy, admitted_at_ms)
+        .map_err(classify_offline_attestation_report_rejection)?;
     // Admission must cover the registration's entire lifetime. Certificate
     // validity and governed root activation are continuous time ranges, so
     // validating both endpoints prevents a registration from surviving
     // beyond either bound without repeating X.509 verification on every use.
     let last_valid_ms = registration.expires_at_ms.saturating_sub(1);
     validate_offline_attestation_policy(&lifetime_policy, last_valid_ms)?;
-    validate_offline_attestation_report(registration, &lifetime_policy, last_valid_ms)?;
+    validate_offline_attestation_report(registration, &lifetime_policy, last_valid_ms)
+        .map_err(classify_offline_attestation_report_rejection)?;
     let bytes = norito::encode_canonical(registration).map_err(|err| {
         labeled_invariant(
             "invalid_attestation",

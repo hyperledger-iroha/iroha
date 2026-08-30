@@ -1,6 +1,6 @@
 //! Public Torii DTOs for the first-release Offline lifecycle.
 use crate::ErrorEnvelope;
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, PublicKey};
 pub use iroha_data_model::offline::{
     KagemushaRecursiveSpendRedeemRequestV4 as OfflineRedeemRequest,
     KagemushaRecursiveSpendTopUpRequestV4 as OfflineTopUpRequest, KagemushaValidationError,
@@ -23,9 +23,504 @@ use iroha_data_model::{
         KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2, KagemushaActiveReceiverEntryV1,
         KagemushaActiveReceiverMembershipProofV1, KagemushaActiveReceiverSnapshotStatusV1,
         KagemushaActiveReceiverWitnessProofV1, KagemushaRecipientPaymentRequestV2,
+        OfflineDeviceAttestationPolicyViewV1, OfflineDeviceEligibilityCredentialV1,
+        OfflineDeviceEligibilityDecisionV1,
+        OfflineDeviceEligibilityOutcomeV1 as DeviceEligibilityOutcome,
+        OfflineDeviceEligibilityReasonV1 as DeviceEligibilityReason,
     },
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+
+/// Stable public Norito schema name for a checkpoint-to-policy proof request.
+pub const OFFLINE_DEVICE_POLICY_PROOF_REQUEST_SCHEMA_NAME: &str =
+    "iroha.torii.v1.offline.device_attestation_policy.proof.request";
+/// Stable public Norito schema name for a checkpoint-to-policy proof page.
+pub const OFFLINE_DEVICE_POLICY_PROOF_RESPONSE_SCHEMA_NAME: &str =
+    "iroha.torii.v1.offline.device_attestation_policy.proof.response";
+/// Current checkpoint-to-policy proof request/response layout.
+pub const OFFLINE_DEVICE_POLICY_PROOF_VERSION_V1: u16 = 1;
+/// Maximum canonical request bytes for one checkpoint-to-policy page.
+pub const OFFLINE_DEVICE_POLICY_PROOF_REQUEST_MAX_BYTES: usize = 4 * 1024;
+/// Maximum consecutive finality proofs returned in one policy page.
+pub const OFFLINE_DEVICE_POLICY_PROOF_MAX_FINALITY_PROOFS: usize = 64;
+/// Maximum canonical bytes occupied by one bounded policy finality page.
+pub const OFFLINE_DEVICE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES: usize = 3 * 1024 * 1024;
+/// Defensive response bound shared by maintained mobile clients.
+pub const OFFLINE_DEVICE_POLICY_PROOF_MAX_RESPONSE_BYTES: usize =
+    iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+        + OFFLINE_DEVICE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES
+        + 64 * 1024;
+/// Stable public Norito schema name for one eligibility issuance request.
+pub const OFFLINE_DEVICE_ELIGIBILITY_REQUEST_SCHEMA_NAME: &str =
+    "iroha.torii.v1.offline.device_eligibility.request";
+/// Stable public Norito schema name for one eligibility issuance response.
+pub const OFFLINE_DEVICE_ELIGIBILITY_RESPONSE_SCHEMA_NAME: &str =
+    "iroha.torii.v1.offline.device_eligibility.response";
+/// Current authenticated eligibility issuance request/response layout.
+pub const OFFLINE_DEVICE_ELIGIBILITY_VERSION_V1: u16 = 1;
+/// Maximum canonical request bytes for one exact protected registration selector.
+pub const OFFLINE_DEVICE_ELIGIBILITY_REQUEST_MAX_BYTES: usize = 8 * 1024;
+/// Defensive response bound shared by maintained mobile clients.
+pub const OFFLINE_DEVICE_ELIGIBILITY_MAX_RESPONSE_BYTES: usize =
+    iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+        + iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1
+        + 64 * 1024;
+/// Current closed Kagemusha public-issuance status response schema.
+pub const KAGEMUSHA_PUBLIC_ISSUANCE_STATUS_SCHEMA_VERSION_V1: u16 = 1;
+/// Sole successful state emitted by the public-issuance endpoint.
+pub const KAGEMUSHA_PUBLIC_ISSUANCE_STATUS_PUBLIC_ENABLED_V1: &str = "public-enabled";
+
+/// Finalized consensus-backed Kagemusha public-issuance status.
+///
+/// The endpoint returns this shape only for a fully enabled release. Disabled, staged, expired,
+/// locally mismatched, or non-finalized states fail closed instead of being flattened into an
+/// operator-readiness boolean.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaPublicIssuanceStatusV1 {
+    /// Exact closed response schema version.
+    pub schema_version: u16,
+    /// Exact successful state; always `public-enabled`.
+    pub status: String,
+    /// Committed state height evaluated by the handler.
+    pub evaluated_height: u64,
+    /// Height whose durable Sumeragi-v2 finality artifact was verified.
+    pub finalized_height: u64,
+    /// Height at which governance committed the enable transition.
+    pub activation_committed_height: u64,
+    /// Asset definition authenticated by the enabled ABI-21 manifest.
+    pub asset_definition_id: String,
+    /// Fixed scale checked against the live asset definition.
+    pub asset_scale: u32,
+    /// Unchanged recursive proof ABI version.
+    pub recursive_proof_abi_version: u32,
+    /// Unchanged authenticated release-manifest version.
+    pub manifest_version: u16,
+    /// Original unchanged ABI-21 cash-handoff capability.
+    pub cash_handoff_capability: String,
+    /// ABI-22 eligibility-credential and one-use-signature envelope capability.
+    pub eligibility_cash_handoff_capability: String,
+    /// Native bridge ABI required to consume the eligibility envelope.
+    pub required_bridge_abi_version: u32,
+    /// Maximum peer-payment hop count enforced by native semantics.
+    pub max_hops: u32,
+    /// Lowercase SHA-256 of the exact authenticated release manifest.
+    pub release_manifest_sha256: String,
+    /// Lowercase canonical Iroha hash of the committed enable transaction intent.
+    pub activation_transaction_hash: String,
+    /// Lowercase SHA-256 of the exact governed device policy required by issuance.
+    pub governance_policy_sha256: String,
+    /// Lowercase SHA-256 of the exact canonical persisted lifecycle state.
+    pub lifecycle_state_sha256: String,
+    /// Lowercase SHA-256 of the complete frozen validator runtime projection.
+    pub runtime_effective_config_sha256: String,
+    /// Lowercase canonical Iroha hash of the exact finalized block.
+    pub finality_block_hash: String,
+}
+
+/// Request one bounded finality page beginning at a caller-owned checkpoint.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineDevicePolicyProofRequestV1 {
+    /// Request layout version.
+    pub version: u16,
+    /// Height of the externally trusted checkpoint which must begin the response chain.
+    pub trusted_checkpoint_height: u64,
+}
+
+/// A finalized device policy plus a bounded checkpoint-to-tip proof page.
+///
+/// Intermediate pages deliberately omit `policy_view`: clients first promote
+/// the returned context id durably, then request the next page. The final page
+/// carries the policy view bound to the exact last proof.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineDevicePolicyProofV1 {
+    /// Response layout version.
+    pub version: u16,
+    /// Finalized policy view, present only on the page that reaches the observed ledger tip.
+    pub policy_view: Option<OfflineDeviceAttestationPolicyViewV1>,
+    /// Consecutive finality proofs beginning at the caller's checkpoint.
+    pub finality_chain: Vec<BridgeFinalityProof>,
+    /// Context id of the last verified proof, suitable for durable checkpoint promotion.
+    pub evaluated_context_id: HeightContextId,
+    /// Height of the last proof in this page.
+    pub evaluated_block_height: u64,
+    /// Canonical lowercase hash of the evaluated committed block.
+    pub evaluated_block_hash: String,
+    /// Ledger tip observed while this page was assembled.
+    pub observed_ledger_tip_height: u64,
+    /// Whether another checkpoint-promotion request is required to reach the observed tip.
+    pub more_available: bool,
+}
+
+impl OfflineDevicePolicyProofV1 {
+    /// Verify one policy page from a caller-owned durable checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the page, chain, policy, or finality binding is
+    /// malformed, non-canonical, evaluated before finality, or inconsistent
+    /// with the trust anchor. A stale terminal policy remains verifiable so the
+    /// caller can synchronize into drain-only mode.
+    pub fn verify_against(
+        &self,
+        network_id: NetworkId,
+        trusted_checkpoint_height: u64,
+        trusted_checkpoint_context_id: [u8; 32],
+        evaluation_time_ms: u64,
+    ) -> Result<HeightContextId, String> {
+        self.validate_page_shape(trusted_checkpoint_height, evaluation_time_ms)?;
+        require_canonical_iroha_hash(
+            "trusted Offline device-policy checkpoint context id",
+            &trusted_checkpoint_context_id,
+        )?;
+        require_canonical_iroha_hash("Offline device-policy network id", network_id.as_bytes())?;
+        let evaluated_block_hash =
+            exact_lower_hex_32("evaluated_block_hash", &self.evaluated_block_hash)?;
+        require_canonical_iroha_hash("evaluated Offline policy block hash", &evaluated_block_hash)?;
+        let trusted_context = HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
+            Hash::prehashed(trusted_checkpoint_context_id),
+        ));
+        let evaluated = self.verify_finality_chain(
+            network_id,
+            trusted_checkpoint_height,
+            trusted_context,
+            evaluated_block_hash,
+        )?;
+        self.verify_terminal_policy_view(evaluated, evaluation_time_ms)?;
+        Ok(self.evaluated_context_id)
+    }
+
+    fn validate_page_shape(
+        &self,
+        trusted_checkpoint_height: u64,
+        evaluation_time_ms: u64,
+    ) -> Result<(), String> {
+        if self.version != OFFLINE_DEVICE_POLICY_PROOF_VERSION_V1
+            || trusted_checkpoint_height == 0
+            || evaluation_time_ms == 0
+            || self.evaluated_block_height == 0
+            || self.observed_ledger_tip_height < self.evaluated_block_height
+            || self.more_available
+                != (self.evaluated_block_height < self.observed_ledger_tip_height)
+            || self.policy_view.is_some() == self.more_available
+            || self.finality_chain.is_empty()
+            || self.finality_chain.len() > OFFLINE_DEVICE_POLICY_PROOF_MAX_FINALITY_PROOFS
+        {
+            return Err(
+                "unsupported Offline device-policy proof version or invalid page shape".to_owned(),
+            );
+        }
+        let finality_bytes = norito::core::encoded_frame_len(&self.finality_chain)
+            .map_err(|error| format!("device-policy finality chain encoding failed: {error}"))?;
+        if finality_bytes > OFFLINE_DEVICE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES {
+            return Err("Offline device-policy finality chain exceeds its byte bound".to_owned());
+        }
+        if self.finality_chain.windows(2).any(|pair| {
+            pair[0].finality_artifact.height.checked_add(1)
+                != Some(pair[1].finality_artifact.height)
+        }) {
+            return Err(
+                "Offline device-policy finality chain skips or reorders a height".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    fn verify_finality_chain(
+        &self,
+        network_id: NetworkId,
+        trusted_checkpoint_height: u64,
+        trusted_context: HeightContextId,
+        evaluated_block_hash: [u8; 32],
+    ) -> Result<&BridgeFinalityProof, String> {
+        let first = self
+            .finality_chain
+            .first()
+            .expect("validated non-empty policy finality chain");
+        if first.finality_artifact.height != trusted_checkpoint_height
+            || first.finality_artifact.context_id() != trusted_context
+            || first.finality_artifact.height_context.network_id != network_id
+        {
+            return Err(
+                "Offline device-policy finality chain does not begin at the caller's checkpoint"
+                    .to_owned(),
+            );
+        }
+        let mut verifier = BridgeFinalityVerifier::with_context(network_id, trusted_context);
+        for proof in &self.finality_chain {
+            verifier
+                .verify(proof)
+                .map_err(|error| format!("Offline device-policy finality chain failed: {error}"))?;
+        }
+        let evaluated = self
+            .finality_chain
+            .last()
+            .expect("validated non-empty policy finality chain");
+        let artifact = &evaluated.finality_artifact;
+        if artifact.height != self.evaluated_block_height
+            || artifact.block_hash.as_ref() != &evaluated_block_hash
+            || evaluated.block_header.height().get() != artifact.height
+            || evaluated.block_header.hash() != artifact.block_hash
+            || self.evaluated_context_id != artifact.context_id()
+        {
+            return Err("Offline device-policy page tip differs from finality".to_owned());
+        }
+        Ok(evaluated)
+    }
+
+    fn verify_terminal_policy_view(
+        &self,
+        evaluated: &BridgeFinalityProof,
+        evaluation_time_ms: u64,
+    ) -> Result<(), String> {
+        let Some(policy_view) = &self.policy_view else {
+            return Ok(());
+        };
+        policy_view
+            .validated_policy_binding_v1(evaluation_time_ms)
+            .map_err(|error| format!("finalized Offline device policy is invalid: {error}"))?;
+        let embedded: BridgeFinalityProof =
+            norito::decode_canonical(&policy_view.finality_evidence_bytes).map_err(|error| {
+                format!("Offline device-policy finality proof is not canonical: {error}")
+            })?;
+        let canonical = norito::encode_canonical(&embedded).map_err(|error| {
+            format!("Offline device-policy finality proof cannot be encoded: {error}")
+        })?;
+        if canonical != policy_view.finality_evidence_bytes
+            || embedded != *evaluated
+            || policy_view.finality.network_id
+                != evaluated.finality_artifact.height_context.network_id
+            || policy_view.finality.finalized_block_height != self.evaluated_block_height
+            || policy_view.finality.finalized_block_hash
+                != Hash::from(evaluated.finality_artifact.block_hash)
+            || policy_view.finality.finalized_block_timestamp_ms
+                != u64::try_from(evaluated.block_header.creation_time().as_millis())
+                    .unwrap_or(u64::MAX)
+        {
+            return Err(
+                "Offline device-policy view differs from the finalized page tip".to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Authenticated selector for one native-protected device registration.
+///
+/// The canonical request-signature account is authoritative. No account field
+/// is accepted in the body, preventing a caller from selecting a registration
+/// owned by another account.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineDeviceEligibilityRequestV1 {
+    /// Request layout version.
+    pub version: u16,
+    /// Original canonical registration hash used as the protected-state key.
+    pub registration_hash: [u8; 32],
+    /// Exact attested device identifier expected in protected state.
+    pub device_id: String,
+    /// Exact issuer-scoped attestation key identifier expected in protected state.
+    pub attestation_key_id: String,
+    /// Requested credential lifetime, bounded by 24 hours, policy freshness,
+    /// and native registration expiry.
+    pub requested_ttl_ms: u64,
+}
+
+/// Current typed outcome and optional issuer-signed offline spend credential.
+///
+/// `credential` is present if and only if `decision` is `eligible`. Every
+/// non-eligible admitted state is returned for wallet drain-only handling but
+/// can never be converted into an offline spend credential by this endpoint.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineDeviceEligibilityResponseV1 {
+    /// Response layout version.
+    pub version: u16,
+    /// Current native policy decision.
+    pub decision: OfflineDeviceEligibilityDecisionV1,
+    /// Configured issuer identity, returned even for drain-only outcomes.
+    pub issuer_public_key: PublicKey,
+    /// Credential usable in a peer-payment envelope only when eligible.
+    pub credential: Option<OfflineDeviceEligibilityCredentialV1>,
+    /// Finalized policy view against which the decision and credential were shaped.
+    pub policy_view: OfflineDeviceAttestationPolicyViewV1,
+    /// Original protected registration hash selected by the request.
+    pub registration_hash: [u8; 32],
+    /// Policy hash under which native consensus admitted the registration.
+    pub admission_policy_hash: [u8; 32],
+    /// Block height that admitted the protected registration.
+    pub admission_height: u64,
+    /// Canonical lowercase hash of the signed admission transaction.
+    pub admission_transaction_hash: String,
+}
+
+impl OfflineDeviceEligibilityResponseV1 {
+    /// Validate the response shape and, when eligible, the complete issuer,
+    /// policy, finality, registration, and lifetime binding of its credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed provenance hash, an unsupported stale
+    /// decision, decision/credential mismatch, or invalid signed credential.
+    /// A structurally authenticated stale/future policy view is accepted only
+    /// for `drain_only/policy_not_fresh`; eligible credentials remain fresh-only.
+    pub fn validate_v1(&self, evaluation_time_ms: u64) -> Result<(), String> {
+        self.validate_provenance_v1(evaluation_time_ms)?;
+        self.validate_decision_shape_v1()?;
+        self.validate_policy_binding_v1(evaluation_time_ms)?;
+        self.validate_credential_v1(evaluation_time_ms)
+    }
+
+    fn validate_provenance_v1(&self, evaluation_time_ms: u64) -> Result<(), String> {
+        if self.version != OFFLINE_DEVICE_ELIGIBILITY_VERSION_V1
+            || evaluation_time_ms == 0
+            || self.registration_hash == [0; 32]
+            || self.admission_policy_hash == [0; 32]
+            || self.admission_height == 0
+            || self.policy_view.finality.finalized_block_height < self.admission_height
+        {
+            return Err("invalid Offline device-eligibility response shape".to_owned());
+        }
+        let admission_transaction_hash = exact_lower_hex_32(
+            "admission_transaction_hash",
+            &self.admission_transaction_hash,
+        )?;
+        require_canonical_iroha_hash(
+            "Offline device eligibility admission transaction hash",
+            &admission_transaction_hash,
+        )
+    }
+
+    fn validate_decision_shape_v1(&self) -> Result<(), String> {
+        let rules = &self.decision.matched_rule_ids;
+        if rules.len()
+            > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_VULNERABILITY_RULES_V2
+            || rules.windows(2).any(|pair| pair[0] >= pair[1])
+            || rules.iter().any(|rule| {
+                rule.is_empty()
+                    || rule.len()
+                        > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_ID_BYTES_V2
+                    || !rule.is_ascii()
+                    || rule.trim() != rule
+                    || rule.chars().any(char::is_control)
+            })
+        {
+            return Err("Offline device eligibility decision has invalid rule identifiers".to_owned());
+        }
+        let shape_is_valid = matches!(
+            (
+                self.decision.outcome,
+                self.decision.reason,
+                rules.is_empty()
+            ),
+            (
+                DeviceEligibilityOutcome::Eligible,
+                DeviceEligibilityReason::PolicySatisfied,
+                true
+            ) | (
+                DeviceEligibilityOutcome::CryptographicallyRejected,
+                DeviceEligibilityReason::CryptographicAttestationRejected,
+                true
+            ) | (
+                DeviceEligibilityOutcome::DrainOnly,
+                DeviceEligibilityReason::PolicyNotFresh
+                    | DeviceEligibilityReason::IncompleteAttestedProperties
+                    | DeviceEligibilityReason::UnsupportedPreAndroid12Tee,
+                true
+            ) | (
+                DeviceEligibilityOutcome::DrainOnly,
+                DeviceEligibilityReason::VulnerableFirmware
+                    | DeviceEligibilityReason::PermanentlyBlockedDevice,
+                false
+            )
+        );
+        if !shape_is_valid {
+            return Err("Offline device eligibility decision shape is invalid".to_owned());
+        }
+        Ok(())
+    }
+
+    fn validate_policy_binding_v1(&self, evaluation_time_ms: u64) -> Result<(), String> {
+        let stale_drain_only = self.decision.outcome == DeviceEligibilityOutcome::DrainOnly
+            && self.decision.reason == DeviceEligibilityReason::PolicyNotFresh;
+        let policy = if stale_drain_only {
+            self.policy_view
+                .validated_policy_binding_v1(evaluation_time_ms)
+        } else {
+            self.policy_view.validated_policy_v1(evaluation_time_ms)
+        }
+        .map_err(|error| format!("finalized Offline device policy is invalid: {error}"))?;
+        if !stale_drain_only {
+            return Ok(());
+        }
+
+        let snapshot = policy.android_status_snapshot.as_ref().ok_or_else(|| {
+            "Offline device eligibility stale decision has no authenticated status snapshot"
+                .to_owned()
+        })?;
+        let snapshot_is_not_fresh = evaluation_time_ms < snapshot.response_date_ms
+            || evaluation_time_ms >= self.policy_view.freshness_deadline_ms;
+        let admission_policy_is_superseded =
+            self.admission_policy_hash != self.policy_view.policy_hash;
+        if !snapshot_is_not_fresh && !admission_policy_is_superseded {
+            return Err(
+                "Offline device eligibility policy-not-fresh decision is not supported by the finalized view or admission provenance"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_credential_v1(&self, evaluation_time_ms: u64) -> Result<(), String> {
+        match (&self.decision.outcome, &self.credential) {
+            (DeviceEligibilityOutcome::Eligible, Some(credential)) => {
+                if credential.payload.registration_hash != self.registration_hash {
+                    return Err(
+                        "Offline device eligibility credential selects a different registration"
+                            .to_owned(),
+                    );
+                }
+                credential
+                    .verify_against_policy_view_v1(
+                        &self.issuer_public_key,
+                        &self.policy_view,
+                        evaluation_time_ms,
+                    )
+                    .map_err(|error| {
+                        format!("Offline device eligibility credential is invalid: {error}")
+                    })?;
+            }
+            (DeviceEligibilityOutcome::Eligible, None) | (_, Some(_)) => {
+                return Err(
+                    "Offline device eligibility decision and credential presence disagree"
+                        .to_owned(),
+                );
+            }
+            (_, None) => {}
+        }
+        Ok(())
+    }
+}
 
 /// Decode one exact first-release wallet payment request.
 ///
@@ -455,6 +950,14 @@ fn exact_lower_hex_32(field: &str, value: &str) -> Result<[u8; 32], String> {
         .map_err(|_| format!("{field} must be canonical lowercase 32-byte hex"))?;
     Ok(decoded)
 }
+fn require_canonical_iroha_hash(label: &str, value: &[u8; 32]) -> Result<(), String> {
+    if value[31] & 1 == 0 {
+        return Err(format!(
+            "{label} must carry the canonical Iroha hash marker"
+        ));
+    }
+    Ok(())
+}
 /// Finalized anchor returned by an applied offline top-up.
 ///
 /// The underlying consensus wire type remains internally versioned, while the
@@ -615,12 +1118,63 @@ mod offline_cash_v1_api_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_data_model::{
+        block::BlockHeader,
+        offline::{
+            OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+            OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2,
+            OFFLINE_DEVICE_POLICY_FINALITY_BINDING_VERSION_V1,
+            OfflineAndroidAttestationStatusSnapshotV1, OfflineDeviceAttestationPolicy,
+            OfflineDeviceEligibilityOutcomeV1, OfflineDeviceEligibilityReasonV1,
+            OfflineDevicePolicyFinalityBindingV1,
+        },
+    };
     use std::collections::BTreeMap;
     #[derive(Debug, JsonDeserialize, JsonSerialize, PartialEq, Eq)]
     struct JsonDefaultByteMappingProbe {
         fixed: [u8; 4],
         dynamic: Vec<u8>,
         keyed: BTreeMap<[u8; 2], u8>,
+    }
+    fn public_issuance_status_fixture() -> KagemushaPublicIssuanceStatusV1 {
+        KagemushaPublicIssuanceStatusV1 {
+            schema_version: KAGEMUSHA_PUBLIC_ISSUANCE_STATUS_SCHEMA_VERSION_V1,
+            status: KAGEMUSHA_PUBLIC_ISSUANCE_STATUS_PUBLIC_ENABLED_V1.to_owned(),
+            evaluated_height: 44,
+            finalized_height: 44,
+            activation_committed_height: 41,
+            asset_definition_id: "cash#taira".to_owned(),
+            asset_scale: 2,
+            recursive_proof_abi_version: 21,
+            manifest_version: 4,
+            cash_handoff_capability: "cash_handoff_v1".to_owned(),
+            eligibility_cash_handoff_capability: "cash_handoff_eligibility_v1".to_owned(),
+            required_bridge_abi_version: 22,
+            max_hops: 8,
+            release_manifest_sha256: "11".repeat(32),
+            activation_transaction_hash: "23".repeat(32),
+            governance_policy_sha256: "33".repeat(32),
+            lifecycle_state_sha256: "44".repeat(32),
+            runtime_effective_config_sha256: "55".repeat(32),
+            finality_block_hash: "67".repeat(32),
+        }
+    }
+    #[test]
+    fn public_issuance_status_roundtrips_as_exact_closed_json() {
+        let status = public_issuance_status_fixture();
+        let json = norito::json::to_string(&status).expect("encode issuance status");
+        assert!(json.contains(r#""status":"public-enabled""#));
+        assert!(json.contains(r#""activation_transaction_hash""#));
+        assert!(!json.contains("activation_transaction_sha256"));
+        let decoded: KagemushaPublicIssuanceStatusV1 =
+            norito::json::from_str(&json).expect("decode issuance status");
+        assert_eq!(decoded, status);
+        let unknown = json.replacen('{', r#"{"operator_ready":true,"#, 1);
+        assert!(
+            norito::json::from_str::<KagemushaPublicIssuanceStatusV1>(&unknown).is_err(),
+            "unknown status fields must fail closed"
+        );
     }
     #[test]
     fn norito_json_default_byte_and_map_key_mapping_is_exact() {
@@ -652,11 +1206,99 @@ mod tests {
             "unexpected duplicate-key error"
         );
     }
+    fn stale_eligibility_response_fixture() -> OfflineDeviceEligibilityResponseV1 {
+        let response_date_ms = 1_800_000_000_000;
+        let policy = OfflineDeviceAttestationPolicy {
+            version: OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2,
+            policy_epoch: 7,
+            trusted_roots: Vec::new(),
+            revoked_certificate_tbs_sha256: Vec::new(),
+            ios_apps: Vec::new(),
+            android_apps: Vec::new(),
+            android_status_snapshot: Some(OfflineAndroidAttestationStatusSnapshotV1 {
+                version: OFFLINE_ANDROID_ATTESTATION_STATUS_SNAPSHOT_VERSION_V1,
+                payload_sha256: [0x51; 32],
+                response_date_ms,
+                last_modified_ms: Some(response_date_ms - 1_000),
+                cache_max_age_seconds: 3_600,
+                non_valid_serials: Vec::new(),
+            }),
+            android_vulnerability_rules: Vec::new(),
+            require_ios_app_policy: false,
+            require_android_app_policy: false,
+        };
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"offline eligibility response network",
+            )));
+        let evidence = b"offline eligibility response finality evidence".to_vec();
+        let finality = OfflineDevicePolicyFinalityBindingV1 {
+            version: OFFLINE_DEVICE_POLICY_FINALITY_BINDING_VERSION_V1,
+            network_id,
+            finalized_block_height: 10,
+            finalized_block_hash: Hash::new(b"offline eligibility response finalized block"),
+            finalized_block_timestamp_ms: response_date_ms,
+            finality_evidence_hash: Hash::new(&evidence),
+        };
+        let policy_view = OfflineDeviceAttestationPolicyViewV1::new_v1(
+            &policy,
+            response_date_ms + 3_600_000,
+            evidence,
+            finality,
+        )
+        .expect("build finalized stale-policy fixture");
+        let issuer = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519)
+            .expect("derive eligibility response issuer");
+        OfflineDeviceEligibilityResponseV1 {
+            version: OFFLINE_DEVICE_ELIGIBILITY_VERSION_V1,
+            decision: OfflineDeviceEligibilityDecisionV1 {
+                outcome: OfflineDeviceEligibilityOutcomeV1::DrainOnly,
+                reason: OfflineDeviceEligibilityReasonV1::PolicyNotFresh,
+                matched_rule_ids: Vec::new(),
+            },
+            issuer_public_key: issuer.public_key().clone(),
+            credential: None,
+            policy_view,
+            registration_hash: [0x71; 32],
+            admission_policy_hash: [0x72; 32],
+            admission_height: 9,
+            admission_transaction_hash: hex::encode(
+                Hash::new(b"offline eligibility admission transaction").as_ref(),
+            ),
+        }
+    }
+    #[test]
+    fn eligibility_response_authenticates_stale_and_superseded_drain_only_without_credential() {
+        let mut response = stale_eligibility_response_fixture();
+        response.admission_policy_hash = response.policy_view.policy_hash;
+        let deadline = response.policy_view.freshness_deadline_ms;
+        response
+            .validate_v1(deadline)
+            .expect("stale finalized policy must remain representable as drain-only");
+
+        assert!(
+            response.validate_v1(deadline - 1).is_err(),
+            "a current matching policy cannot claim policy-not-fresh"
+        );
+        response.admission_policy_hash = [0x72; 32];
+        response.validate_v1(deadline - 1).expect(
+            "a superseded admission policy is typed drain-only while current policy is fresh",
+        );
+        response.decision.outcome = OfflineDeviceEligibilityOutcomeV1::Eligible;
+        response.decision.reason = OfflineDeviceEligibilityReasonV1::PolicySatisfied;
+        assert!(
+            response.validate_v1(deadline - 1).is_err(),
+            "eligible always requires an issuer-signed credential"
+        );
+    }
     fn universal_capability_status() -> OfflineStatus {
         OfflineStatus {
             mandatory: false,
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
+            eligibility_cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1
+                    .to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,

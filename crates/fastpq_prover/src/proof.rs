@@ -1230,7 +1230,7 @@ fn fri_terminal_degree_bound(
     layer_lengths: &[usize],
 ) -> Result<usize> {
     let blowup = usize::try_from(blowup_factor).expect("FRI blowup factor fits usize");
-    if blowup == 0 || domain_size % blowup != 0 || layer_lengths.is_empty() {
+    if blowup == 0 || !domain_size.is_multiple_of(blowup) || layer_lengths.is_empty() {
         return Err(Error::FriDomainSize {
             length: domain_size,
             arity: blowup,

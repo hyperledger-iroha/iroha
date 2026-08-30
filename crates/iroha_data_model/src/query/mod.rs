@@ -1410,6 +1410,26 @@ mod model {
         FindDomainById(domain::prelude::FindDomainById),
         /// Fetch a non-fungible asset by identifier.
         FindNftById(nft::prelude::FindNftById),
+        /// Fetch finalized provenance for one consumed ZK-ACE replay nullifier.
+        FindPrivacyZkAceReplayNullifierV1(privacy::prelude::FindPrivacyZkAceReplayNullifierV1),
+        /// Fetch finalized typed state for one proof-managed privacy pool.
+        FindPrivacyProofManagedPoolStateV1(privacy::prelude::FindPrivacyProofManagedPoolStateV1),
+        /// Fetch finalized typed state for one governed Orchard pool.
+        FindPrivacyOrchardPoolStateV1(privacy::prelude::FindPrivacyOrchardPoolStateV1),
+        /// Fetch finalized provenance for one consumed Orchard nullifier.
+        FindPrivacyOrchardNullifierV1(privacy::prelude::FindPrivacyOrchardNullifierV1),
+        /// Fetch finalized bounded state for one Anonymous PGC pool.
+        FindPrivacyAnonymousPgcPoolStateV1(privacy::prelude::FindPrivacyAnonymousPgcPoolStateV1),
+        /// Fetch finalized provenance for one admitted ZK-AMS PHC anchor.
+        FindPrivacyZkAmsAdmissionV1(privacy::prelude::FindPrivacyZkAmsAdmissionV1),
+        /// Fetch finalized provenance for one anonymous ZK-AMS account provisioning.
+        FindPrivacyZkAmsProvisionV1(privacy::prelude::FindPrivacyZkAmsProvisionV1),
+        /// Fetch finalized provenance for one consumed ZK-X509 certificate nullifier.
+        FindPrivacyZkX509CertificateNullifierV1(
+            privacy::prelude::FindPrivacyZkX509CertificateNullifierV1,
+        ),
+        /// Fetch one finalized consensus-backed Exact12 execution receipt.
+        FindPrivacyActionExecutionReceiptV1(privacy::prelude::FindPrivacyActionExecutionReceiptV1),
         #[cfg(test)]
         #[doc(hidden)]
         __TestFallback,
@@ -1619,6 +1639,28 @@ mod model {
         Domain(crate::domain::Domain),
         /// Non-fungible asset payload.
         Nft(crate::nft::Nft),
+        /// Finalized provenance for one consumed ZK-ACE replay nullifier.
+        PrivacyZkAceReplayNullifierProvenanceV1(
+            crate::privacy::PrivacyZkAceReplayNullifierProvenanceV1,
+        ),
+        /// Finalized typed state of one FCMP++, private-IVM, or PQ-MASP pool.
+        PrivacyProofManagedPoolStateViewV1(crate::privacy::PrivacyProofManagedPoolStateViewV1),
+        /// Finalized typed state of one governed Orchard pool.
+        PrivacyOrchardPoolStateViewV1(crate::privacy::PrivacyOrchardPoolStateViewV1),
+        /// Finalized provenance for one consumed Orchard nullifier.
+        PrivacyOrchardNullifierProvenanceV1(crate::privacy::PrivacyOrchardNullifierProvenanceV1),
+        /// Finalized bounded public state of one Anonymous PGC pool.
+        PrivacyAnonymousPgcPoolStateViewV1(crate::privacy::PrivacyAnonymousPgcPoolStateViewV1),
+        /// Finalized provenance for one admitted ZK-AMS PHC anchor.
+        PrivacyZkAmsAdmissionViewV1(crate::privacy::PrivacyZkAmsAdmissionViewV1),
+        /// Finalized provenance for one anonymous ZK-AMS account provisioning.
+        PrivacyZkAmsProvisionViewV1(crate::privacy::PrivacyZkAmsProvisionViewV1),
+        /// Finalized provenance for one consumed ZK-X509 certificate nullifier.
+        PrivacyZkX509CertificateNullifierProvenanceV1(
+            crate::privacy::PrivacyZkX509CertificateNullifierProvenanceV1,
+        ),
+        /// Finalized consensus-backed receipt for one executed Exact12 action.
+        PrivacyActionExecutionReceiptViewV1(crate::privacy::PrivacyActionExecutionReceiptViewV1),
     }
     /// The results of a single iterable query request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -4264,6 +4306,15 @@ impl_singular_queries! {
     account::prelude::FindAccountByAlias => crate::account::Account,
     domain::prelude::FindDomainById => crate::domain::Domain,
     nft::prelude::FindNftById => crate::nft::Nft,
+    privacy::prelude::FindPrivacyZkAceReplayNullifierV1 => crate::privacy::PrivacyZkAceReplayNullifierProvenanceV1,
+    privacy::prelude::FindPrivacyProofManagedPoolStateV1 => crate::privacy::PrivacyProofManagedPoolStateViewV1,
+    privacy::prelude::FindPrivacyOrchardPoolStateV1 => crate::privacy::PrivacyOrchardPoolStateViewV1,
+    privacy::prelude::FindPrivacyOrchardNullifierV1 => crate::privacy::PrivacyOrchardNullifierProvenanceV1,
+    privacy::prelude::FindPrivacyAnonymousPgcPoolStateV1 => crate::privacy::PrivacyAnonymousPgcPoolStateViewV1,
+    privacy::prelude::FindPrivacyZkAmsAdmissionV1 => crate::privacy::PrivacyZkAmsAdmissionViewV1,
+    privacy::prelude::FindPrivacyZkAmsProvisionV1 => crate::privacy::PrivacyZkAmsProvisionViewV1,
+    privacy::prelude::FindPrivacyZkX509CertificateNullifierV1 => crate::privacy::PrivacyZkX509CertificateNullifierProvenanceV1,
+    privacy::prelude::FindPrivacyActionExecutionReceiptV1 => crate::privacy::PrivacyActionExecutionReceiptViewV1,
 }
 // NOTE: Query DSL projection traits are provided generically in dsl module now.
 #[cfg(test)]
@@ -4422,6 +4473,7 @@ macro_rules! queries {
     };
 }
 include!("domain_queries.rs");
+include!("privacy_queries.rs");
 pub mod sns {
     //! SNS-related query definitions.
     //!
@@ -4561,8 +4613,8 @@ pub mod prelude {
         builder::prelude::*, da::prelude::*, domain::prelude::*, dsl::prelude::*,
         endorsement::prelude::*, escrow::prelude::*, executor::prelude::*, musubi::prelude::*,
         nft::prelude::*, oracle::prelude::*, parameters::prelude::*, peer::prelude::*,
-        permission::prelude::*, role::prelude::*, rwa::prelude::*, settlement::prelude::*,
-        sorafs::prelude::*, transaction::prelude::*, trigger::prelude::*,
+        permission::prelude::*, privacy::prelude::*, role::prelude::*, rwa::prelude::*,
+        settlement::prelude::*, sorafs::prelude::*, transaction::prelude::*, trigger::prelude::*,
     };
 }
 include!("query_tail_tests.rs");

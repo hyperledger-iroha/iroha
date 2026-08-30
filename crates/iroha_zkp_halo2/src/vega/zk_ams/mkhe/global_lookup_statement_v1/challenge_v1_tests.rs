@@ -422,16 +422,18 @@ fn lookup_relation_has_literal_oracle_and_rejects_every_hostile_term() {
     assert_eq!(active_selector_v1(&point), Ok(Scalar::one()));
     assert_eq!(coordinate_zero_selector_v1(&point), Scalar::one());
     assert_eq!(fixed_table_inverse_mle_v1(z, &point), Ok(z.inverse().unwrap()));
-    assert_eq!(lookup_gate_residuals_v1(z, a, u, v, m, rhs, alpha, &rho, &point, lambda, mu, masked, rhs + masked).unwrap(), [Scalar::zero(); 3]);
-    let relation = |z,u,v,m,r,alpha,rho,point,lambda,mu| lookup_relation_residual_v1(z,u,v,m,r,alpha,rho,point,lambda,mu).unwrap();
-    assert_ne!(relation(z,u,v,m,rhs,alpha+Scalar::one(),&rho,&point,lambda,mu), Scalar::zero());
-    let mut hostile_rho=rho; hostile_rho[0]+=Scalar::one(); assert_ne!(relation(z,u,v,m,rhs,alpha,&hostile_rho,&point,lambda,mu), Scalar::zero());
-    let mut hostile_point=point; hostile_point[0]=Scalar::from_u64(2); assert_ne!(relation(z,u,v,m,rhs,alpha,&rho,&hostile_point,lambda,mu), Scalar::zero());
-    for changed in [relation(z,u,v,m,rhs,alpha,&rho,&point,lambda+Scalar::one(),mu), relation(z,u,v,m,rhs,alpha,&rho,&point,lambda,mu+Scalar::one()), relation(z,u,v+Scalar::one(),m,rhs,alpha,&rho,&point,lambda,mu), relation(z,u+Scalar::one(),v,m,rhs,alpha,&rho,&point,lambda,mu), relation(z,u,v,m+Scalar::one(),rhs,alpha,&rho,&point,lambda,mu), relation(z+Scalar::one(),u,v,m,rhs,alpha,&rho,&point,lambda,mu)] { assert_ne!(changed, Scalar::zero()); }
+    let relation = LookupRelationEvaluationV1 { z, inverse: u, inverse_product: v, multiplicity: m, residual: rhs, alpha, rho: &rho, point: &point, lambda, mu };
+    let gate = |relation, candidate, public_claim| lookup_gate_residuals_v1(LookupGateEvaluationV1 { relation, candidate, masked_accumulator: masked, public_claim }).unwrap();
+    assert_eq!(gate(relation, a, rhs + masked), [Scalar::zero(); 3]);
+    let residual = |evaluation| lookup_relation_residual_v1(evaluation).unwrap();
+    assert_ne!(residual(LookupRelationEvaluationV1 { alpha: alpha+Scalar::one(), ..relation }), Scalar::zero());
+    let mut hostile_rho=rho; hostile_rho[0]+=Scalar::one(); assert_ne!(residual(LookupRelationEvaluationV1 { rho: &hostile_rho, ..relation }), Scalar::zero());
+    let mut hostile_point=point; hostile_point[0]=Scalar::from_u64(2); assert_ne!(residual(LookupRelationEvaluationV1 { point: &hostile_point, ..relation }), Scalar::zero());
+    for changed in [residual(LookupRelationEvaluationV1 { lambda: lambda+Scalar::one(), ..relation }), residual(LookupRelationEvaluationV1 { mu: mu+Scalar::one(), ..relation }), residual(LookupRelationEvaluationV1 { inverse_product: v+Scalar::one(), ..relation }), residual(LookupRelationEvaluationV1 { inverse: u+Scalar::one(), ..relation }), residual(LookupRelationEvaluationV1 { multiplicity: m+Scalar::one(), ..relation }), residual(LookupRelationEvaluationV1 { z: z+Scalar::one(), ..relation })] { assert_ne!(changed, Scalar::zero()); }
     let hostile_table_rhs = alpha * -Scalar::one() * (v - Scalar::one()) + lambda * (u - m * (z-Scalar::one()).inverse().unwrap()) + mu * (m-Scalar::one());
-    assert_ne!(relation(z,u,v,m,hostile_table_rhs,alpha,&rho,&point,lambda,mu), Scalar::zero());
-    assert_ne!(lookup_gate_residuals_v1(z,a+Scalar::one(),u,v,m,rhs,alpha,&rho,&point,lambda,mu,masked,rhs+masked).unwrap()[0], Scalar::zero());
-    assert_ne!(lookup_gate_residuals_v1(z,a,u,v,m,rhs,alpha,&rho,&point,lambda,mu,masked,rhs+masked+Scalar::one()).unwrap()[2], Scalar::zero());
+    assert_ne!(residual(LookupRelationEvaluationV1 { residual: hostile_table_rhs, ..relation }), Scalar::zero());
+    assert_ne!(gate(relation, a+Scalar::one(), rhs+masked)[0], Scalar::zero());
+    assert_ne!(gate(relation, a, rhs+masked+Scalar::one())[2], Scalar::zero());
     assert_eq!(coefficient_gate_residuals_v1(Scalar::from_u64(3), Scalar::from_u64(5), Scalar::from_u64(15), Scalar::from_u64(7), Scalar::from_u64(22)), [Scalar::zero(); 2]);
     assert_eq!(mask_constraint_residuals_v1(14, Scalar::from_u64(5), Scalar::from_u64(7), Scalar::from_u64(12), Scalar::from_u64(99)).unwrap(), [Scalar::zero(); 2]);
     assert_eq!(mask_constraint_residuals_v1(7, Scalar::zero(), Scalar::zero(), Scalar::zero(), Scalar::zero()), Err(GlobalLookupErrorV1::Shape));

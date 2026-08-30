@@ -1,7 +1,8 @@
 //! Deterministic, non-shipping native privacy release evidence.
 //!
 //! This module is deliberately behind the non-default `privacy-release-evidence` feature. It is
-//! compiled only into explicit release runners and opt-in integration gates, never into `irohad`.
+//! compiled into explicit release runners, opt-in integration gates, and only the explicitly
+//! feature-selected non-shipping `irohad` canary binary. It is never present in the default daemon.
 //! The deterministic entropy below is suitable only for reproducible release fixtures; neither its
 //! seed nor any witness byte is exposed by the public evidence types. Canonical proof bytes do
 //! cross the release-evidence boundary so release gates can authenticate, persist, and
@@ -9,18 +10,22 @@
 mod network_actions;
 mod retained_native;
 mod vega;
+mod zk_ace_network_receipt;
 mod zk_x509;
+mod zk_x509_worker;
 pub use network_actions::{
     PrivacyReleaseAnonymousPgcNetworkActionV1, PrivacyReleaseBootleLanternNetworkActionV1,
     PrivacyReleaseFcmpNetworkActionV1, PrivacyReleaseIvmPrivateNoteNetworkActionV1,
     PrivacyReleaseJindoNetworkActionV1, PrivacyReleaseOrchardNetworkActionV1,
-    PrivacyReleasePqMaspNetworkActionsV1, PrivacyReleaseTransactionContextV1,
-    PrivacyReleaseVeRangeNetworkActionV1, PrivacyReleaseVegaNetworkActionV1,
-    PrivacyReleaseZkAceNetworkActionV1, build_privacy_release_anonymous_pgc_network_action_v1,
+    PrivacyReleaseOrchardNetworkActionsV1, PrivacyReleasePqMaspNetworkActionsV1,
+    PrivacyReleaseTransactionContextV1, PrivacyReleaseVeRangeNetworkActionV1,
+    PrivacyReleaseVegaNetworkActionV1, PrivacyReleaseZkAceNetworkActionV1,
+    build_privacy_release_anonymous_pgc_network_action_v1,
     build_privacy_release_bootle_lantern_network_action_v1,
     build_privacy_release_fcmp_network_action_v1,
     build_privacy_release_ivm_private_note_network_action_v1,
     build_privacy_release_jindo_network_action_v1, build_privacy_release_orchard_network_action_v1,
+    build_privacy_release_orchard_network_actions_v1,
     build_privacy_release_pq_masp_network_actions_v1, build_privacy_release_vega_network_action_v1,
     build_privacy_release_verange_network_action_v1,
     build_privacy_release_zk_ace_network_action_v1,
@@ -36,6 +41,16 @@ use vega::{
 use vega::{
     VEGA_RELEASE_MC_MAX_CIRCUIT_VARIABLES_V1, VEGA_RELEASE_MC_RELAXED_SUMCHECK_ROUNDS_V1,
     VEGA_RELEASE_MC_TOTAL_APP_CONSTRAINTS_V1, run_vega_stage_v1,
+};
+pub use zk_ace_network_receipt::{
+    PRIVACY_ZK_ACE_NETWORK_SEMANTIC_ACTIVATION_NOTICE_BLOCKS_V1,
+    PRIVACY_ZK_ACE_NETWORK_SEMANTIC_RECEIPT_MAX_BYTES_V1,
+    PRIVACY_ZK_ACE_NETWORK_SEMANTIC_RECEIPT_VERSION_V1,
+    PRIVACY_ZK_ACE_NETWORK_SEMANTIC_VALIDATOR_COUNT_V1, PrivacyZkAceActivationReceiptV1,
+    PrivacyZkAceAppliedTransferReceiptV1, PrivacyZkAceCanonicalTransactionAnchorV1,
+    PrivacyZkAceNetworkSemanticCorridorV1, PrivacyZkAceNetworkSemanticReceiptV1,
+    PrivacyZkAceRejectedReplayReceiptV1, PrivacyZkAceReplayRejectionKindV1,
+    PrivacyZkAceValidatorReplayObservationV1,
 };
 use zk_x509::run_zk_x509_stage_v1;
 pub use zk_x509::{
@@ -53,6 +68,13 @@ pub use zk_x509::{
 #[cfg(test)]
 use zk_x509::{
     ZK_X509_RELEASE_PUBLIC_MATERIAL_DOMAIN_V1, zk_x509_release_public_statement_material_v1,
+};
+pub use zk_x509_worker::{
+    PRIVACY_ZK_X509_WORKER_ACTION_INDEX_V1, PRIVACY_ZK_X509_WORKER_PROTOCOL_VERSION_V1,
+    PRIVACY_ZK_X509_WORKER_PUBLIC_REQUEST_VERSION_V1, PrivacyZkX509WorkerActionV1,
+    PrivacyZkX509WorkerErrorV1, PrivacyZkX509WorkerPublicRequestV1,
+    PrivacyZkX509WorkerReleasePinsV1, build_signed_privacy_zk_x509_worker_action_v1,
+    privacy_zk_x509_worker_release_pins_v1, validate_privacy_zk_x509_worker_inputs_v1,
 };
 fn release_network_id_from_genesis_hash(hash: [u8; 32]) -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -125,7 +147,8 @@ use crate::privacy_engines::{
         VEGA_MDL_PUBLIC_INPUT_COUNT_V1, VEGA_PRIVACY_ACTION_INDEX_V1, VegaMdlConsensusBindingV1,
         VegaMdlWitnessV1, VegaPrivacyActionPublicInputV1, VegaPrivacyActionTransactionContextV1,
         VegaPrivacyActionWitnessMaterialV1, derive_device_authentication_digest_v1,
-        prepare_vega_privacy_action_with_rng_v1, prove_mdl_figure9_v1, verify_mdl_figure9_v1,
+        prepare_vega_release_candidate_privacy_action_with_rng_v1, prove_mdl_figure9_v1,
+        verify_mdl_figure9_v1,
     },
     verange::{
         MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1, MAX_VERANGE_TYPE1_BATCH_PROOF_BYTES_V1,
@@ -133,8 +156,8 @@ use crate::privacy_engines::{
         verify_batch_encoded,
     },
     zk_ace::{
-        ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, ZkAcePrivacyWitnessV1, prove_zk_ace_privacy_v1_with_rng,
-        verify_zk_ace_privacy_v1,
+        ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, ZkAcePrivacyWitnessV1,
+        prove_zk_ace_release_candidate_v2_with_rng, verify_zk_ace_release_candidate_v2,
     },
     zk_ace_stark::{QUERY_COUNT as ZK_ACE_QUERY_COUNT_V1, TRACE_LOG2 as ZK_ACE_TRACE_LOG2_V1},
     zk_ams::{
@@ -143,14 +166,14 @@ use crate::privacy_engines::{
         ZK_AMS_PRIVACY_ACTION_INDEX_V1, ZkAmsBatchCredentialWitnessV1,
         ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionEffectV1, ZkAmsPrivacyActionGovernanceV1,
         ZkAmsPrivacyActionTransactionContextV1, ZkAmsSeedSecretV1,
-        prepare_zk_ams_batch_admission_privacy_action_with_rng_v1,
-        prepare_zk_ams_provision_account_transaction_intent_v1,
-        prepare_zk_ams_provision_privacy_action_with_rng_v1,
+        prepare_zk_ams_batch_admission_release_candidate_privacy_action_with_rng_v1,
+        prepare_zk_ams_provision_account_release_candidate_transaction_intent_v1,
+        prepare_zk_ams_provision_release_candidate_privacy_action_with_rng_v1,
         sign_prepared_zk_ams_privacy_action_v1,
-        validate_zk_ams_privacy_action_transaction_intent_v1, verify_zk_ams_batch_admission_v1,
-        verify_zk_ams_provision_statement_v1, zk_ams_batch_admission_adversarial_wires_v1,
-        zk_ams_generator_digest_v1, zk_ams_key_image_v1, zk_ams_registry_transition_root_v1,
-        zk_ams_seed_public_key_v1,
+        validate_zk_ams_release_candidate_privacy_action_transaction_intent_v1,
+        verify_zk_ams_batch_admission_release_candidate_v1, verify_zk_ams_provision_statement_v1,
+        zk_ams_batch_admission_adversarial_wires_v1, zk_ams_generator_digest_v1,
+        zk_ams_key_image_v1, zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
     },
     zk_x509::{
         engine::{prove_zk_x509_credential_proof_v1_with_rng, verify_zk_x509_credential_proof_v1},
@@ -167,6 +190,8 @@ use crate::privacy_engines::{
 use crate::{
     privacy_profiles::{
         CompiledPrivacyProfileV1, compiled_privacy_profile_v1,
+        vega_release_candidate_profile_material_v1, zk_ace_release_candidate_profile_material_v2,
+        zk_ams_release_candidate_profile_material_v1,
         zk_x509_release_candidate_profile_material_v1,
     },
     privacy_state::{PrivacyZkX509AuthoritativeStateV1, compute_privacy_pgc_account_state_root_v1},
@@ -174,6 +199,7 @@ use crate::{
         PrivacyVerificationContextV1, PrivacyVerificationErrorV1, PrivacyZkX509VerificationStateV1,
         VerifiedPrivacyLedgerEffectsV1, VerifiedZkX509CertificateEffectV1,
         validate_vega_authoritative_issuer_binding_v1, verify_privacy_envelope_v1,
+        verify_vega_release_candidate_envelope_v1, verify_zk_ams_release_candidate_envelope_v1,
         verify_zk_x509_release_candidate_envelope_v1,
     },
 };
@@ -1238,6 +1264,72 @@ pub fn validate_privacy_release_proof_artifacts_v1(
     }
     true
 }
+/// Validate one complete stage artifact against the closed exact-12 schedule.
+///
+/// This is the admission boundary used by offline release controllers before
+/// an evidence archive is hashed or compared with a reviewed source pin. It
+/// re-derives every field that is fixed by the protocol/case coordinate and
+/// rejects a merely well-formed receipt with substituted descriptors,
+/// resource ceilings, artifact order, or expected-failure semantics.
+/// It does not replace native proof regeneration: the stage archive retains a
+/// public-statement digest rather than secret-bearing fixture material, so a
+/// release controller must also reproduce the exact stage through
+/// [`run_privacy_release_stage_v1`] in an isolated process and compare the
+/// complete canonical archive byte-for-byte.
+#[must_use]
+pub fn validate_privacy_release_stage_evidence_v1(
+    evidence: &PrivacyReleaseStageEvidenceV1,
+) -> bool {
+    let expected_failure_class = match evidence.case_kind {
+        PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd
+        | PrivacyReleaseCaseKindV1::MaximumShapeResource => {
+            PrivacyReleaseFailureClassV1::NotApplicable
+        }
+        PrivacyReleaseCaseKindV1::PublicStatementBindingMutation => {
+            PrivacyReleaseFailureClassV1::PublicStatementBindingRejected
+        }
+        PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation => {
+            PrivacyReleaseFailureClassV1::CanonicalWireCorruptionAndTruncationRejected
+        }
+    };
+    let Some(expected_resources) =
+        privacy_release_resource_facts_v1(evidence.protocol_id, evidence.case_kind)
+    else {
+        return false;
+    };
+
+    evidence.schema_version == PRIVACY_RELEASE_EVIDENCE_SCHEMA_VERSION_V1
+        && evidence.stage_ordinal
+            == privacy_release_stage_ordinal_v1(evidence.protocol_id, evidence.case_kind)
+        && evidence.protocol_descriptor
+            == privacy_release_protocol_descriptor_v1(evidence.protocol_id)
+        && evidence.public_statement_sha256 != [0; 32]
+        && evidence.failure_class == expected_failure_class
+        && evidence.resources == expected_resources
+        && evidence.resources.validate()
+        && validate_privacy_release_proof_artifacts_v1(
+            evidence.protocol_id,
+            evidence.case_kind,
+            &evidence.proof_artifacts,
+        )
+}
+/// Return the reviewed-pin digest for one fully validated stage artifact.
+///
+/// The digest is SHA-256 over the canonical Norito archive, exactly matching
+/// the ZK-ACE source-pin contract. Invalid or non-canonical stage semantics do
+/// not produce a candidate pin. A digest becomes reviewed evidence only after
+/// the isolated native-regeneration comparison described by
+/// [`validate_privacy_release_stage_evidence_v1`].
+#[must_use]
+pub fn privacy_release_stage_evidence_sha256_v1(
+    evidence: &PrivacyReleaseStageEvidenceV1,
+) -> Option<[u8; 32]> {
+    if !validate_privacy_release_stage_evidence_v1(evidence) {
+        return None;
+    }
+    let canonical = norito::encode_canonical(evidence).ok()?;
+    Some(sha256_v1(&canonical))
+}
 /// Execute one mandatory native prove/verify or adversarial stage.
 ///
 /// The selected engine must perform its public production prover and verifier path. Missing
@@ -1400,7 +1492,7 @@ pub fn run_privacy_release_stage_v1(
             class: PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant,
         });
     }
-    Ok(PrivacyReleaseStageEvidenceV1 {
+    let evidence = PrivacyReleaseStageEvidenceV1 {
         schema_version: PRIVACY_RELEASE_EVIDENCE_SCHEMA_VERSION_V1,
         stage_ordinal: privacy_release_stage_ordinal_v1(protocol_id, case_kind),
         protocol_id,
@@ -1410,7 +1502,15 @@ pub fn run_privacy_release_stage_v1(
         proof_artifacts,
         failure_class: material.failure_class,
         resources: material.resources,
-    })
+    };
+    if !validate_privacy_release_stage_evidence_v1(&evidence) {
+        return Err(PrivacyReleaseEvidenceErrorV1 {
+            protocol_id,
+            case_kind,
+            class: PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant,
+        });
+    }
+    Ok(evidence)
 }
 struct ProofArtifactMaterialV1 {
     proof: Vec<u8>,
@@ -1495,9 +1595,9 @@ fn run_zk_ace_stage_v1(
         PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
         case_kind,
     ));
-    let proof = prove_zk_ace_privacy_v1_with_rng(&public_inputs, &witness, &mut rng)
+    let proof = prove_zk_ace_release_candidate_v2_with_rng(&public_inputs, &witness, &mut rng)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
-    verify_zk_ace_privacy_v1(&public_inputs, &proof, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1)
+    verify_zk_ace_release_candidate_v2(&public_inputs, &proof, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
     let trace_rows = 1_u64
         .checked_shl(u32::from(ZK_ACE_TRACE_LOG2_V1))
@@ -1549,8 +1649,12 @@ fn run_zk_ace_stage_v1(
                 &malformed_version,
                 &malformed_statement,
             ] {
-                if verify_zk_ace_privacy_v1(mutation, &proof, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1)
-                    .is_ok()
+                if verify_zk_ace_release_candidate_v2(
+                    mutation,
+                    &proof,
+                    ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
+                )
+                .is_ok()
                 {
                     return Err(
                         PrivacyReleaseEvidenceErrorClassV1::PublicStatementMutationAccepted,
@@ -1569,7 +1673,7 @@ fn run_zk_ace_stage_v1(
                 .first_mut()
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
             *first ^= 0x80;
-            if verify_zk_ace_privacy_v1(
+            if verify_zk_ace_release_candidate_v2(
                 &public_inputs,
                 &corrupt_header,
                 ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
@@ -1584,7 +1688,7 @@ fn run_zk_ace_stage_v1(
                 .get_mut(middle)
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
             *middle_byte ^= 0x01;
-            if verify_zk_ace_privacy_v1(
+            if verify_zk_ace_release_candidate_v2(
                 &public_inputs,
                 &tampered,
                 ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
@@ -1596,7 +1700,7 @@ fn run_zk_ace_stage_v1(
             let truncated = proof
                 .get(..proof.len().saturating_sub(1))
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-            if verify_zk_ace_privacy_v1(
+            if verify_zk_ace_release_candidate_v2(
                 &public_inputs,
                 truncated,
                 ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
@@ -1635,13 +1739,8 @@ fn zk_ace_fixture_v1()
     let asset_name = "zkace"
         .parse()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
-        .map_err(|error| match error {
-            crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                ..
-            } => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
-            _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
-        })?;
+    let profile = zk_ace_release_candidate_profile_material_v2()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let statement = ZkAcePqAuthorizationStatementV1 {
         context: release_statement_context_from_compiled_profile_v1(
             &profile,
@@ -2883,12 +2982,12 @@ fn run_zk_ams_stage_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     };
     let provision_context = zk_ams_provision_transaction_context_v1()?;
-    let admission_intent = validate_zk_ams_privacy_action_transaction_intent_v1(
+    let admission_intent = validate_zk_ams_release_candidate_privacy_action_transaction_intent_v1(
         &zk_ams_admission_transaction_context_v1()?,
         &admission.statement,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let provision_intent = validate_zk_ams_privacy_action_transaction_intent_v1(
+    let provision_intent = validate_zk_ams_release_candidate_privacy_action_transaction_intent_v1(
         &provision_context,
         &expected_statement,
     )
@@ -2897,7 +2996,7 @@ fn run_zk_ams_stage_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     let mut rng = EvidenceRng06::new(stage_seed_v1(PrivacyProtocolIdV1::IrohaZkAmsV1, case_kind));
-    let prepared = prepare_zk_ams_provision_privacy_action_with_rng_v1(
+    let prepared = prepare_zk_ams_provision_release_candidate_privacy_action_with_rng_v1(
         provision_context,
         governance,
         provision_action,
@@ -2979,7 +3078,7 @@ fn run_zk_ams_stage_v1(
             };
             batch.next_account_registry_root = PrivacyRootV1::new([0x39; 32]);
             let mutated_admission_binding = zk_ams_binding_v1(&mutated_admission)?;
-            if verify_zk_ams_batch_admission_v1(
+            if verify_zk_ams_batch_admission_release_candidate_v1(
                 &mutated_admission,
                 &mutated_admission_binding,
                 &admission.proof,
@@ -3023,7 +3122,7 @@ fn run_zk_ams_stage_v1(
             let mut wrong_network = admission.statement.clone();
             wrong_network.context.network_id = release_network_id_from_genesis_hash([0x12; 32]);
             let wrong_network_binding = zk_ams_binding_v1(&wrong_network)?;
-            if verify_zk_ams_batch_admission_v1(
+            if verify_zk_ams_batch_admission_release_candidate_v1(
                 &wrong_network,
                 &wrong_network_binding,
                 &admission.proof,
@@ -3084,7 +3183,7 @@ fn run_zk_ams_stage_v1(
                 .first_mut()
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
             *first ^= 0x80;
-            if verify_zk_ams_batch_admission_v1(
+            if verify_zk_ams_batch_admission_release_candidate_v1(
                 &admission.statement,
                 &admission_binding,
                 &corrupt_batch_header,
@@ -3109,7 +3208,7 @@ fn run_zk_ams_stage_v1(
                 .get_mut(interior_index)
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
             *interior ^= 0x01;
-            if verify_zk_ams_batch_admission_v1(
+            if verify_zk_ams_batch_admission_release_candidate_v1(
                 &admission.statement,
                 &admission_binding,
                 &corrupt_batch_interior,
@@ -3132,7 +3231,7 @@ fn run_zk_ams_stage_v1(
                 .proof
                 .get(..admission.proof.len().saturating_sub(1))
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-            if verify_zk_ams_batch_admission_v1(
+            if verify_zk_ams_batch_admission_release_candidate_v1(
                 &admission.statement,
                 &admission_binding,
                 truncated_batch,
@@ -3157,7 +3256,7 @@ fn run_zk_ams_stage_v1(
             )
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
             {
-                if verify_zk_ams_batch_admission_v1(
+                if verify_zk_ams_batch_admission_release_candidate_v1(
                     &admission.statement,
                     &admission_binding,
                     &malformed_batch,
@@ -3195,7 +3294,7 @@ fn run_zk_ams_stage_v1(
                 return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
             }
             for malformed_batch in submax_malformed {
-                if verify_zk_ams_batch_admission_v1(
+                if verify_zk_ams_batch_admission_release_candidate_v1(
                     &submax_admission.statement,
                     &submax_binding,
                     &malformed_batch,
@@ -3221,7 +3320,7 @@ fn run_zk_ams_stage_v1(
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
             let mut oversized_batch = vec![0_u8; oversized_batch_len];
             oversized_batch[0] = 1;
-            if verify_zk_ams_batch_admission_v1(
+            if verify_zk_ams_batch_admission_release_candidate_v1(
                 &admission.statement,
                 &admission_binding,
                 &oversized_batch,
@@ -3675,7 +3774,7 @@ fn zk_ams_admission_lineage_material_v1(
         case_kind,
         &proof_purpose,
     )?);
-    let prepared = prepare_zk_ams_batch_admission_privacy_action_with_rng_v1(
+    let prepared = prepare_zk_ams_batch_admission_release_candidate_privacy_action_with_rng_v1(
         zk_ams_admission_transaction_context_v1()?,
         governance,
         action,
@@ -3688,7 +3787,7 @@ fn zk_ams_admission_lineage_material_v1(
     let (statement, proof) =
         zk_ams_prepared_release_material_v1(prepared, ZkAmsPrivacyActionEffectV1::BatchAdmission)?;
     let binding = zk_ams_binding_v1(&statement)?;
-    let effect = verify_zk_ams_batch_admission_v1(&statement, &binding, &proof)
+    let effect = verify_zk_ams_batch_admission_release_candidate_v1(&statement, &binding, &proof)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
     let authoritative_network_id =
         release_network_id_from_genesis_hash(ZK_AMS_RELEASE_GENESIS_HASH_V1);
@@ -3857,7 +3956,7 @@ fn zk_ams_provision_statement_v1(
         account_id: privacy_release_account_v1(40)?,
         key_image: PrivacyZkAmsKeyImageV1::new(key_image),
     };
-    prepare_zk_ams_provision_account_transaction_intent_v1(
+    prepare_zk_ams_provision_account_release_candidate_transaction_intent_v1(
         &zk_ams_provision_transaction_context_v1()?,
         governance,
         action,
@@ -3910,7 +4009,7 @@ fn verify_zk_ams_release_production_envelope_v1(
     genesis_hash: [u8; 32],
     authoritative_action_index: u32,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
+    let profile = zk_ams_release_candidate_profile_material_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
         PrivacyActiveLifecycleV1 {
@@ -3946,7 +4045,7 @@ fn verify_zk_ams_release_production_envelope_v1(
         proof: PrivacyProofV1::IrohaZkAmsV1(action_proof),
     };
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let effects = verify_privacy_envelope_v1(
+    let effects = verify_zk_ams_release_candidate_envelope_v1(
         &envelope,
         PrivacyVerificationContextV1 {
             activation: &activation,

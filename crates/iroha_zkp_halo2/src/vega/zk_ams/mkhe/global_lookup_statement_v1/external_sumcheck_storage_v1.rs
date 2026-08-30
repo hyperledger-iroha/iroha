@@ -15,7 +15,7 @@ use crate::vega::{
     sponge::Keccak256,
 };
 use core::convert::Infallible;
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
@@ -764,14 +764,16 @@ fn validate_message_v1(message: &[u8; 96]) -> Result<(), ExternalStorageErrorV1>
     }
     Ok(())
 }
-fn map_spool_v1(_: iroha_confidential_spool::ConfidentialSpoolErrorV1) -> ExternalStorageErrorV1 {
+fn map_spool_v1(
+    _: iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1,
+) -> ExternalStorageErrorV1 {
     ExternalStorageErrorV1::Spool
 }
 #[path = "external_sumcheck_storage_v1/m_table_oracle_v1.rs"]
 mod m_table_oracle_v1;
 pub(super) use m_table_oracle_v1::{
     EvaluatedGlobalRoundV1, GlobalCubicCompleteV1, GlobalCubicOracleV1, GlobalCubicPrefixReadyV1,
-    MOracleErrorV1, OracleTransitionV1, begin_global_cubic_oracle_v1,
+    MOracleErrorV1, OracleAxesV1, OracleTransitionV1, begin_global_cubic_oracle_v1,
 };
 #[cfg(test)]
 pub(super) use m_table_oracle_v1::{

@@ -13,11 +13,14 @@ pin the exact cryptographic contract.
 ## Universal capability contract
 
 Offline cash is a wallet and device protocol, not a validator deployment mode.
-Every Iroha deployment exposes the ABI-21/V4 and `cash_handoff_v1` surfaces
-needed to build an offline user experience. Operators do not enable that
-capability per node, asset, domain, dataspace, or routing container. In particular,
-there is no `settlement.offline.enabled` switch, `offline.enabled` asset
-metadata, configured escrow catalog, or offline-specific startup/readiness
+Every Iroha deployment exposes the unchanged ABI-21/V4 `cash_handoff_v1`
+payment proof and the separately advertised ABI-22
+`cash_handoff_eligibility_v1` peer envelope needed to build an offline user
+experience. The universal status exposes both values in distinct fields;
+clients reject omission, substitution, or conflation. Operators do not enable
+that capability per node, asset, domain, dataspace, or routing container. In
+particular, there is no `settlement.offline.enabled` switch, `offline.enabled`
+asset metadata, configured escrow catalog, or offline-specific startup/readiness
 gate.
 
 Applications decide whether to expose offline load, pay, receive, receipt, and
@@ -138,20 +141,28 @@ The receiver creates a nonce-bound payment request containing its output
 commitment, exact amount, asset, scale, verifier generation, and expiry. The
 sender authenticates the request, creates recipient and optional change
 outputs, proves and locally verifies the transition, then performs the
-`cash_handoff_v1` boundary atomically: it irreversibly consumes the selected
-parents and durably binds/signs the exact outgoing payment before exposing any
-payment byte to a receiver-capable transport.
+underlying `cash_handoff_v1` boundary atomically: it irreversibly consumes the
+selected parents and durably binds/signs the exact outgoing payment before
+exposing any payment byte to a receiver-capable transport.
 
-The peer payload contains the recipient's opaque proof bundle and the exact
-proof-bound, secret-free membership witness required for its next spend. Replay
-identity remains derived only from the recipient bundle's authenticated split
-transition. The payload never carries a spend key, sender change, or local key
+The transmitted `cash_handoff_eligibility_v1` envelope wraps that unchanged V4
+payment, the sender's current finalized eligibility credential, and an
+operation-bound one-use device signature. The credential is bound to the
+device and assertion keys, NetworkId, policy epoch and hash, issuer, and
+finality evidence, and expires no later than 24 hours after issuance. The
+operation signature cannot authorize a second handoff. The nested peer payload
+contains the recipient's opaque proof bundle and the exact proof-bound,
+secret-free membership witness required for its next spend. Replay identity
+remains derived only from the recipient bundle's authenticated split
+transition. Neither layer carries a spend key, sender change, or local key
 reference.
 
-The receiver runs `verifySpendV4` and checks the signed request, exact network,
-asset, scale, exact amount, recipient commitment, hop limit, verifier activation
-window, finalized top-up origin, recursive proof validity, and branch
-disjointness. It atomically persists the received note before signing a durable
+The receiver first verifies the eligibility credential and one-use device
+signature against its latest cached finalized policy, then runs `verifySpendV4`
+and checks the signed request, exact network, asset, scale, exact amount,
+recipient commitment, hop limit, verifier activation window, finalized top-up
+origin, recursive proof validity, and branch disjointness. It atomically
+persists the received note before signing a durable
 acknowledgement receipt. The receipt is evidence only, not acceptance or a
 sender commit gate. Missing, invalid, or lost acknowledgements never unspend,
 roll back, replace, or claw back the exact outgoing payment. Duplicate delivery

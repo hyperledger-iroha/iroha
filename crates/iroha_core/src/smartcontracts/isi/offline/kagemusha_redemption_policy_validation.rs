@@ -108,6 +108,16 @@ fn authenticate_registered_kagemusha_v2_device_against_policy(
     release_policy: &OfflineDeviceAttestationPolicy,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<KagemushaAuthenticatedDeviceV1, Error> {
+    if matches!(
+        authorization.hardware_assertion,
+        KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_)
+    ) {
+        return Err(labeled_invariant(
+            "invalid_authorization",
+            "drain-only account authority is valid only for same-account redemption",
+        )
+        .into());
+    }
     if &authorization.asset_definition_id != asset {
         return Err(labeled_invariant(
             "invalid_authorization",
@@ -239,6 +249,13 @@ fn authenticate_registered_kagemusha_v2_device_against_policy(
                 sign_count: authenticator_data.sign_count,
             }
         }
+        (KagemushaOnlineHardwareAssertionV1::AccountAuthorityDrainOnly(_), _) => {
+            return Err(labeled_invariant(
+                "invalid_authorization",
+                "drain-only account authority cannot consume a device registration",
+            )
+            .into());
+        }
         _ => {
             return Err(labeled_invariant(
                 "invalid_attestation",
@@ -254,6 +271,96 @@ fn authenticate_registered_kagemusha_v2_device_against_policy(
         consumption: assertion_consumption(authorization)?,
         assertion,
     })
+}
+
+fn authenticate_kagemusha_drain_only_redemption_policy(
+    authorization: &KagemushaRequestAuthorizationV2,
+    binding: &KagemushaDrainOnlyRedemptionPolicyBindingV1,
+    asset: &AssetDefinitionId,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    if &authorization.asset_definition_id != asset || authorization.registration_hash != [0; 32] {
+        return Err(labeled_invariant(
+            "invalid_authorization",
+            "drain-only redemption changed its asset or zero registration sentinel",
+        )
+        .into());
+    }
+    let Some(signatory) = authorization.authority.try_signatory() else {
+        return Err(labeled_invariant(
+            "invalid_authorization",
+            "drain-only redemption requires one exact single-key account authority",
+        )
+        .into());
+    };
+    if !matches!(signatory.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        return Err(labeled_invariant(
+            "invalid_authorization",
+            "drain-only redemption requires an Ed25519 account authority",
+        )
+        .into());
+    }
+    binding
+        .validate(authorization.issued_at_ms, authorization.expires_at_ms)
+        .map_err(|error| labeled_invariant("invalid_authorization", error.to_string()))?;
+
+    let policy = effective_offline_device_attestation_policy(state_transaction)?;
+    validate_offline_attestation_policy(&policy, state_transaction.block_unix_timestamp_ms())?;
+    let policy_hash = canonical_offline_device_attestation_policy_hash(&policy)?;
+    let snapshot = policy.android_status_snapshot.as_ref().ok_or_else(|| {
+        labeled_invariant(
+            "attestation_policy_missing",
+            "drain-only redemption requires a current authenticated Android status snapshot",
+        )
+    })?;
+    let freshness_deadline_ms = snapshot
+        .response_date_ms
+        .checked_add(u64::from(snapshot.cache_max_age_seconds) * 1_000)
+        .ok_or_else(|| {
+            labeled_invariant(
+                "attestation_policy_invalid",
+                "drain-only redemption policy freshness deadline overflowed",
+            )
+        })?;
+    if binding.policy_epoch != policy.policy_epoch
+        || binding.policy_hash != policy_hash
+        || binding.freshness_deadline_ms != freshness_deadline_ms
+        || authorization.expires_at_ms > freshness_deadline_ms
+    {
+        return Err(labeled_invariant(
+            "attestation_policy_changed",
+            "drain-only redemption is not bound to the exact current governed policy",
+        )
+        .into());
+    }
+    let committed_height = state_transaction.block_hashes().len() as u64;
+    if binding.finalized_block_height > committed_height
+        || committed_height.saturating_sub(binding.finalized_block_height)
+            > KAGEMUSHA_ATTESTATION_RECENT_BLOCK_WINDOW
+    {
+        return Err(labeled_invariant(
+            "stale_authorization",
+            "drain-only redemption policy block is uncommitted or outside the recent window",
+        )
+        .into());
+    }
+    let finalized_hash = state_transaction
+        .block_hashes()
+        .get(binding.finalized_block_height.saturating_sub(1) as usize)
+        .ok_or_else(|| {
+            labeled_invariant(
+                "invalid_authorization",
+                "drain-only redemption references a missing policy block",
+            )
+        })?;
+    if finalized_hash.as_ref() != binding.finalized_block_hash.as_ref() {
+        return Err(labeled_invariant(
+            "invalid_authorization",
+            "drain-only redemption finalized policy block hash differs from ledger state",
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn authenticate_registered_kagemusha_v2_device(

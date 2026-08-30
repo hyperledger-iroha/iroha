@@ -64,6 +64,28 @@ class RecordingSession(requests.Session):
         )
         return self._response
 
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """Capture canonical requests after their exact target is prepared."""
+
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": request.url,
+                "params": {},
+                "headers": request.headers,
+                "data": request.body,
+                "prepared": True,
+                "allow_redirects": kwargs.get("allow_redirects"),
+            }
+        )
+        self._response.request = request
+        self._response.url = request.url
+        return self._response
+
     def get(
         self,
         url: Union[str, bytes],

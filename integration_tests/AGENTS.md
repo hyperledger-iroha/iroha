@@ -4,11 +4,12 @@ These guidelines apply to the `integration_tests/` crate.
 
 ## Layout
 - `src/` hosts reusable harness code (metrics parsing, sandbox helpers, SoraFS gateway coverage) plus the `sorafs_gateway_fixtures` binary (`cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures`) that regenerates gateway fixtures.
-- `tests/` is the primary suite of Rust integration tests (genesis, Sumeragi, permissions, Norito streaming, triggers, telemetry, SoraFS, etc.). Cargo now exposes six explicit harness crates:
+- `tests/` is the primary suite of Rust integration tests (genesis, Sumeragi, permissions, Norito streaming, triggers, telemetry, SoraFS, etc.). Cargo exposes seven grouped scenario harness crates:
   - `core_api`
   - `events_and_triggers`
   - `queries_and_proofs`
   - `network_functional`
+  - `privacy_release_network` (requires `zk-stark,privacy-release-evidence` and solely owns the seven Exact12 network modules)
   - `consensus_and_da`
   - `nexus_and_streaming`
 - Scenario files remain under `tests/` and are pulled into those harnesses with `#[path = ...]`; keep a `//!` header on each scenario file.
@@ -21,6 +22,8 @@ These guidelines apply to the `integration_tests/` crate.
   - `fault_injection` opens hooks used by adversarial Sumeragi tests.
   - `norito_streaming_fec` pulls in Reed–Solomon helpers for FEC regression coverage.
   - `js_host_parity` mirrors Kotodama host tests inside JS targets.
+  - `zk-stark` enables STARK-backed integration coverage.
+  - `privacy-release-evidence` exposes non-shipping Exact12 fixture builders; the dedicated release harness requires it together with `zk-stark`.
 - Some tests require optional data:
   - Set `IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR=1` before building if you need the default executor sample in `fixtures/ivm`.
   - Long-running or flaky suites stay `#[ignore]`; run with `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.

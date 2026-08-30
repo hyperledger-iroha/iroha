@@ -347,6 +347,170 @@ public final class Java8CompatibilitySurfaceTests {
     } catch (final IllegalArgumentException expected) {
       assertTrue(expected.getMessage().contains("refuses insecure transport"));
     }
+
+    try {
+      TransportSecurity.requireAuthenticatedHttpRequestAllowed(
+          "java8-signed-query-test",
+          URI.create("http://torii.example"),
+          URI.create("http://torii.example/v1/pipeline/transactions/details"));
+      fail("opaque signed-query bodies must require authenticated TLS");
+    } catch (final IllegalArgumentException expected) {
+      assertTrue(expected.getMessage().contains("refuses insecure transport"));
+    }
+    TransportSecurity.requireAuthenticatedHttpRequestAllowed(
+        "java8-signed-query-test",
+        URI.create("https://torii.example"),
+        URI.create("https://torii.example/v1/pipeline/transactions/details"));
+  }
+
+  @Test
+  public void authenticatedCommittedRejectionAcceptsOnlyClosedReasonCodes() {
+    new AuthenticatedCommittedRejectionV1(
+        "ab".repeat(32),
+        "canonical-authority-from-native",
+        "cd".repeat(32),
+        "ef".repeat(32),
+        "validation",
+        "permission denied",
+        7L);
+    try {
+      new AuthenticatedCommittedRejectionV1(
+          "ab".repeat(32),
+          "canonical-authority-from-native",
+          "cd".repeat(32),
+          "ef".repeat(32),
+          "server_error",
+          "permission denied",
+          7L);
+      fail("committed rejection codes must remain a closed ABI-22 union");
+    } catch (final IllegalArgumentException expected) {
+      assertTrue(expected.getMessage().contains("six ABI-22"));
+    }
+  }
+
+  @Test
+  public void authenticatedTransactionDetailsV2KeepsAuthoritiesAndProjectorsSeparate()
+      throws Exception {
+    final AuthenticatedCommittedTransactionResultV2 result =
+        new AuthenticatedCommittedTransactionResultV2(
+            "11".repeat(32),
+            "wallet-query-authority",
+            "issuer-transaction-authority",
+            "22".repeat(32),
+            "33".repeat(32),
+            true,
+            null,
+            java.math.BigInteger.valueOf(9L));
+    assertTrue("wallet-query-authority".equals(result.queryAuthorityAccountId()));
+    assertTrue("issuer-transaction-authority".equals(result.transactionAuthorityAccountId()));
+
+    assertTrue(
+        AuthenticatedTransactionDetailsNativeBridge.class
+                .getMethod(
+                    "buildSignedTransactionDetailsQueryV2",
+                    String.class,
+                    org.hyperledger.iroha.android.model.NetworkId.class,
+                    String.class,
+                    String.class,
+                    IrohaQuerySignatureProvider.class)
+                .getParameterCount()
+            == 5);
+    assertTrue(
+        AuthenticatedTransactionDetailsNativeBridge.class
+                .getMethod(
+                    "projectKagemushaCommittedRejectionV2",
+                    AuthenticatedTransactionDetailsNativeBridge.SignedQueryV2.class,
+                    byte[].class,
+                    byte[].class,
+                    String.class,
+                    byte[].class)
+                .getParameterCount()
+            == 5);
+    assertTrue(
+        AuthenticatedTransactionDetailsNativeBridge.class
+                .getMethod(
+                    "projectCommittedTransactionResultV2",
+                    AuthenticatedTransactionDetailsNativeBridge.SignedQueryV2.class,
+                    byte[].class)
+                .getParameterCount()
+            == 2);
+    assertTrue(
+        HttpClientTransport.class
+                .getMethod(
+                    "getAuthenticatedCommittedTransactionResultV2",
+                    String.class,
+                    org.hyperledger.iroha.android.model.NetworkId.class,
+                    String.class,
+                    String.class,
+                    IrohaQuerySignatureProvider.class)
+                .getParameterCount()
+            == 5);
+    assertTrue(
+        AuthenticatedTransactionDetailsNativeBridge.class
+                .getMethod("bindFinalityProofPageV1", byte[][].class)
+                .getParameterCount()
+            == 1);
+    assertTrue(
+        AuthenticatedTransactionDetailsNativeBridge.class
+                .getMethod(
+                    "verifyFinalityPageV1",
+                    org.hyperledger.iroha.android.model.NetworkId.class,
+                    AuthenticatedFinalityCheckpointV1.class,
+                    AuthenticatedFinalityProofPageV1.class)
+                .getParameterCount()
+            == 3);
+    assertTrue(
+        AuthenticatedTransactionDetailsNativeBridge.class
+                .getMethod(
+                    "bindTransactionDetailsCarrierV2",
+                    AuthenticatedTransactionDetailsNativeBridge.SignedQueryV2.class,
+                    byte[].class)
+                .getParameterCount()
+            == 2);
+    assertTrue(
+        AuthenticatedTransactionDetailsNativeBridge.class
+                .getMethod(
+                    "projectFinalizedKagemushaOutcomeV1",
+                    AuthenticatedTransactionDetailsCarrierV2.class,
+                    byte[].class,
+                    String.class,
+                    byte[].class,
+                    org.hyperledger.iroha.android.model.NetworkId.class,
+                    AuthenticatedFinalityCheckpointV1.class,
+                    AuthenticatedFinalityProofPageV1.class,
+                    byte[].class)
+                .getParameterCount()
+            == 8);
+    assertTrue(
+        HttpClientTransport.class
+                .getMethod("getBridgeFinalityProofV1", java.math.BigInteger.class)
+                .getParameterCount()
+            == 1);
+    assertTrue(
+        HttpClientTransport.class
+                .getMethod(
+                    "getAuthenticatedTransactionDetailsCarrierV2",
+                    String.class,
+                    org.hyperledger.iroha.android.model.NetworkId.class,
+                    String.class,
+                    String.class,
+                    IrohaQuerySignatureProvider.class)
+                .getParameterCount()
+            == 5);
+    assertTrue(
+        org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver.class
+                .getMethod("decodeTopUpFinalityProof", byte[].class)
+                .getParameterCount()
+            == 1);
+    assertTrue(
+        org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver.class
+                .getMethod(
+                    "projectVerifiedTopUpFinalityV4",
+                    org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver.TopUpAnchorV4.class,
+                    org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver.TopUpFinalityProof.class,
+                    org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver.TopUpFinalityRosterArtifact.class)
+                .getParameterCount()
+            == 3);
   }
 
   private static void assertImmutable(final List<String> values) {

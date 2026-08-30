@@ -49,7 +49,7 @@ fn exact_mapping_packing_geometry_and_io_are_frozen() {
     assert_eq!(RADIX_WITNESS_TOTAL_IO_BYTES_V2, 214_556_928);
     assert_eq!(RADIX_COEFFICIENT_SCRATCH_BUDGET_BYTES_V2, 384);
     assert_eq!(RADIX_WITNESS_NAMED_LIVE_PAYLOAD_BYTES_V2, 57_728);
-    assert!(RADIX_WITNESS_NAMED_LIVE_PAYLOAD_BYTES_V2 <= 64 * 1_024);
+    const { assert!(RADIX_WITNESS_NAMED_LIVE_PAYLOAD_BYTES_V2 <= 64 * 1_024) };
 
     let first = radix_witness_coordinate_v2(0, 0, 0, 0).unwrap();
     assert_eq!(
@@ -173,9 +173,10 @@ fn exact_15_bit_decomposition_complement_and_centering_boundaries_hold() {
         assert_eq!(witness.m, witness.b_d * witness.beta[16]);
         assert_eq!(witness.beta[17], witness.beta[16] - witness.m);
         let mut previous_borrow = 0_i64;
-        for limb in 0..RADIX_LOW_LIMBS_V2 {
-            let d = i64::from(witness.d_low[limb]);
-            let k = i64::from(threshold_digits[limb]);
+        for (limb, (&digit, &threshold)) in witness.d_low.iter().zip(&threshold_digits).enumerate()
+        {
+            let d = i64::from(digit);
+            let k = i64::from(threshold);
             let borrow = i64::from(witness.beta[limb]);
             let delta = d + i64::from(RADIX_BASE_V2) * borrow - k - previous_borrow;
             assert!((0..i64::from(RADIX_BASE_V2)).contains(&delta));
@@ -311,18 +312,20 @@ fn binding_record_seal_and_all_downstream_gates_are_strict() {
         changed.record_digest = radix_witness_record_digest_v2(&changed).unwrap();
         assert!(validate_radix_witness_record_v2(&changed).is_err());
     }
-    assert!(AUTHENTICATED_CANONICAL_REREAD_COMPLETE_V2);
-    assert!(COMPACT_RADIX_WITNESS_MATERIALIZED_V2);
-    assert!(!COMMITMENTS_CONSTRUCTED_V2);
-    assert!(!TRANSCRIPT_BOUND_V2);
-    assert!(!FINAL_ARITHMETIC_PLANE_CONSTRUCTED_V2);
-    assert!(!RADIX_PROOF_VERIFIED_V2);
-    assert!(!ZERO_KNOWLEDGE_ACCEPTED_V2);
-    assert!(!AUTHORITY_MINTED_V2);
-    assert!(!RSS_QUALIFIED_V2);
-    assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2);
-    assert!(!RELEASE_READY_V2);
-    assert!(!RELEASE_COMPLETE_V2);
+    const {
+        assert!(AUTHENTICATED_CANONICAL_REREAD_COMPLETE_V2);
+        assert!(COMPACT_RADIX_WITNESS_MATERIALIZED_V2);
+        assert!(!COMMITMENTS_CONSTRUCTED_V2);
+        assert!(!TRANSCRIPT_BOUND_V2);
+        assert!(!FINAL_ARITHMETIC_PLANE_CONSTRUCTED_V2);
+        assert!(!RADIX_PROOF_VERIFIED_V2);
+        assert!(!ZERO_KNOWLEDGE_ACCEPTED_V2);
+        assert!(!AUTHORITY_MINTED_V2);
+        assert!(!RSS_QUALIFIED_V2);
+        assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V2);
+        assert!(!RELEASE_READY_V2);
+        assert!(!RELEASE_COMPLETE_V2);
+    };
 }
 
 #[test]

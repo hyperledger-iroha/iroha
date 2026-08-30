@@ -879,6 +879,10 @@ pub struct BootleLanternDisclosedAttributeV1 {
     pub value: BootleLanternAttributeValueV1,
 }
 /// Native Bootle Lantern/LNP22 module-lattice anonymous-credential statement.
+///
+/// V1 has no per-credential revocation accumulator. The selected exact current
+/// issuer-policy record supplies the supported whole-lineage lifecycle check;
+/// a terminally revoked policy rejects every presentation in that lineage.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
@@ -1206,6 +1210,43 @@ impl PrivacyStatementV1 {
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
+        }
+    }
+    /// Exact closed Exact12 operation selected by this statement.
+    ///
+    /// ZK-AMS is deliberately split into its separate batch-admission and
+    /// account-provisioning operations. Every other statement maps one-to-one
+    /// to its protocol's sole V1 operation.
+    #[must_use]
+    pub const fn operation_schema(&self) -> PrivacyOperationSchemaV1 {
+        match self {
+            Self::ZkAcePqAuthorizationV0(_) => PrivacyOperationSchemaV1::ZkAceAuthorizationActionV1,
+            Self::AnonymousPgcKOutOfNV1(_) => PrivacyOperationSchemaV1::AnonymousPgcPaymentActionV1,
+            Self::VeRangeTransparentRangeV1(_) => PrivacyOperationSchemaV1::VeRangeRangeProofV1,
+            Self::IrohaZkAmsV1(statement) => match &statement.action {
+                PrivacyZkAmsActionV1::BatchAdmission(_) => {
+                    PrivacyOperationSchemaV1::ZkAmsBatchAdmissionActionV1
+                }
+                PrivacyZkAmsActionV1::ProvisionAccount(_) => {
+                    PrivacyOperationSchemaV1::ZkAmsProvisionAccountActionV1
+                }
+            },
+            Self::VegaExistingCredentialZkV0(_) => {
+                PrivacyOperationSchemaV1::VegaCredentialPresentationV1
+            }
+            Self::IrohaZkX509StarkP256V0(_) => {
+                PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1
+            }
+            Self::IrohaJindoPolynomialCommitmentV0(_) => {
+                PrivacyOperationSchemaV1::JindoPolynomialEvaluationV1
+            }
+            Self::IrohaBootleLanternAnoncredV1(_) => {
+                PrivacyOperationSchemaV1::BootleLanternCredentialPresentationV1
+            }
+            Self::OrchardHalo2ActionsV1(_) => PrivacyOperationSchemaV1::OrchardNoteActionV1,
+            Self::MoneroFcmpPlusPlusV1(_) => PrivacyOperationSchemaV1::FcmpMembershipPaymentV1,
+            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyOperationSchemaV1::IvmPrivateNoteActionV1,
+            Self::PqMaspStarkV0(_) => PrivacyOperationSchemaV1::PqMaspNoteActionV1,
         }
     }
     /// Borrow the explicit shared context inside this protocol statement.

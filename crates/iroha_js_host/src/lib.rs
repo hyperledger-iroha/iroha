@@ -11,6 +11,10 @@
     clippy::unnecessary_wraps
 )]
 mod authenticated_block_proofs;
+mod authenticated_privacy_action_receipt;
+mod authenticated_privacy_state_query;
+mod authenticated_transaction_details;
+mod privacy_exact12_action;
 mod secure_private_fs;
 mod sorafs_orderbook_submission;
 macro_rules! norito_json {
@@ -66,7 +70,7 @@ use iroha_crypto::{
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use iroha_data_model::{
-    HasMetadata, NetworkId,
+    HasMetadata, Level, NetworkId,
     account::{
         Account, AccountId, NewAccount,
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
@@ -87,7 +91,7 @@ use iroha_data_model::{
     },
     isi::{
         Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger, Grant, GrantBox,
-        Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
+        Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Log, Mint, MintBox,
         RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
@@ -176,10 +180,12 @@ use iroha_data_model::{
         ValidationFeeTreasuryPayoutBindingV1,
     },
 };
+#[cfg(test)]
+use std::mem;
 use std::{
     collections::{BTreeMap, HashSet},
     convert::{TryFrom, TryInto},
-    fmt, fs, mem,
+    fmt, fs,
     num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
@@ -7949,6 +7955,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
         &value,
         json::Value::Object(map)
             if map.contains_key("Register")
+                || map.contains_key("Log")
                 || map.contains_key("Settlement")
                 || map.contains_key("CancelSmartContractCodeUpload")
                 || map.contains_key("CancelAssetLock")
@@ -7962,6 +7969,55 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     }
     match value {
         json::Value::Object(mut map) => {
+            if let Some(payload) = map.remove("Log") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "Log instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let json::Value::Object(mut fields) = payload else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Log must be an object",
+                    ));
+                };
+                let level = match parse_string_value(
+                    required_value(&mut fields, "level", "Log")?,
+                    "Log.level",
+                )?
+                .as_str()
+                {
+                    "TRACE" => Level::TRACE,
+                    "DEBUG" => Level::DEBUG,
+                    "INFO" => Level::INFO,
+                    "WARN" => Level::WARN,
+                    "ERROR" => Level::ERROR,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "Log.level must be exactly TRACE, DEBUG, INFO, WARN, or ERROR (found {other:?})"
+                            ),
+                        ));
+                    }
+                };
+                let msg =
+                    parse_string_value(required_value(&mut fields, "msg", "Log")?, "Log.msg")?;
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "Log contains unexpected field(s): {}",
+                            fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                return Ok(Log::new(level, msg).into());
+            }
             if let Some(payload) = map.remove("SetAssetTransferAvailability") {
                 if !map.is_empty() {
                     return Err(napi::Error::new(
@@ -9844,6 +9900,17 @@ fn exact_json_object_fields(
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
 fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json::Value> {
     let instruction_ref: &dyn InstructionTrait = &**instruction;
+    if let Some(log) = instruction_ref.as_any().downcast_ref::<Log>() {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "level".to_owned(),
+            json::Value::String(log.level.to_string()),
+        );
+        inner.insert("msg".to_owned(), json::Value::String(log.msg.clone()));
+        let mut outer = json::Map::new();
+        outer.insert("Log".to_owned(), json::Value::Object(inner));
+        return Ok(json::Value::Object(outer));
+    }
     if let Some(availability) = instruction_ref
         .as_any()
         .downcast_ref::<SetAssetTransferAvailability>()
@@ -11611,6 +11678,231 @@ pub fn privacy_require_exact12_capability_tuple_v1(
         ));
     }
     Ok(true)
+}
+#[napi(js_name = "privacyInspectSignedExact12ActionV1")]
+/// Authenticate one exact versioned Exact12 transaction without accepting its proof locally.
+pub fn privacy_inspect_signed_exact12_action_v1(
+    signed_transaction_versioned: Uint8Array,
+    network_id: Uint8Array,
+    authority: String,
+    operation_index: u32,
+) -> napi::Result<Buffer> {
+    let projection = privacy_exact12_action::inspect_signed_action_v1(
+        signed_transaction_versioned.as_ref(),
+        network_id.as_ref(),
+        &authority,
+        operation_index,
+    )
+    .map_err(|message| napi::Error::new(napi::Status::InvalidArg, message))?;
+    Ok(Buffer::from(projection.to_fixed_bytes().to_vec()))
+}
+#[napi(js_name = "privacyBuildFindPrivacyActionExecutionReceiptQueryV1")]
+/// Build one fresh signed query for the finalized native receipt of an Exact12 action.
+pub fn privacy_build_find_privacy_action_execution_receipt_query_v1(
+    authority: String,
+    private_key: Uint8Array,
+    network_id: Uint8Array,
+    operation_index: u32,
+    transaction_hash_hex: String,
+    action_index: u32,
+) -> napi::Result<Buffer> {
+    authenticated_privacy_action_receipt::build_signed_query_v1(
+        &authority,
+        private_key.as_ref(),
+        network_id.as_ref(),
+        operation_index,
+        &transaction_hash_hex,
+        action_index,
+    )
+    .map(Buffer::from)
+    .map_err(|message| napi::Error::new(napi::Status::InvalidArg, message))
+}
+#[napi(js_name = "privacyInspectPrivacyActionExecutionReceiptResponseV1")]
+/// Decode, validate, and bind one finalized typed Exact12 execution receipt.
+pub fn privacy_inspect_privacy_action_execution_receipt_response_v1(
+    network_id: Uint8Array,
+    operation_index: u32,
+    transaction_hash_hex: String,
+    action_index: u32,
+    requested_action_binding: Uint8Array,
+    response_norito: Uint8Array,
+) -> napi::Result<String> {
+    let projection = authenticated_privacy_action_receipt::inspect_receipt_v1(
+        network_id.as_ref(),
+        operation_index,
+        &transaction_hash_hex,
+        action_index,
+        requested_action_binding.as_ref(),
+        response_norito.as_ref(),
+    )
+    .map_err(|message| napi::Error::new(napi::Status::InvalidArg, message))?;
+    let mut result = Map::new();
+    result.insert(
+        "version".into(),
+        Value::Number(json::Number::from(u64::from(projection.version))),
+    );
+    result.insert(
+        "network_id".into(),
+        Value::String(projection.network_id_hex),
+    );
+    result.insert(
+        "protocol_id".into(),
+        Value::String(projection.protocol_id.to_owned()),
+    );
+    result.insert(
+        "operation_schema".into(),
+        Value::String(projection.operation_schema.to_owned()),
+    );
+    result.insert(
+        "ledger_effect_kind".into(),
+        Value::String(projection.ledger_effect_kind.to_owned()),
+    );
+    result.insert(
+        "transaction_hash".into(),
+        Value::String(projection.transaction_hash_hex),
+    );
+    result.insert(
+        "action_index".into(),
+        Value::Number(json::Number::from(u64::from(projection.action_index))),
+    );
+    result.insert(
+        "transaction_intent_digest".into(),
+        Value::String(projection.transaction_intent_digest_hex),
+    );
+    result.insert(
+        "statement_digest".into(),
+        Value::String(projection.statement_digest_hex),
+    );
+    result.insert(
+        "proof_envelope_hash".into(),
+        Value::String(projection.proof_envelope_hash_hex),
+    );
+    result.insert(
+        "capability_manifest_digest".into(),
+        Value::String(projection.capability_manifest_digest_hex),
+    );
+    result.insert(
+        "capability_committed_height".into(),
+        Value::String(projection.capability_committed_height.to_string()),
+    );
+    result.insert(
+        "admitted_at_height".into(),
+        Value::String(projection.admitted_at_height.to_string()),
+    );
+    result.insert(
+        "finalized_height".into(),
+        Value::String(projection.finalized_height.to_string()),
+    );
+    result.insert(
+        "finalized_block_hash".into(),
+        Value::String(projection.finalized_block_hash_hex),
+    );
+    json::to_string(&Value::Object(result)).map_err(norito_to_napi)
+}
+
+#[napi(js_name = "privacyBuildFinalizedStateQueryV1")]
+/// Build one fresh signed query for a closed Exact12 finalized-state lookup (IDs 97-104).
+pub fn privacy_build_finalized_state_query_v1(
+    authority: String,
+    private_key: Uint8Array,
+    network_id: Uint8Array,
+    query_index: u32,
+    protocol_index: u32,
+    request_binding: Uint8Array,
+) -> napi::Result<Buffer> {
+    authenticated_privacy_state_query::build_signed_query_v1(
+        &authority,
+        private_key.as_ref(),
+        network_id.as_ref(),
+        query_index,
+        protocol_index,
+        request_binding.as_ref(),
+    )
+    .map(Buffer::from)
+    .map_err(|message| napi::Error::new(napi::Status::InvalidArg, message))
+}
+
+#[napi(js_name = "privacyInspectFinalizedStateQueryResponseV1")]
+/// Decode, validate, and bind one closed Exact12 finalized-state query response.
+pub fn privacy_inspect_finalized_state_query_response_v1(
+    network_id: Uint8Array,
+    query_index: u32,
+    protocol_index: u32,
+    request_binding: Uint8Array,
+    response_norito: Uint8Array,
+) -> napi::Result<String> {
+    authenticated_privacy_state_query::inspect_response_v1(
+        network_id.as_ref(),
+        query_index,
+        protocol_index,
+        request_binding.as_ref(),
+        response_norito.as_ref(),
+    )
+    .map_err(|message| napi::Error::new(napi::Status::InvalidArg, message))
+}
+#[napi(js_name = "privacyBuildFindCommittedTransactionQueryV1")]
+/// Build one fresh, nonce-bearing, exact-hash signed transaction-details query.
+pub fn privacy_build_find_committed_transaction_query_v1(
+    authority: String,
+    private_key: Uint8Array,
+    network_id: Uint8Array,
+    transaction_hash_hex: String,
+) -> napi::Result<Buffer> {
+    authenticated_transaction_details::build_signed_query_v1(
+        &authority,
+        private_key.as_ref(),
+        network_id.as_ref(),
+        &transaction_hash_hex,
+    )
+    .map(Buffer::from)
+    .map_err(|message| napi::Error::new(napi::Status::InvalidArg, message))
+}
+#[napi(js_name = "privacyInspectPipelineTransactionDetailsV1")]
+/// Decode and bind one canonical committed transaction-details response.
+pub fn privacy_inspect_pipeline_transaction_details_v1(
+    transaction_hash_hex: String,
+    network_id: Uint8Array,
+    authority: String,
+    response_norito: Uint8Array,
+) -> napi::Result<String> {
+    let projection = authenticated_transaction_details::inspect_committed_result_v1(
+        &transaction_hash_hex,
+        network_id.as_ref(),
+        &authority,
+        response_norito.as_ref(),
+    )
+    .map_err(|message| napi::Error::new(napi::Status::InvalidArg, message))?;
+    let mut result = Map::new();
+    result.insert(
+        "transaction_hash".into(),
+        Value::String(projection.transaction_hash_hex),
+    );
+    result.insert(
+        "block_hash".into(),
+        Value::String(projection.block_hash_hex),
+    );
+    result.insert(
+        "result_hash".into(),
+        Value::String(projection.result_hash_hex),
+    );
+    result.insert("result_ok".into(), Value::Bool(projection.result_ok));
+    result.insert(
+        "rejection_code".into(),
+        projection
+            .rejection_code
+            .map_or(Value::Null, |value| Value::String(value.to_owned())),
+    );
+    result.insert(
+        "rejection_message".into(),
+        projection
+            .rejection_message
+            .map_or(Value::Null, Value::String),
+    );
+    result.insert(
+        "committed_height".into(),
+        Value::String(projection.committed_block_height.to_string()),
+    );
+    json::to_string(&Value::Object(result)).map_err(norito_to_napi)
 }
 /// Result of signing a transaction via the native helper.
 #[napi(object)]
@@ -15119,6 +15411,46 @@ seiyaku Privacy {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
+    }
+    #[test]
+    fn log_instruction_json_roundtrip_is_strict() {
+        let instruction: InstructionBox =
+            Log::new(Level::INFO, "native JSON parity".to_owned()).into();
+        let json_value =
+            instruction_to_json_value(&instruction).expect("serialize Log instruction to JSON");
+        assert_eq!(
+            json_value,
+            norito_json!({
+                "Log": norito_json!({
+                    "level": "INFO",
+                    "msg": "native JSON parity"
+                })
+            })
+        );
+        let reconstructed =
+            value_to_instruction(json_value).expect("deserialize Log instruction from JSON");
+        assert_eq!(reconstructed, instruction);
+
+        for malformed in [
+            norito_json!({
+                "Log": norito_json!({
+                    "level": "info",
+                    "msg": "case alias"
+                })
+            }),
+            norito_json!({
+                "Log": norito_json!({
+                    "level": "INFO",
+                    "msg": "unknown field",
+                    "extra": true
+                })
+            }),
+        ] {
+            assert!(
+                value_to_instruction(malformed).is_err(),
+                "Log JSON aliases and unknown fields must fail closed"
+            );
+        }
     }
     #[test]
     fn transfer_asset_batch_instruction_json_roundtrip() {

@@ -13,8 +13,9 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
  * Strict first-release model for one finalized platform device attestation.
  *
  * This mirrors `OfflineDeviceAttestationRegistration` exactly and exposes only the canonical
- * Kagemusha model. Native attestation acquisition uses bridge ABI 22;
- * the on-chain registration format marker remains version 1.
+ * Kagemusha model. Native attestation acquisition uses bridge ABI 22 and the
+ * on-chain registration format marker is version 2. This does not relabel the
+ * underlying Kagemusha recursive proof/artifact ABI-21/V4 protocol.
  */
 class DeviceAttestationRegistration(
     val version: Int,
@@ -28,6 +29,7 @@ class DeviceAttestationRegistration(
     val iosEnvironment: String?,
     val androidPackageName: String?,
     androidSigningCertificateSha256: ByteArray?,
+    val androidAttestedDeviceProperties: OfflineAndroidAttestedDevicePropertiesV2?,
     val publicKey: KagemushaDevicePublicKeyV2,
     val assertionScheme: String,
     val assertionKeyAlgorithm: String,
@@ -123,7 +125,7 @@ class DeviceAttestationRegistration(
     fun canonicalRegistrationHash(): ByteArray = IrohaHash.prehash(noritoEncoded())
 
     private fun requireCore() {
-        require(version == REGISTRATION_VERSION) { "registration version must be exactly 1" }
+        require(version == REGISTRATION_VERSION) { "registration version must be exactly 2" }
         require(oneUse) { "device attestation authority must be one-use" }
         OfflineDeviceAttestationCodec.validateAccountId(accountId)
         assetDefinitionId?.let(AssetDefinitionIdEncoder::parseAddressBytes)
@@ -139,17 +141,35 @@ class DeviceAttestationRegistration(
         KagemushaP256Codec.requireUncompressedPublicKey(_assertionPublicKey)
         when (platform) {
             ANDROID_KEYMINT_PLATFORM -> {
-                require(
+                val properties = androidAttestedDeviceProperties
+                val hardwareUsageLimitProfile =
                     assertionScheme == ANDROID_KEYMINT_ASSERTION_SCHEME &&
-                        assertionKeyAlgorithm == ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM &&
-                        assertionUsageCountLimit == 1,
-                ) { "Android KeyMint requires the canonical one-use P-256 assertion profile" }
+                        assertionUsageCountLimit == 1 &&
+                        (properties == null || properties.osVersion >= ANDROID_12_OS_VERSION_FLOOR)
+                val managedPre12ReceiptFirstProfile =
+                    assertionScheme == ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME &&
+                        assertionUsageCountLimit == null &&
+                        properties != null &&
+                        properties.osVersion < ANDROID_12_OS_VERSION_FLOOR &&
+                        properties.securityLevel == OfflineAndroidDeviceSecurityLevelV2.STRONG_BOX &&
+                        properties.isCompleteV2()
+                require(
+                    (hardwareUsageLimitProfile || managedPre12ReceiptFirstProfile) &&
+                        assertionKeyAlgorithm == ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                ) {
+                    "Android KeyMint requires either the Android 12+ hardware usage-limit " +
+                        "profile or the complete managed pre-Android-12 StrongBox " +
+                        "receipt-first profile"
+                }
                 require(androidPackageName != null) {
                     "Android KeyMint requires android_package_name"
                 }
                 val signingDigest = _androidSigningCertificateSha256
                 require(signingDigest != null && signingDigest.size == 32 && !allZero(signingDigest)) {
                     "Android KeyMint requires a non-zero 32-byte signing certificate SHA-256"
+                }
+                require(androidAttestedDeviceProperties != null) {
+                    "Android KeyMint requires exact hardware-attested device properties"
                 }
                 require(iosTeamId == null && iosBundleId == null && iosEnvironment == null) {
                     "Android KeyMint must not carry iOS app metadata"
@@ -178,7 +198,11 @@ class DeviceAttestationRegistration(
                 require(iosEnvironment == "production" || iosEnvironment == "development") {
                     "ios_environment must be production or development"
                 }
-                require(androidPackageName == null && _androidSigningCertificateSha256 == null) {
+                require(
+                    androidPackageName == null &&
+                        _androidSigningCertificateSha256 == null &&
+                        androidAttestedDeviceProperties == null,
+                ) {
                     "iOS App Attest must not carry Android app metadata"
                 }
             }
@@ -202,6 +226,7 @@ class DeviceAttestationRegistration(
             iosEnvironment == other.iosEnvironment &&
             androidPackageName == other.androidPackageName &&
             nullableBytesEqual(_androidSigningCertificateSha256, other._androidSigningCertificateSha256) &&
+            androidAttestedDeviceProperties == other.androidAttestedDeviceProperties &&
             publicKey == other.publicKey &&
             assertionScheme == other.assertionScheme &&
             assertionKeyAlgorithm == other.assertionKeyAlgorithm &&
@@ -230,6 +255,7 @@ class DeviceAttestationRegistration(
             iosBundleId,
             iosEnvironment,
             androidPackageName,
+            androidAttestedDeviceProperties,
             publicKey,
             assertionScheme,
             assertionKeyAlgorithm,
@@ -259,10 +285,12 @@ class DeviceAttestationRegistration(
         /** Sole native bridge ABI supported by the first-release client. */
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 22
         /** Sole on-chain registration format marker. */
-        const val REGISTRATION_VERSION: Int = 1
+        const val REGISTRATION_VERSION: Int = 2
         const val ANDROID_KEYMINT_PLATFORM: String = "android-keymint"
         const val ANDROID_KEYMINT_ASSERTION_SCHEME: String =
             "android-keymint-ecdsa-p256-usage-limit-v1"
+        const val ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME: String =
+            "android-keymint-managed-pre12-receipt-first-v1"
         const val ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM: String = "ecdsa-p256-sha256"
         const val IOS_APP_ATTEST_PLATFORM: String = "ios-appattest"
         const val IOS_APP_ATTEST_ASSERTION_SCHEME: String = "apple-appattest-counter-v1"
@@ -274,6 +302,7 @@ class DeviceAttestationRegistration(
 
         private const val MAX_REPORT_BYTES = 64 * 1024
         private const val MAX_EVIDENCE_BYTES = 128 * 1024
+        private const val ANDROID_12_OS_VERSION_FLOOR = 120_000L
         private val EVIDENCE_PREFIX_BYTES =
             DEVICE_ATTESTATION_EVIDENCE_PREFIX.toByteArray(StandardCharsets.UTF_8)
 
@@ -290,6 +319,7 @@ class DeviceAttestationRegistration(
 
         /** Build the canonical Android challenge before KeyMint creates the assertion key. */
         @JvmStatic
+        @JvmOverloads
         fun androidPreKeyGenerationChallengeHash(
             version: Int,
             deviceId: String,
@@ -301,6 +331,8 @@ class DeviceAttestationRegistration(
             recentBlockHeight: Long,
             recentBlockHash: ByteArray,
             expiresAtMs: Long,
+            assertionScheme: String = ANDROID_KEYMINT_ASSERTION_SCHEME,
+            assertionUsageCountLimit: Int? = 1,
         ): ByteArray = OfflineDeviceAttestationCodec.androidPreKeyGenerationChallengeHash(
             version,
             deviceId,
@@ -312,6 +344,8 @@ class DeviceAttestationRegistration(
             recentBlockHeight,
             recentBlockHash,
             expiresAtMs,
+            assertionScheme,
+            assertionUsageCountLimit,
         )
 
         internal fun requireHash(value: ByteArray, field: String) {

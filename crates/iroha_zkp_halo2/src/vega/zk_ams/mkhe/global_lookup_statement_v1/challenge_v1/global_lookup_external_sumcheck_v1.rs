@@ -6,7 +6,8 @@
 //! or M. No scalar, challenge, context, or storage owner is returned.
 use super::super::external_sumcheck_storage_v1::{
     EvaluatedGlobalRoundV1, FoldSinkSealV1, GlobalCubicCompleteV1, GlobalCubicOracleV1,
-    GlobalCubicPrefixReadyV1, MOracleErrorV1, OracleTransitionV1, begin_global_cubic_oracle_v1,
+    GlobalCubicPrefixReadyV1, MOracleErrorV1, OracleAxesV1, OracleTransitionV1,
+    begin_global_cubic_oracle_v1,
 };
 use super::*;
 const GLOBAL_MESSAGE_OFFSET_V1: usize = 205;
@@ -34,21 +35,26 @@ pub(super) struct GlobalLookupExternalSumcheckSessionV1 {
     )>,
 }
 #[must_use = "the public message and move-only transition must be consumed together"]
+pub(super) struct GlobalLookupExternalSumcheckContinueV1 {
+    message: [u8; CUBIC_MESSAGE_BYTES_V1],
+    session: GlobalLookupExternalSumcheckSessionV1,
+}
+#[must_use = "the terminal transcript and authenticated oracle must be consumed together"]
+pub(super) struct GlobalLookupExternalSumcheckCompleteV1 {
+    message: [u8; CUBIC_MESSAGE_BYTES_V1],
+    transcript: GlobalLookupTranscriptV1<EndpointStageV1>,
+    oracle: GlobalCubicCompleteV1,
+}
+#[must_use = "the public message and move-only transition must be consumed together"]
 pub(super) enum GlobalLookupExternalSumcheckTransitionV1 {
-    Continue {
-        message: [u8; CUBIC_MESSAGE_BYTES_V1],
-        session: GlobalLookupExternalSumcheckSessionV1,
-    },
-    Complete {
-        message: [u8; CUBIC_MESSAGE_BYTES_V1],
-        transcript: GlobalLookupTranscriptV1<EndpointStageV1>,
-        oracle: GlobalCubicCompleteV1,
-    },
+    Continue(Box<GlobalLookupExternalSumcheckContinueV1>),
+    Complete(Box<GlobalLookupExternalSumcheckCompleteV1>),
 }
 impl GlobalLookupExternalSumcheckTransitionV1 {
     pub(super) fn message_v1(&self) -> &[u8; CUBIC_MESSAGE_BYTES_V1] {
         match self {
-            Self::Continue { message, .. } | Self::Complete { message, .. } => message,
+            Self::Continue(transition) => &transition.message,
+            Self::Complete(transition) => &transition.message,
         }
     }
 }
@@ -122,22 +128,26 @@ impl GlobalLookupExternalSumcheckSessionV1 {
         match transition {
             OracleTransitionV1::Continue(oracle) if round < EXTERNAL_LAST_ROUND_V1 => {
                 validate_alignment_v1(&transcript, &oracle)?;
-                Ok(GlobalLookupExternalSumcheckTransitionV1::Continue {
-                    message,
-                    session: Self {
-                        live: Some((transcript, oracle)),
-                    },
-                })
+                Ok(GlobalLookupExternalSumcheckTransitionV1::Continue(
+                    Box::new(GlobalLookupExternalSumcheckContinueV1 {
+                        message,
+                        session: Self {
+                            live: Some((transcript, *oracle)),
+                        },
+                    }),
+                ))
             }
             OracleTransitionV1::Complete(oracle) if round == EXTERNAL_LAST_ROUND_V1 => {
                 let transcript = transcript
                     .finish_sumcheck_v1()
                     .map_err(GlobalLookupExternalSumcheckErrorV1::Transcript)?;
-                Ok(GlobalLookupExternalSumcheckTransitionV1::Complete {
-                    message,
-                    transcript,
-                    oracle,
-                })
+                Ok(GlobalLookupExternalSumcheckTransitionV1::Complete(
+                    Box::new(GlobalLookupExternalSumcheckCompleteV1 {
+                        message,
+                        transcript,
+                        oracle: *oracle,
+                    }),
+                ))
             }
             OracleTransitionV1::Continue(_) | OracleTransitionV1::Complete(_) => Err(
                 GlobalLookupExternalSumcheckErrorV1::Transcript(GlobalLookupErrorV1::Order),
@@ -162,13 +172,16 @@ fn validate_alignment_v1(
         ));
     }
     let challenges = &transcript.challenges;
+    let axes = OracleAxesV1::new_v1(
+        challenges.z,
+        challenges.rho,
+        challenges.alpha,
+        challenges.lambda,
+        challenges.mu,
+    );
     if !oracle.matches_transcript_v1(
         &transcript.bound_context_digest,
-        &challenges.z,
-        &challenges.rho,
-        &challenges.alpha,
-        &challenges.lambda,
-        &challenges.mu,
+        &axes,
         &challenges.sumcheck[GLOBAL_MESSAGE_OFFSET_V1..expected_next],
     ) {
         return Err(GlobalLookupExternalSumcheckErrorV1::Transcript(

@@ -6,7 +6,8 @@ from an ignored local `dist/` directory or an explicitly configured external
 artifact directory. CocoaPods consumes the same ZIP through the generated,
 checksum-pinned `NoritoBridge` binary pod. `IrohaSwift/VERSION` owns the shared
 source-pod, binary-pod, tag, and archive SemVer. The Rust sources are instead
-bound by the reviewed commit, source fingerprint, and root lockfile. For
+bound by the reviewed commit, source fingerprint, tracked workspace lock, and
+the authority-specific build lock described below. For
 end-to-end instructions on consuming a published artifact inside an app, see the
 [public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html).
 
@@ -31,22 +32,31 @@ that workflow for local release verification.
 3. Keep `IrohaSwift/VERSION`, the Swift loader's expected version, and the
    reviewed release version map aligned.
 4. Do not require numeric equality with `crates/norito/Cargo.toml`; authenticate
-   the exact Rust source commit, source fingerprint, and root lockfile instead.
+   the exact Rust source commit, source fingerprint, tracked workspace lock, and
+   selected build-lock authority instead.
 
 ## Build steps
 
-1. From a clean pinned commit, create dedicated canonical build and artifact
-   directories outside the repository and invoke the helper:
+1. From a clean pinned commit, provision the authenticated privacy-release Cargo
+   corridor exactly as the `privacy_swift_sdk_parse` job in
+   `.github/workflows/pr_privacy_sdk_guard.yml` does. In particular:
+
+   - invoke `ci/privacy_sdk_cargo_lockfile.sh provision-ci` with the host-qualified
+     `1.93.1-aarch64-apple-darwin` toolchain and apply its generated environment
+     and path files with GitHub Actions' prepend semantics;
+   - install and seal exactly `aarch64-apple-ios`, `aarch64-apple-ios-sim`,
+     `x86_64-apple-ios`, `aarch64-apple-darwin`, and
+     `x86_64-apple-darwin` using
+     `scripts/run_mobile_hermetic_command.py seal-apple-targets`; and
+   - leave `CARGO`, `RUSTC`, and `RUSTDOC` unset. The provisioner and authenticated
+     wrapper own those executable selections; never copy their generated secret
+     or toolchain paths into logs.
+
+   The checked-in workflow is the executable reference for corridor provisioning
+   and target sealing. After those steps, create dedicated canonical artifact and
+   build directories outside the repository and invoke the helper:
 
    ```bash
-   export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
-   mkdir -p "$CARGO_TARGET_DIR"
-   export CARGO_BUILD_JOBS=1
-   export CARGO_INCREMENTAL=0
-   export CARGO_NET_OFFLINE=true
-   export RUSTC_BOOTSTRAP=1
-   export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-   export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
    export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
    export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
    export NORITO_BRIDGE_OUT_DIR=/absolute/cache/iroha-apple-artifacts
@@ -69,7 +79,12 @@ that workflow for local release verification.
    one atomic XCFramework exchange publishes the binaries and manifest together. The
    manifest binds exact native bridge ABI 22, the privacy-production feature state,
    source commit and fingerprint, header digest, required-symbol inventory, and
-   per-slice SHA-256 hashes. Before publication the helper invokes
+   per-slice SHA-256 hashes. A workspace/default artifact uses build-lock authority
+   `workspace-v1`, environment schema v1, and the three legacy Apple profiles. A
+   privacy-production release uses `privacy-sdk-release-v2`, independently binds
+   both the tracked root-lock digest and the immutable
+   `ci/privacy_sdk_release_lock_v2.toml` digest, uses environment schema v2, and
+   records the five architecture-specific privacy profiles. Before publication the helper invokes
    `scripts/check_mobile_sdk_artifacts.sh --apple-only` against the staged generation; a
    checker or `xcodebuild` failure leaves the live generation unchanged. The
    first-release builder has no skip-build, preserved-target, alternate-lock, or

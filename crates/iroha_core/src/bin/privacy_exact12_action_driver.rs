@@ -12,6 +12,7 @@
 //! receipt issuance remains closed.
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+    privacy_engines::vega::VEGA_FIGURE9_RELEASE_READINESS_BLOCKER_V1,
     privacy_profiles::compiled_privacy_profile_v1,
     privacy_release_evidence::{
         PrivacyReleaseTransactionContextV1, build_privacy_release_anonymous_pgc_network_action_v1,
@@ -54,6 +55,10 @@ const ZK_ACE_OPERATION: &str = "build-zk-ace-action-v1";
 const ANONYMOUS_PGC_OPERATION: &str = "build-anonymous-pgc-action-v1";
 const VERANGE_OPERATION: &str = "build-verange-action-v1";
 const UNAVAILABLE_VEGA_OPERATION: &str = "build-vega-action-v1";
+const UNAVAILABLE_ZK_AMS_BATCH_ADMISSION_OPERATION: &str = "build-zk-ams-batch-admission-action-v1";
+const UNAVAILABLE_ZK_AMS_PROVISION_ACCOUNT_OPERATION: &str =
+    "build-zk-ams-provision-account-action-v1";
+const UNAVAILABLE_ZK_X509_OPERATION: &str = "build-zk-x509-action-v1";
 const JINDO_OPERATION: &str = "build-jindo-action-v1";
 const BOOTLE_LANTERN_OPERATION: &str = "build-bootle-lantern-action-v1";
 const ORCHARD_OPERATION: &str = "build-orchard-action-v1";
@@ -82,7 +87,12 @@ const CONSTRUCTION_ONLY_STATUS: &str = "constructible";
 const JINDO_EXPERIMENTAL_STATUS: &str = "available-experimental";
 const MISSING_CONTROLLER_CASE_EVIDENCE: &str = "MissingSealedControllerProtocolCaseEvidence";
 const MISSING_ADMISSION_ARTIFACT_BUNDLE: &str = "MissingCanonicalAdmissionArtifactBundle";
-const MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS: &str = "MissingGovernedFigure9ProverArtifacts";
+const MISSING_ZK_AMS_RELEASE_GATES: &str = concat!(
+    "MissingZkAmsReceiptRnsLinkTerminalMaterializationSplitDecryption",
+    "PersistentEqualityGates"
+);
+const MISSING_AUTHENTICATED_ZK_X509_PROVER_WORKER: &str =
+    "MissingAuthenticatedHashPinnedZkX509ProverWorkerArtifact";
 const MISSING_JINDO_KNOWLEDGE_SOUNDNESS: &str = "MissingDistributionWideKnowledgeSoundnessEvidence";
 const MISSING_VERANGE_SETUP_AUTHORITY: &str =
     "MissingExactGenesisSourceClosedControllerSetupAuthorityIdentity";
@@ -109,6 +119,12 @@ const MAX_ACTIVATION_TEMPLATE_BYTES: usize = 64 * 1024;
 struct ConstructibleOperationSpecV1 {
     operation: &'static str,
     protocol: &'static str,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UnavailableOperationSpecV1 {
+    operation: &'static str,
+    protocol: &'static str,
+    reason: &'static str,
 }
 const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 9] = [
     ConstructibleOperationSpecV1 {
@@ -148,6 +164,28 @@ const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 9] = [
         protocol: "pq-masp-stark-v0",
     },
 ];
+const UNAVAILABLE_OPERATION_SPECS_V1: [UnavailableOperationSpecV1; 4] = [
+    UnavailableOperationSpecV1 {
+        operation: UNAVAILABLE_ZK_AMS_BATCH_ADMISSION_OPERATION,
+        protocol: "iroha-zk-ams-v1",
+        reason: MISSING_ZK_AMS_RELEASE_GATES,
+    },
+    UnavailableOperationSpecV1 {
+        operation: UNAVAILABLE_ZK_AMS_PROVISION_ACCOUNT_OPERATION,
+        protocol: "iroha-zk-ams-v1",
+        reason: MISSING_ZK_AMS_RELEASE_GATES,
+    },
+    UnavailableOperationSpecV1 {
+        operation: UNAVAILABLE_VEGA_OPERATION,
+        protocol: "vega-existing-credential-zk-v0",
+        reason: VEGA_FIGURE9_RELEASE_READINESS_BLOCKER_V1,
+    },
+    UnavailableOperationSpecV1 {
+        operation: UNAVAILABLE_ZK_X509_OPERATION,
+        protocol: "iroha-zk-x509-stark-p256-v0",
+        reason: MISSING_AUTHENTICATED_ZK_X509_PROVER_WORKER,
+    },
+];
 fn constructible_operation_spec_v1(operation: &str) -> Option<ConstructibleOperationSpecV1> {
     CONSTRUCTIBLE_OPERATION_SPECS_V1
         .iter()
@@ -155,7 +193,10 @@ fn constructible_operation_spec_v1(operation: &str) -> Option<ConstructibleOpera
         .find(|spec| spec.operation == operation)
 }
 fn unavailable_operation_reason_v1(operation: &str) -> Option<&'static str> {
-    (operation == UNAVAILABLE_VEGA_OPERATION).then_some(MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS)
+    UNAVAILABLE_OPERATION_SPECS_V1
+        .iter()
+        .find(|spec| spec.operation == operation)
+        .and_then(|spec| (!spec.protocol.is_empty()).then_some(spec.reason))
 }
 #[derive(Debug, Clone, norito::JsonDeserialize, norito::JsonSerialize)]
 #[norito(deny_unknown_fields)]
@@ -374,7 +415,7 @@ fn bounded_ed25519_authority_v1(
             "VeRange {label} authority account ID is not bounded ASCII"
         ));
     }
-    Ok((account_id, public_key_bytes))
+    Ok((account_id, public_key_bytes.to_vec()))
 }
 fn verange_setup_authority_v1(candidate: &[u8; 32]) -> Result<AccountId, String> {
     let seed = Zeroizing::new(derive_nonzero_verange_setup_seed(candidate));
@@ -857,6 +898,23 @@ mod tests {
     fn operation_table_contains_only_genuine_release_action_paths() {
         assert_eq!(CONSTRUCTIBLE_OPERATION_SPECS_V1.len(), 9);
         assert_eq!(
+            CONSTRUCTIBLE_OPERATION_SPECS_V1.len() + UNAVAILABLE_OPERATION_SPECS_V1.len(),
+            13,
+            "the action driver must classify the complete closed Exact12 operation union"
+        );
+        let operations = CONSTRUCTIBLE_OPERATION_SPECS_V1
+            .iter()
+            .map(|spec| spec.operation)
+            .chain(
+                UNAVAILABLE_OPERATION_SPECS_V1
+                    .iter()
+                    .map(|spec| spec.operation),
+            )
+            .collect::<Vec<_>>();
+        assert!(operations.iter().enumerate().all(|(index, operation)| {
+            !operation.is_empty() && !operations[..index].contains(operation)
+        }));
+        assert_eq!(
             CONSTRUCTIBLE_OPERATION_SPECS_V1.map(|spec| spec.protocol),
             [
                 "zk-ace-pq-authorization-v0",
@@ -868,6 +926,32 @@ mod tests {
                 "monero-fcmp-plus-plus-v1",
                 "iroha-ivm-private-note-stark-v1",
                 "pq-masp-stark-v0",
+            ]
+        );
+        assert_eq!(
+            UNAVAILABLE_OPERATION_SPECS_V1
+                .map(|spec| (spec.operation, spec.protocol, spec.reason,)),
+            [
+                (
+                    "build-zk-ams-batch-admission-action-v1",
+                    "iroha-zk-ams-v1",
+                    MISSING_ZK_AMS_RELEASE_GATES,
+                ),
+                (
+                    "build-zk-ams-provision-account-action-v1",
+                    "iroha-zk-ams-v1",
+                    MISSING_ZK_AMS_RELEASE_GATES,
+                ),
+                (
+                    "build-vega-action-v1",
+                    "vega-existing-credential-zk-v0",
+                    VEGA_FIGURE9_RELEASE_READINESS_BLOCKER_V1,
+                ),
+                (
+                    "build-zk-x509-action-v1",
+                    "iroha-zk-x509-stark-p256-v0",
+                    MISSING_AUTHENTICATED_ZK_X509_PROVER_WORKER,
+                ),
             ]
         );
         assert!(
@@ -883,30 +967,27 @@ mod tests {
     }
 
     #[test]
-    fn vega_is_rejected_before_request_material_derivation_with_exact_reason() {
-        let request = BuildActionRequestV1 {
-            asset_definition_id: String::new(),
-            candidate_binding_sha256: String::new(),
-            creation_time_millis: 0,
-            network_id_hex: String::new(),
-            nonce: 0,
-            operation: UNAVAILABLE_VEGA_OPERATION.to_owned(),
-            request_id: String::new(),
-            schema: REQUEST_SCHEMA.to_owned(),
-            schema_version: SCHEMA_VERSION,
-            ttl_millis: 0,
-        };
-        assert!(constructible_operation_spec_v1(UNAVAILABLE_VEGA_OPERATION).is_none());
-        assert_eq!(
-            build_response(request).expect_err("Vega must remain unavailable"),
-            MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS
-        );
-        assert_eq!(
-            DRIVER_SOURCE
-                .matches("\"MissingGovernedFigure9ProverArtifacts\"")
-                .count(),
-            1
-        );
+    fn unavailable_exact12_operations_reject_before_request_material_derivation() {
+        for spec in UNAVAILABLE_OPERATION_SPECS_V1 {
+            let request = BuildActionRequestV1 {
+                asset_definition_id: String::new(),
+                candidate_binding_sha256: String::new(),
+                creation_time_millis: 0,
+                network_id_hex: String::new(),
+                nonce: 0,
+                operation: spec.operation.to_owned(),
+                request_id: String::new(),
+                schema: REQUEST_SCHEMA.to_owned(),
+                schema_version: SCHEMA_VERSION,
+                ttl_millis: 0,
+            };
+            assert!(constructible_operation_spec_v1(spec.operation).is_none());
+            assert_eq!(
+                build_response(request)
+                    .expect_err("release-blocked Exact12 operation must remain unavailable"),
+                spec.reason
+            );
+        }
         let retired_builder = ["build_privacy_release_", "vega_network_action_v1"].concat();
         assert!(!DRIVER_SOURCE.contains(&retired_builder));
         let response_source = DRIVER_SOURCE

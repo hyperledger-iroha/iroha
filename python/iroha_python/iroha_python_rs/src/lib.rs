@@ -4,7 +4,9 @@
 mod connect_key_bindings;
 #[cfg(test)]
 mod crypto_admission_tests;
+mod privacy_action_receipt;
 mod privacy_capability_manifest;
+mod privacy_finalized_state;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
 pub mod privacy_wallet_worker;
@@ -28,7 +30,7 @@ use iroha_core::{
 };
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, LaneCommitmentId, PrivateKey, PublicKey,
-    Signature, derive_keyset_from_slice, ed25519_parse_signature,
+    Signature, SignatureOf, derive_keyset_from_slice, ed25519_parse_signature,
     error::ParseError,
     mldsa65_parse_signature,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
@@ -94,8 +96,8 @@ use iroha_data_model::{
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1,
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
         PrivacyChallengeV1, PrivacyCompiledProfileCatalogV1, PrivacyConsensusLimitsV1,
-        PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1, PrivacyP256PointV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
+        PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1, PrivacyLedgerEffectKindV1,
+        PrivacyP256PointV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
         PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1, PrivacyStatementV1,
         PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
         PrivacyVegaIssuerRecordDigestV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
@@ -107,8 +109,9 @@ use iroha_data_model::{
         proof_box_max_proof_bytes_v1, verifying_key_id_field_is_portable,
     },
     query::{
-        CommittedTransaction, QueryItemKind, QueryOutputBatchBox, QueryRequest, QueryResponse,
-        QueryWithParams, SingularQueryBox,
+        CommittedTransaction, QueryItemKind, QueryOutputBatchBox, QueryRequest,
+        QueryRequestWithAuthority, QueryResponse, QuerySignature, QueryWithParams, SignedQuery,
+        SingularQueryBox,
         block::prelude::FindBlocks,
         dsl::{CommittedTxPredicate, CompoundPredicate, SelectorTuple},
         escrow::prelude::{FindAssetEscrowById, FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
@@ -150,6 +153,7 @@ use iroha_primitives::{
 };
 use iroha_schema::Ident;
 use iroha_torii_shared::{
+    PipelineTransactionDetailsResponse,
     connect::{
         AppMeta, ConnectCiphertextV1, ConnectControlV1, ConnectFrameV1, ConnectPayloadV1,
         Constraints, ControlAfterKeyV1, Dir, FrameKind, PermissionsV1, Role, ServerEventV1,
@@ -224,6 +228,7 @@ use sorafs_orchestrator::{
 use std::{
     collections::{HashMap, HashSet},
     convert::{TryFrom, TryInto},
+    error::Error as _,
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     net::IpAddr,
@@ -7244,6 +7249,79 @@ mod tests {
         );
     }
     #[test]
+    fn pipeline_transaction_details_rejection_projection_matches_abi22() {
+        use iroha_data_model::{
+            isi::error::InvalidParameterError,
+            offline::{
+                OfflineDeviceEligibilityDecisionV1, OfflineDeviceEligibilityOutcomeV1,
+                OfflineDeviceEligibilityReasonV1, OfflineDeviceEligibilityRejectionV1,
+            },
+        };
+
+        let nested = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "deepest typed source".to_owned(),
+            )),
+        ));
+        assert_eq!(
+            validated_pipeline_transaction_rejection_message_v1(&nested)
+                .expect("canonical deepest typed source"),
+            "Invalid smart contract: deepest typed source"
+        );
+
+        let eligibility = OfflineDeviceEligibilityRejectionV1::new_v1(
+            OfflineDeviceEligibilityDecisionV1 {
+                outcome: OfflineDeviceEligibilityOutcomeV1::DrainOnly,
+                reason: OfflineDeviceEligibilityReasonV1::VulnerableFirmware,
+                matched_rule_ids: vec!["reviewed-firmware-floor".to_owned()],
+            },
+            "reviewed firmware floor is not satisfied",
+        )
+        .expect("canonical offline-device eligibility rejection");
+        let eligibility =
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                InstructionExecutionError::OfflineDeviceEligibility(eligibility),
+            ));
+        assert_eq!(
+            validated_pipeline_transaction_rejection_message_v1(&eligibility)
+                .expect("canonical offline-device eligibility detail"),
+            "reviewed firmware floor is not satisfied"
+        );
+        assert_eq!(
+            transaction_rejection_code(&eligibility),
+            "OfflineDeviceEligibility"
+        );
+    }
+    #[test]
+    fn pipeline_transaction_details_rejection_projection_rejects_noncanonical_text() {
+        use iroha_data_model::transaction::error::TransactionLimitError;
+
+        let maximum = "x".repeat(PIPELINE_TRANSACTION_DETAILS_REJECTION_MESSAGE_MAX_BYTES_V1);
+        let reason = TransactionRejectionReason::LimitCheck(TransactionLimitError {
+            reason: maximum.clone(),
+        });
+        assert_eq!(
+            validated_pipeline_transaction_rejection_message_v1(&reason)
+                .expect("maximum canonical rejection message"),
+            maximum
+        );
+
+        for invalid in [
+            String::new(),
+            " leading".to_owned(),
+            "trailing ".to_owned(),
+            "control\ncharacter".to_owned(),
+            "x".repeat(PIPELINE_TRANSACTION_DETAILS_REJECTION_MESSAGE_MAX_BYTES_V1 + 1),
+        ] {
+            let reason =
+                TransactionRejectionReason::LimitCheck(TransactionLimitError { reason: invalid });
+            assert!(
+                validated_pipeline_transaction_rejection_message_v1(&reason).is_err(),
+                "non-canonical rejection text must fail closed"
+            );
+        }
+    }
+    #[test]
     fn repo_governance_parser_accepts_mixed_numeric_sources() {
         ensure_python();
         Python::attach(|py| {
@@ -10842,12 +10920,7 @@ impl TransactionBuilder {
         Ok(PrivacyNativeActionBuildResultV1 {
             envelope: Py::new(py, envelope)?,
             protocol_id: signed.protocol_id().canonical_label().to_owned(),
-            operation_schema:
-                crate::privacy_native_actions::privacy_native_action_capability_for_protocol_v1(
-                    signed.protocol_id(),
-                )
-                .expect("dispatcher result has a retained capability")
-                .operation_schema,
+            operation_schema: signed.operation_schema(),
             transaction_hash: signed.transaction_hash(),
             transaction_intent_digest: signed.transaction_intent_digest(),
             statement_digest: signed.statement_digest(),
@@ -11402,25 +11475,35 @@ impl TransactionBuilder {
     }
 }
 const ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "authorization_action";
-const ZK_ACE_TRANSFER_LEDGER_EFFECT_V1: &str = "zk_ace_transparent_transfer";
+const ZK_ACE_TRANSFER_LEDGER_EFFECT_V1: &str =
+    PrivacyLedgerEffectKindV1::ZkAceTransparentTransfer.canonical_label();
 const VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
+const JINDO_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
 const VEGA_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
 const ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "admission_action";
-const ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1: &str = "zk_ams_batch_admission";
-const ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1: &str = "zk_ams_provision_account";
+const ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1: &str =
+    PrivacyLedgerEffectKindV1::ZkAmsBatchAdmission.canonical_label();
+const ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1: &str =
+    PrivacyLedgerEffectKindV1::ZkAmsProvisionAccount.canonical_label();
 const BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "presentation_action";
 const ANONYMOUS_PGC_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "payment_action";
-const ANONYMOUS_PGC_LEDGER_EFFECT_V1: &str = "anonymous_pgc_account_state_transition";
+const ANONYMOUS_PGC_LEDGER_EFFECT_V1: &str =
+    PrivacyLedgerEffectKindV1::AnonymousPgcAccountStateTransition.canonical_label();
 const ORCHARD_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "note_action";
-const ORCHARD_LEDGER_EFFECT_V1: &str = "orchard_note_state_transition";
+const ORCHARD_LEDGER_EFFECT_V1: &str =
+    PrivacyLedgerEffectKindV1::OrchardNoteStateTransition.canonical_label();
 const FCMP_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "payment_action";
-const FCMP_LEDGER_EFFECT_V1: &str = "fcmp_membership_payment";
+const FCMP_LEDGER_EFFECT_V1: &str =
+    PrivacyLedgerEffectKindV1::FcmpMembershipPayment.canonical_label();
 const IVM_PRIVATE_NOTE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "note_action";
-const IVM_PRIVATE_NOTE_LEDGER_EFFECT_V1: &str = "ivm_private_note_state_transition";
+const IVM_PRIVATE_NOTE_LEDGER_EFFECT_V1: &str =
+    PrivacyLedgerEffectKindV1::IvmPrivateNoteStateTransition.canonical_label();
 const PQ_MASP_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "note_action";
-const PQ_MASP_LEDGER_EFFECT_V1: &str = "pq_masp_note_state_transition";
+const PQ_MASP_LEDGER_EFFECT_V1: &str =
+    PrivacyLedgerEffectKindV1::PqMaspNoteStateTransition.canonical_label();
 const ZK_X509_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "presentation_action";
-const ZK_X509_LEDGER_EFFECT_V1: &str = "zk_x509_certificate_nullifier";
+const ZK_X509_LEDGER_EFFECT_V1: &str =
+    PrivacyLedgerEffectKindV1::ZkX509CertificateNullifier.canonical_label();
 /// Common signed result for typed native privacy action bindings.
 ///
 /// Secret-bearing bundle buffers are held in zeroizing storage around their
@@ -11878,24 +11961,13 @@ fn sign_py(
         .map_err(|err| PyValueError::new_err(format!("failed to sign message: {err}")))?;
     Ok(Py::from(PyBytes::new(py, signature.payload())))
 }
-fn sign_query_request(
+fn query_request_with_authority(
     authority: &str,
-    private_key: &[u8],
     network_id: &NetworkId,
     request: QueryRequest,
-) -> PyResult<Vec<u8>> {
+) -> PyResult<QueryRequestWithAuthority> {
     let authority = parse_account_id(authority)?;
     ensure_ed25519_account(&authority)?;
-    let private = parse_private_key(private_key)?;
-    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
-        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
-    })?;
-    let authority_signatory = require_single_signatory(&authority, "query authority")?;
-    if key_pair.public_key() != authority_signatory {
-        return Err(PyValueError::new_err(
-            "query private key does not match the authority account",
-        ));
-    }
     let creation_time_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| {
@@ -11911,17 +11983,65 @@ fn sign_query_request(
     OsRng06
         .try_fill_bytes(&mut nonce)
         .map_err(|error| PyValueError::new_err(format!("query nonce OS RNG failed: {error}")))?;
-    request
-        .with_authority(
-            *network_id,
-            authority,
-            creation_time_ms,
-            time_to_live_ms,
-            nonce,
-        )
+    Ok(request.with_authority(
+        *network_id,
+        authority,
+        creation_time_ms,
+        time_to_live_ms,
+        nonce,
+    ))
+}
+fn sign_query_request(
+    authority: &str,
+    private_key: &[u8],
+    network_id: &NetworkId,
+    request: QueryRequest,
+) -> PyResult<Vec<u8>> {
+    let payload = query_request_with_authority(authority, network_id, request)?;
+    let private = parse_private_key(private_key)?;
+    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
+        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
+    })?;
+    let authority_signatory = require_single_signatory(&payload.authority, "query authority")?;
+    if key_pair.public_key() != authority_signatory {
+        return Err(PyValueError::new_err(
+            "query private key does not match the authority account",
+        ));
+    }
+    payload
         .try_sign(&key_pair)
         .map(|signed| signed.encode_versioned())
         .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))
+}
+fn sign_query_request_with_signer(
+    py: Python<'_>,
+    authority: &str,
+    signer: &Bound<'_, PyAny>,
+    network_id: &NetworkId,
+    request: QueryRequest,
+) -> PyResult<Vec<u8>> {
+    if !signer.is_callable() {
+        return Err(PyTypeError::new_err("query signer must be callable"));
+    }
+    let payload = query_request_with_authority(authority, network_id, request)?;
+    let signing_hash = HashOf::<QueryRequestWithAuthority>::new(&payload);
+    let signature_value = signer.call1((PyBytes::new(py, signing_hash.as_ref()),))?;
+    let signature_bytes = py_exact_bytes(&signature_value, "query signer result")?;
+    let signature = ed25519_parse_signature(&signature_bytes).map_err(|error| {
+        PyValueError::new_err(format!(
+            "query signer returned an invalid Ed25519 signature: {error}"
+        ))
+    })?;
+    let signed = SignedQuery {
+        signature: QuerySignature(SignatureOf::from_signature(signature)),
+        payload,
+    };
+    signed.verify_signature().map_err(|error| {
+        PyValueError::new_err(format!(
+            "query signer does not authenticate the query authority: {error}"
+        ))
+    })?;
+    Ok(signed.encode_versioned())
 }
 fn parse_typed_hash<T>(value: &str, context: &str) -> PyResult<HashOf<T>> {
     let normalized = value.strip_prefix("0x").unwrap_or(value);
@@ -12022,12 +12142,17 @@ fn build_find_committed_transaction_query_py(
     network_id: &PyNetworkId,
     transaction_hash: &str,
 ) -> PyResult<Py<PyBytes>> {
+    let request = find_committed_transaction_request(transaction_hash)?;
+    let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
+}
+fn find_committed_transaction_request(transaction_hash: &str) -> PyResult<QueryRequest> {
     let transaction_hash =
         parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
     let predicate = CompoundPredicate::<CommittedTransaction>::from_committed_tx_predicate(
         CommittedTxPredicate::EntryEq(transaction_hash),
     );
-    let request = QueryRequest::Start(QueryWithParams {
+    Ok(QueryRequest::Start(QueryWithParams {
         query: (),
         query_payload: norito::codec::Encode::encode(&FindTransactions),
         item: QueryItemKind::CommittedTransaction,
@@ -12036,8 +12161,21 @@ fn build_find_committed_transaction_query_py(
             &SelectorTuple::<CommittedTransaction>::default(),
         ),
         params: QueryParams::default(),
-    });
-    let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
+    }))
+}
+#[pyfunction]
+#[pyo3(name = "build_find_committed_transaction_query_with_signer")]
+/// Build the exact signed query while keeping the authority key behind a Python callback.
+fn build_find_committed_transaction_query_with_signer_py(
+    py: Python<'_>,
+    authority: &str,
+    signer: &Bound<'_, PyAny>,
+    network_id: &PyNetworkId,
+    transaction_hash: &str,
+) -> PyResult<Py<PyBytes>> {
+    let request = find_committed_transaction_request(transaction_hash)?;
+    let signed =
+        sign_query_request_with_signer(py, authority, signer, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
 #[pyfunction]
@@ -12169,6 +12307,7 @@ fn instruction_execution_rejection_code(error: &InstructionExecutionError) -> &'
         InstructionExecutionError::InvalidParameter(_) => "InvalidParameter",
         InstructionExecutionError::AccountAdmission(_) => "AccountAdmission",
         InstructionExecutionError::InvariantViolation(_) => "InvariantViolation",
+        InstructionExecutionError::OfflineDeviceEligibility(_) => "OfflineDeviceEligibility",
     }
 }
 fn transaction_rejection_code(reason: &TransactionRejectionReason) -> &str {
@@ -12208,6 +12347,124 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
     value.insert("name".into(), json::Value::String(rejection.name.clone()));
     value.insert("code".into(), json::Value::from(rejection.code));
     Some(json::Value::Object(value))
+}
+const PIPELINE_TRANSACTION_DETAILS_REJECTION_MESSAGE_MAX_BYTES_V1: usize = 1_024;
+fn validated_pipeline_transaction_rejection_message_v1(
+    reason: &TransactionRejectionReason,
+) -> Result<String, &'static str> {
+    let message = match reason {
+        TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::OfflineDeviceEligibility(rejection),
+        )) => rejection.detail.clone(),
+        _ => {
+            let mut message = reason.to_string();
+            let mut source = reason.source();
+            while let Some(current) = source {
+                message = current.to_string();
+                source = current.source();
+            }
+            message
+        }
+    };
+    if message.is_empty()
+        || message.len() > PIPELINE_TRANSACTION_DETAILS_REJECTION_MESSAGE_MAX_BYTES_V1
+        || message.trim() != message
+        || message.chars().any(char::is_control)
+    {
+        return Err("rejected transaction details response has a non-canonical rejection reason");
+    }
+    Ok(message)
+}
+const PIPELINE_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+#[pyfunction]
+#[pyo3(name = "inspect_pipeline_transaction_details_json")]
+/// Decode and bind one canonical authenticated transaction-details response.
+fn inspect_pipeline_transaction_details_json_py(
+    transaction_hash: &str,
+    response_bytes: &[u8],
+) -> PyResult<String> {
+    if response_bytes.is_empty() {
+        return Err(PyValueError::new_err(
+            "transaction details response must not be empty",
+        ));
+    }
+    if response_bytes.len() > PIPELINE_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES {
+        return Err(PyValueError::new_err(format!(
+            "transaction details response exceeds {} bytes",
+            PIPELINE_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES
+        )));
+    }
+    let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
+    let details: PipelineTransactionDetailsResponse = norito::decode_canonical_with_limits(
+        response_bytes,
+        norito::canonical_decode_limits(response_bytes.len()),
+    )
+    .map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to decode canonical transaction details response: {error}"
+        ))
+    })?;
+    let response_hash =
+        parse_typed_hash::<TransactionEntrypoint>(&details.hash, "transaction details hash")?;
+    let transaction = &details.transaction;
+    if response_hash != expected
+        || details.block_height == 0
+        || transaction.entrypoint_hash() != &expected
+        || transaction.entrypoint().hash() != expected
+        || transaction.result_hash() != &transaction.result().hash()
+        || transaction.entrypoint_proof().leaf_index() != transaction.result_proof().leaf_index()
+    {
+        return Err(PyValueError::new_err(
+            "transaction details response does not match the requested entrypoint/result hash",
+        ));
+    }
+    let (result_ok, rejection_code, rejection_message) = match &transaction.result().0 {
+        Ok(_) => (true, None, None),
+        Err(reason) => {
+            let message = validated_pipeline_transaction_rejection_message_v1(reason)
+                .map_err(PyValueError::new_err)?;
+            (
+                false,
+                Some(transaction_rejection_code(reason).to_owned()),
+                Some(message),
+            )
+        }
+    };
+    let mut result = norito::json::Map::new();
+    result.insert(
+        "transaction_hash".into(),
+        norito::json::Value::String(hex_encode(expected.as_ref())),
+    );
+    result.insert(
+        "block_hash".into(),
+        norito::json::Value::String(hex_encode(transaction.block_hash().as_ref())),
+    );
+    result.insert(
+        "block_height".into(),
+        norito::json::Value::from(details.block_height),
+    );
+    result.insert(
+        "result_hash".into(),
+        norito::json::Value::String(hex_encode(transaction.result_hash().as_ref())),
+    );
+    result.insert("result_ok".into(), norito::json::Value::Bool(result_ok));
+    result.insert(
+        "rejection_code".into(),
+        rejection_code.map_or(norito::json::Value::Null, norito::json::Value::String),
+    );
+    result.insert(
+        "rejection_message".into(),
+        rejection_message.map_or(norito::json::Value::Null, norito::json::Value::String),
+    );
+    result.insert(
+        "trigger_completion_count".into(),
+        norito::json::Value::from(details.trigger_completions.len()),
+    );
+    norito::json::to_string(&norito::json::Value::Object(result)).map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to encode inspected transaction details JSON: {error}"
+        ))
+    })
 }
 fn batch_rejection_code(code: AssetBatchTransferRejectionCode) -> &'static str {
     match code {
@@ -13139,87 +13396,35 @@ fn inspect_signed_privacy_jindo_action_v1_py(
     signed_transaction_versioned: &[u8],
 ) -> PyResult<Py<PyDict>> {
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
-    signed.verify_signature().map_err(|_| {
-        PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
-    })?;
-    let (transaction_intent_digest, submission) = signed
-        .privacy_transaction_intent_binding_if_present_v1()
-        .map_err(|_| {
-            PyValueError::new_err(
-                "signed_transaction_versioned has an invalid privacy intent binding",
-            )
-        })?
-        .ok_or_else(|| {
-            PyValueError::new_err("signed_transaction_versioned contains no direct privacy action")
-        })?;
-    let envelope = &submission.envelope;
-    if envelope.protocol_id != PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 {
-        return Err(PyValueError::new_err(
-            "signed_transaction_versioned is not a Jindo action",
-        ));
-    }
-    envelope
-        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
-        .map_err(|_| {
-            PyValueError::new_err(
-                "signed_transaction_versioned has an invalid Jindo proof envelope",
-            )
-        })?;
+    let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        "Jindo",
+    )?;
     let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &envelope.statement
     else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Jindo statement",
         ));
     };
-    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| {
-        PyValueError::new_err("signed_transaction_versioned Jindo statement could not be encoded")
-    })?;
-    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| {
-        PyValueError::new_err("signed_transaction_versioned Jindo envelope could not be encoded")
-    })?;
-    let statement_bytes = u32::try_from(statement_encoding.len())
-        .map_err(|_| PyValueError::new_err("Jindo statement byte length overflowed"))?;
-    let proof_bytes = u32::try_from(envelope.proof.bytes().as_bytes().len())
-        .map_err(|_| PyValueError::new_err("Jindo proof byte length overflowed"))?;
-    let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
-        .map_err(|_| PyValueError::new_err("Jindo envelope byte length overflowed"))?;
-    let adaptive_signed_transaction_bytes =
-        u32::try_from(norito::codec::encode_adaptive(&signed).len())
-            .map_err(|_| PyValueError::new_err("adaptive transaction byte length overflowed"))?;
-    let submitted_versioned_transaction_bytes =
-        u32::try_from(signed_transaction_versioned.len())
-            .map_err(|_| PyValueError::new_err("versioned transaction byte length overflowed"))?;
+    if !matches!(
+        &envelope.proof,
+        PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(_)
+    ) {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched Jindo proof variant",
+        ));
+    }
     let polynomial_count = u32::try_from(statement.polynomial_commitments.len())
         .map_err(|_| PyValueError::new_err("Jindo polynomial count overflowed"))?;
-    let proof_envelope_hash = Hash::new(&envelope_encoding);
-    let transaction_hash = signed.hash();
-    let result = PyDict::new(py);
-    result.set_item(
-        "transaction_hash",
-        PyBytes::new(py, transaction_hash.as_ref()),
-    )?;
-    result.set_item(
-        "transaction_intent_digest",
-        PyBytes::new(py, transaction_intent_digest.as_bytes()),
-    )?;
-    result.set_item(
-        "statement_digest",
-        PyBytes::new(py, envelope.statement_digest.as_bytes()),
-    )?;
-    result.set_item(
-        "proof_envelope_hash",
-        PyBytes::new(py, proof_envelope_hash.as_ref()),
-    )?;
-    result.set_item("statement_bytes", statement_bytes)?;
-    result.set_item("proof_bytes", proof_bytes)?;
-    result.set_item("encoded_proof_envelope_bytes", encoded_proof_envelope_bytes)?;
-    result.set_item(
-        "adaptive_signed_transaction_bytes",
-        adaptive_signed_transaction_bytes,
-    )?;
-    result.set_item(
-        "submitted_versioned_transaction_bytes",
-        submitted_versioned_transaction_bytes,
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        transaction_intent_digest,
+        envelope,
+        JINDO_ACTION_EXECUTION_CLASSIFICATION_V1,
+        None,
     )?;
     result.set_item("polynomial_count", polynomial_count)?;
     result.set_item("availability", "available-experimental")?;
@@ -14441,6 +14646,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         build_find_committed_transaction_query_py,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_find_committed_transaction_query_with_signer_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(build_find_block_by_hash_query_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         committed_transaction_carrier_block_hash_py,
@@ -14448,6 +14657,26 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         verify_committed_transaction_inclusion_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_pipeline_transaction_details_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_action_receipt::build_query_with_signer,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_action_receipt::inspect_response,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_finalized_state::build_query_with_signer,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        privacy_finalized_state::inspect_response,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(verify_py, module)?)?;

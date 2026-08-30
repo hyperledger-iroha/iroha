@@ -14,7 +14,8 @@ enum class PrivacyOperationSchemaV1(val canonicalLabel: String) {
     ZK_ACE_AUTHORIZATION_ACTION_V1("zk_ace_authorization_action_v1"),
     ANONYMOUS_PGC_PAYMENT_ACTION_V1("anonymous_pgc_payment_action_v1"),
     VERANGE_RANGE_PROOF_V1("verange_range_proof_v1"),
-    ZK_AMS_ADMISSION_AND_PROVISIONING_V1("zk_ams_admission_and_provisioning_v1"),
+    ZK_AMS_BATCH_ADMISSION_ACTION_V1("zk_ams_batch_admission_action_v1"),
+    ZK_AMS_PROVISION_ACCOUNT_ACTION_V1("zk_ams_provision_account_action_v1"),
     VEGA_CREDENTIAL_PRESENTATION_V1("vega_credential_presentation_v1"),
     ZK_X509_IDENTITY_PRESENTATION_V1("zk_x509_identity_presentation_v1"),
     JINDO_POLYNOMIAL_EVALUATION_V1("jindo_polynomial_evaluation_v1"),
@@ -96,7 +97,7 @@ class PrivacyCapabilityReadinessV1 internal constructor(
 /** One canonical committed Exact12 capability row. */
 class PrivacyExact12CapabilityRowV1 internal constructor(
     @JvmField val protocolId: PrivacyProtocolIdV1,
-    @JvmField val operationSchema: PrivacyOperationSchemaV1,
+    operationSchemas: List<PrivacyOperationSchemaV1>,
     @JvmField val executionMode: PrivacyExecutionModeV1,
     @JvmField val privacyFeatureMask: Int,
     @JvmField val compiledProfile: PrivacyCompiledProfileResultV1,
@@ -106,9 +107,14 @@ class PrivacyExact12CapabilityRowV1 internal constructor(
     /** True only when native Rust compared the complete committed tuple with this binary. */
     @JvmField val localCompiledTupleMatches: Boolean,
 ) {
+    /** One canonical action schema, except for ZK-AMS's ordered pair. */
+    @JvmField
+    val operationSchemas: List<PrivacyOperationSchemaV1> =
+        Collections.unmodifiableList(operationSchemas.toList())
+
     init {
-        require(operationSchema == expectedOperationSchema(protocolId)) {
-            "Exact12 operation schema does not match its protocol"
+        require(this.operationSchemas == expectedOperationSchemas(protocolId)) {
+            "Exact12 operation schemas do not match their protocol"
         }
         require(executionMode == expectedExecutionMode(protocolId)) {
             "Exact12 execution mode does not match its protocol"
@@ -151,7 +157,7 @@ class PrivacyExact12CapabilityRowV1 internal constructor(
     override fun equals(other: Any?): Boolean =
         other is PrivacyExact12CapabilityRowV1 &&
             protocolId == other.protocolId &&
-            operationSchema == other.operationSchema &&
+            operationSchemas == other.operationSchemas &&
             executionMode == other.executionMode &&
             privacyFeatureMask == other.privacyFeatureMask &&
             compiledProfile == other.compiledProfile &&
@@ -162,7 +168,7 @@ class PrivacyExact12CapabilityRowV1 internal constructor(
 
     override fun hashCode(): Int {
         var result = protocolId.hashCode()
-        result = 31 * result + operationSchema.hashCode()
+        result = 31 * result + operationSchemas.hashCode()
         result = 31 * result + executionMode.hashCode()
         result = 31 * result + privacyFeatureMask
         result = 31 * result + compiledProfile.hashCode()
@@ -236,11 +242,14 @@ class PrivacyExact12CapabilityTupleAdmissionV1 private constructor(
     @JvmField val protocolId: PrivacyProtocolIdV1,
     @JvmField val committedHeight: BigInteger,
     @JvmField val manifestDigest: PrivacyFixed32V1,
-    @JvmField val operationSchema: PrivacyOperationSchemaV1,
+    operationSchemas: List<PrivacyOperationSchemaV1>,
     canonicalManifestArchive: ByteArray,
     private val seal: Any,
 ) {
     private val manifestArchive = canonicalManifestArchive.copyOf()
+    @JvmField
+    val operationSchemas: List<PrivacyOperationSchemaV1> =
+        Collections.unmodifiableList(operationSchemas.toList())
 
     companion object {
         private val SEAL = Any()
@@ -255,7 +264,7 @@ class PrivacyExact12CapabilityTupleAdmissionV1 private constructor(
                 row.protocolId,
                 manifest.committedHeight,
                 manifest.manifestDigest,
-                row.operationSchema,
+                row.operationSchemas,
                 archive,
                 SEAL,
             )
@@ -426,7 +435,7 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
             value,
             setOf(
                 "protocol_id",
-                "operation_schema",
+                "operation_schemas",
                 "execution_mode",
                 "privacy_feature_mask",
                 "compiled_profile",
@@ -439,14 +448,30 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
         )
         val protocol = protocolTag(row["protocol_id"], "$path.protocol_id")
         require(protocol == expected) { "$path is out of canonical protocol order" }
-        val operation = PrivacyOperationSchemaV1.fromCanonicalLabel(
+        val operationSet = exactObject(
+            row["operation_schemas"],
+            setOf("primary", "secondary"),
+            "$path.operation_schemas",
+        )
+        val primaryOperation = PrivacyOperationSchemaV1.fromCanonicalLabel(
             taggedUnit(
-                row["operation_schema"],
+                operationSet["primary"],
                 "operation_schema",
                 "value",
-                "$path.operation_schema",
+                "$path.operation_schemas.primary",
             ),
         )
+        val secondaryOperation = operationSet["secondary"]?.let {
+            PrivacyOperationSchemaV1.fromCanonicalLabel(
+                taggedUnit(
+                    it,
+                    "operation_schema",
+                    "value",
+                    "$path.operation_schemas.secondary",
+                ),
+            )
+        }
+        val operations = listOfNotNull(primaryOperation, secondaryOperation)
         val execution = PrivacyExecutionModeV1.fromCanonicalLabel(
             taggedUnit(
                 row["execution_mode"],
@@ -469,7 +494,7 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
         val limitation = parseLimitation(row["limitation"], "$path.limitation")
         return PrivacyExact12CapabilityRowV1(
             protocol,
-            operation,
+            operations,
             execution,
             featureMask,
             compiled,
@@ -718,31 +743,37 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
     )
 }
 
-private fun expectedOperationSchema(protocol: PrivacyProtocolIdV1): PrivacyOperationSchemaV1 =
+private fun expectedOperationSchemas(
+    protocol: PrivacyProtocolIdV1,
+): List<PrivacyOperationSchemaV1> =
     when (protocol) {
         PrivacyProtocolIdV1.ZK_ACE_PQ_AUTHORIZATION_V0 ->
-            PrivacyOperationSchemaV1.ZK_ACE_AUTHORIZATION_ACTION_V1
+            listOf(PrivacyOperationSchemaV1.ZK_ACE_AUTHORIZATION_ACTION_V1)
         PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1 ->
-            PrivacyOperationSchemaV1.ANONYMOUS_PGC_PAYMENT_ACTION_V1
+            listOf(PrivacyOperationSchemaV1.ANONYMOUS_PGC_PAYMENT_ACTION_V1)
         PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1 ->
-            PrivacyOperationSchemaV1.VERANGE_RANGE_PROOF_V1
+            listOf(PrivacyOperationSchemaV1.VERANGE_RANGE_PROOF_V1)
         PrivacyProtocolIdV1.IROHA_ZK_AMS_V1 ->
-            PrivacyOperationSchemaV1.ZK_AMS_ADMISSION_AND_PROVISIONING_V1
+            listOf(
+                PrivacyOperationSchemaV1.ZK_AMS_BATCH_ADMISSION_ACTION_V1,
+                PrivacyOperationSchemaV1.ZK_AMS_PROVISION_ACCOUNT_ACTION_V1,
+            )
         PrivacyProtocolIdV1.VEGA_EXISTING_CREDENTIAL_ZK_V0 ->
-            PrivacyOperationSchemaV1.VEGA_CREDENTIAL_PRESENTATION_V1
+            listOf(PrivacyOperationSchemaV1.VEGA_CREDENTIAL_PRESENTATION_V1)
         PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V0 ->
-            PrivacyOperationSchemaV1.ZK_X509_IDENTITY_PRESENTATION_V1
+            listOf(PrivacyOperationSchemaV1.ZK_X509_IDENTITY_PRESENTATION_V1)
         PrivacyProtocolIdV1.IROHA_JINDO_POLYNOMIAL_COMMITMENT_V0 ->
-            PrivacyOperationSchemaV1.JINDO_POLYNOMIAL_EVALUATION_V1
+            listOf(PrivacyOperationSchemaV1.JINDO_POLYNOMIAL_EVALUATION_V1)
         PrivacyProtocolIdV1.IROHA_BOOTLE_LANTERN_ANONCRED_V1 ->
-            PrivacyOperationSchemaV1.BOOTLE_LANTERN_CREDENTIAL_PRESENTATION_V1
+            listOf(PrivacyOperationSchemaV1.BOOTLE_LANTERN_CREDENTIAL_PRESENTATION_V1)
         PrivacyProtocolIdV1.ORCHARD_HALO2_ACTIONS_V1 ->
-            PrivacyOperationSchemaV1.ORCHARD_NOTE_ACTION_V1
+            listOf(PrivacyOperationSchemaV1.ORCHARD_NOTE_ACTION_V1)
         PrivacyProtocolIdV1.MONERO_FCMP_PLUS_PLUS_V1 ->
-            PrivacyOperationSchemaV1.FCMP_MEMBERSHIP_PAYMENT_V1
+            listOf(PrivacyOperationSchemaV1.FCMP_MEMBERSHIP_PAYMENT_V1)
         PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1 ->
-            PrivacyOperationSchemaV1.IVM_PRIVATE_NOTE_ACTION_V1
-        PrivacyProtocolIdV1.PQ_MASP_STARK_V0 -> PrivacyOperationSchemaV1.PQ_MASP_NOTE_ACTION_V1
+            listOf(PrivacyOperationSchemaV1.IVM_PRIVATE_NOTE_ACTION_V1)
+        PrivacyProtocolIdV1.PQ_MASP_STARK_V0 ->
+            listOf(PrivacyOperationSchemaV1.PQ_MASP_NOTE_ACTION_V1)
     }
 
 private fun expectedExecutionMode(protocol: PrivacyProtocolIdV1): PrivacyExecutionModeV1 =

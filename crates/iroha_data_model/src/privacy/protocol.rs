@@ -444,7 +444,14 @@ pub enum PrivacyRootRoleV1 {
     PgcAccountState,
     /// ZK-AMS admitted identities, seed keys, and provisioning records.
     AccountRegistry,
-    /// Credential revocation accumulator.
+    /// Reserved governance-managed credential revocation accumulator.
+    ///
+    /// No Exact12 V1 protocol accepts this role. In particular,
+    /// Bootle/Lantern V1 proves anonymous selective disclosure against the
+    /// exact current issuer-policy record and supports only whole-lineage
+    /// revocation through that record's terminal lifecycle. A future protocol
+    /// with a native per-credential non-revocation relation may opt in with a
+    /// new closed compatibility mapping.
     Revocation,
     /// X.509 CA-membership accumulator.
     CertificateAuthorityMembership,
@@ -479,10 +486,6 @@ impl PrivacyRootRoleV1 {
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 Self::PgcAccountState
             ) | (PrivacyProtocolIdV1::IrohaZkAmsV1, Self::AccountRegistry)
-                | (
-                    PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
-                    Self::Revocation
-                )
                 | (
                     PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
                     Self::CertificateAuthorityMembership

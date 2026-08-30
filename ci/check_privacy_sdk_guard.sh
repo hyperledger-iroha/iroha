@@ -119,6 +119,19 @@ def read(relative: str, overrides: dict[str, str]) -> str:
     return (root / relative).read_text(encoding="utf-8")
 
 
+def assigned_string(source: str, name: str) -> str | None:
+    for statement in ast.parse(source).body:
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        if not any(isinstance(target, ast.Name) and target.id == name for target in targets):
+            continue
+        value = statement.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+    return None
+
+
 def require(condition: bool, message: str, errors: list[str]) -> None:
     if not condition:
         errors.append(message)
@@ -172,6 +185,11 @@ def check_exact12_feature_boundary(
         "crates/connect_norito_bridge/Cargo.toml", overrides
     )
     core_manifest = read("crates/iroha_core/Cargo.toml", overrides)
+    halo_manifest = read("crates/iroha_zkp_halo2/Cargo.toml", overrides)
+    halo_vega = read("crates/iroha_zkp_halo2/src/vega.rs", overrides)
+    halo_zk_ams = read(
+        "crates/iroha_zkp_halo2/src/vega/zk_ams.rs", overrides
+    )
 
     exact12_conformance_features = cargo_feature_values(
         data_model_manifest, "privacy-exact12-conformance"
@@ -181,6 +199,9 @@ def check_exact12_feature_boundary(
     )
     core_release_features = cargo_feature_values(
         core_manifest, "privacy-release-evidence"
+    )
+    halo_release_features = cargo_feature_values(
+        halo_manifest, "privacy-release-evidence"
     )
     exact12_conformance_gate = (
         '#[cfg(any(test, feature = "privacy-exact12-conformance"))]'
@@ -199,11 +220,46 @@ def check_exact12_feature_boundary(
         errors,
     )
     require(
-        "iroha_data_model/privacy-exact12-conformance"
-        in core_release_features
-        and "iroha_data_model/test-fixtures" not in core_release_features,
-        "privacy release evidence must use the narrow exact-12 conformance "
-        "surface instead of general data-model fixtures",
+        core_release_features
+        == (
+            "zk-stark",
+            "json",
+            "iroha_data_model/privacy-exact12-conformance",
+            "iroha_zkp_halo2/privacy-release-evidence",
+        ),
+        "privacy release evidence must expose exactly the narrow Exact12 "
+        "model surface and the non-shipping Halo2 candidate relation",
+        errors,
+    )
+    require(
+        not halo_release_features,
+        "the Halo2 privacy-release-evidence feature must remain an empty "
+        "non-default surface without dependency edges",
+        errors,
+    )
+    require(
+        halo_vega.count(
+            '#[cfg(feature = "privacy-release-evidence")]\n'
+            "pub use zk_ams::{\n"
+            "    prove_zk_ams_release_candidate_admission_relation_v1,\n"
+            "    verify_zk_ams_release_candidate_admission_relation_v1,\n"
+            "};"
+        )
+        == 1
+        and halo_zk_ams.count(
+            '#[cfg(feature = "privacy-release-evidence")]\n'
+            "pub fn prove_zk_ams_release_candidate_admission_relation_v1"
+        )
+        == 1
+        and halo_zk_ams.count(
+            '#[cfg(feature = "privacy-release-evidence")]\n'
+            "pub fn verify_zk_ams_release_candidate_admission_relation_v1"
+        )
+        == 1
+        and "require_mkhe_release_ready_v1()?;\n"
+        in halo_zk_ams,
+        "the ZK-AMS candidate prover/verifier must remain feature-gated while "
+        "the production relation retains its readiness check",
         errors,
     )
     require(
@@ -614,7 +670,7 @@ def _workflow_run_has_cargo_policy(run: str) -> bool:
 
 NEGATIVE_CONTROL_STEP_NAME = "Privacy SDK guard negative controls"
 NEGATIVE_CONTROL_COMMAND_PREFIX = "ci/check_privacy_sdk_guard.sh "
-NEGATIVE_CONTROL_COUNT = 232
+NEGATIVE_CONTROL_COUNT = 233
 WORKFLOW_META_NEGATIVE_CONTROLS = frozenset(
     {
         "--negative-control-negative-controls-workflow",
@@ -627,6 +683,7 @@ EXACT12_FEATURE_NEGATIVE_CONTROLS = frozenset(
     {
         "--negative-control-exact12-bridge-test-fixtures",
         "--negative-control-exact12-conformance-rand-edge",
+        "--negative-control-exact12-halo2-forwarding",
         "--negative-control-exact12-release-evidence-test-fixtures",
     }
 )
@@ -697,6 +754,10 @@ def _check_cargo_workflow(
         + ' "${{ steps.privacy-python.outputs.python-path }}"'
     )
     checkout_step = {"uses": checkout_action}
+    guard_checkout_step = {
+        "uses": checkout_action,
+        "with": (("fetch-depth", "0"),),
+    }
     install_step = {
         "name": "Install host-qualified privacy SDK Rust toolchain",
         "shell": "bash",
@@ -731,6 +792,22 @@ def _check_cargo_workflow(
                 "print(f\"{sys.version_info.major}.{sys.version_info.minor}\")')\" "
                 '== "3.12" ]]',
                 'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"',
+            )
+        ),
+    }
+    cargo_lock_review_step = {
+        "name": "Authenticate frozen-base Cargo lock workspace-edge review",
+        "run": "\n".join(
+            (
+                '"$MOBILE_SDK_PYTHON_BINARY" -I -S ' + chr(92),
+                "  scripts/tests/cargo_lock_workspace_edge_review_test.py "
+                + chr(92),
+                "  --validate " + chr(92),
+                '  --root "$GITHUB_WORKSPACE" ' + chr(92),
+                "  --base-commit be874e0f08743929a492dd17383747a96a4f0879 "
+                + chr(92),
+                '  --review "$GITHUB_WORKSPACE/ci/'
+                'cargo_lock_workspace_edge_review_v1.json"',
             )
         ),
     }
@@ -829,13 +906,9 @@ def _check_cargo_workflow(
             "final_verify": python_final_verify_step,
         },
     }
-    swift_install_run = (
-        install_run.replace(
-            "1.93.1-x86_64-unknown-linux-gnu",
-            "1.93.1-aarch64-apple-darwin",
-        )
-        + '\necho "RUSTUP_TOOLCHAIN=1.93.1-aarch64-apple-darwin" '
-        '>> "$GITHUB_ENV"'
+    swift_install_run = install_run.replace(
+        "1.93.1-x86_64-unknown-linux-gnu",
+        "1.93.1-aarch64-apple-darwin",
     )
     jvm_provision_run = (
         native_provision_run.replace(
@@ -847,12 +920,70 @@ def _check_cargo_workflow(
         'ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" '
         '"${{ steps.privacy-jvm-python.outputs.python-path }}"'
     )
-    swift_fetch_run = "\n".join(
+    js_provision_run = (
+        native_provision_run.replace(
+            "iroha-privacy-sdk-cargo", "iroha-privacy-js-cargo"
+        )
+        + ' \\\n  "${{ steps.privacy-js-python.outputs.python-path }}"'
+    )
+    js_verify_run = (
+        'ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" '
+        '"${{ steps.privacy-js-python.outputs.python-path }}"'
+    )
+    swift_provision_run = (
+        native_provision_run.replace(
+            "iroha-privacy-sdk-cargo", "iroha-privacy-swift-cargo"
+        ).replace(
+            "1.93.1-x86_64-unknown-linux-gnu",
+            "1.93.1-aarch64-apple-darwin",
+        )
+        + ' \\\n  "${{ steps.privacy-swift-python.outputs.python-path }}"'
+    )
+    swift_verify_run = (
+        'ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" '
+        '"${{ steps.privacy-swift-python.outputs.python-path }}"'
+    )
+    line_continuation = "\\"
+    swift_target_install_run = "\n".join(
         (
-            "rustup target add --toolchain 1.93.1-aarch64-apple-darwin "
-            "aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios "
-            "aarch64-apple-darwin x86_64-apple-darwin",
-            "cargo fetch --locked",
+            '[[ "$IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR" == "1.93.1-aarch64-apple-darwin" ]]',
+            f"env -i {line_continuation}",
+            f'  HOME="$HOME" {line_continuation}',
+            f'  CARGO_HOME="$IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME" {line_continuation}',
+            f'  RUSTUP_HOME="$HOME/.rustup" {line_continuation}',
+            f'  RUSTUP_DIST_SERVER="https://static.rust-lang.org" {line_continuation}',
+            f'  TMPDIR="$RUNNER_TEMP" {line_continuation}',
+            f"  LANG=C.UTF-8 {line_continuation}",
+            f"  LC_ALL=C.UTF-8 {line_continuation}",
+            f'  "$IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH" target add {line_continuation}',
+            f'    --toolchain "$IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR" {line_continuation}',
+            f"    aarch64-apple-ios {line_continuation}",
+            f"    aarch64-apple-ios-sim {line_continuation}",
+            f"    x86_64-apple-ios {line_continuation}",
+            f"    aarch64-apple-darwin {line_continuation}",
+            "    x86_64-apple-darwin",
+            "source ci/privacy_sdk_cargo_lockfile.sh",
+            f"privacy_sdk_assert_authenticated_toolchain_state {line_continuation}",
+            f'  "$GITHUB_WORKSPACE" {line_continuation}',
+            f'  "$GITHUB_WORKSPACE" {line_continuation}',
+            '  "$MOBILE_SDK_PYTHON_BINARY"',
+            'target_manifest="$RUNNER_TEMP/iroha-privacy-swift-cargo/apple-targets.json"',
+            'target_manifest_seal="$(' ,
+            f"  env -i {line_continuation}",
+            f"    HOME=/tmp {line_continuation}",
+            f"    PATH=/usr/bin:/bin {line_continuation}",
+            f'    TMPDIR="$RUNNER_TEMP" {line_continuation}',
+            f"    LANG=C.UTF-8 {line_continuation}",
+            f"    LC_ALL=C.UTF-8 {line_continuation}",
+            f'    "$MOBILE_SDK_PYTHON_BINARY" -I -S -B {line_continuation}',
+            f"      scripts/run_mobile_hermetic_command.py seal-apple-targets {line_continuation}",
+            f'      --toolchain-cargo "$IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH" {line_continuation}',
+            f"      --toolchain-selector {line_continuation}",
+            f'        "$IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR" {line_continuation}',
+            '      --output "$target_manifest"',
+            ')"',
+            'echo "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH=$target_manifest" >> "$GITHUB_ENV"',
+            'echo "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL=$target_manifest_seal" >> "$GITHUB_ENV"',
         )
     )
     additional_cargo_policies = {
@@ -887,8 +1018,23 @@ def _check_cargo_workflow(
                 "name": "Install host-qualified privacy N-API Rust toolchain",
             },
             {
+                "name": "Provision private privacy N-API Cargo lock",
+                "shell": "bash",
+                "run": js_provision_run,
+            },
+            {
+                "name": "Verify privacy N-API Cargo lock isolation",
+                "run": js_verify_run,
+            },
+            {
                 "name": "Prime privacy N-API dependencies from the frozen lock",
+                "env": (("CARGO_NET_OFFLINE", '"false"'),),
                 "run": "cargo fetch --locked",
+            },
+            {
+                "name": "Verify final privacy N-API Cargo lock isolation",
+                "if": "always()",
+                "run": js_verify_run,
             },
         ),
         "privacy_swift_sdk_parse": (
@@ -898,16 +1044,48 @@ def _check_cargo_workflow(
                 "run": swift_install_run,
             },
             {
-                "name": "Install Apple Rust targets and prime frozen dependencies",
-                "run": swift_fetch_run,
+                "name": "Provision private privacy Swift Cargo lock",
+                "shell": "bash",
+                "run": swift_provision_run,
+            },
+            {
+                "name": "Verify privacy Swift Cargo lock isolation",
+                "run": swift_verify_run,
+            },
+            {
+                "name": "Install and seal exact Apple Rust targets",
+                "shell": "bash",
+                "run": swift_target_install_run,
+            },
+            {
+                "name": "Prime frozen privacy Swift dependencies",
+                "env": (("CARGO_NET_OFFLINE", '"false"'),),
+                "run": "cargo fetch --locked",
+            },
+            {
+                "name": "Revalidate frozen Swift inputs and ABI22 artifacts",
+                "if": "always()",
+                "run": "\n".join(
+                    (
+                        swift_verify_run,
+                        '[[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c '
+                        "'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path(\"Cargo.lock\").read_bytes()).hexdigest())')\" "
+                        '== "179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7" ]]',
+                        '[[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c '
+                        "'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "
+                        '"$IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH")" '
+                        '== "31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d" ]]',
+                        "scripts/check_mobile_sdk_artifacts.sh --apple-only",
+                    )
+                ) + "\n",
             },
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "7f7765d55844744f84df43017b29fe1539e42b700ce86f6e16507cec6a243ecf",
+        "privacy_swift_sdk_parse": "39bd577da62a498cd85d6247feccf55e88a3f82fa2971670845e9f2d2005c435",
         "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
-        "privacy_csharp_sdk_tests": "9d449aa16a205b2faf73847b2e863c18c673d51e831efb83396d9e196d021604",
-        "privacy_javascript_sdk_tests": "2a4fe6a4326a2987e8093b5a2a8919b3265364af8ec40287f6ad8d33db701112",
+        "privacy_csharp_sdk_tests": "7eed00a1eeccfcd04474465652189ec0b5c62bd1ed55087f9c701f6749d550b8",
+        "privacy_javascript_sdk_tests": "b63e6d1cb680898aa74bf05b453267bb36c9bbf4fd928d1c23643a51438131bf",
     }
 
     require(
@@ -995,9 +1173,12 @@ def _check_cargo_workflow(
             if isinstance(step.fields.get("uses"), str)
             and step.fields["uses"].startswith("actions/checkout@")
         )
+        expected_checkout_step = (
+            guard_checkout_step if job_name == "privacy-sdk-guard" else checkout_step
+        )
         require(
             len(checkout_matches) == 1
-            and _exact_step(checkout_matches[0][1], checkout_step),
+            and _exact_step(checkout_matches[0][1], expected_checkout_step),
             f"{job_name} must contain exactly one exact pinned checkout step",
             errors,
         )
@@ -1025,6 +1206,9 @@ def _check_cargo_workflow(
         if job_name == "privacy-sdk-guard":
             required_steps.append(
                 ("canonical mobile Python binding", mobile_python_binding_step)
+            )
+            required_steps.append(
+                ("frozen Cargo lock review authentication", cargo_lock_review_step)
             )
         required_steps.extend(
             (
@@ -1123,7 +1307,7 @@ def _check_cargo_workflow(
             ordered_indices.append(final_matches[0][0])
             policy_indices.add(final_matches[0][0])
 
-        expected_order_length = 11 if job_name == "privacy-sdk-guard" else (
+        expected_order_length = 12 if job_name == "privacy-sdk-guard" else (
             8 if policy["python"] else 7
         )
         require(
@@ -1135,8 +1319,8 @@ def _check_cargo_workflow(
                 )
             ),
             f"{job_name} must keep checkout, toolchain, setup, mobile Python "
-            "binding, provision, verification, fetch, tests, negative controls, "
-            "consumer, and final verification in canonical order",
+            "binding, frozen lock review, provision, verification, fetch, tests, "
+            "negative controls, consumer, and final verification in canonical order",
             errors,
         )
         policy_indices.update(
@@ -1214,10 +1398,10 @@ def _check_cargo_workflow(
         errors,
     )
     expected_python_output_counts = {
-        "privacy-swift-python": 1,
+        "privacy-swift-python": 4,
         "privacy-jvm-python": 4,
         "privacy-csharp-python": 3,
-        "privacy-js-python": 2,
+        "privacy-js-python": 4,
         "privacy-python": 8,
     }
     require(
@@ -1882,6 +2066,25 @@ def check(overrides: dict[str, str] | None = None) -> None:
             "iroha_privacy_validate_compiled_profile_catalog_v1",
             "iroha_privacy_exact12_fixture_bundle_v1",
             "iroha_privacy_validate_exact12_fixture_bundle_v1",
+            "iroha_privacy_inspect_signed_exact12_action_v1",
+            "iroha_privacy_authenticated_transaction_details_prepare_v1",
+            "iroha_privacy_authenticated_transaction_details_finalize_v1",
+            "iroha_privacy_authenticated_transaction_details_project_result_v1",
+            "iroha_privacy_authenticated_transaction_details_prepare_v2",
+            "iroha_privacy_authenticated_transaction_details_finalize_v2",
+            "iroha_privacy_authenticated_transaction_details_project_result_v2",
+            "iroha_privacy_authenticated_finality_proof_page_bind_v1",
+            "iroha_privacy_authenticated_finality_page_verify_v1",
+            "iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1",
+            "iroha_privacy_authenticated_finalized_action_rejection_project_v1",
+            "iroha_privacy_kagemusha_topup_finality_project_v4",
+            "iroha_privacy_authenticated_offline_device_registration_result_project_v1",
+            "iroha_privacy_authenticated_action_receipt_prepare_v1",
+            "iroha_privacy_authenticated_action_receipt_finalize_v1",
+            "iroha_privacy_authenticated_action_receipt_project_result_v1",
+            "iroha_privacy_authenticated_state_query_prepare_v1",
+            "iroha_privacy_authenticated_state_query_finalize_v1",
+            "iroha_privacy_authenticated_state_query_project_result_v1",
             "iroha_privacy_free_buffer",
         },
         "C privacy ABI must contain only local compiled-profile catalog, exact-12 conformance, typed validators, and zeroizing free",
@@ -2004,6 +2207,52 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "python/iroha_python/tests/package_import_fallback_test.py", overrides
     )
     python_pyproject_source = read("python/iroha_python/pyproject.toml", overrides)
+    generic11_worker_package_source = read(
+        "scripts/package_privacy_wallet_worker.py", overrides
+    )
+    generic11_worker_package_tests = read(
+        "scripts/tests/package_privacy_wallet_worker_test.py", overrides
+    )
+    zk_x509_worker_package_source = read(
+        "scripts/package_zk_x509_prover_worker.py", overrides
+    )
+    zk_x509_worker_package_tests = read(
+        "scripts/tests/package_zk_x509_prover_worker_test.py", overrides
+    )
+    zk_x509_candidate_capture_source = read(
+        "scripts/capture_zk_x509_native_candidate.py", overrides
+    )
+    zk_x509_candidate_capture_tests = read(
+        "scripts/tests/capture_zk_x509_native_candidate_test.py", overrides
+    )
+    ec2_iid_verifier_source = read(
+        "scripts/verify_ec2_instance_identity.py", overrides
+    )
+    ec2_iid_verifier_tests = read(
+        "scripts/tests/verify_ec2_instance_identity_test.py", overrides
+    )
+    native_host_tests = read(
+        "scripts/tests/check_taira_privacy_native_host_test.py", overrides
+    )
+    zk_x509_worker_source = read(
+        "crates/iroha_core/src/bin/iroha_zk_x509_prover_worker.rs", overrides
+    )
+    zk_x509_worker_linux_isolation_source = read(
+        "crates/iroha_core/src/bin/iroha_zk_x509_prover_worker/linux_isolation.rs",
+        overrides,
+    )
+    zk_x509_worker_source_closure = read(
+        "ci/privacy_zk_x509_worker_source_closure_v1.txt", overrides
+    )
+    zk_x509_containment_sources = (
+        zk_x509_worker_package_source,
+        zk_x509_candidate_capture_source,
+        ec2_iid_verifier_source,
+    )
+    zk_x509_containment_supervisors = tuple(
+        assigned_string(source, "_LINUX_PID_NAMESPACE_SUPERVISOR")
+        for source in zk_x509_containment_sources
+    )
     workflow = _check_cargo_workflow(workflow_source, errors)
     required_workflow_paths = (
         ".gitignore",
@@ -2059,14 +2308,37 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "ci/check_privacy_js_sdk.sh",
         "ci/check_privacy_jvm_sdk.sh",
         "ci/check_privacy_swift_sdk.sh",
+        "ci/privacy_sdk_release_lock_v1.toml",
+        "ci/privacy_sdk_release_lock_v2.toml",
+        "ci/check_agents_guardrails.sh",
+        "ci/cargo_lock_workspace_edge_review_v1.json",
+        "ci/audit_privacy_sdk_release_lock_transition.py",
+        "ci/privacy_generic11_worker_source_closure_v1.txt",
+        "ci/privacy_zk_x509_worker_source_closure_v1.txt",
         "scripts/check_native_sdk_abi22_artifact.py",
+        "scripts/tests/cargo_lock_workspace_edge_review_test.py",
         "scripts/check_privacy_python_witness_boundary.py",
+        "scripts/package_privacy_wallet_worker.py",
+        "scripts/package_zk_x509_prover_worker.py",
+        "scripts/capture_zk_x509_native_candidate.py",
+        "scripts/verify_ec2_instance_identity.py",
+        "ci/check_taira_privacy_native_host.sh",
+        "ci/taira_privacy_native_host_probe.c",
         "scripts/compute_workspace_source_manifest.py",
         "scripts/tests/check_privacy_jvm_native_gate_test.py",
         "scripts/tests/check_privacy_python_witness_boundary_test.py",
+        "scripts/tests/audit_privacy_sdk_release_lock_transition_test.py",
+        "scripts/tests/package_privacy_wallet_worker_test.py",
+        "scripts/tests/package_zk_x509_prover_worker_test.py",
+        "scripts/tests/capture_zk_x509_native_candidate_test.py",
+        "scripts/tests/verify_ec2_instance_identity_test.py",
+        "scripts/tests/check_taira_privacy_native_host_test.py",
+        "docs/source/zk_x509_native_candidate_capture.md",
         "javascript/iroha_js/test/privacyNative.integration.test.js",
         "python/iroha_python/tests/privacy_native_integration_test.py",
         "python/iroha_python/tests/privacy_wallet_worker_controller_test.py",
+        "python/iroha_python/tests/privacy_zk_x509_worker_controller_test.py",
+        "python/iroha_python/src/iroha_python/privacy_zk_x509_worker.py",
     )
     _check_workflow_trigger_paths(workflow, required_workflow_paths, errors)
     lock_helper_executable_source = "\n".join(
@@ -2084,10 +2356,18 @@ def check(overrides: dict[str, str] | None = None) -> None:
     )
     require(
         'RUSTC_BOOTSTRAP=1 \\' in lock_helper_source
-        and '"${real_cargo}" -Z unstable-options generate-lockfile'
+        and '"${real_cargo}" -Z unstable-options metadata'
         in lock_helper_source
         and 'CARGO_HOME="${private_cargo_home}"' in lock_helper_source
-        and "CARGO_NET_OFFLINE=false" in lock_helper_source
+        and "CARGO_NET_OFFLINE=true" in lock_helper_source
+        and 'install -m 400 "${release_lock_source}" "${lock_path}"'
+        in lock_helper_source
+        and "PRIVACY_SDK_RELEASE_CARGO_LOCK_SOURCE_RELATIVE"
+        in lock_helper_source
+        and '"ci/privacy_sdk_release_lock_v2.toml"'
+        in lock_helper_source
+        and "--locked" in lock_helper_source
+        and "--offline" in lock_helper_source
         and '--lockfile-path "${lock_path}"' in lock_helper_source
         and "privacy_sdk_validate_repository_cargo_configuration"
         in lock_helper_source
@@ -2202,9 +2482,130 @@ def check(overrides: dict[str, str] | None = None) -> None:
         in python_sdk_guard_source
         and "tests/privacy_wallet_worker_controller_test.py"
         in python_sdk_guard_source
+        and "tests/privacy_zk_x509_worker_controller_test.py"
+        in python_sdk_guard_source
         and "scripts/tests/check_privacy_python_witness_boundary_test.py"
+        in python_sdk_guard_source
+        and "scripts/tests/package_privacy_wallet_worker_test.py"
+        in python_sdk_guard_source
+        and "scripts/tests/package_zk_x509_prover_worker_test.py"
+        in python_sdk_guard_source
+        and "scripts/tests/capture_zk_x509_native_candidate_test.py"
+        in python_sdk_guard_source
+        and "scripts/tests/verify_ec2_instance_identity_test.py"
+        in python_sdk_guard_source
+        and "scripts/tests/check_taira_privacy_native_host_test.py"
         in python_sdk_guard_source,
         "privacy Python SDK gate must enforce and test the Rust-worker witness boundary",
+        errors,
+    )
+    require(
+        'SCHEMA = "iroha.privacy.generic11_wallet_worker_package.v2"'
+        in generic11_worker_package_source
+        and 'AUTHENTICATED_SOURCE_BUILD_V2 = "cargo-iroha-fast-frozen-release-v2"'
+        in generic11_worker_package_source
+        and 'PREBUILT_CANDIDATE_BUILD_V1 = "prebuilt-artifact-candidate-v1"'
+        in generic11_worker_package_source
+        and "_raw_release_source_identity(source_root)"
+        in generic11_worker_package_source
+        and 'f"gpg.ssh.program={_SYSTEM_SSH_KEYGEN}"'
+        in generic11_worker_package_source
+        and '"GIT_NO_REPLACE_OBJECTS"' in generic11_worker_package_source
+        and "build_command_sha256 == _build_command_sha256(target)"
+        in generic11_worker_package_source
+        and '"artifact_build_provenance"' in generic11_worker_package_source
+        and "repeated_corridor != corridor" in generic11_worker_package_source
+        and "def _frozen_build_environment(" in generic11_worker_package_source
+        and '"--frozen"' in generic11_worker_package_source
+        and "test_prebuilt_artifact_cannot_be_promoted_by_a_ready_manifest"
+        in generic11_worker_package_tests
+        and "test_frozen_build_environment_drops_compiler_and_loader_injection"
+        in generic11_worker_package_tests
+        and "test_source_identity_change_during_evidence_collection_is_rejected"
+        in generic11_worker_package_tests,
+        "Generic11 worker packages must bind raw-clean signed source, exact registry and authenticated build provenance while keeping prebuilt artifacts candidate-only",
+        errors,
+    )
+    require(
+        'SCHEMA = "iroha.privacy.zk_x509_prover_worker_package.v5"'
+        in zk_x509_worker_package_source
+        and 'AUTHENTICATED_SOURCE_BUILD_V2 = "cargo-direct-frozen-signed-snapshot-v3"'
+        in zk_x509_worker_package_source
+        and 'PREBUILT_CANDIDATE_BUILD_V1 = "prebuilt-artifact-candidate-v1"'
+        in zk_x509_worker_package_source
+        and "_raw_release_source_identity(source_root, signed_source_helper)"
+        in zk_x509_worker_package_source
+        and "signed source identity helper snapshot remained path-addressable"
+        in zk_x509_worker_package_source
+        and 'f"gpg.ssh.program={_SYSTEM_SSH_KEYGEN}"'
+        in zk_x509_worker_package_source
+        and 'parser.add_argument("--signer-principal", required=True)'
+        in zk_x509_worker_package_source
+        and 'parser.add_argument("--signer-fingerprint", required=True)'
+        in zk_x509_worker_package_source
+        and "def _export_signed_source_snapshot(" in zk_x509_worker_package_source
+        and "def _cargo_cache_tree_record(" in zk_x509_worker_package_source
+        and '"cargo_cache_roots"' in zk_x509_worker_package_source
+        and "pass_fds=pass_descriptors" in zk_x509_worker_package_source
+        and '_SIGNED_MANIFEST_TOKEN = "@SIGNED_SOURCE_SNAPSHOT@/Cargo.toml"'
+        in zk_x509_worker_package_source
+        and '"GIT_NO_REPLACE_OBJECTS"' in zk_x509_worker_package_source
+        and "artifact_build_command_sha256 == _build_command_sha256(target)"
+        in zk_x509_worker_package_source
+        and '"artifact_build_provenance"' in zk_x509_worker_package_source
+        and "repeated_corridor != corridor" in zk_x509_worker_package_source
+        and "def _frozen_build_environment(" in zk_x509_worker_package_source
+        and '"--frozen"' in zk_x509_worker_package_source
+        and "test_prebuilt_artifact_cannot_be_promoted_by_a_ready_identity"
+        in zk_x509_worker_package_tests
+        and "test_frozen_build_environment_drops_compiler_and_loader_injection"
+        in zk_x509_worker_package_tests
+        and "test_source_identity_change_during_evidence_collection_is_rejected"
+        in zk_x509_worker_package_tests
+        and "test_cargo_cache_tree_seal_is_descriptor_anchored_and_content_exact"
+        in zk_x509_worker_package_tests
+        and "test_release_manifest_rejects_unrepinned_build_input_drift"
+        in zk_x509_worker_package_tests
+        and "def _run_bounded_process(" in zk_x509_worker_package_source
+        and "def _atomic_rename_noreplace(" in zk_x509_worker_package_source
+        and "test_package_publication_collision_never_replaces_attacker_entry"
+        in zk_x509_worker_package_tests
+        and "def _run_bounded_process(" in zk_x509_candidate_capture_source
+        and "def _atomic_rename_noreplace(" in zk_x509_candidate_capture_source
+        and "test_candidate_publication_collision_preserves_existing_entry"
+        in zk_x509_candidate_capture_tests
+        and "def _run_bounded_process(" in ec2_iid_verifier_source
+        and all(zk_x509_containment_supervisors)
+        and len(set(zk_x509_containment_supervisors)) == 1
+        and all(
+            "requires Linux user and PID namespaces" in source
+            and "def _request_namespace_teardown_and_reap(" in source
+            and "controller_catchable_signals.intersection(" in source
+            for source in zk_x509_containment_sources
+        )
+        and "test_containment_supervisor_source_is_identical_across_all_runners"
+        in native_host_tests
+        and "test_cleanup_defers_controller_exception_until_supervisor_reap"
+        in zk_x509_worker_package_tests
+        and "test_bounded_process_defers_spawn_signal_until_handle_is_retained"
+        in zk_x509_worker_package_tests
+        and "test_bounded_process_pre_authorization_exception_never_execs_and_reaps_supervisor"
+        in zk_x509_worker_package_tests
+        and "test_bounded_process_exec_target_state_is_not_overclaimed"
+        in zk_x509_worker_package_tests
+        and "rustix::process::DumpableBehavior::NotDumpable"
+        in zk_x509_worker_source
+        and "fn process_is_nondumpable_v1() -> bool"
+        in zk_x509_worker_linux_isolation_source
+        and "|| !process_is_nondumpable_v1()"
+        in zk_x509_worker_linux_isolation_source
+        and "crates/iroha_core/src/bin/iroha_zk_x509_prover_worker.rs"
+        in zk_x509_worker_source_closure
+        and "crates/iroha_core/src/bin/iroha_zk_x509_prover_worker/linux_isolation.rs"
+        in zk_x509_worker_source_closure
+        and "test_linux_launcher_is_source_closed_and_matches_packaging_policy"
+        in zk_x509_worker_package_tests,
+        "zk-X509 worker packages must bind raw-clean signed source, Linux-only PID-namespace containment with reap-before-return, post-exec state evidence, and the exact authenticated build corridor while keeping prebuilt artifacts candidate-only",
         errors,
     )
     require(
@@ -2458,7 +2859,9 @@ if mode:
     elif mode == "--negative-control-cargo-lock-helper-generation":
         path = "ci/privacy_sdk_cargo_lockfile.sh"
         overrides[path] = read(path, {}).replace(
-            "generate-lockfile", "generate-workspace-lockfile", 1
+            '"${real_cargo}" -Z unstable-options metadata',
+            '"${real_cargo}" -Z unstable-options unchecked-metadata',
+            1,
         )
     elif mode == "--negative-control-cargo-config-workflow-path":
         path = ".github/workflows/pr_privacy_sdk_guard.yml"
@@ -2611,6 +3014,13 @@ if mode:
         overrides[path] = read(path, {}).replace(
             '"iroha_data_model/privacy-exact12-conformance"',
             '"iroha_data_model/test-fixtures"',
+            1,
+        )
+    elif mode == "--negative-control-exact12-halo2-forwarding":
+        path = "crates/iroha_core/Cargo.toml"
+        overrides[path] = read(path, {}).replace(
+            '    "iroha_zkp_halo2/privacy-release-evidence",\n',
+            "",
             1,
         )
     else:

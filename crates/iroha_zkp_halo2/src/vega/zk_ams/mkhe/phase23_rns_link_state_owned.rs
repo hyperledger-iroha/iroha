@@ -17,13 +17,12 @@ use super::super::{
     packing::{
         ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1, zk_ams_t256_packing_layout_v1,
     },
-    phase23_encrypted::ZkAmsPhase23PackedAccumulatorSetV1,
 };
 use super::{
     RNS_LINK_FAMILY_COUNT_V1, RNS_LINK_RELEASE_COMMITMENTS_V1, RNS_LINK_VERSION_V1,
-    ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1, ZkAmsPhase23RnsLinkFamilyGeometryV1,
-    ZkAmsPhase23RnsLinkFamilyV1, ZkAmsPhase23RnsLinkReleaseGeometryV1,
-    ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1,
+    ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1, ZkAmsPhase23PackedAccumulatorSetV1,
+    ZkAmsPhase23RnsLinkFamilyGeometryV1, ZkAmsPhase23RnsLinkFamilyV1,
+    ZkAmsPhase23RnsLinkReleaseGeometryV1, ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1,
     derive_zk_ams_phase23_rns_link_release_geometry_v1,
     preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1,
     q_relation_adapter::{
@@ -869,7 +868,7 @@ mod tests {
             .expect("unit-only adapter signature");
         for required in [
             "self,",
-            "ZkAmsPhase23NativeBgvOpeningVerifierPermitV1",
+            "ZkAmsPhase23NativeBgvOpeningVerifierBindingV1",
             "&mut ZkAmsPhase23QNativeRelationAdapterSinkV1",
             "Result<(), ZkAmsMkheErrorV1>",
         ] {

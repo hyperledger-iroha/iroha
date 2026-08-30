@@ -16,10 +16,10 @@ fn legacy_source_blinding_bytes_v1(seed: [u8; 32], group: u16) -> [u8; 32] {
         hash.update(&group.to_be_bytes());
         hash.update(&(attempt as u16).to_be_bytes());
         hash.finalize_into(&mut encoded);
-        if let Ok(scalar) = Scalar::from_be_bytes_exact_ref(&encoded) {
-            if !scalar.is_zero() {
-                return encoded;
-            }
+        if let Ok(scalar) = Scalar::from_be_bytes_exact_ref(&encoded)
+            && !scalar.is_zero()
+        {
+            return encoded;
         }
     }
     panic!("legacy deterministic source fixture exhausted rejection bound");
@@ -194,16 +194,18 @@ fn exact_storage_and_zero_new_skeleton_io_are_frozen() {
         INVENTORY_SKELETON_NAMED_HEAP_BYTES_V1,
         82_805 * core::mem::size_of::<Option<GlobalLookupCommitmentTicketV1>>()
     );
-    assert!(!DUAL_Z_PROOF_INVENTORY_CAP_ADMISSIBLE_V1);
-    assert!(!UNIFIED_Z_INVENTORY_INHABITED_V1);
-    assert!(!TRANSCRIPT_Z_ALIAS_INSTANTIATED_V1);
-    assert!(!PROOF_ACCOUNTING_QUALIFIED_V1);
-    assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1);
-    assert!(!AUTHORITY_ACCEPTED_V1);
-    assert!(!RSS_QUALIFIED_V1);
-    assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V1);
-    assert!(!RELEASE_READY_V1);
-    assert!(!RELEASE_COMPLETE_V1);
+    const {
+        assert!(!DUAL_Z_PROOF_INVENTORY_CAP_ADMISSIBLE_V1);
+        assert!(!UNIFIED_Z_INVENTORY_INHABITED_V1);
+        assert!(!TRANSCRIPT_Z_ALIAS_INSTANTIATED_V1);
+        assert!(!PROOF_ACCOUNTING_QUALIFIED_V1);
+        assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1);
+        assert!(!AUTHORITY_ACCEPTED_V1);
+        assert!(!RSS_QUALIFIED_V1);
+        assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V1);
+        assert!(!RELEASE_READY_V1);
+        assert!(!RELEASE_COMPLETE_V1);
+    };
     let inventory = GlobalLookupCommitmentInventorySkeletonV1::new_v1().unwrap();
     assert_eq!(inventory.slots.len(), 82_805);
     assert_eq!(inventory.slots.capacity(), 82_805);

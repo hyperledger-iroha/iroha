@@ -23,7 +23,7 @@ use super::super::super::manifest::{RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_
 use super::is_prime_u64;
 use crate::vega::sponge::{Keccak256, keccak256};
 use core::{convert::Infallible, fmt};
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
     CONFIDENTIAL_SPOOL_MAX_SLOTS_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1,
     ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,

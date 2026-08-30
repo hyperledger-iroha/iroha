@@ -664,6 +664,887 @@ pub enum PrivacyZkAcePolicyRecordValidationErrorV1 {
     #[error("ZK-ACE policy record self-digest mismatch")]
     RecordDigestMismatch,
 }
+/// Finalized provenance for one consumed ZK-ACE replay nullifier.
+///
+/// The marker fields are copied from the durable privacy-nullifier registry.
+/// `finalized_height` and `finalized_block_hash` bind that marker to the exact
+/// committed state snapshot that served the authenticated query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyZkAceReplayNullifierProvenanceV1 {
+    /// Exact genesis-derived identity of the queried network.
+    pub network_id: NetworkId,
+    /// Stable governed policy lineage that scoped the replay key.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Exact replay nullifier consumed by the verified authorization.
+    pub replay_nullifier: PrivacyNullifierV1,
+    /// Exact authoritative policy revision used during verification.
+    pub policy_record_digest: PrivacyZkAcePolicyRecordDigestV1,
+    /// Digest of the exact verified public statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Block height at which the replay marker became durable.
+    pub admitted_at_height: u64,
+    /// Zero-based privacy-action index within the committed transaction.
+    pub action_index: u32,
+    /// Height of the finalized state snapshot that served the query.
+    pub finalized_height: u64,
+    /// Hash of the finalized block that anchors the served state snapshot.
+    pub finalized_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+}
+impl PrivacyZkAceReplayNullifierProvenanceV1 {
+    /// Validate the fixed finalized replay-marker view.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identities or digests and a finality anchor older than the
+    /// block that admitted the marker.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err("ZK-ACE replay provenance NetworkId must be non-zero");
+        }
+        if self.policy_id.is_zero() {
+            return Err("ZK-ACE replay provenance policy id must be non-zero");
+        }
+        if self.replay_nullifier.is_zero() {
+            return Err("ZK-ACE replay provenance nullifier must be non-zero");
+        }
+        if self.policy_record_digest.is_zero() {
+            return Err("ZK-ACE replay provenance policy record digest must be non-zero");
+        }
+        if self.statement_digest.is_zero() {
+            return Err("ZK-ACE replay provenance statement digest must be non-zero");
+        }
+        if self.admitted_at_height == 0 {
+            return Err("ZK-ACE replay provenance admission height must be non-zero");
+        }
+        if self.finalized_height < self.admitted_at_height {
+            return Err("ZK-ACE replay provenance finality predates marker admission");
+        }
+        if self
+            .finalized_block_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err("ZK-ACE replay provenance finalized block hash must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Exact latest verified transition in one proof-managed privacy pool.
+///
+/// The statement digest binds the complete FCMP++, private-IVM, or PQ-MASP
+/// public action, including its consumed key image/nullifiers and appended
+/// outputs. Counts and the successor epoch are copied from the durable
+/// validator provenance checked against the authoritative accumulator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyProofManagedPoolTransitionViewV1 {
+    /// Digest of the exact verified public statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Exact accumulator epoch produced by the transition.
+    pub successor_epoch: u64,
+    /// Block height at which the transition became durable.
+    pub admitted_at_height: u64,
+    /// Zero-based privacy-action index within the committed transaction.
+    pub action_index: u32,
+    /// Number of consumed key images or nullifiers in the statement.
+    pub nullifier_count: u32,
+    /// Number of outputs appended by the statement.
+    pub output_count: u32,
+}
+impl PrivacyProofManagedPoolTransitionViewV1 {
+    /// Validate one fixed transition view.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero statement digests, epochs, heights, or native batch counts.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.statement_digest.is_zero() {
+            return Err("proof-managed transition statement digest must be non-zero");
+        }
+        if self.successor_epoch <= 1 {
+            return Err("proof-managed transition successor epoch must exceed one");
+        }
+        if self.admitted_at_height == 0 {
+            return Err("proof-managed transition admission height must be non-zero");
+        }
+        if self.nullifier_count == 0 {
+            return Err("proof-managed transition nullifier count must be non-zero");
+        }
+        if self.output_count == 0 {
+            return Err("proof-managed transition output count must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Finalized typed state of one FCMP++, private-IVM, or PQ-MASP pool.
+///
+/// Core constructs this only after rebuilding and cross-checking the complete
+/// durable output order, compact frontier, current root head, retained root
+/// history, and latest statement provenance. The finality fields bind that
+/// validated state to the exact network snapshot that served the authenticated
+/// query.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyProofManagedPoolStateViewV1 {
+    /// Exact genesis-derived identity of the queried network.
+    pub network_id: NetworkId,
+    /// One of FCMP++, private-IVM, or PQ-MASP.
+    pub protocol_id: PrivacyProtocolIdV1,
+    /// Stable pool identity inside the protocol namespace.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset represented by the pool.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Protocol-specific accumulator role.
+    pub root_role: PrivacyRootRoleV1,
+    /// Digest of the immutable governed bootstrap.
+    pub bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+    /// Canonical accumulator root derived from the bootstrap.
+    pub initial_root: PrivacyRootV1,
+    /// Current authoritative accumulator epoch.
+    pub current_epoch: u64,
+    /// Current authoritative shared history root.
+    pub current_root: PrivacyRootV1,
+    /// Total genesis and proof-produced outputs in append order.
+    pub output_count: u64,
+    /// Height at which the immutable bootstrap became durable.
+    pub bootstrap_admitted_at_height: u64,
+    /// Latest verified transition, absent only at bootstrap epoch one.
+    pub latest_transition: Option<PrivacyProofManagedPoolTransitionViewV1>,
+    /// Height of the finalized state snapshot that served the query.
+    pub finalized_height: u64,
+    /// Hash of the finalized block that anchors the served state snapshot.
+    pub finalized_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+}
+impl PrivacyProofManagedPoolStateViewV1 {
+    /// Validate the complete bounded finalized pool view.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsupported protocols, mismatched root roles, zero identities,
+    /// malformed epoch/transition relationships, or stale finality anchors.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err("proof-managed pool state NetworkId must be non-zero");
+        }
+        if self.pool_id.is_zero() {
+            return Err("proof-managed pool state pool id must be non-zero");
+        }
+        let expected_role = match self.protocol_id {
+            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => PrivacyRootRoleV1::OutputSet,
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => PrivacyRootRoleV1::ProgramState,
+            PrivacyProtocolIdV1::PqMaspStarkV0 => PrivacyRootRoleV1::NoteCommitmentAnchor,
+            _ => return Err("proof-managed pool state protocol is unsupported"),
+        };
+        if self.root_role != expected_role {
+            return Err("proof-managed pool state root role differs from its protocol");
+        }
+        if self.bootstrap_digest.is_zero() {
+            return Err("proof-managed pool state bootstrap digest must be non-zero");
+        }
+        if self.initial_root.is_zero() || self.current_root.is_zero() {
+            return Err("proof-managed pool state roots must be non-zero");
+        }
+        if self.current_epoch == 0 || self.output_count == 0 {
+            return Err("proof-managed pool state epoch and output count must be non-zero");
+        }
+        if self.bootstrap_admitted_at_height == 0 {
+            return Err("proof-managed pool bootstrap admission height must be non-zero");
+        }
+        match (self.current_epoch, self.latest_transition) {
+            (1, None) => {}
+            (1, Some(_)) => {
+                return Err("proof-managed bootstrap epoch cannot carry a transition");
+            }
+            (_, None) => {
+                return Err("advanced proof-managed pool state must carry its latest transition");
+            }
+            (epoch, Some(transition)) => {
+                transition.validate()?;
+                if transition.successor_epoch != epoch {
+                    return Err("proof-managed transition epoch differs from the current head");
+                }
+                if u64::from(transition.output_count) > self.output_count {
+                    return Err("proof-managed transition output count exceeds pool output count");
+                }
+                if transition.admitted_at_height > self.finalized_height {
+                    return Err("proof-managed transition admission postdates query finality");
+                }
+            }
+        }
+        if self.finalized_height < self.bootstrap_admitted_at_height {
+            return Err("proof-managed pool finality predates bootstrap admission");
+        }
+        if self
+            .finalized_block_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err("proof-managed pool finalized block hash must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Exact latest verified transition in one governed Orchard pool.
+///
+/// The authoritative root head retains this fixed provenance even though note
+/// openings and wallet custody remain off ledger. The parent binding proves
+/// that the current root is the direct successor of the consumed root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyOrchardPoolTransitionViewV1 {
+    /// Digest of the exact verified Orchard statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Epoch of the authoritative root produced by this transition.
+    pub successor_epoch: u64,
+    /// Exact epoch consumed by the verified transition.
+    pub parent_epoch: u64,
+    /// Exact root consumed by the verified transition.
+    pub parent_root: PrivacyRootV1,
+    /// Block height at which the transition became durable.
+    pub admitted_at_height: u64,
+    /// Zero-based privacy-action index within the committed transaction.
+    pub action_index: u32,
+}
+impl PrivacyOrchardPoolTransitionViewV1 {
+    /// Validate one fixed Orchard successor view.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero statement/root/height fields or a non-adjacent epoch link.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.statement_digest.is_zero() {
+            return Err("Orchard transition statement digest must be non-zero");
+        }
+        if self.parent_epoch == 0 || self.parent_epoch.checked_add(1) != Some(self.successor_epoch)
+        {
+            return Err("Orchard transition must advance its parent by exactly one epoch");
+        }
+        if self.parent_root.is_zero() {
+            return Err("Orchard transition parent root must be non-zero");
+        }
+        if self.admitted_at_height == 0 {
+            return Err("Orchard transition admission height must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Finalized typed state of one governed Orchard pool.
+///
+/// Core constructs this only after rehashing the complete compact frontier and
+/// cross-checking its current typed root head and retained history. Note
+/// plaintexts, viewing keys, and authentication paths are deliberately absent.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyOrchardPoolStateViewV1 {
+    /// Exact genesis-derived identity of the queried network.
+    pub network_id: NetworkId,
+    /// Stable pool identity inside the Orchard namespace.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset represented by the pool.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Public balance scope fixed by the governed bootstrap.
+    pub public_balance_scope: AssetBalanceScope,
+    /// Public account holding the pool reserve.
+    pub reserve_account: AccountId,
+    /// Digest of the immutable governed bootstrap.
+    pub bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+    /// Current authoritative Orchard root epoch.
+    pub current_epoch: u64,
+    /// Current authoritative Orchard note-commitment root.
+    pub current_root: PrivacyRootV1,
+    /// Total ordered action commitments in the compact frontier.
+    pub tree_size: u64,
+    /// Latest verified transition, absent only at the empty bootstrap origin.
+    pub latest_transition: Option<PrivacyOrchardPoolTransitionViewV1>,
+    /// Height of the finalized state snapshot that served the query.
+    pub finalized_height: u64,
+    /// Hash of the finalized block that anchors the served state snapshot.
+    pub finalized_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+}
+impl PrivacyOrchardPoolStateViewV1 {
+    /// Validate the bounded finalized Orchard pool view.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identities, an impossible compact-frontier size/epoch
+    /// relation, malformed latest-transition provenance, or stale finality.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err("Orchard pool state NetworkId must be non-zero");
+        }
+        if self.pool_id.is_zero() {
+            return Err("Orchard pool state pool id must be non-zero");
+        }
+        if matches!(
+            self.public_balance_scope,
+            AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL)
+        ) {
+            return Err("Orchard pool state cannot use the universal dataspace balance scope");
+        }
+        if self.bootstrap_digest.is_zero() || self.current_root.is_zero() {
+            return Err("Orchard pool state bootstrap digest and root must be non-zero");
+        }
+        if self.current_epoch == 0 {
+            return Err("Orchard pool state epoch must be non-zero");
+        }
+        let transitions = self
+            .current_epoch
+            .checked_sub(PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1)
+            .ok_or("Orchard pool state precedes its canonical origin")?;
+        let maximum_tree_size = transitions
+            .checked_mul(u64::from(ORCHARD_MAX_ACTIONS_V1))
+            .ok_or("Orchard pool state transition count overflow")?;
+        if self.tree_size < transitions || self.tree_size > maximum_tree_size {
+            return Err("Orchard pool state tree size is inconsistent with its epoch");
+        }
+        match (transitions, self.latest_transition) {
+            (0, None) => {}
+            (0, Some(_)) => {
+                return Err("Orchard bootstrap origin cannot carry a latest transition");
+            }
+            (_, None) => {
+                return Err("advanced Orchard pool state must carry its latest transition");
+            }
+            (_, Some(transition)) => {
+                transition.validate()?;
+                if transition.successor_epoch != self.current_epoch {
+                    return Err("Orchard latest transition does not produce the current epoch");
+                }
+                if transition.admitted_at_height > self.finalized_height {
+                    return Err("Orchard transition admission postdates query finality");
+                }
+            }
+        }
+        if self.finalized_height == 0 {
+            return Err("Orchard pool finalized height must be non-zero");
+        }
+        if self
+            .finalized_block_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err("Orchard pool finalized block hash must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Finalized provenance for one consumed Orchard nullifier.
+///
+/// The exact nullifier remains pool-scoped and origin-bound in durable state;
+/// the finality fields bind the marker to the authenticated state snapshot that
+/// served the query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyOrchardNullifierProvenanceV1 {
+    /// Exact genesis-derived identity of the queried network.
+    pub network_id: NetworkId,
+    /// Stable pool identity inside the Orchard namespace.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact canonical Orchard nullifier consumed by the transition.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub nullifier: [u8; 32],
+    /// Immutable pool bootstrap selected during verification.
+    pub bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+    /// Digest of the exact verified public statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Block height at which the nullifier became durable.
+    pub admitted_at_height: u64,
+    /// Zero-based privacy-action index within the committed transaction.
+    pub action_index: u32,
+    /// Height of the finalized state snapshot that served the query.
+    pub finalized_height: u64,
+    /// Hash of the finalized block that anchors the served state snapshot.
+    pub finalized_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+}
+impl PrivacyOrchardNullifierProvenanceV1 {
+    /// Validate the fixed finalized nullifier view.
+    ///
+    /// Canonical Pallas-field validation is deliberately performed by Core
+    /// against the native Orchard key constructor before this view is built.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identities/digests/heights, finality before admission, or
+    /// an absent finalized-block binding.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err("Orchard nullifier provenance NetworkId must be non-zero");
+        }
+        if self.pool_id.is_zero() {
+            return Err("Orchard nullifier provenance pool id must be non-zero");
+        }
+        if self.bootstrap_digest.is_zero() || self.statement_digest.is_zero() {
+            return Err("Orchard nullifier provenance digests must be non-zero");
+        }
+        if self.admitted_at_height == 0 {
+            return Err("Orchard nullifier admission height must be non-zero");
+        }
+        if self.finalized_height < self.admitted_at_height {
+            return Err("Orchard nullifier finality predates marker admission");
+        }
+        if self
+            .finalized_block_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err("Orchard nullifier finalized block hash must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Exact latest verified transition in one Anonymous PGC pool.
+///
+/// The encrypted account table remains validator-internal. This public view
+/// carries only the root transition and committed provenance needed to prove
+/// that the current table is the direct, finalized successor of its parent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyAnonymousPgcPoolTransitionViewV1 {
+    /// Digest of the exact verified Anonymous PGC payment statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Epoch of the authoritative encrypted account-table root produced by the transition.
+    pub successor_epoch: u64,
+    /// Exact epoch consumed by the verified transition.
+    pub parent_epoch: u64,
+    /// Exact root consumed by the verified transition.
+    pub parent_root: PrivacyRootV1,
+    /// Block height at which the transition became durable.
+    pub admitted_at_height: u64,
+    /// Zero-based privacy-action index within the committed transaction.
+    pub action_index: u32,
+}
+impl PrivacyAnonymousPgcPoolTransitionViewV1 {
+    /// Validate the fixed successor relationship and provenance.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero statement/root/height fields or a non-adjacent epoch link.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.statement_digest.is_zero() {
+            return Err("Anonymous PGC transition statement digest must be non-zero");
+        }
+        if self.parent_epoch == 0 || self.parent_epoch.checked_add(1) != Some(self.successor_epoch)
+        {
+            return Err("Anonymous PGC transition must advance its parent by exactly one epoch");
+        }
+        if self.parent_root.is_zero() {
+            return Err("Anonymous PGC transition parent root must be non-zero");
+        }
+        if self.admitted_at_height == 0 {
+            return Err("Anonymous PGC transition admission height must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Finalized bounded public state of one Anonymous PGC pool.
+///
+/// Core constructs this only after validating the complete encrypted account
+/// table, immutable supply invariant, compact root history, and current head.
+/// Ciphertexts and account public keys are deliberately excluded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyAnonymousPgcPoolStateViewV1 {
+    /// Exact genesis-derived identity of the queried network.
+    pub network_id: NetworkId,
+    /// Stable Anonymous PGC pool identity.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Immutable public aggregate supply established by the verified bootstrap.
+    pub total_supply: u32,
+    /// Canonical epoch-one encrypted account-table root.
+    pub bootstrap_root: PrivacyRootV1,
+    /// Digest of the exact governed bootstrap payload.
+    pub bootstrap_digest: PrivacyPgcAccountBootstrapDigestV1,
+    /// Digest of the exact native bootstrap proof bytes.
+    pub bootstrap_proof_digest: PrivacyPgcBootstrapProofDigestV1,
+    /// Current authoritative encrypted account-table epoch.
+    pub current_epoch: u64,
+    /// Current authoritative encrypted account-table root.
+    pub current_root: PrivacyRootV1,
+    /// Number of encrypted accounts in the closed table.
+    pub account_count: u32,
+    /// Height at which the current root became durable.
+    pub current_state_admitted_at_height: u64,
+    /// Latest verified payment transition, absent only at epoch one.
+    pub latest_transition: Option<PrivacyAnonymousPgcPoolTransitionViewV1>,
+    /// Height of the finalized state snapshot that served the query.
+    pub finalized_height: u64,
+    /// Hash of the finalized block that anchors the served state snapshot.
+    pub finalized_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+}
+impl PrivacyAnonymousPgcPoolStateViewV1 {
+    /// Validate the bounded finalized pool view.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed identities, invariants, account counts, transition
+    /// relationships, or stale/absent finality bindings.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err("Anonymous PGC pool state NetworkId must be non-zero");
+        }
+        if self.pool_id.is_zero() {
+            return Err("Anonymous PGC pool state pool id must be non-zero");
+        }
+        if self.total_supply == 0 {
+            return Err("Anonymous PGC pool state total supply must be non-zero");
+        }
+        if self.bootstrap_root.is_zero() || self.current_root.is_zero() {
+            return Err("Anonymous PGC pool state roots must be non-zero");
+        }
+        if self.bootstrap_digest.is_zero() || self.bootstrap_proof_digest.is_zero() {
+            return Err("Anonymous PGC pool state bootstrap digests must be non-zero");
+        }
+        if self.current_epoch == 0 {
+            return Err("Anonymous PGC pool state epoch must be non-zero");
+        }
+        if !ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1.contains(&self.account_count) {
+            return Err("Anonymous PGC pool state account count is outside the closed profile");
+        }
+        if self.current_state_admitted_at_height == 0 {
+            return Err("Anonymous PGC pool state admission height must be non-zero");
+        }
+        match (self.current_epoch, self.latest_transition) {
+            (PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, None) => {
+                if self.current_root != self.bootstrap_root {
+                    return Err("Anonymous PGC bootstrap head differs from its origin root");
+                }
+            }
+            (PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, Some(_)) => {
+                return Err("Anonymous PGC bootstrap epoch cannot carry a transition");
+            }
+            (_, None) => {
+                return Err("advanced Anonymous PGC state must carry its latest transition");
+            }
+            (epoch, Some(transition)) => {
+                transition.validate()?;
+                if transition.successor_epoch != epoch {
+                    return Err("Anonymous PGC transition does not produce the current epoch");
+                }
+                if transition.admitted_at_height != self.current_state_admitted_at_height {
+                    return Err("Anonymous PGC head admission differs from its transition");
+                }
+            }
+        }
+        if self.finalized_height < self.current_state_admitted_at_height {
+            return Err("Anonymous PGC pool finality predates its current state");
+        }
+        if self
+            .finalized_block_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err("Anonymous PGC pool finalized block hash must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Finalized provenance for one admitted ZK-AMS personhood credential.
+///
+/// This view preserves the exact PHC/seed pairing and batch position committed
+/// after native admission verification. It never exposes credential plaintext
+/// or holder secret material.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyZkAmsAdmissionViewV1 {
+    /// Exact genesis-derived identity of the queried network.
+    pub network_id: NetworkId,
+    /// Credential issuer governing the admission relation.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Admitted-identity registry containing the anchor.
+    pub registry_id: PrivacyZkAmsRegistryIdV1,
+    /// Governed admission policy.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Exact canonical PHC hash admitted by the proof.
+    pub phc_hash: PrivacyZkAmsPhcHashV1,
+    /// Seed public key paired with the PHC in the verified batch transcript.
+    pub seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
+    /// Immutable registry bootstrap selected during verification.
+    pub bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+    /// Exact authoritative issuer-key/policy revision selected by the proof.
+    pub issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    /// Governed policy digest bound into the authoritative registry record.
+    pub policy_digest: PrivacyPolicyDigestV1,
+    /// Exact authoritative pre-transition registry snapshot selected by the proof.
+    pub registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    /// Registry epoch consumed by the verified batch.
+    pub parent_epoch: u64,
+    /// Registry root consumed by the verified batch.
+    pub parent_root: PrivacyRootV1,
+    /// Zero-based anchor position in the verified batch.
+    pub anchor_index: u32,
+    /// Exact number of ordered anchors in the verified batch.
+    pub batch_size: u32,
+    /// Registry epoch produced by the batch.
+    pub successor_epoch: u64,
+    /// Registry root produced by the batch.
+    pub successor_root: PrivacyRootV1,
+    /// Digest of the exact verified public statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Block height at which the anchor became durable.
+    pub admitted_at_height: u64,
+    /// Zero-based privacy-action index within the committed transaction.
+    pub action_index: u32,
+    /// Height of the finalized state snapshot that served the query.
+    pub finalized_height: u64,
+    /// Hash of the finalized block that anchors the served state snapshot.
+    pub finalized_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+}
+impl PrivacyZkAmsAdmissionViewV1 {
+    /// Validate the fixed admission and finality relationships.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero fields, an out-of-bounds batch position, or finality before
+    /// the committed admission.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err("ZK-AMS admission NetworkId must be non-zero");
+        }
+        if self.issuer_id.is_zero()
+            || self.registry_id.is_zero()
+            || self.policy_id.is_zero()
+            || self.phc_hash.is_zero()
+            || self.seed_public_key.is_zero()
+        {
+            return Err("ZK-AMS admission identities and anchor must be non-zero");
+        }
+        if self.bootstrap_digest.is_zero()
+            || self.issuer_policy_record_digest.is_zero()
+            || self.policy_digest.is_zero()
+            || self.registry_record_digest.is_zero()
+            || self.parent_root.is_zero()
+            || self.successor_root.is_zero()
+            || self.statement_digest.is_zero()
+        {
+            return Err("ZK-AMS admission digests and roots must be non-zero");
+        }
+        if self.batch_size == 0
+            || self.batch_size > ZK_AMS_MAX_BATCH_SIZE_V1
+            || self.anchor_index >= self.batch_size
+        {
+            return Err("ZK-AMS admission batch position is outside the closed profile");
+        }
+        if self.parent_epoch < ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1
+            || self.parent_epoch.checked_add(1) != Some(self.successor_epoch)
+        {
+            return Err("ZK-AMS admission must advance its parent by exactly one epoch");
+        }
+        if self.registry_record_digest
+            != zk_ams_registry_record_digest_v1(
+                self.issuer_id,
+                self.registry_id,
+                self.policy_id,
+                self.issuer_policy_record_digest,
+                self.policy_digest,
+                self.parent_root,
+                self.parent_epoch,
+            )
+        {
+            return Err("ZK-AMS admission registry-record digest is inconsistent");
+        }
+        if self.admitted_at_height == 0 || self.finalized_height < self.admitted_at_height {
+            return Err("ZK-AMS admission finality predates its durable record");
+        }
+        if self
+            .finalized_block_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err("ZK-AMS admission finalized block hash must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Finalized provenance for one anonymous ZK-AMS account provisioning.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyZkAmsProvisionViewV1 {
+    /// Exact genesis-derived identity of the queried network.
+    pub network_id: NetworkId,
+    /// Credential issuer governing the anonymous provisioning relation.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Admitted-identity registry used for ring membership.
+    pub registry_id: PrivacyZkAmsRegistryIdV1,
+    /// Governed admission policy.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// One-use LSAG key image consumed by the provisioning action.
+    pub key_image: PrivacyZkAmsKeyImageV1,
+    /// Exact account materialized by the committed action.
+    pub account_id: AccountId,
+    /// Immutable registry bootstrap selected during verification.
+    pub bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+    /// Exact authoritative issuer-key/policy revision used by the proof.
+    pub issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    /// Governed policy digest bound into the authoritative registry record.
+    pub policy_digest: PrivacyPolicyDigestV1,
+    /// Exact authoritative registry snapshot record used by the proof.
+    pub registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    /// Registry epoch used for ring membership.
+    pub registry_epoch: u64,
+    /// Registry root used for ring membership.
+    pub registry_root: PrivacyRootV1,
+    /// Digest of the exact verified public statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Block height at which the key image and account became durable.
+    pub admitted_at_height: u64,
+    /// Zero-based privacy-action index within the committed transaction.
+    pub action_index: u32,
+    /// Height of the finalized state snapshot that served the query.
+    pub finalized_height: u64,
+    /// Hash of the finalized block that anchors the served state snapshot.
+    pub finalized_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+}
+impl PrivacyZkAmsProvisionViewV1 {
+    /// Validate the complete provision effect and finality binding.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero typed state, a pre-bootstrap registry epoch, or finality
+    /// before account materialization.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err("ZK-AMS provision NetworkId must be non-zero");
+        }
+        if self.issuer_id.is_zero()
+            || self.registry_id.is_zero()
+            || self.policy_id.is_zero()
+            || self.key_image.is_zero()
+        {
+            return Err("ZK-AMS provision identities and key image must be non-zero");
+        }
+        if self.bootstrap_digest.is_zero()
+            || self.issuer_policy_record_digest.is_zero()
+            || self.policy_digest.is_zero()
+            || self.registry_record_digest.is_zero()
+            || self.registry_root.is_zero()
+            || self.statement_digest.is_zero()
+        {
+            return Err("ZK-AMS provision digests and registry root must be non-zero");
+        }
+        if self.registry_epoch < ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1 {
+            return Err("ZK-AMS provision registry epoch precedes its bootstrap");
+        }
+        if self.registry_record_digest
+            != zk_ams_registry_record_digest_v1(
+                self.issuer_id,
+                self.registry_id,
+                self.policy_id,
+                self.issuer_policy_record_digest,
+                self.policy_digest,
+                self.registry_root,
+                self.registry_epoch,
+            )
+        {
+            return Err("ZK-AMS provision registry-record digest is inconsistent");
+        }
+        if self.admitted_at_height == 0 || self.finalized_height < self.admitted_at_height {
+            return Err("ZK-AMS provision finality predates account materialization");
+        }
+        if self
+            .finalized_block_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err("ZK-AMS provision finalized block hash must be non-zero");
+        }
+        Ok(())
+    }
+}
+/// Finalized provenance for one consumed ZK-X509 certificate nullifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyZkX509CertificateNullifierProvenanceV1 {
+    /// Exact genesis-derived identity of the queried network.
+    pub network_id: NetworkId,
+    /// Stable trust-anchor lineage selected by the certificate proof.
+    pub trust_anchor_id: PrivacyIssuerIdV1,
+    /// Stable certificate-policy lineage selected by the certificate proof.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Exact consumed certificate-and-policy-derived nullifier.
+    pub nullifier: PrivacyNullifierV1,
+    /// Exact trust-anchor revision selected by the verified statement.
+    pub trust_anchor_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+    /// Exact trust-anchor revision epoch selected by the verified statement.
+    pub trust_anchor_record_epoch: u64,
+    /// Exact certificate-policy revision selected by the verified statement.
+    pub certificate_policy_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+    /// Exact certificate-policy revision epoch selected by the verified statement.
+    pub certificate_policy_record_epoch: u64,
+    /// Exact signed-CRL revision selected by the verified statement.
+    pub crl_record_digest: PrivacyZkX509CrlRecordDigestV1,
+    /// Exact signed-CRL revision epoch selected by the verified statement.
+    pub crl_record_epoch: u64,
+    /// Digest of the exact verified public statement.
+    pub statement_digest: PrivacyStatementDigestV1,
+    /// Block height at which the nullifier became durable.
+    pub admitted_at_height: u64,
+    /// Zero-based privacy-action index within the committed transaction.
+    pub action_index: u32,
+    /// Height of the finalized state snapshot that served the query.
+    pub finalized_height: u64,
+    /// Hash of the finalized block that anchors the served state snapshot.
+    pub finalized_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+}
+impl PrivacyZkX509CertificateNullifierProvenanceV1 {
+    /// Validate the complete governed-revision and finality provenance.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identities, digests, revision epochs, or stale/absent
+    /// finality bindings.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err("ZK-X509 nullifier NetworkId must be non-zero");
+        }
+        if self.trust_anchor_id.is_zero() || self.policy_id.is_zero() || self.nullifier.is_zero() {
+            return Err("ZK-X509 nullifier identities must be non-zero");
+        }
+        if self.trust_anchor_record_digest.is_zero()
+            || self.certificate_policy_record_digest.is_zero()
+            || self.crl_record_digest.is_zero()
+            || self.statement_digest.is_zero()
+        {
+            return Err("ZK-X509 nullifier provenance digests must be non-zero");
+        }
+        if self.trust_anchor_record_epoch == 0
+            || self.certificate_policy_record_epoch == 0
+            || self.crl_record_epoch == 0
+        {
+            return Err("ZK-X509 nullifier revision epochs must be non-zero");
+        }
+        if self.admitted_at_height == 0 || self.finalized_height < self.admitted_at_height {
+            return Err("ZK-X509 nullifier finality predates marker admission");
+        }
+        if self
+            .finalized_block_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err("ZK-X509 nullifier finalized block hash must be non-zero");
+        }
+        Ok(())
+    }
+}
 /// Failure while validating a canonical ZK-ACE governance transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyZkAcePolicyTransitionValidationErrorV1 {

@@ -122,7 +122,7 @@ if [[ -n "${MOBILE_SDK_APPLE_CARGO_LOCK_PATH+x}" ]]; then
   echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_APPLE_CARGO_LOCK_PATH is not part of the first-release artifact contract" >&2
   exit 64
 fi
-APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+APPLE_CARGO_LOCKFILE="${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH:-$ROOT_DIR/Cargo.lock}"
 
 resolve_trusted_python312() {
   local candidate canonical
@@ -470,7 +470,8 @@ KAGEMUSHA_CANDIDATE_LAB_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeRedeemV4
 )
 
-# The first mobile release is one exact ABI-22/V4 contract. Keep the complete
+# The first mobile release preserves the ABI-21/V4 proof/artifact contract
+# behind the ABI-22 native bridge. Keep the complete
 # Kagemusha C export allow-list here so Apple archives, Android shared objects,
 # checked-out Rust, and the checked-in header are all compared against the same
 # surface. V2 suffixes below are unchanged note, authorization, membership, and
@@ -523,18 +524,53 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4
   connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4
   connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4
+  connect_norito_kagemusha_eligibility_payment_prepare_v1
+  connect_norito_kagemusha_eligibility_payment_signing_bytes_v1
+  connect_norito_kagemusha_eligibility_payment_finalize_v1
+  connect_norito_kagemusha_eligibility_payment_validate_static_v1
+  connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1
+  connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1
   connect_norito_kagemusha_recursive_spend_bundle_summary_v4
+)
+
+OFFLINE_DEVICE_POLICY_C_SYMBOLS=(
+  connect_norito_offline_device_policy_proof_request_v1
+  connect_norito_offline_device_policy_proof_verify_v1
+  connect_norito_offline_device_eligibility_request_v1
+  connect_norito_offline_device_eligibility_response_verify_v1
+  connect_norito_offline_device_attestation_policy_view_verify_v1
+  connect_norito_offline_device_eligibility_credential_verify_v1
+  connect_norito_offline_device_eligibility_peer_certificate_verify_v1
 )
 
 SORAFS_APPEAL_FINANCE_C_SYMBOLS=(
   connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json
 )
 
-PRIVACY_COMPILED_PROFILE_C_SYMBOLS=(
+PRIVACY_ABI_C_SYMBOLS=(
   iroha_privacy_compiled_profile_catalog_v1
   iroha_privacy_validate_compiled_profile_catalog_v1
   iroha_privacy_exact12_fixture_bundle_v1
   iroha_privacy_validate_exact12_fixture_bundle_v1
+  iroha_privacy_inspect_signed_exact12_action_v1
+  iroha_privacy_authenticated_transaction_details_prepare_v1
+  iroha_privacy_authenticated_transaction_details_finalize_v1
+  iroha_privacy_authenticated_transaction_details_project_result_v1
+  iroha_privacy_authenticated_transaction_details_prepare_v2
+  iroha_privacy_authenticated_transaction_details_finalize_v2
+  iroha_privacy_authenticated_transaction_details_project_result_v2
+  iroha_privacy_authenticated_finality_proof_page_bind_v1
+  iroha_privacy_authenticated_finality_page_verify_v1
+  iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1
+  iroha_privacy_authenticated_finalized_action_rejection_project_v1
+  iroha_privacy_kagemusha_topup_finality_project_v4
+  iroha_privacy_authenticated_offline_device_registration_result_project_v1
+  iroha_privacy_authenticated_action_receipt_prepare_v1
+  iroha_privacy_authenticated_action_receipt_finalize_v1
+  iroha_privacy_authenticated_action_receipt_project_result_v1
+  iroha_privacy_authenticated_state_query_prepare_v1
+  iroha_privacy_authenticated_state_query_finalize_v1
+  iroha_privacy_authenticated_state_query_project_result_v1
   iroha_privacy_free_buffer
 )
 
@@ -550,13 +586,14 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
-  "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}"
+  "${PRIVACY_ABI_C_SYMBOLS[@]}"
   connect_norito_sorafs_reference_validate_bundle_json
   connect_norito_sorafs_reference_validate_governance_json
   connect_norito_sorafs_reference_validate_governance_dag_block_json
   connect_norito_sorafs_reference_validate_governance_dag_head_chain_json
   connect_norito_validation_fee_current_policy_proof_request_v1
   connect_norito_validation_fee_current_policy_proof_verify_v1
+  "${OFFLINE_DEVICE_POLICY_C_SYMBOLS[@]}"
   "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}"
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
@@ -663,6 +700,8 @@ PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCompiledProfileCatalog
   Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle
   Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12FixtureBundle
+  Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactOfflineDeviceRegistrationResultV1
+  Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactOfflineDeviceRegistrationResultV1
 )
 
 NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS=(
@@ -1884,7 +1923,8 @@ for label, actual, expected in inventories:
     retired_or_extra = sorted(actual - expected)
     if missing or retired_or_extra:
         errors.append(
-            f"Swift Kagemusha {label} inventory is not exact ABI-22/V4 "
+            f"Swift Kagemusha {label} inventory is not the exact ABI-21/V4 "
+            "proof plus eligibility-envelope surface through the ABI-22 native bridge "
             f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
         )
 if re.search(r"\bpublic\s+(?:struct|enum|class|typealias|protocol)\s+[A-Za-z0-9_]*V3\b", text):
@@ -2006,7 +2046,8 @@ for path in paths:
         retired_or_extra = sorted(actual - expected)
         if missing or retired_or_extra:
             errors.append(
-                f"{path}: {label} inventory is not exact ABI-22/V4 "
+                f"{path}: {label} inventory is not the exact ABI-21/V4 "
+                "proof plus eligibility-envelope surface through the ABI-22 native bridge "
                 f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
             )
     if re.search(r"\b(?:data\s+class|class|interface|record|enum)\s+[A-Za-z0-9_]*V3\b", text):
@@ -2054,7 +2095,7 @@ if "PREFERRED" in text:
     errors.append("physical KeyMint path exposes a silent StrongBox preference/downgrade")
 if re.search(
     r"generateRegistration\s*\([\s\S]{0,1800}?"
-    r"requiredParameters\.attestationChallenge\(\)"
+    r"requiredParameters\.attestationChallenge\(assertionProfile\)"
     r"[\s\S]{0,900}?requiredParameters\.registration\(material\)",
     text,
 ) is None:
@@ -2271,7 +2312,8 @@ PY
       --manifest "$embedded_manifest" \
       --manifest-link "$manifest" \
       --expected-link-target "NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
-      --swift-loader "$swift_loader"; then
+      --swift-loader "$swift_loader" \
+      --lockfile-path "$APPLE_CARGO_LOCKFILE"; then
       fail "NoritoBridge published artifact inventory is not exact"
     fi
     if ! run_isolated_checker_python - "$manifest" "$ROOT_DIR/scripts/run_mobile_hermetic_command.py" <<'PY'
@@ -2329,7 +2371,7 @@ expected_fields = {
 }
 if not isinstance(environment, dict) or set(environment) != expected_fields:
     raise SystemExit(1)
-common = {
+workspace_common = {
     "CARGO",
     "CARGO_BUILD_JOBS",
     "CARGO_HOME",
@@ -2347,12 +2389,12 @@ common = {
     "RUSTUP_HOME",
     "TMPDIR",
 }
-expected_profiles = {
+workspace_profiles = {
     "apple-ios-device": sorted(
-        common | {"DEVELOPER_DIR", "IPHONEOS_DEPLOYMENT_TARGET", "SDKROOT"}
+        workspace_common | {"DEVELOPER_DIR", "IPHONEOS_DEPLOYMENT_TARGET", "SDKROOT"}
     ),
     "apple-ios-simulator": sorted(
-        common
+        workspace_common
         | {
             "DEVELOPER_DIR",
             "IPHONEOS_DEPLOYMENT_TARGET",
@@ -2361,14 +2403,95 @@ expected_profiles = {
         }
     ),
     "apple-macos": sorted(
-        common | {"DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT"}
+        workspace_common | {"DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT"}
     ),
 }
+privacy_common = {
+    "CARGO",
+    "CARGO_BUILD_JOBS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_HOME",
+    "CARGO_INCREMENTAL",
+    "CARGO_NET_OFFLINE",
+    "CARGO_TARGET_DIR",
+    "DEVELOPER_DIR",
+    "HOME",
+    "IROHA_PRIVACY_AUTHENTICATED_APPLE_CARGO_PROFILE",
+    "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGET",
+    "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_GIT_LINK_STATE",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_REGISTRY_LINK_STATE",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR",
+    "IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE",
+    "IROHA_PRIVACY_AUTHENTICATED_DEVELOPER_DIR",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH",
+    "IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL",
+    "IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR",
+    "IROHA_PRIVACY_AUTHENTICATED_SDKROOT",
+    "IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE",
+    "IROHA_PRIVACY_CARGO_AUDIT_PATH",
+    "IROHA_PRIVACY_CARGO_LOCKFILE_PATH",
+    "IROHA_PRIVACY_LOCKFILE_PYTHON_BIN",
+    "IROHA_PRIVACY_REAL_CARGO",
+    "IROHA_PRIVACY_SDK_ROOT",
+    "LANG",
+    "LC_ALL",
+    "NORITO_SKIP_BINDINGS_SYNC",
+    "PATH",
+    "RUSTC_BOOTSTRAP",
+    "SDKROOT",
+    "TMPDIR",
+}
+privacy_profiles = {
+    "privacy-apple-ios-device-arm64": sorted(
+        privacy_common | {"IPHONEOS_DEPLOYMENT_TARGET"}
+    ),
+    "privacy-apple-ios-simulator-arm64": sorted(
+        privacy_common
+        | {"IPHONEOS_DEPLOYMENT_TARGET", "IPHONESIMULATOR_DEPLOYMENT_TARGET"}
+    ),
+    "privacy-apple-ios-simulator-x86_64": sorted(
+        privacy_common
+        | {"IPHONEOS_DEPLOYMENT_TARGET", "IPHONESIMULATOR_DEPLOYMENT_TARGET"}
+    ),
+    "privacy-apple-macos-arm64": sorted(
+        privacy_common | {"MACOSX_DEPLOYMENT_TARGET"}
+    ),
+    "privacy-apple-macos-x86_64": sorted(
+        privacy_common | {"MACOSX_DEPLOYMENT_TARGET"}
+    ),
+}
+authority = manifest.get("build_cargo_lock_authority")
+if authority == "workspace-v1":
+    expected_profiles = workspace_profiles
+    expected_schema = "iroha.mobile-native-build-environment.v1"
+    expected_runner_schema = "iroha.mobile-hermetic-command.v1"
+elif authority == "privacy-sdk-release-v2":
+    expected_profiles = privacy_profiles
+    expected_schema = "iroha.mobile-native-build-environment.v2"
+    expected_runner_schema = "iroha.mobile-hermetic-command.v2"
+else:
+    raise SystemExit(1)
 if environment["environment_profiles"] != expected_profiles:
     raise SystemExit(1)
 if (
-    environment["schema"] != "iroha.mobile-native-build-environment.v1"
-    or environment["hermetic_runner_schema"] != "iroha.mobile-hermetic-command.v1"
+    environment["schema"] != expected_schema
+    or environment["hermetic_runner_schema"] != expected_runner_schema
     or environment["rust_toolchain_channel"] != "1.93.1"
     or environment["cargo_release"] != "1.93.1"
     or environment["rustc_release"] != "1.93.1"
@@ -2516,15 +2639,32 @@ PY
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
-    require_regex "$manifest" '"cargo_lock_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "NoritoBridge selected Cargo lock hash"
+    require_regex "$manifest" '"workspace_cargo_lock_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "NoritoBridge workspace Cargo lock hash"
+    require_regex "$manifest" '"build_cargo_lock_sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]{64}"' "NoritoBridge build Cargo lock hash"
+    require_regex "$manifest" '"build_cargo_lock_authority"[[:space:]]*:[[:space:]]*"(workspace-v1|privacy-sdk-release-v2)"' "NoritoBridge build Cargo lock authority"
     require_regex "$manifest" '"bridge_header_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge header hash"
-    local manifest_lock_hash selected_lock_hash
-    manifest_lock_hash="$(manifest_json_value "$manifest" cargo_lock_sha256 2>/dev/null || true)"
+    local manifest_workspace_lock_hash manifest_build_lock_hash
+    local manifest_build_lock_authority workspace_lock_hash selected_lock_hash
+    manifest_workspace_lock_hash="$(manifest_json_value "$manifest" workspace_cargo_lock_sha256 2>/dev/null || true)"
+    manifest_build_lock_hash="$(manifest_json_value "$manifest" build_cargo_lock_sha256 2>/dev/null || true)"
+    manifest_build_lock_authority="$(manifest_json_value "$manifest" build_cargo_lock_authority 2>/dev/null || true)"
+    workspace_lock_hash="$(canonical_cargo_lock_sha256 "$ROOT_DIR/Cargo.lock" 2>/dev/null || true)"
+    if [[ -z "$workspace_lock_hash" || "$manifest_workspace_lock_hash" != "$workspace_lock_hash" ]]; then
+      fail "NoritoBridge artifact workspace Cargo lock digest does not match checkout"
+    fi
     if [[ -n "$APPLE_CARGO_LOCKFILE" ]]; then
       if ! selected_lock_hash="$(canonical_cargo_lock_sha256 "$APPLE_CARGO_LOCKFILE")"; then
         fail "selected Apple Cargo lock is not an absolute canonical non-symbolic regular file"
-      elif [[ "$manifest_lock_hash" != "$selected_lock_hash" ]]; then
-        fail "NoritoBridge artifact selected Cargo lock digest does not match checkout"
+      elif [[ "$manifest_build_lock_hash" != "$selected_lock_hash" ]]; then
+        fail "NoritoBridge artifact build Cargo lock digest does not match checkout"
+      elif [[ "$APPLE_CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock" ]]; then
+        if [[ "$manifest_build_lock_authority" != "workspace-v1" \
+            || "$selected_lock_hash" != "$workspace_lock_hash" ]]; then
+          fail "NoritoBridge artifact workspace build-lock authority is invalid"
+        fi
+      elif [[ "$manifest_build_lock_authority" != "privacy-sdk-release-v2" \
+          || "$selected_lock_hash" != "31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d" ]]; then
+        fail "NoritoBridge artifact privacy build-lock authority is invalid"
       fi
     fi
     local manifest_dirty
@@ -2840,8 +2980,9 @@ check_android_native_symbols() {
   done
   if ! run_isolated_checker_python - "$abi" \
     "${KAGEMUSHA_C_SYMBOLS[@]}" \
+    "${OFFLINE_DEVICE_POLICY_C_SYMBOLS[@]}" \
     "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}" \
-    "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}" \
+    "${PRIVACY_ABI_C_SYMBOLS[@]}" \
     -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'
 import os
 import sys
@@ -2876,7 +3017,8 @@ retired_or_extra = sorted(actual - expected)
 if missing:
     print(
         f"[mobile-sdk-artifacts] ERROR: client-android {abi} bridge is missing "
-        "ABI22/V4 symbols: " + ", ".join(missing),
+        "ABI-21/V4 proof plus eligibility-envelope symbols through the ABI-22 "
+        "native bridge: " + ", ".join(missing),
         file=sys.stderr,
     )
 if retired_or_extra:

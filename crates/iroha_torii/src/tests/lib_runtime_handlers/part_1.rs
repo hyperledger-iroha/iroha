@@ -2057,7 +2057,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         sumeragi: None,
         #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
         p2p: None,
-        #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
         local_peer_id: None,
         #[cfg(feature = "connect")]
         connect_bus: crate::connect::Bus::from_config(

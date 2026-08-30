@@ -8,7 +8,13 @@
 //! includes the two canonical eight-member admissions required for a minimum ring, successor-root
 //! account provisioning, and persisted key-image replay.
 use eyre::{Result, WrapErr as _, ensure, eyre};
-use integration_tests::sandbox;
+use integration_tests::{
+    privacy_exact12_controller::{
+        require_applied_privacy_action_v1, require_privacy_action_receipt_on_peer_v1,
+        submit_signed_privacy_action_and_wait_async_v1,
+    },
+    sandbox,
+};
 use iroha::client::Client;
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
@@ -48,26 +54,28 @@ use iroha_data_model::{
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyActiveLifecycleV1, PrivacyChallengeV1,
         PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
         PrivacyCredentialDocumentTypeV1, PrivacyExact12CapabilityManifestV1,
-        PrivacyExact12CapabilityRowV1, PrivacyIssuerIdV1, PrivacyP256PointV1,
-        PrivacyParameterDigestV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
+        PrivacyExact12CapabilityRowV1, PrivacyIssuerIdV1, PrivacyOperationSchemaV1,
+        PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
+        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
         PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
         PrivacyRootV1, PrivacySessionTranscriptDigestV1, PrivacyStatementDigestV1,
         PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyVegaIssuerRecordDigestV1,
         PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
         PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsAdmissionAnchorV1,
-        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
-        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
-        PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryRecordDigestV1,
-        PrivacyZkAmsSeedPublicKeyV1, PrivacyZkAmsSubjectCommitmentV1,
-        VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
+        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
+        PrivacyZkAmsAdmissionViewV1, PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
+        PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        PrivacyZkAmsProvisionViewV1, PrivacyZkAmsRegistryBootstrapV1,
+        PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
+        PrivacyZkAmsSubjectCommitmentV1, VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
         VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1, VEGA_MDL_MSO_PAYLOAD_BYTES_V1,
         ZK_AMS_PHC_VERSION_V1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
         zk_ams_registry_record_digest_v1,
     },
     query::{
-        account::prelude::FindAccounts, block::prelude::FindBlocks,
+        account::prelude::FindAccounts,
+        block::prelude::FindBlocks,
+        privacy::prelude::{FindPrivacyZkAmsAdmissionV1, FindPrivacyZkAmsProvisionV1},
         transaction::prelude::FindTransactions,
     },
     transaction::{
@@ -175,10 +183,12 @@ struct ZkAmsRegistryStateV1 {
 }
 struct ZkAmsBatchActionV1 {
     transaction: SignedTransaction,
+    statement: IrohaZkAmsStatementV1,
     next_state: ZkAmsRegistryStateV1,
 }
 struct ZkAmsProvisionActionV1 {
     transaction: SignedTransaction,
+    statement: IrohaZkAmsStatementV1,
     account_id: AccountId,
     key_image: PrivacyZkAmsKeyImageV1,
 }
@@ -572,6 +582,107 @@ async fn wait_for_zk_ams_account_state_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
+fn assert_zk_ams_admission_state(
+    client: &Client,
+    fixture: &ZkAmsFixture,
+    action: &ZkAmsBatchActionV1,
+    handle: &iroha::client::privacy_exact12_action::AuthenticatedPrivacyActionHandleV1,
+    context: &str,
+) -> Result<()> {
+    let PrivacyZkAmsActionV1::BatchAdmission(batch) = &action.statement.action else {
+        return Err(eyre!(
+            "{context}: ZK-AMS batch artifact changed operation kind"
+        ));
+    };
+    let statement_digest = PrivacyStatementV1::IrohaZkAmsV1(action.statement.clone())
+        .digest()
+        .wrap_err_with(|| format!("{context}: digest canonical ZK-AMS admission statement"))?;
+    for (anchor_index, anchor) in batch.anchors.iter().enumerate() {
+        let view: PrivacyZkAmsAdmissionViewV1 = client
+            .query_single(FindPrivacyZkAmsAdmissionV1::new(
+                action.statement.issuer_id,
+                action.statement.registry_id,
+                action.statement.policy_id,
+                anchor.phc_hash,
+            ))
+            .wrap_err_with(|| format!("{context}: query finalized ZK-AMS admission anchor"))?;
+        view.validate()
+            .map_err(|error| eyre!("{context}: invalid finalized ZK-AMS admission: {error}"))?;
+        ensure!(
+            view.network_id == client.network_id
+                && view.issuer_id == action.statement.issuer_id
+                && view.registry_id == action.statement.registry_id
+                && view.policy_id == action.statement.policy_id
+                && view.phc_hash == anchor.phc_hash
+                && view.seed_public_key == anchor.seed_public_key
+                && view.bootstrap_digest == fixture.bootstrap.digest()
+                && view.issuer_policy_record_digest == action.statement.issuer_policy_record_digest
+                && view.policy_digest == action.statement.policy_digest
+                && view.registry_record_digest == action.statement.registry_record_digest
+                && view.parent_epoch == batch.account_registry_root_epoch
+                && view.parent_root == batch.account_registry_root
+                && view.anchor_index
+                    == u32::try_from(anchor_index).expect("bounded ZK-AMS anchor index fits u32")
+                && view.batch_size
+                    == u32::try_from(batch.anchors.len())
+                        .expect("bounded ZK-AMS batch size fits u32")
+                && view.successor_epoch == batch.next_account_registry_root_epoch
+                && view.successor_root == batch.next_account_registry_root
+                && view.statement_digest == statement_digest
+                && Some(view.admitted_at_height) == handle.view().committed_height()
+                && view.action_index == 0
+                && view.finalized_height >= view.admitted_at_height,
+            "{context}: finalized ZK-AMS admission differs from the exact native ledger effect: {view:?}"
+        );
+    }
+    Ok(())
+}
+fn assert_zk_ams_provision_state(
+    client: &Client,
+    fixture: &ZkAmsFixture,
+    action: &ZkAmsProvisionActionV1,
+    handle: &iroha::client::privacy_exact12_action::AuthenticatedPrivacyActionHandleV1,
+    context: &str,
+) -> Result<()> {
+    let PrivacyZkAmsActionV1::ProvisionAccount(provision) = &action.statement.action else {
+        return Err(eyre!(
+            "{context}: ZK-AMS provision artifact changed operation kind"
+        ));
+    };
+    let statement_digest = PrivacyStatementV1::IrohaZkAmsV1(action.statement.clone())
+        .digest()
+        .wrap_err_with(|| format!("{context}: digest canonical ZK-AMS provision statement"))?;
+    let view: PrivacyZkAmsProvisionViewV1 = client
+        .query_single(FindPrivacyZkAmsProvisionV1::new(
+            action.statement.issuer_id,
+            action.statement.registry_id,
+            action.statement.policy_id,
+            provision.key_image,
+        ))
+        .wrap_err_with(|| format!("{context}: query finalized ZK-AMS provision"))?;
+    view.validate()
+        .map_err(|error| eyre!("{context}: invalid finalized ZK-AMS provision: {error}"))?;
+    ensure!(
+        view.network_id == client.network_id
+            && view.issuer_id == action.statement.issuer_id
+            && view.registry_id == action.statement.registry_id
+            && view.policy_id == action.statement.policy_id
+            && view.key_image == provision.key_image
+            && &view.account_id == &provision.account_id
+            && view.bootstrap_digest == fixture.bootstrap.digest()
+            && view.issuer_policy_record_digest == action.statement.issuer_policy_record_digest
+            && view.policy_digest == action.statement.policy_digest
+            && view.registry_record_digest == action.statement.registry_record_digest
+            && view.registry_epoch == provision.account_registry_root_epoch
+            && view.registry_root == provision.account_registry_root
+            && view.statement_digest == statement_digest
+            && Some(view.admitted_at_height) == handle.view().committed_height()
+            && view.action_index == 0
+            && view.finalized_height >= view.admitted_at_height,
+        "{context}: finalized ZK-AMS provision differs from the exact native ledger effect: {view:?}"
+    );
+    Ok(())
+}
 fn p256_public_key(signing_key: &P256SigningKey) -> Result<PrivacyP256PointV1> {
     let encoded = signing_key.verifying_key().to_encoded_point(true);
     let bytes: [u8; 33] = encoded
@@ -880,6 +991,7 @@ fn build_zk_ams_batch_action(
     };
     Ok(ZkAmsBatchActionV1 {
         transaction,
+        statement,
         next_state,
     })
 }
@@ -989,6 +1101,7 @@ fn build_zk_ams_provision_action(
     let transaction = build_transaction_from_envelope(&context, envelope, client)?;
     Ok(ZkAmsProvisionActionV1 {
         transaction,
+        statement,
         account_id,
         key_image,
     })
@@ -1425,14 +1538,25 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
     let context = stringify!(
         canonical_zk_ams_and_vega_actions_survive_four_validator_activation_replay_and_restart
     );
+    let zk_compiled = compiled_privacy_profile_v1(ZK_AMS_PROTOCOL)
+        .wrap_err("load canonical compiled ZK-AMS profile before network startup")?;
+    let vega_compiled = compiled_privacy_profile_v1(VEGA_PROTOCOL)
+        .wrap_err("load canonical compiled Vega profile before network startup")?;
+    let zk_snapshot: PrivacyCompiledProfileSnapshotV1 = zk_compiled.into();
+    let vega_snapshot: PrivacyCompiledProfileSnapshotV1 = vega_compiled.into();
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
         .with_permissioned_consensus();
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| {
+            eyre!(
+                "{context}: release-evidence qualification requires the four-peer localnet; \
+                 the ZK-AMS/Vega semantic gate cannot pass by skipping network execution"
+            )
+        })?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -1440,12 +1564,6 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         );
         let client = bounded_client(network.client());
         let genesis_hash = canonical_genesis_hash(&client)?;
-        let zk_compiled = compiled_privacy_profile_v1(ZK_AMS_PROTOCOL)
-            .wrap_err("load canonical compiled ZK-AMS profile")?;
-        let vega_compiled = compiled_privacy_profile_v1(VEGA_PROTOCOL)
-            .wrap_err("load canonical compiled Vega profile")?;
-        let zk_snapshot: PrivacyCompiledProfileSnapshotV1 = zk_compiled.into();
-        let vega_snapshot: PrivacyCompiledProfileSnapshotV1 = vega_compiled.into();
         submit_instruction(
             &client,
             Grant::account_permission(Permission::from(CanEnactGovernance), client.account.clone()),
@@ -1861,22 +1979,46 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             restart_peer.shutdown_if_started().await,
             "selected Active privacy validator was not running before restart coverage"
         );
-        for (label, transaction) in [
-            ("ZK-AMS admission one", &zk_admission_one.transaction),
-            ("ZK-AMS admission two", &zk_admission_two.transaction),
-            ("Vega", &vega_final),
-            ("ZK-AMS account provision", &zk_provision.transaction),
+        let mut canonical_handles = Vec::new();
+        for (label, operation, transaction) in [
+            (
+                "ZK-AMS admission one",
+                PrivacyOperationSchemaV1::ZkAmsBatchAdmissionActionV1,
+                &zk_admission_one.transaction,
+            ),
+            (
+                "ZK-AMS admission two",
+                PrivacyOperationSchemaV1::ZkAmsBatchAdmissionActionV1,
+                &zk_admission_two.transaction,
+            ),
+            (
+                "Vega",
+                PrivacyOperationSchemaV1::VegaCredentialPresentationV1,
+                &vega_final,
+            ),
+            (
+                "ZK-AMS account provision",
+                PrivacyOperationSchemaV1::ZkAmsProvisionAccountActionV1,
+                &zk_provision.transaction,
+            ),
         ] {
-            let submitted = submit_signed_transaction(
+            let handle = submit_signed_privacy_action_and_wait_async_v1(
                 &client,
+                operation,
                 transaction,
-                &format!("submit canonical active {label} action"),
+                SUBMISSION_TIMEOUT,
+                POLL_INTERVAL,
             )
-            .await?;
+            .await
+            .wrap_err_with(|| {
+                format!("submit canonical active {label} through authenticated controller")
+            })?;
+            let view = require_applied_privacy_action_v1(&handle, operation)?;
             ensure!(
-                *submitted.as_ref() == *transaction.hash().as_ref(),
-                "submitted {label} transaction hash differs from signed bytes"
+                view.transaction_hash() == *transaction.hash().as_ref(),
+                "authenticated {label} transaction hash differs from signed bytes"
             );
+            canonical_handles.push((label, handle));
         }
         let finalized_height = client
             .get_privacy_capabilities()
@@ -1900,6 +2042,34 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "healthy-validator ZK-AMS lineage and Vega finality",
         )
         .await?;
+        for (peer_index, peer) in healthy_clients.iter().enumerate() {
+            for (label, handle) in &canonical_handles {
+                require_privacy_action_receipt_on_peer_v1(peer, handle).wrap_err_with(|| {
+                    format!("healthy validator {peer_index} finalized {label} receipt")
+                })?;
+            }
+            assert_zk_ams_admission_state(
+                peer,
+                &zk_fixture,
+                &zk_admission_one,
+                &canonical_handles[0].1,
+                &format!("healthy validator {peer_index} first ZK-AMS admission"),
+            )?;
+            assert_zk_ams_admission_state(
+                peer,
+                &zk_fixture,
+                &zk_admission_two,
+                &canonical_handles[1].1,
+                &format!("healthy validator {peer_index} second ZK-AMS admission"),
+            )?;
+            assert_zk_ams_provision_state(
+                peer,
+                &zk_fixture,
+                &zk_provision,
+                &canonical_handles[3].1,
+                &format!("healthy validator {peer_index} ZK-AMS provision"),
+            )?;
+        }
         wait_for_zk_ams_account_state_on_peers(
             &healthy_clients,
             &provisioned_account,
@@ -1987,6 +2157,34 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             "post-restart exact ZK-AMS lineage and Vega transaction visibility",
         )
         .await?;
+        for (peer_index, peer) in all_clients.iter().enumerate() {
+            for (label, handle) in &canonical_handles {
+                require_privacy_action_receipt_on_peer_v1(peer, handle).wrap_err_with(|| {
+                    format!("recovered validator {peer_index} finalized {label} receipt")
+                })?;
+            }
+            assert_zk_ams_admission_state(
+                peer,
+                &zk_fixture,
+                &zk_admission_one,
+                &canonical_handles[0].1,
+                &format!("recovered validator {peer_index} first ZK-AMS admission"),
+            )?;
+            assert_zk_ams_admission_state(
+                peer,
+                &zk_fixture,
+                &zk_admission_two,
+                &canonical_handles[1].1,
+                &format!("recovered validator {peer_index} second ZK-AMS admission"),
+            )?;
+            assert_zk_ams_provision_state(
+                peer,
+                &zk_fixture,
+                &zk_provision,
+                &canonical_handles[3].1,
+                &format!("recovered validator {peer_index} ZK-AMS provision"),
+            )?;
+        }
         wait_for_zk_ams_account_state_on_peers(
             &all_clients,
             &provisioned_account,
@@ -2036,14 +2234,22 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
     init_instruction_registry();
     let context =
         stringify!(canonical_vega_action_survives_four_validator_activation_replay_and_restart);
+    let compiled = compiled_privacy_profile_v1(VEGA_PROTOCOL)
+        .wrap_err("load canonical compiled Vega profile before network startup")?;
+    let snapshot: PrivacyCompiledProfileSnapshotV1 = compiled.into();
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
         .with_permissioned_consensus();
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| {
+            eyre!(
+                "{context}: release-evidence qualification requires the four-peer localnet; \
+                 the Vega semantic gate cannot pass by skipping network execution"
+            )
+        })?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -2051,9 +2257,6 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
         );
         let client = bounded_client(network.client());
         let genesis_hash = canonical_genesis_hash(&client)?;
-        let compiled = compiled_privacy_profile_v1(VEGA_PROTOCOL)
-            .wrap_err("load canonical compiled Vega profile")?;
-        let snapshot: PrivacyCompiledProfileSnapshotV1 = compiled.into();
         submit_instruction(
             &client,
             Grant::account_permission(
@@ -2213,15 +2416,22 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             restart_peer.shutdown_if_started().await,
             "selected Active Vega validator was not running before restart"
         );
-        let submitted = submit_signed_transaction(
+        let final_handle = submit_signed_privacy_action_and_wait_async_v1(
             &client,
+            PrivacyOperationSchemaV1::VegaCredentialPresentationV1,
             &final_action,
-            "submit canonical active Vega action",
+            SUBMISSION_TIMEOUT,
+            POLL_INTERVAL,
         )
-        .await?;
+        .await
+        .wrap_err("submit canonical active Vega through authenticated controller")?;
+        let final_view = require_applied_privacy_action_v1(
+            &final_handle,
+            PrivacyOperationSchemaV1::VegaCredentialPresentationV1,
+        )?;
         ensure!(
-            *submitted.as_ref() == *final_action.hash().as_ref(),
-            "submitted Vega transaction hash differs from signed bytes"
+            final_view.transaction_hash() == *final_action.hash().as_ref(),
+            "authenticated Vega transaction hash differs from signed bytes"
         );
         let finalized_height = client
             .get_privacy_capabilities()
@@ -2240,6 +2450,11 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             "healthy-validator Vega finality",
         )
         .await?;
+        for (peer_index, peer) in healthy_clients.iter().enumerate() {
+            require_privacy_action_receipt_on_peer_v1(peer, &final_handle).wrap_err_with(|| {
+                format!("healthy validator {peer_index} finalized Vega receipt")
+            })?;
+        }
         let replay_error = client
             .submit_transaction(&final_action)
             .expect_err("exact finalized Vega transaction replay was accepted");
@@ -2272,6 +2487,11 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
             "post-restart exact Vega transaction visibility",
         )
         .await?;
+        for (peer_index, peer) in all_clients.iter().enumerate() {
+            require_privacy_action_receipt_on_peer_v1(peer, &final_handle).wrap_err_with(|| {
+                format!("recovered validator {peer_index} finalized Vega receipt")
+            })?;
+        }
         let restarted_client = bounded_client(restart_peer.client());
         ensure!(
             canonical_genesis_hash(&restarted_client)? == genesis_hash,

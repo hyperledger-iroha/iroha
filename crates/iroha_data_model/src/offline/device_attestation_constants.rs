@@ -22,6 +22,89 @@ pub const OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_NON_VALID_SERIALS_V1: usize = 4
 pub const OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_SERIAL_HEX_BYTES_V1: usize = 40;
 /// Maximum upstream cache lifetime accepted for one governed snapshot.
 pub const OFFLINE_ANDROID_ATTESTATION_STATUS_MAX_CACHE_AGE_SECONDS_V1: u32 = 86_400;
+/// Current governed Offline device-attestation policy layout.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2: u16 = 2;
+/// Current finalized Offline device-attestation policy-view layout.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_VERSION_V1: u16 = 1;
+/// Stable canonical Norito schema name for the finalized policy query response.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_SCHEMA_NAME_V1: &str =
+    "iroha.torii.v1.offline.device_attestation_policy.response";
+/// Maximum canonical bytes for one portable Sumeragi-v2 finality proof.
+pub const OFFLINE_DEVICE_POLICY_FINALITY_EVIDENCE_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
+/// Defensive maximum canonical response size for one finalized policy view.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1: usize =
+    OFFLINE_DEVICE_POLICY_FINALITY_EVIDENCE_MAX_BYTES_V1
+        + OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
+        + 64 * 1024;
+/// Current Offline device-eligibility credential layout.
+pub const OFFLINE_DEVICE_ELIGIBILITY_CREDENTIAL_VERSION_V1: u16 = 1;
+/// Current finalized-policy binding layout used by eligibility credentials.
+pub const OFFLINE_DEVICE_POLICY_FINALITY_BINDING_VERSION_V1: u16 = 1;
+/// Current attested Android device-property layout.
+pub const OFFLINE_ANDROID_ATTESTED_DEVICE_PROPERTIES_VERSION_V2: u16 = 2;
+/// Highest Android Key Attestation `osVersion` accepted by policy selectors.
+pub const OFFLINE_ANDROID_OS_VERSION_MAX_V2: u32 = 999_999;
+/// Maximum lifetime of one Offline device-eligibility credential.
+pub const OFFLINE_DEVICE_ELIGIBILITY_CREDENTIAL_MAX_TTL_MS_V1: u64 = 24 * 60 * 60 * 1_000;
+/// Android 12 encoded as the Key Attestation `osVersion` integer.
+pub const OFFLINE_ANDROID_12_OS_VERSION_FLOOR_V2: u32 = 120_000;
+/// Maximum governed Android vulnerability rules in one policy.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_VULNERABILITY_RULES_V2: usize = 256;
+/// Maximum source identifiers retained by one governed vulnerability rule.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_SOURCES_V2: usize = 8;
+/// Maximum CVE identifiers retained by one governed vulnerability rule.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_CVES_V2: usize = 16;
+/// Maximum printable bytes in one governed vulnerability-rule identifier.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_ID_BYTES_V2: usize = 128;
+/// Maximum printable bytes in one governed vulnerability source identifier.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_SOURCE_BYTES_V2: usize = 512;
+/// Maximum printable bytes in one governed CVE identifier.
+pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_CVE_BYTES_V2: usize = 32;
+/// Maximum attested Android build-property bytes retained per property.
+pub const OFFLINE_ANDROID_ATTESTED_PROPERTY_MAX_BYTES_V2: usize = 128;
+/// Minimum bytes in a governed attested-model family prefix.
+///
+/// This admits Samsung's canonical `SM-Gxxx` family codes while preventing a
+/// reviewed device rule from degenerating into a one-character vendor-wide
+/// selector.
+pub const OFFLINE_ANDROID_ATTESTED_MODEL_PREFIX_MIN_BYTES_V2: usize = 7;
+/// Maximum attested verified-boot key bytes retained in registration state.
+pub const OFFLINE_ANDROID_VERIFIED_BOOT_KEY_MAX_BYTES_V2: usize = 1_024;
+/// Samsung bulletin containing the August 2021 Keymaster IV-reuse fix.
+pub const OFFLINE_SAMSUNG_SMR_AUGUST_2021_SOURCE_V2: &str =
+    "https://security.samsungmobile.com/securityUpdate.smsb?month=8&year=2021";
+/// Samsung bulletin containing the October 2021 Keymaster downgrade fix.
+pub const OFFLINE_SAMSUNG_SMR_OCTOBER_2021_SOURCE_V2: &str =
+    "https://security.samsungmobile.com/securityUpdate.smsb?month=10&year=2021";
+/// Samsung's 2021 firmware-update archive used to cross-check the two SMR entries.
+pub const OFFLINE_SAMSUNG_FIRMWARE_UPDATES_2021_ARCHIVE_SOURCE_V2: &str =
+    "https://security.samsungmobile.com/securityUpdate.smsb?month=5&year=2021";
+/// Samsung bulletin containing the July 2026 fabricKeymaster fix.
+pub const OFFLINE_SAMSUNG_SMR_JULY_2026_SOURCE_V2: &str =
+    "https://security.samsungmobile.com/securityUpdate.smsb?month=7&year=2026";
+/// Samsung's 2026 firmware-update archive containing the July SMR entry.
+pub const OFFLINE_SAMSUNG_FIRMWARE_UPDATES_2026_ARCHIVE_SOURCE_V2: &str =
+    "https://security.samsungmobile.com/securityUpdate.smsb?year=2026";
+/// Peer-reviewed analysis of Samsung's 2021 `TrustZone` Keymaster failures.
+pub const OFFLINE_SAMSUNG_KEYMASTER_USENIX_2022_SOURCE_V2: &str =
+    "https://www.usenix.org/conference/usenixsecurity22/presentation/shakevsky";
+/// Official Samsung model-code map used to bind reviewed marketing families
+/// to the `attestationIdModel` prefixes selected by policy.
+pub const OFFLINE_SAMSUNG_MODEL_CODE_MAP_SOURCE_V2: &str = "https://images.samsung.com/is/content/samsung/assets/ch/support/Samsung_SEAS_PowerUp_Modelle.pdf";
+/// Official Samsung J3 (2018) support page binding the `SM-J337` family.
+pub const OFFLINE_SAMSUNG_J3_2018_MODEL_SOURCE_V2: &str =
+    "https://www.samsung.com/us/business/support/owners/product/galaxy-j3-2018-unlocked/";
+/// Official Samsung J7 (2018) support page binding the `SM-J737` family.
+pub const OFFLINE_SAMSUNG_J7_2018_MODEL_SOURCE_V2: &str =
+    "https://www.samsung.com/us/business/support/owners/product/galaxy-j7-2018-unlocked/";
+/// Official Samsung J7 Duo support page binding the `SM-J720` family.
+pub const OFFLINE_SAMSUNG_J7_DUO_MODEL_SOURCE_V2: &str =
+    "https://www.samsung.com/n_africa/support/model/SM-J720FZVDMWD/";
+/// Official Samsung Tab S4 support page binding the carrier `SM-T837` family.
+pub const OFFLINE_SAMSUNG_TAB_S4_T837_MODEL_SOURCE_V2: &str =
+    "https://www.samsung.com/us/business/support/owners/product/galaxy-tab-s4-10-5-with-s-pen-att/";
+/// Official Samsung Tab A 8.0 product sheet binding the `SM-T387` family.
+pub const OFFLINE_SAMSUNG_TAB_A_T387_MODEL_SOURCE_V2: &str = "https://image-us.samsung.com/SamsungUS/samsungbusiness/products/mobile/tablets/galaxy-tab-a/sm-t387-2019/pdf/TAB-SPR-GALAXYTABADSHT-NOV18T-Final-11-26-18.pdf";
 /// Maximum canonical Norito bytes for one governed device-attestation policy.
 pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
 /// Maximum trusted roots retained by one governed device-attestation policy.

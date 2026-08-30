@@ -2377,6 +2377,9 @@ fn offline_lifecycle_routes_are_available_to_operator_mcp_tools() {
     let tools = build_tool_specs(&cfg);
     for path in [
         iroha_torii_shared::route_catalog::offline::READINESS_PATH,
+        iroha_torii_shared::route_catalog::offline::DEVICE_ATTESTATION_POLICY_PATH,
+        iroha_torii_shared::route_catalog::offline::DEVICE_ATTESTATION_POLICY_PROOF_PATH,
+        iroha_torii_shared::route_catalog::offline::DEVICE_ELIGIBILITY_PATH,
         iroha_torii_shared::route_catalog::offline::RECIPIENT_LINEAGE_PATH,
         iroha_torii_shared::route_catalog::offline::TOP_UP_PATH,
         iroha_torii_shared::route_catalog::offline::REDEEM_PATH,

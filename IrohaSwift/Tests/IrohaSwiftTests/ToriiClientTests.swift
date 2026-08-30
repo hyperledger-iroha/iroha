@@ -520,6 +520,36 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "X-API-Token"), file: file, line: line)
     }
 
+    private func assertCanonicalAccountAuthentication(
+        _ request: URLRequest,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+            authority,
+            file: file,
+            line: line
+        )
+        for header in [
+            ToriiCanonicalRequest.headerSignature,
+            ToriiCanonicalRequest.headerTimestampMs,
+            ToriiCanonicalRequest.headerNonce,
+        ] {
+            XCTAssertNotNil(
+                request.value(forHTTPHeaderField: header),
+                "missing \(header)",
+                file: file,
+                line: line
+            )
+        }
+        XCTAssertNil(
+            request.value(forHTTPHeaderField: "Authorization"),
+            file: file,
+            line: line
+        )
+    }
+
     private func canonicalUnsignedFeePayload(
         domain: ToriiJSONValue = .object([
             "kind": .string("network"),
@@ -10777,6 +10807,7 @@ final class ToriiClientTests: XCTestCase {
         {
           "mandatory": false,
           "cash_handoff_capability": "cash_handoff_v1",
+          "eligibility_cash_handoff_capability": "cash_handoff_eligibility_v1",
           "required_bridge_abi_version": 22,
           "max_hops": 8,
           "ready": true,
@@ -10789,6 +10820,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
             XCTAssertNil(request.url?.query)
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            self.assertCanonicalAccountAuthentication(request)
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: 200,
@@ -10798,9 +10830,15 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let status = try await makeClient().getOfflineCapability()
+        let status = try await makeClient().getOfflineCapability(
+            canonicalAuth: canonicalReadAuth
+        )
         XCTAssertFalse(status.mandatory)
         XCTAssertEqual(status.cashHandoffCapability, "cash_handoff_v1")
+        XCTAssertEqual(
+            status.eligibilityCashHandoffCapability,
+            KagemushaRecursiveSpend.cashHandoffEligibilityCapabilityV1
+        )
         XCTAssertEqual(status.requiredBridgeAbiVersion, 22)
         XCTAssertEqual(status.maxHops, 8)
         XCTAssertTrue(status.ready)
@@ -10808,17 +10846,88 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertTrue(status.blockers.isEmpty)
     }
 
+    func testKagemushaReadinessRequiresDistinctEligibilityCapability() throws {
+        let validPayload = """
+        {
+          "cash_handoff_capability": "cash_handoff_v1",
+          "eligibility_cash_handoff_capability": "cash_handoff_eligibility_v1",
+          "required_bridge_abi_version": 22,
+          "max_hops": 8,
+          "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+          "asset_scale": null,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "\(String(repeating: "11", count: 32))",
+          "active_transfer_verifier": null,
+          "active_topup_shield_verifier": null,
+          "active_unshield_verifier": null,
+          "active_recursive_step_eq_verifier": null,
+          "active_recursive_step_ep_verifier": null,
+          "artifact_set": null,
+          "proof_backend_available": false,
+          "recursive_lineage_supported": false,
+          "ready": false,
+          "blockers": [
+            {"code": "asset_scale_unavailable", "message": "Asset scale is unavailable."},
+            {"code": "transfer_verifier_unavailable", "message": "Transfer verifier is unavailable."},
+            {"code": "topup_shield_verifier_unavailable", "message": "Top-up verifier is unavailable."},
+            {"code": "unshield_verifier_unavailable", "message": "Unshield verifier is unavailable."},
+            {"code": "recursive_step_eq_verifier_unavailable", "message": "StepEq verifier is unavailable."},
+            {"code": "recursive_step_ep_verifier_unavailable", "message": "StepEp verifier is unavailable."},
+            {"code": "recursive_v4_registry_unavailable", "message": "V4 registry is unavailable."},
+            {"code": "proof_backend_unavailable", "message": "Proof backend is unavailable."},
+            {"code": "recursive_lineage_unavailable", "message": "Recursive lineage is unavailable."}
+          ]
+        }
+        """
+
+        let readiness = try JSONDecoder().decode(
+            ToriiKagemushaReadiness.self,
+            from: Data(validPayload.utf8)
+        )
+        XCTAssertEqual(
+            readiness.cashHandoffCapability,
+            KagemushaRecursiveSpend.cashHandoffCapabilityV1
+        )
+        XCTAssertEqual(
+            readiness.eligibilityCashHandoffCapability,
+            KagemushaRecursiveSpend.cashHandoffEligibilityCapabilityV1
+        )
+
+        let eligibilityField =
+            #""eligibility_cash_handoff_capability": "cash_handoff_eligibility_v1","#
+        let missingCapability = validPayload.replacingOccurrences(
+            of: eligibilityField,
+            with: ""
+        )
+        let mislabeledCapability = validPayload.replacingOccurrences(
+            of: KagemushaRecursiveSpend.cashHandoffEligibilityCapabilityV1,
+            with: KagemushaRecursiveSpend.cashHandoffCapabilityV1
+        )
+        XCTAssertNotEqual(missingCapability, validPayload)
+        XCTAssertNotEqual(mislabeledCapability, validPayload)
+        for payload in [missingCapability, mislabeledCapability] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiKagemushaReadiness.self,
+                    from: Data(payload.utf8)
+                )
+            )
+        }
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsNonUniversalClaims() async throws {
         let invalidPayloads = [
-            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}"#,
+            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}"#,
         ]
 
         for payload in invalidPayloads {
@@ -10832,7 +10941,9 @@ final class ToriiClientTests: XCTestCase {
                 return (response, Data(payload.utf8))
             }
             do {
-                _ = try await makeClient().getOfflineCapability()
+                _ = try await makeClient().getOfflineCapability(
+                    canonicalAuth: canonicalReadAuth
+                )
                 XCTFail("expected non-universal offline capability to fail")
             } catch {
                 // Exact universal discovery is fail-closed.
@@ -10843,7 +10954,8 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsDuplicateKeysAndInvalidUtf8() async throws {
         let payloads = [
-            Data(#"{"mandatory":false,"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#.utf8),
+            Data(#"{"mandatory":false,"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#.utf8),
+            Data(#"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","eligibility_cash_handoff_capability":"cash_handoff_eligibility_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#.utf8),
             Data([0xff, 0xfe, 0xfd]),
         ]
         for payload in payloads {
@@ -10857,7 +10969,9 @@ final class ToriiClientTests: XCTestCase {
                 return (response, payload)
             }
             do {
-                _ = try await makeClient().getOfflineCapability()
+                _ = try await makeClient().getOfflineCapability(
+                    canonicalAuth: canonicalReadAuth
+                )
                 XCTFail("expected malformed offline capability to fail")
             } catch {
                 // Duplicate and non-UTF-8 JSON must never be accepted.
@@ -10921,6 +11035,7 @@ final class ToriiClientTests: XCTestCase {
                 throw ToriiClientError.invalidURL(path ?? "")
             }
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito")
+            self.assertCanonicalAccountAuthentication(request)
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: status,
@@ -10935,16 +11050,19 @@ final class ToriiClientTests: XCTestCase {
 
         let client = makeClient()
         let acceptedTopUp = try await client.submitKagemushaTopUp(
-            KagemushaTopUpRequest(noritoArchive: topUpRequestArchive)
+            KagemushaTopUpRequest(noritoArchive: topUpRequestArchive),
+            canonicalAuth: canonicalReadAuth
         )
         XCTAssertEqual(acceptedTopUp, try reference(.topUp))
         let acceptedRedeem = try await client.submitKagemushaRedeem(
-            KagemushaRedeemRequest(noritoArchive: redeemRequestArchive)
+            KagemushaRedeemRequest(noritoArchive: redeemRequestArchive),
+            canonicalAuth: canonicalReadAuth
         )
         XCTAssertEqual(acceptedRedeem, try reference(.redeem))
         let operationStatus = try await client.getKagemushaOperationStatus(
             operationId: operationId,
-            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+            canonicalAuth: canonicalReadAuth
         )
         XCTAssertEqual(
             operationStatus,
@@ -10980,7 +11098,8 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                canonicalAuth: canonicalReadAuth
             )
             XCTFail("missing operation status must return typed HTTP failure")
         } catch let error as ToriiClientError {
@@ -11028,7 +11147,11 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await KagemushaOperationFinalityCoordinator.resolve(
                 operation: .topUp(request),
-                transport: makeClient(),
+                transport: ToriiAuthenticatedKagemushaOperationTransport(
+                    client: makeClient(),
+                    accountId: authority,
+                    privateKey: canonicalSigningSeed
+                ),
                 chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
                 initialState: 0,
                 continuity: .unaccepted,
@@ -11089,7 +11212,10 @@ final class ToriiClientTests: XCTestCase {
             }
 
             do {
-                _ = try await makeClient().submitKagemushaTopUp(request)
+                _ = try await makeClient().submitKagemushaTopUp(
+                    request,
+                    canonicalAuth: canonicalReadAuth
+                )
                 XCTFail("rejected submission must fail")
             } catch let error as ToriiClientError {
                 guard case let .httpStatus(
@@ -11151,7 +11277,10 @@ final class ToriiClientTests: XCTestCase {
             }
 
             do {
-                _ = try await makeClient().submitKagemushaTopUp(request)
+                _ = try await makeClient().submitKagemushaTopUp(
+                    request,
+                    canonicalAuth: canonicalReadAuth
+                )
                 XCTFail("rejected submission must fail")
             } catch let error as ToriiClientError {
                 guard case let .httpStatus(
@@ -11215,7 +11344,8 @@ final class ToriiClientTests: XCTestCase {
         await assertToriiInvalidPayload(contains: "declares more than") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                canonicalAuth: self.canonicalReadAuth
             )
         }
 
@@ -11230,7 +11360,8 @@ final class ToriiClientTests: XCTestCase {
         await assertToriiInvalidPayload(contains: "response exceeded") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                canonicalAuth: self.canonicalReadAuth
             )
         }
 
@@ -11245,7 +11376,8 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                canonicalAuth: canonicalReadAuth
             )
             XCTFail("exact-limit non-Norito bytes must reach the codec")
         } catch let error as KagemushaOperationError {
@@ -11266,7 +11398,8 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: operationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                canonicalAuth: canonicalReadAuth
             )
             XCTFail("oversized 404 must fail before absence classification")
         } catch let error as ToriiClientError {
@@ -11299,7 +11432,10 @@ final class ToriiClientTests: XCTestCase {
             body: Data([0x00])
         )
         await assertToriiInvalidPayload(contains: "declares more than") {
-            _ = try await self.makeClient().submitKagemushaTopUp(request)
+            _ = try await self.makeClient().submitKagemushaTopUp(
+                request,
+                canonicalAuth: self.canonicalReadAuth
+            )
         }
 
         install(
@@ -11314,7 +11450,10 @@ final class ToriiClientTests: XCTestCase {
             )
         )
         await assertToriiInvalidPayload(contains: "response exceeded") {
-            _ = try await self.makeClient().submitKagemushaTopUp(request)
+            _ = try await self.makeClient().submitKagemushaTopUp(
+                request,
+                canonicalAuth: self.canonicalReadAuth
+            )
         }
     }
 
@@ -11398,7 +11537,10 @@ final class ToriiClientTests: XCTestCase {
                 return (response, body)
             }
             do {
-                _ = try await makeClient().submitKagemushaTopUp(request)
+                _ = try await makeClient().submitKagemushaTopUp(
+                    request,
+                    canonicalAuth: canonicalReadAuth
+                )
                 XCTFail("expected unbound Offline operation response to fail")
             } catch {
                 XCTAssertTrue(
@@ -11429,7 +11571,8 @@ final class ToriiClientTests: XCTestCase {
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
                 operationId: otherOperationId,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                canonicalAuth: canonicalReadAuth
             )
             XCTFail("expected operation identity mismatch to fail")
         } catch {
@@ -11452,7 +11595,8 @@ final class ToriiClientTests: XCTestCase {
             do {
                 _ = try await makeClient().getKagemushaOperationStatus(
                     operationId: operationId,
-                    chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                    chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                    canonicalAuth: canonicalReadAuth
                 )
                 XCTFail("expected invalid operation media type to fail")
             } catch {
@@ -11471,6 +11615,7 @@ final class ToriiClientTests: XCTestCase {
         {
           "mandatory": false,
           "cash_handoff_capability": "cash_handoff_v1",
+          "eligibility_cash_handoff_capability": "cash_handoff_eligibility_v1",
           "required_bridge_abi_version": 22,
           "max_hops": 8,
           "ready": true,
@@ -11493,7 +11638,9 @@ final class ToriiClientTests: XCTestCase {
                 return (response, payload)
             }
             do {
-                _ = try await makeClient().getOfflineCapability()
+                _ = try await makeClient().getOfflineCapability(
+                    canonicalAuth: canonicalReadAuth
+                )
                 XCTFail("expected invalid capability media type to fail")
             } catch {
                 XCTAssertTrue(

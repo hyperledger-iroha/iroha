@@ -526,6 +526,35 @@ symbols, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form algorithm selectors are absent;
 proofs use protocol-specific typed APIs.
 
+`SubmitSignedPrivacyActionV1Async(...)` is the closed authenticated Exact12
+submission flow. It binds native signed-transaction inspection to the exact
+`NetworkId`, canonical-request authority, operation, transaction hash, intent,
+statement, and proof envelope; fresh manifest admission remains explicit
+pre-submit evidence. An observed pipeline `Committed` state is nonterminal.
+`Applied` is returned only after both authenticated committed transaction
+details and a native-inspected finalized ID105 execution receipt agree on the
+admission height. The operation view then exposes the separate
+`ExecutionCapabilityManifestDigest`, `ExecutionCapabilityCommittedHeight`,
+`ExecutionReceiptFinalizedHeight`, and `ExecutionReceiptFinalizedBlockHash`.
+Those fields are complete only for `Applied` and are never equated to the
+earlier preflight manifest. Details or receipt HTTP 404 responses remain
+retryable, cache-only expiry cannot emit `Expired`, and a receipt for a
+rejected transaction is treated as contradictory authenticated evidence.
+
+The eight finalized privacy-state helpers cover the closed native query-ID
+range 97 through 104: ZK-ACE replay provenance, proof-managed pool state,
+Orchard pool and nullifier state, Anonymous PGC pool state, ZK-AMS admission
+and provisioning, and ZK-X509 certificate-nullifier provenance. Each helper
+builds and signs its query through the ABI-22 native bridge, binds the exact
+canonical request authority, `NetworkId`, protocol discriminant, and nonzero
+fixed-width selector, then accepts only the native-projected typed result from
+`/v1/query`. Integer leaves must be canonical decimal strings, fixed 32-byte
+values remain JSON byte arrays, and network/finality hashes remain canonical
+checksummed `hash:...#....` literals. Only an authenticated query HTTP 404 is
+projected as `null`; redirects, other status codes, content-type deviations,
+unknown fields, duplicate fields, and request/result contradictions fail
+closed.
+
 `PrivacyExact12FixtureCodecV1` is the native-independent managed conformance
 codec for the checked-in
 `fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64` archive. It accepts

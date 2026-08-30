@@ -21,7 +21,7 @@ import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 
-/** Canonical one-instruction transaction for the ABI-21 device-attestation path. */
+/** Canonical one-instruction ABI-22 transaction for registration format V2. */
 public final class RegisterOfflineDeviceAttestation {
 
   private static final long DEFAULT_TRANSACTION_TTL_MS = 100_000L;

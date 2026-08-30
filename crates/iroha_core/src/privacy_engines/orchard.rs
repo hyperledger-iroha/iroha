@@ -123,6 +123,16 @@ impl OrchardSpendProverInputV1 {
             merkle_path,
         }
     }
+    /// Return the exact nullifier this wallet input will consume.
+    ///
+    /// This exposes only the public replay marker; the note opening and
+    /// spending key remain owned by the native prover input.
+    #[must_use]
+    pub fn nullifier_v1(&self) -> [u8; 32] {
+        self.note
+            .nullifier(&FullViewingKey::from(&self.spending_key))
+            .to_bytes()
+    }
     /// Parse one exact wallet note opening and its complete depth-32 path.
     ///
     /// The derived note commitment must reach `expected_anchor`. This keeps raw upstream Orchard
@@ -212,6 +222,31 @@ pub enum OrchardSpendInputErrorV1 {
     AuthenticationPathLength,
     /// The note and path do not authenticate to the requested retained anchor.
     #[error("Orchard authentication path does not reach the retained anchor")]
+    AnchorMismatch,
+}
+/// Failure while recovering a wallet-owned output into a native spend input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum OrchardWalletRecoveryErrorV1 {
+    /// The producing bundle failed the independent production verifier.
+    #[error("Orchard producing bundle is invalid: {0}")]
+    ProducingBundle(OrchardNativeErrorV1),
+    /// The selected public action index is outside the producing bundle.
+    #[error("Orchard output action index is outside the producing bundle")]
+    ActionIndex,
+    /// Neither incoming-viewing-key scope can decrypt the selected output.
+    #[error("Orchard output is not controlled by the supplied spending key")]
+    OutputNotOwned,
+    /// The decrypted note does not reproduce the public note commitment.
+    #[error("Orchard decrypted output differs from its public note commitment")]
+    NoteCommitmentMismatch,
+    /// One supplied authentication-path element is not canonical.
+    #[error("Orchard authentication path element {index} is invalid")]
+    AuthenticationPath {
+        /// Zero-based path level.
+        index: usize,
+    },
+    /// The recovered note and path do not reach the requested retained anchor.
+    #[error("Orchard recovered output path does not reach the retained anchor")]
     AnchorMismatch,
 }
 /// One wallet-controlled change output consumed by the native prover.
@@ -646,6 +681,44 @@ pub(crate) fn append_orchard_commitments_v1(
         }
     }
     Ok(orchard_frontier_parts_v1(frontier))
+}
+/// Derive the exact depth-32 witness for the sole output appended to the
+/// canonical empty Orchard frontier.
+///
+/// This is intentionally narrow: later wallet witnesses must come from the
+/// wallet's authenticated scanner rather than being synthesized from public
+/// state. The release corridor uses it only to chain its deterministic funding
+/// action into the immediately following real-spend fixture.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn orchard_singleton_output_witness_v1(
+    note_commitment: [u8; 32],
+) -> Result<([u8; 32], [[u8; 32]; ORCHARD_TREE_DEPTH_V1 as usize]), OrchardFrontierErrorV1> {
+    use incrementalmerkletree::{Hashable as _, Level};
+
+    let commitment = Option::<ExtractedNoteCommitment>::from(ExtractedNoteCommitment::from_bytes(
+        &note_commitment,
+    ))
+    .ok_or(OrchardFrontierErrorV1::NoteCommitmentEncoding { index: 0 })?;
+    let authentication_path = core::array::from_fn(|index| {
+        MerkleHashOrchard::empty_root(Level::from(
+            u8::try_from(index).expect("closed Orchard path level fits u8"),
+        ))
+        .to_bytes()
+    });
+    let path = MerklePath::from_parts(
+        0,
+        authentication_path.map(|bytes| {
+            Option::<MerkleHashOrchard>::from(MerkleHashOrchard::from_bytes(&bytes))
+                .expect("native Orchard empty roots are canonical")
+        }),
+    );
+    let anchor = path.root(commitment).to_bytes();
+    let successor =
+        append_orchard_commitments_v1(0, None, &[], orchard_empty_root_v1(), &[note_commitment])?;
+    if successor.root != anchor || successor.tree_size != 1 {
+        return Err(OrchardFrontierErrorV1::RootMismatch);
+    }
+    Ok((anchor, authentication_path))
 }
 /// Return the unique first-release authorization-wire size for `action_count`.
 #[must_use]
@@ -1239,21 +1312,10 @@ pub fn authorize_orchard_bundle_v1(
         .map_err(|_| OrchardProverErrorV1::SelfCheck)?;
     Ok(proved)
 }
-/// Verify one complete first-release Orchard V3 bundle.
-///
-/// # Errors
-///
-/// Returns a typed failure for malformed encodings, count/size violations,
-/// invalid RedPallas signatures, or an invalid Post-NU6.3 Halo2 proof.
-pub fn verify_orchard_bundle_v1(
+fn decode_authorized_bundle_v1(
     public: &OrchardBundlePublicV1,
     proof_bytes: &[u8],
-    consensus_limits: &PrivacyConsensusLimitsV1,
-) -> Result<(), OrchardNativeErrorV1> {
-    public
-        .consensus_binding
-        .validate(consensus_limits)
-        .map_err(|_| OrchardNativeErrorV1::ConsensusBinding)?;
+) -> Result<Bundle<Authorized, i64>, OrchardNativeErrorV1> {
     if public.actions.is_empty() || public.actions.len() > ORCHARD_MAX_ACTIONS_V1 {
         return Err(OrchardNativeErrorV1::ActionCount {
             actual: public.actions.len(),
@@ -1278,7 +1340,7 @@ pub fn verify_orchard_bundle_v1(
         Proof::new(authorization.halo2_proof.to_vec()),
         redpallas::Signature::<Binding>::from(authorization.binding_signature),
     );
-    let bundle = Bundle::try_from_parts(
+    Bundle::try_from_parts(
         actions,
         Flags::CROSS_ADDRESS_DISABLED,
         public.value_balance,
@@ -1286,7 +1348,24 @@ pub fn verify_orchard_bundle_v1(
         authorization,
         BundleVersion::orchard_v3(),
     )
-    .map_err(|_| OrchardNativeErrorV1::BundleEncoding)?;
+    .map_err(|_| OrchardNativeErrorV1::BundleEncoding)
+}
+/// Verify one complete first-release Orchard V3 bundle.
+///
+/// # Errors
+///
+/// Returns a typed failure for malformed encodings, count/size violations,
+/// invalid RedPallas signatures, or an invalid Post-NU6.3 Halo2 proof.
+pub fn verify_orchard_bundle_v1(
+    public: &OrchardBundlePublicV1,
+    proof_bytes: &[u8],
+    consensus_limits: &PrivacyConsensusLimitsV1,
+) -> Result<(), OrchardNativeErrorV1> {
+    public
+        .consensus_binding
+        .validate(consensus_limits)
+        .map_err(|_| OrchardNativeErrorV1::ConsensusBinding)?;
+    let bundle = decode_authorized_bundle_v1(public, proof_bytes)?;
     let sighash = derive_orchard_bundle_sighash_v1(public, consensus_limits)?;
     for (index, action) in bundle.actions().iter().enumerate() {
         action
@@ -1301,6 +1380,78 @@ pub fn verify_orchard_bundle_v1(
     bundle
         .verify_proof(orchard_v3_verifying_key())
         .map_err(|_| OrchardNativeErrorV1::Halo2Proof)
+}
+/// Recover one wallet-owned output of a verified Orchard bundle into the exact
+/// native spend input required by a successor proof.
+///
+/// The producing authorization is independently verified before decryption.
+/// The supplied depth-32 path is then parsed and required to carry the
+/// decrypted note commitment to `expected_anchor`. No note opening or viewing
+/// key leaves this native boundary.
+///
+/// # Errors
+///
+/// Rejects an invalid producing bundle, a foreign or missing output, a public
+/// commitment mismatch, a malformed path, or a path that does not reach the
+/// requested anchor.
+pub fn recover_orchard_spend_prover_input_v1(
+    producing_bundle: &OrchardProvedBundleV1,
+    consensus_limits: &PrivacyConsensusLimitsV1,
+    spending_key: SpendingKey,
+    action_index: usize,
+    leaf_position: u32,
+    authentication_path: [[u8; 32]; ORCHARD_TREE_DEPTH_V1 as usize],
+    expected_anchor: [u8; 32],
+) -> Result<OrchardSpendProverInputV1, OrchardWalletRecoveryErrorV1> {
+    verify_orchard_bundle_v1(
+        &producing_bundle.public,
+        &producing_bundle.authorization,
+        consensus_limits,
+    )
+    .map_err(OrchardWalletRecoveryErrorV1::ProducingBundle)?;
+    let public_action = producing_bundle
+        .public
+        .actions
+        .get(action_index)
+        .ok_or(OrchardWalletRecoveryErrorV1::ActionIndex)?;
+    let bundle =
+        decode_authorized_bundle_v1(&producing_bundle.public, &producing_bundle.authorization)
+            .map_err(OrchardWalletRecoveryErrorV1::ProducingBundle)?;
+    let viewing_key = FullViewingKey::from(&spending_key);
+    let recovered = [Scope::External, Scope::Internal]
+        .into_iter()
+        .find_map(|scope| bundle.decrypt_output_with_key(action_index, &viewing_key.to_ivk(scope)))
+        .ok_or(OrchardWalletRecoveryErrorV1::OutputNotOwned)?;
+    let note = recovered.0;
+    if ExtractedNoteCommitment::from(note.commitment()).to_bytes() != public_action.note_commitment
+    {
+        return Err(OrchardWalletRecoveryErrorV1::NoteCommitmentMismatch);
+    }
+    let path = authentication_path
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| {
+            Option::<MerkleHashOrchard>::from(MerkleHashOrchard::from_bytes(bytes))
+                .ok_or(OrchardWalletRecoveryErrorV1::AuthenticationPath { index })
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| OrchardWalletRecoveryErrorV1::AuthenticationPath {
+            index: usize::from(ORCHARD_TREE_DEPTH_V1),
+        })?;
+    let merkle_path = MerklePath::from_parts(leaf_position, path);
+    if merkle_path
+        .root(ExtractedNoteCommitment::from(note.commitment()))
+        .to_bytes()
+        != expected_anchor
+    {
+        return Err(OrchardWalletRecoveryErrorV1::AnchorMismatch);
+    }
+    Ok(OrchardSpendProverInputV1::new(
+        spending_key,
+        note,
+        merkle_path,
+    ))
 }
 #[cfg(test)]
 pub(crate) mod tests {
@@ -1819,6 +1970,102 @@ pub(crate) mod tests {
         assert_eq!(proved.public.actions, draft.actions);
         verify_orchard_bundle_v1(&proved.public, &proved.authorization, &consensus_limits())
             .expect("authorized exact draft verifies");
+    }
+    #[test]
+    fn verified_wallet_output_is_recovered_spent_and_split_into_public_value_and_change() {
+        const FUNDED_VALUE: u64 = 23;
+        const PUBLIC_RECEIVER_VALUE: u64 = 17;
+        const CHANGE_VALUE: u64 = 6;
+        assert_eq!(
+            PUBLIC_RECEIVER_VALUE.checked_add(CHANGE_VALUE),
+            Some(FUNDED_VALUE)
+        );
+
+        let wallet_seed = 0x39;
+        let funding = prepare_orchard_bundle_v1_with_rng(
+            orchard_empty_root_v1(),
+            Vec::new(),
+            vec![OrchardChangeProverInputV1::new(
+                spending_key(wallet_seed),
+                Scope::External,
+                u32::from(wallet_seed),
+                FUNDED_VALUE,
+                [wallet_seed; 512],
+            )],
+            1,
+            &mut ProverEntropyRngV1(ProverEntropyModeV1::Healthy),
+        )
+        .expect("prepare wallet funding output");
+        let funding =
+            authorize_orchard_bundle_v1(funding, consensus_binding(0x74), &consensus_limits())
+                .expect("authorize wallet funding output");
+        assert_eq!(funding.public.value_balance, -23);
+        assert_eq!(funding.public.actions.len(), 1);
+
+        let (funded_anchor, authentication_path) =
+            orchard_singleton_output_witness_v1(funding.public.actions[0].note_commitment)
+                .expect("derive exact singleton funding witness");
+        let spend = recover_orchard_spend_prover_input_v1(
+            &funding,
+            &consensus_limits(),
+            spending_key(wallet_seed),
+            0,
+            0,
+            authentication_path,
+            funded_anchor,
+        )
+        .expect("recover funded wallet output through verified native decryption");
+        let funded_nullifier = spend.nullifier_v1();
+        let successor = prepare_orchard_bundle_v1_with_rng(
+            funded_anchor,
+            vec![spend],
+            vec![OrchardChangeProverInputV1::new(
+                spending_key(wallet_seed),
+                Scope::Internal,
+                u32::from(wallet_seed) + 1,
+                CHANGE_VALUE,
+                [wallet_seed.wrapping_add(1); 512],
+            )],
+            2,
+            &mut ProverEntropyRngV1(ProverEntropyModeV1::Healthy),
+        )
+        .expect("prepare real spend and wallet change");
+        let successor =
+            authorize_orchard_bundle_v1(successor, consensus_binding(0x75), &consensus_limits())
+                .expect("authorize real spend and wallet change");
+        assert_eq!(successor.public.anchor, funded_anchor);
+        assert_eq!(successor.public.value_balance, 17);
+        assert_eq!(successor.public.actions.len(), 2);
+        assert_eq!(
+            successor
+                .public
+                .actions
+                .iter()
+                .filter(|action| action.nullifier == funded_nullifier)
+                .count(),
+            1,
+            "exact funded-note nullifier must be consumed once"
+        );
+
+        let authorized = decode_authorized_bundle_v1(&successor.public, &successor.authorization)
+            .expect("decode independently verified successor");
+        let viewing_key = FullViewingKey::from(&spending_key(wallet_seed));
+        let change_outputs = (0..successor.public.actions.len())
+            .filter_map(|index| {
+                authorized.decrypt_output_with_key(index, &viewing_key.to_ivk(Scope::Internal))
+            })
+            .filter(|(note, _, _)| note.value() == NoteValue::from_raw(CHANGE_VALUE))
+            .count();
+        assert_eq!(
+            change_outputs, 1,
+            "exact six-unit change must be wallet-owned"
+        );
+        verify_orchard_bundle_v1(
+            &successor.public,
+            &successor.authorization,
+            &consensus_limits(),
+        )
+        .expect("real-spend successor independently verifies");
     }
     #[test]
     fn authorize_consumes_and_rejects_a_malformed_mandatory_binding() {

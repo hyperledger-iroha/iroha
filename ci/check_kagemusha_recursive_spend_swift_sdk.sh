@@ -124,7 +124,7 @@ fi
 
 (
   cd IrohaSwift
-  run_swift_test --filter OfflineDeviceAttestationABI21ParityTests
+  run_swift_test --filter OfflineDeviceAttestationV2ParityTests
 )
 
 (

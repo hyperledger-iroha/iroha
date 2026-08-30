@@ -142,7 +142,7 @@ impl AtomicProofQuarantineReadyV2 {
             #[cfg(test)]
             if take_materialization_test_fault_v2(MaterializationTestFaultV2::Read(slot)) {
                 return Err(
-                    iroha_confidential_spool::ConfidentialSpoolErrorV1::FileOperation {
+                    iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1::FileOperation {
                         operation: "injected-late-materialization-read",
                         kind: std::io::ErrorKind::Other,
                     }
@@ -160,7 +160,8 @@ impl AtomicProofQuarantineReadyV2 {
             if take_materialization_test_fault_v2(MaterializationTestFaultV2::Authentication(slot))
             {
                 return Err(
-                    iroha_confidential_spool::ConfidentialSpoolErrorV1::Authentication.into(),
+                    iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1::Authentication
+                        .into(),
                 );
             }
             #[cfg(test)]

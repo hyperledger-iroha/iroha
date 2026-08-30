@@ -104,14 +104,18 @@ print(
     "offline UI capability",
     capability.ready,
     capability.cash_handoff_capability,
+    capability.eligibility_cash_handoff_capability,
     capability.required_bridge_abi_version,
     capability.max_hops,
 )
 ```
 
 The closed response is always `mandatory=False`,
-`cash_handoff_capability="cash_handoff_v1"`, bridge ABI `22`, maximum hop count
-`8`, `ready=True`, and empty `assets` and `blockers`. The deprecated
+`cash_handoff_capability="cash_handoff_v1"`,
+`eligibility_cash_handoff_capability="cash_handoff_eligibility_v1"`, bridge ABI
+`22`, maximum hop count `8`, `ready=True`, and empty `assets` and `blockers`.
+The two capabilities deliberately distinguish the unchanged ABI-21/V4 payment
+proof from its eligibility-bound ABI-22 transport envelope. The deprecated
 `get_kagemusha_readiness(asset_definition_id)` method ignores its selector and
 returns the same status. Wallet/device peer handoff must not depend on network
 discovery. Missing proof material for a particular online top-up or redemption

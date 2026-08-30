@@ -1,5 +1,5 @@
 use super::*;
-use iroha_confidential_spool::ConfidentialSpoolErrorV1;
+use iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1;
 use std::{
     fs,
     path::PathBuf,

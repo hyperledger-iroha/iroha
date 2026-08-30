@@ -17,6 +17,12 @@ fn ensure_offline_attestation_policy_limit(
 fn validate_offline_attestation_policy_bounds(
     policy: &OfflineDeviceAttestationPolicy,
 ) -> Result<(), Error> {
+    policy.validate_v2_rule_shape().map_err(|error| {
+        labeled_invariant(
+            "invalid_attestation_policy",
+            format!("Offline device attestation policy V2 rule shape is invalid: {error}"),
+        )
+    })?;
     ensure_offline_attestation_policy_limit(
         policy.trusted_roots.len(),
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1,
@@ -258,6 +264,16 @@ fn validate_offline_attestation_policy_transition(
     previous: &OfflineDeviceAttestationPolicy,
     candidate: &OfflineDeviceAttestationPolicy,
 ) -> Result<(), Error> {
+    if previous == candidate {
+        return Ok(());
+    }
+    if candidate.policy_epoch <= previous.policy_epoch {
+        return Err(labeled_invariant(
+            "invalid_attestation_policy",
+            "Offline device attestation policy epoch must strictly increase for a non-identical update",
+        )
+        .into());
+    }
     validate_android_attestation_status_transition(
         previous.android_status_snapshot.as_ref(),
         candidate.android_status_snapshot.as_ref(),
@@ -274,14 +290,33 @@ pub(super) fn validate_offline_attestation_policy_transition_from_state(
     else {
         return Ok(());
     };
-    let previous = norito::decode_canonical::<OfflineDeviceAttestationPolicy>(previous_bytes)
-        .map_err(|error| {
-            labeled_invariant(
-                "invalid_attestation_policy",
-                format!("existing governed Offline device attestation policy is corrupt: {error}"),
+    match norito::decode_canonical::<OfflineDeviceAttestationPolicy>(previous_bytes) {
+        Ok(previous) => validate_offline_attestation_policy_transition(&previous, candidate),
+        Err(v2_error) => {
+            let previous = norito::decode_canonical::<OfflineDeviceAttestationPolicyV1>(
+                previous_bytes,
             )
-        })?;
-    validate_offline_attestation_policy_transition(&previous, candidate)
+            .map_err(|v1_error| {
+                labeled_invariant(
+                    "invalid_attestation_policy",
+                    format!(
+                        "existing governed Offline device attestation policy is corrupt as both V2 ({v2_error}) and legacy V1 ({v1_error})"
+                    ),
+                )
+            })?;
+            if previous.version != 1 || candidate.policy_epoch == 0 {
+                return Err(labeled_invariant(
+                    "invalid_attestation_policy",
+                    "legacy Offline device attestation policy transition requires a non-zero V2 epoch",
+                )
+                .into());
+            }
+            validate_android_attestation_status_transition(
+                previous.android_status_snapshot.as_ref(),
+                candidate.android_status_snapshot.as_ref(),
+            )
+        }
+    }
 }
 pub(crate) fn validate_offline_attestation_policy_status_coverage(
     policy: &OfflineDeviceAttestationPolicy,
@@ -301,6 +336,27 @@ pub(crate) fn validate_offline_attestation_policy_status_coverage(
         return Err(labeled_invariant(
             "invalid_attestation_policy",
             "Android attestation status snapshot does not cover the complete validity window",
+        )
+        .into());
+    }
+    Ok(())
+}
+fn validate_offline_attestation_policy_freshness_for_registration(
+    policy: &OfflineDeviceAttestationPolicy,
+    admitted_at_ms: u64,
+    exclusive_registration_end_ms: u64,
+) -> Result<(), Error> {
+    let Some(snapshot) = policy.android_status_snapshot.as_ref() else {
+        return Ok(());
+    };
+    let fresh_until_ms = android_attestation_status_snapshot_fresh_until_ms(snapshot)?;
+    if admitted_at_ms < snapshot.response_date_ms
+        || admitted_at_ms >= fresh_until_ms
+        || exclusive_registration_end_ms > fresh_until_ms
+    {
+        return Err(offline_device_drain_only_rejection(
+            OfflineDeviceEligibilityReasonV1::PolicyNotFresh,
+            "the finalized Android attestation status snapshot is not fresh for the complete registration lifetime",
         )
         .into());
     }
@@ -370,7 +426,7 @@ fn validate_offline_attestation_policy(
     policy: &OfflineDeviceAttestationPolicy,
     block_unix_timestamp_ms: u64,
 ) -> Result<(), Error> {
-    if policy.version != 1 {
+    if policy.version != OFFLINE_DEVICE_ATTESTATION_POLICY_VERSION_V2 {
         return Err(labeled_invariant(
             "invalid_attestation_policy",
             "Offline device attestation policy version is unsupported",
@@ -829,5 +885,23 @@ mod android_attestation_status_policy_tests {
             validate_offline_attestation_policy_status_coverage(&policy, RESPONSE_DATE_MS + 60_001)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn policy_epoch_is_idempotent_but_strictly_monotonic_for_changes() {
+        let previous =
+            default_offline_device_attestation_policy().expect("built-in policy template");
+        validate_offline_attestation_policy_transition(&previous, &previous)
+            .expect("byte-identical policy publication is idempotent");
+
+        let mut changed = previous.clone();
+        changed.revoked_certificate_tbs_sha256.push(vec![0x42; 32]);
+        assert!(
+            validate_offline_attestation_policy_transition(&previous, &changed).is_err(),
+            "a changed policy cannot reuse the previous epoch",
+        );
+        changed.policy_epoch += 1;
+        validate_offline_attestation_policy_transition(&previous, &changed)
+            .expect("a changed policy with a newer epoch is admitted");
     }
 }

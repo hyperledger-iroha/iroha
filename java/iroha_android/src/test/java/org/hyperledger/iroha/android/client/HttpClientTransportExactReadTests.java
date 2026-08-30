@@ -22,6 +22,11 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionLocalStateV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyActionOperationViewV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyLedgerEffectKindV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyOperationSchemaV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1;
 
 /** Exact, bounded read-route contract tests split from the general transport harness. */
 public final class HttpClientTransportExactReadTests {
@@ -35,7 +40,10 @@ public final class HttpClientTransportExactReadTests {
   public static void main(final String[] args) {
     retryPolicyRecognizesRetryableStatus();
     ledgerExecutedBlockWireIsExactBoundedAndFailClosed();
+    bridgeFinalityProofIsExactBoundedAndFailClosed();
+    exactNoritoTypedAbsenceIsOnlyHttp404();
     privacyCapabilitiesAreTypedAndExact();
+    detachedPrivacyActionStatusFailsBeforeDispatch();
   }
 
   static String noncanonicalStandardBase64PadBitAlias(final String encoded) {
@@ -187,6 +195,138 @@ public final class HttpClientTransportExactReadTests {
       oversizedRejected = true;
     }
     assert oversizedRejected : "oversized executed-block wire must fail closed";
+  }
+
+  private static void bridgeFinalityProofIsExactBoundedAndFailClosed() {
+    final byte[] canonical = new byte[] {0x4e, 0x52, 0x54, 0x30};
+    final OneResponseExecutor success =
+        new OneResponseExecutor(
+            new TransportResponse(
+                200,
+                canonical,
+                "ok",
+                Map.of(
+                    "Content-Type", List.of("application/x-norito"),
+                    "Content-Length", List.of(Integer.toString(canonical.length)))));
+    final HttpClientTransport client =
+        HttpClientTransport.withExecutor(
+            success,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+    final byte[] received =
+        client.getBridgeFinalityProofV1(new BigInteger("18446744073709551615")).join();
+    assert Arrays.equals(canonical, received);
+    assert success.requestCount == 1;
+    assert "GET".equals(success.lastRequest.method());
+    assert "/v1/bridge/finality/18446744073709551615"
+        .equals(success.lastRequest.uri().getRawPath());
+    assert List.of("application/x-norito").equals(success.lastRequest.headers().get("Accept"));
+    assert Long.valueOf(9L * 1024L * 1024L).equals(success.lastRequest.maximumResponseBytes());
+
+    for (final BigInteger height :
+        List.of(BigInteger.ZERO, BigInteger.valueOf(-1L), BigInteger.ONE.shiftLeft(64))) {
+      boolean rejected = false;
+      try {
+        client.getBridgeFinalityProofV1(height);
+      } catch (final IllegalArgumentException expected) {
+        rejected = true;
+      }
+      assert rejected : "invalid bridge-finality height must fail before dispatch";
+    }
+    assert success.requestCount == 1 : "invalid finality heights must not dispatch";
+
+    for (final int status : List.of(201, 404, 409, 500)) {
+      boolean rejected = false;
+      try {
+        HttpClientTransport.withExecutor(
+                new OneResponseExecutor(
+                    new TransportResponse(
+                        status,
+                        canonical,
+                        "",
+                        Map.of("Content-Type", List.of("application/x-norito")))),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build())
+            .getBridgeFinalityProofV1(1L)
+            .join();
+      } catch (final CompletionException expected) {
+        rejected = true;
+      }
+      assert rejected : "non-200 bridge-finality response must fail closed";
+    }
+
+    boolean oversizedRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(
+                  new TransportResponse(
+                      200,
+                      new byte[9 * 1024 * 1024 + 1],
+                      "",
+                      Map.of("Content-Type", List.of("application/x-norito")))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .getBridgeFinalityProofV1(1L)
+          .join();
+    } catch (final CompletionException expected) {
+      oversizedRejected = true;
+    }
+    assert oversizedRejected : "oversized bridge-finality proof must fail closed";
+  }
+
+  private static void exactNoritoTypedAbsenceIsOnlyHttp404() {
+    final TransportRequest request =
+        TransportRequest.builder()
+            .setMethod("POST")
+            .setUri(URI.create("https://torii.example/v1/pipeline/transactions/details"))
+            .addHeader("Accept", "application/x-norito")
+            .setBody(new byte[] {0x01})
+            .setMaximumResponseBytes(Long.valueOf(1024L))
+            .build();
+    final HttpClientTransport missing =
+        HttpClientTransport.withExecutor(
+            new OneResponseExecutor(new TransportResponse(404, new byte[] {0x01}, "", Map.of())),
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+    assert missing
+            .fetchExactNoritoBytesAllowingNotFound(request, "authenticated carrier test")
+            .join()
+        == null : "exact HTTP 404 must project typed absence";
+
+    for (final int status : List.of(400, 401, 403, 410, 429, 500)) {
+      boolean rejected = false;
+      try {
+        HttpClientTransport.withExecutor(
+                new OneResponseExecutor(
+                    new TransportResponse(status, new byte[0], "", Map.of())),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build())
+            .fetchExactNoritoBytesAllowingNotFound(request, "authenticated carrier test")
+            .join();
+      } catch (final CompletionException expected) {
+        rejected = true;
+      }
+      assert rejected : "only exact HTTP 404 may project typed absence";
+    }
+
+    final byte[] canonical = new byte[] {0x4e, 0x52, 0x54, 0x30};
+    final byte[] present =
+        HttpClientTransport.withExecutor(
+                new OneResponseExecutor(
+                    new TransportResponse(
+                        200,
+                        canonical,
+                        "",
+                        Map.of(
+                            "Content-Type", List.of("application/x-norito"),
+                            "Content-Length", List.of("4")))),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build())
+            .fetchExactNoritoBytesAllowingNotFound(request, "authenticated carrier test")
+            .join();
+    assert Arrays.equals(canonical, present) : "exact HTTP 200 must preserve canonical bytes";
   }
 
   private static void privacyCapabilitiesAreTypedAndExact() {
@@ -452,6 +592,40 @@ public final class HttpClientTransportExactReadTests {
     assert admissionExecutor.requestCount == 1 : "admission must dispatch exactly once";
     assert admissionExecutor.lastRequest.replayPolicy() == RequestReplayPolicy.ONE_SHOT
         : "admission capability request must be one-shot";
+  }
+
+  private static void detachedPrivacyActionStatusFailsBeforeDispatch() {
+    final OneResponseExecutor executor =
+        new OneResponseExecutor(new TransportResponse(404, new byte[0], "missing", Map.of()));
+    final HttpClientTransport client =
+        HttpClientTransport.withExecutor(
+            executor, signedClientConfig("https://torii.example"));
+    final byte[] nonzeroDigest = new byte[32];
+    Arrays.fill(nonzeroDigest, (byte) 0x5a);
+    final PrivacyActionOperationViewV1 detached =
+        new PrivacyActionOperationViewV1(
+            PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
+            PrivacyOperationSchemaV1.VERANGE_RANGE_PROOF_V1,
+            nonzeroDigest,
+            nonzeroDigest,
+            nonzeroDigest,
+            nonzeroDigest,
+            PrivacyActionLocalStateV1.SUBMITTED,
+            null,
+            null,
+            null,
+            PrivacyLedgerEffectKindV1.VERIFICATION_ONLY,
+            nonzeroDigest,
+            BigInteger.ONE);
+
+    boolean rejected = false;
+    try {
+      client.getPrivacyActionStatusV1(detached, privacyAuth("privacy-detached-status"));
+    } catch (final IllegalStateException expected) {
+      rejected = true;
+    }
+    assert rejected : "detached Exact12 display views must not authorize status reads";
+    assert executor.requestCount == 0 : "detached Exact12 status must fail before dispatch";
   }
 
   private static void assertPrivacyCapabilitiesResponseRejected(

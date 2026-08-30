@@ -148,9 +148,56 @@ if [[ "${CARGO_BUILD_JOBS:-}" != "1" \
   echo "[-] NoritoBridge requires CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0, CARGO_NET_OFFLINE=true, and RUSTC_BOOTSTRAP=1" >&2
   exit 1
 fi
-if [[ -z "${CARGO_TARGET_DIR:-}" || -z "${RUSTC:-}" || -z "${RUSTDOC:-}" ]]; then
-  echo "[-] NoritoBridge requires explicit CARGO_TARGET_DIR, RUSTC, and RUSTDOC" >&2
-  exit 1
+AUTHENTICATED_PRIVACY_LOCK="${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH:-}"
+if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then
+  if [[ -n "${CARGO+x}" || -n "${RUSTC+x}" || -n "${RUSTDOC+x}" ]]; then
+    echo "[-] Authenticated NoritoBridge builds must not inherit CARGO, RUSTC, or RUSTDOC" >&2
+    exit 1
+  fi
+  if [[ -z "${CARGO_TARGET_DIR:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_REGISTRY_LINK_STATE:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_GIT_LINK_STATE:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_CARGO_SEAL:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_SEAL:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL:-}" \
+      || -z "${IROHA_PRIVACY_SDK_ROOT:-}" \
+      || -z "${IROHA_PRIVACY_REAL_CARGO:-}" \
+      || -z "${IROHA_PRIVACY_CARGO_AUDIT_PATH:-}" \
+      || -z "${IROHA_PRIVACY_LOCKFILE_PYTHON_BIN:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH:-}" \
+      || -z "${IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL:-}" \
+      || "${IROHA_PRIVACY_CARGO_LOCKFILE_PATH:-}" != "$AUTHENTICATED_PRIVACY_LOCK" \
+      || "$IROHA_PRIVACY_SDK_ROOT" != "$ROOT_DIR" \
+      || "$IROHA_PRIVACY_REAL_CARGO" != "$IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH" \
+      || "${CARGO_HOME:-}" != "$IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME" \
+      || "$CARGO_TARGET_DIR" != "$IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR" \
+      || "${CARGO_ENCODED_RUSTFLAGS+x}:${CARGO_ENCODED_RUSTFLAGS:-}" != "x:" ]]; then
+    echo "[-] NoritoBridge authenticated privacy Cargo corridor is incomplete or inconsistent" >&2
+    exit 1
+  fi
+  RUSTC="$IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH"
+  RUSTDOC="$IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH"
+else
+  if [[ -z "${CARGO_TARGET_DIR:-}" || -z "${RUSTC:-}" || -z "${RUSTDOC:-}" ]]; then
+    echo "[-] NoritoBridge requires explicit CARGO_TARGET_DIR, RUSTC, and RUSTDOC" >&2
+    exit 1
+  fi
 fi
 CARGO_TARGET_DIR="$(run_python312_clean - "$CARGO_TARGET_DIR" "$ROOT_DIR" <<'PY'
 import os
@@ -337,7 +384,14 @@ BRIDGE_VERSION=""
 ARCHIVE_OUTPUT=""
 PRIVACY_PRODUCTION_ENABLED=0
 ALLOW_DIRTY_SOURCE=0
-CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+WORKSPACE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+if [[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}" \
+    && ( -z "$AUTHENTICATED_PRIVACY_LOCK" \
+      || "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" != "$AUTHENTICATED_PRIVACY_LOCK" ) ]]; then
+  echo "[-] NoritoBridge rejects an unauthenticated or divergent privacy release Cargo lock" >&2
+  exit 1
+fi
+CARGO_LOCKFILE="${AUTHENTICATED_PRIVACY_LOCK:-$WORKSPACE_CARGO_LOCKFILE}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-version)
@@ -447,25 +501,46 @@ fi
 PINNED_RUST_TOOLCHAIN="1.93.1"
 SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
+CARGO_WRAPPER_BINARY="$ROOT_DIR/ci/privacy_sdk_cargo_wrapper.sh"
+CARGO_LOCK_HELPER="$ROOT_DIR/ci/privacy_sdk_cargo_lockfile.sh"
+RUST_TOOLCHAIN_SELECTOR="$PINNED_RUST_TOOLCHAIN"
+if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then
+  if [[ "$IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR" != \
+      "$PINNED_RUST_TOOLCHAIN-aarch64-apple-darwin" \
+      || "$IROHA_PRIVACY_LOCKFILE_PYTHON_BIN" != "$PYTHON_BINARY" ]]; then
+    echo "[-] Authenticated NoritoBridge toolchain selector or Python changed" >&2
+    exit 1
+  fi
+  RUST_TOOLCHAIN_SELECTOR="$IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR"
+fi
 USER_HOME_DIR="$(run_python312_clean -c \
   'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 USER_HOME_DIR="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$USER_HOME_DIR")"
 GIT_BINARY="/usr/bin/git"
-RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"
+RUSTUP_BINARY="${IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH:-$USER_HOME_DIR/.cargo/bin/rustup}"
 for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"; do
   [[ -f "$tool_path" && ! -L "$tool_path" && -x "$tool_path" ]] || {
     echo "[-] Pinned Python, Git, and rustup executables are required: $tool_path" >&2
     exit 1
   }
 done
-for required_input in "$SOURCE_SEAL_SCRIPT" "$HERMETIC_RUNNER" "$ROOT_DIR/rust-toolchain.toml"; do
+for required_input in \
+  "$SOURCE_SEAL_SCRIPT" \
+  "$HERMETIC_RUNNER" \
+  "$CARGO_WRAPPER_BINARY" \
+  "$CARGO_LOCK_HELPER" \
+  "$ROOT_DIR/rust-toolchain.toml"; do
   [[ -f "$required_input" && ! -L "$required_input" ]] || {
     echo "[-] Required NoritoBridge build input is unavailable: $required_input" >&2
     exit 1
   }
 done
+if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then
+  # shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
+  source "$CARGO_LOCK_HELPER"
+fi
 ACTUAL_RUST_TOOLCHAIN="$(
   sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' \
     "$ROOT_DIR/rust-toolchain.toml"
@@ -475,7 +550,7 @@ if [[ "$ACTUAL_RUST_TOOLCHAIN" != "$PINNED_RUST_TOOLCHAIN" ]]; then
   exit 1
 fi
 
-MOBILE_CARGO_HOME="$USER_HOME_DIR/.cargo"
+MOBILE_CARGO_HOME="${IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME:-$USER_HOME_DIR/.cargo}"
 MOBILE_RUSTUP_HOME="$USER_HOME_DIR/.rustup"
 MOBILE_TMPDIR="/tmp"
 for directory in "$USER_HOME_DIR" "$MOBILE_CARGO_HOME" "$MOBILE_RUSTUP_HOME" "$MOBILE_TMPDIR"; do
@@ -495,15 +570,15 @@ RUSTUP_ENV=(
 )
 CARGO_BINARY="$(
   env -i "${RUSTUP_ENV[@]}" \
-    "$RUSTUP_BINARY" which --toolchain "$PINNED_RUST_TOOLCHAIN" cargo
+    "$RUSTUP_BINARY" which --toolchain "$RUST_TOOLCHAIN_SELECTOR" cargo
 )"
 RUSTC_BINARY="$(
   env -i "${RUSTUP_ENV[@]}" \
-    "$RUSTUP_BINARY" which --toolchain "$PINNED_RUST_TOOLCHAIN" rustc
+    "$RUSTUP_BINARY" which --toolchain "$RUST_TOOLCHAIN_SELECTOR" rustc
 )"
 RUSTDOC_BINARY="$(
   env -i "${RUSTUP_ENV[@]}" \
-    "$RUSTUP_BINARY" which --toolchain "$PINNED_RUST_TOOLCHAIN" rustdoc
+    "$RUSTUP_BINARY" which --toolchain "$RUST_TOOLCHAIN_SELECTOR" rustdoc
 )"
 CARGO_BINARY="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
@@ -518,6 +593,13 @@ RUSTDOC_BINARY="$(run_python312_clean -c \
   echo "[-] Exact Rust $PINNED_RUST_TOOLCHAIN Cargo/rustc/rustdoc executables are unavailable" >&2
   exit 1
 }
+if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" \
+    && ( "$CARGO_BINARY" != "$IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH" \
+      || "$RUSTC_BINARY" != "$IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH" \
+      || "$RUSTDOC_BINARY" != "$IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH" ) ]]; then
+  echo "[-] NoritoBridge resolved Rust tools differ from the authenticated privacy corridor" >&2
+  exit 1
+fi
 for supplied_tool in RUSTC RUSTDOC; do
   expected_tool="${supplied_tool}_BINARY"
   if [[ "${!supplied_tool}" != "${!expected_tool}" \
@@ -527,6 +609,14 @@ for supplied_tool in RUSTC RUSTDOC; do
     exit 1
   fi
 done
+
+assert_authenticated_privacy_corridor() {
+  if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then
+    privacy_sdk_assert_ci_cargo_lock_state "$ROOT_DIR" "$PYTHON_BINARY"
+  fi
+}
+
+assert_authenticated_privacy_corridor
 
 run_source_seal() {
   env -i \
@@ -569,8 +659,92 @@ run_isolated_python() {
     "$PYTHON_BINARY" -I -S -B "$@"
 }
 
-selected_cargo_lock_sha256() {
-  run_isolated_python - "$CARGO_LOCKFILE" <<'PY'
+verify_authenticated_apple_targets() {
+  local selection="$1"
+  local selection_arguments=()
+  [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]] || return 0
+  if [[ "$selection" == "all" ]]; then
+    selection_arguments=(--all)
+  else
+    selection_arguments=(--target "$selection")
+  fi
+  run_isolated_python \
+    "$HERMETIC_RUNNER" verify-apple-targets \
+    --toolchain-cargo "$IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH" \
+    --toolchain-selector \
+      "$IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR" \
+    --manifest \
+      "$IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH" \
+    --manifest-seal \
+      "$IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL" \
+    "${selection_arguments[@]}"
+}
+
+authenticated_cargo_audit_snapshot() {
+  run_isolated_python - "$IROHA_PRIVACY_CARGO_AUDIT_PATH" <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+if not path.is_absolute() or path != Path(os.path.abspath(path)):
+    raise SystemExit("authenticated Cargo audit path must be absolute and canonical")
+metadata = path.lstat()
+if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or metadata.st_nlink != 1:
+    raise SystemExit("authenticated Cargo audit must be one non-symbolic regular file")
+contents = path.read_bytes()
+print(
+    ":".join(
+        (
+            str(len(contents)),
+            hashlib.sha256(contents).hexdigest(),
+            str(metadata.st_dev),
+            str(metadata.st_ino),
+            str(metadata.st_mode),
+        )
+    )
+)
+PY
+}
+
+assert_exact_authenticated_cargo_audit() {
+  local initial_state="$1"
+  shift
+  run_isolated_python - \
+    "$IROHA_PRIVACY_CARGO_AUDIT_PATH" "$initial_state" "$@" <<'PY'
+import hashlib
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+size_raw, digest, device, inode, mode = sys.argv[2].split(":")
+expected = sys.argv[3:]
+if len(expected) != 5:
+    raise SystemExit("authenticated Apple build requires exactly five audit records")
+metadata = path.lstat()
+if (
+    not stat.S_ISREG(metadata.st_mode)
+    or stat.S_ISLNK(metadata.st_mode)
+    or metadata.st_nlink != 1
+    or (metadata.st_dev, metadata.st_ino, metadata.st_mode)
+    != (int(device), int(inode), int(mode))
+):
+    raise SystemExit("authenticated Cargo audit identity changed")
+contents = path.read_bytes()
+size = int(size_raw)
+if len(contents) < size or hashlib.sha256(contents[:size]).hexdigest() != digest:
+    raise SystemExit("authenticated Cargo audit prefix changed")
+expected_suffix = ("\n".join(expected) + "\n").encode("utf-8")
+if contents[size:] != expected_suffix:
+    raise SystemExit("authenticated Apple Cargo audit is not the exact five-build transcript")
+PY
+}
+
+canonical_cargo_lock_sha256() {
+  run_isolated_python - "$1" <<'PY'
 import hashlib
 import os
 from pathlib import Path
@@ -591,10 +765,17 @@ except OSError:
     ) from None
 if (
     resolved != candidate
+    or candidate.name != "Cargo.lock"
     or stat.S_ISLNK(metadata.st_mode)
     or not stat.S_ISREG(metadata.st_mode)
+    or metadata.st_nlink != 1
+    or metadata.st_mode & 0o111
+    or metadata.st_size <= 0
+    or metadata.st_size > 16 * 1024 * 1024
 ):
-    raise SystemExit("selected Cargo lock must be a non-symbolic regular file")
+    raise SystemExit(
+        "Cargo lock must be one bounded, singly linked, non-executable regular file"
+    )
 digest = hashlib.sha256()
 with candidate.open("rb") as handle:
     while chunk := handle.read(1024 * 1024):
@@ -603,11 +784,46 @@ print(digest.hexdigest())
 PY
 }
 
+selected_cargo_lock_sha256() {
+  canonical_cargo_lock_sha256 "$CARGO_LOCKFILE"
+}
+
+WORKSPACE_CARGO_LOCK_SHA256_START="$(
+  canonical_cargo_lock_sha256 "$WORKSPACE_CARGO_LOCKFILE"
+)"
 CARGO_LOCK_SHA256_START="$(selected_cargo_lock_sha256)"
+BUILD_CARGO_LOCK_AUTHORITY=""
+if [[ "$CARGO_LOCKFILE" == "$WORKSPACE_CARGO_LOCKFILE" ]]; then
+  if [[ "$CARGO_LOCK_SHA256_START" != "$WORKSPACE_CARGO_LOCK_SHA256_START" ]]; then
+    echo "[-] NoritoBridge workspace build-lock digest is inconsistent" >&2
+    exit 1
+  fi
+  BUILD_CARGO_LOCK_AUTHORITY="workspace-v1"
+elif [[ -n "$AUTHENTICATED_PRIVACY_LOCK" \
+    && "$CARGO_LOCKFILE" == "$AUTHENTICATED_PRIVACY_LOCK" \
+    && "$CARGO_LOCK_SHA256_START" == "31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d" ]]; then
+  BUILD_CARGO_LOCK_AUTHORITY="privacy-sdk-release-v2"
+else
+  echo "[-] NoritoBridge selected Cargo lock has no reviewed authority" >&2
+  exit 1
+fi
+readonly WORKSPACE_CARGO_LOCKFILE CARGO_LOCKFILE
+readonly WORKSPACE_CARGO_LOCK_SHA256_START CARGO_LOCK_SHA256_START
+readonly BUILD_CARGO_LOCK_AUTHORITY
 
 assert_selected_cargo_lock() {
   local phase="$1"
-  local current_digest
+  local current_digest current_workspace_digest
+  if ! current_workspace_digest="$(
+    canonical_cargo_lock_sha256 "$WORKSPACE_CARGO_LOCKFILE"
+  )"; then
+    echo "[-] Workspace Cargo lock became unreadable during $phase" >&2
+    exit 1
+  fi
+  if [[ "$current_workspace_digest" != "$WORKSPACE_CARGO_LOCK_SHA256_START" ]]; then
+    echo "[-] Workspace Cargo lock changed during $phase" >&2
+    exit 1
+  fi
   if ! current_digest="$(selected_cargo_lock_sha256)"; then
     echo "[-] Selected Cargo lock became unreadable during $phase" >&2
     exit 1
@@ -880,6 +1096,18 @@ SIM_ARM_TRIPLE="aarch64-apple-ios-sim"
 SIM_X64_TRIPLE="x86_64-apple-ios"
 MACOS_ARM_TRIPLE="aarch64-apple-darwin"
 MACOS_X64_TRIPLE="x86_64-apple-darwin"
+DEVICE_CARGO_PROFILE="apple-ios-device"
+SIM_ARM_CARGO_PROFILE="apple-ios-simulator"
+SIM_X64_CARGO_PROFILE="apple-ios-simulator"
+MACOS_ARM_CARGO_PROFILE="apple-macos"
+MACOS_X64_CARGO_PROFILE="apple-macos"
+if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then
+  DEVICE_CARGO_PROFILE="privacy-apple-ios-device-arm64"
+  SIM_ARM_CARGO_PROFILE="privacy-apple-ios-simulator-arm64"
+  SIM_X64_CARGO_PROFILE="privacy-apple-ios-simulator-x86_64"
+  MACOS_ARM_CARGO_PROFILE="privacy-apple-macos-arm64"
+  MACOS_X64_CARGO_PROFILE="privacy-apple-macos-x86_64"
+fi
 stage_cargo_library() {
   local target_triple="$1"
   local label="$2"
@@ -901,16 +1129,26 @@ run_hermetic_apple_cargo() {
   local cargo_subcommand="$1"
   shift
   local cargo_status
+  local expected_target=""
+  local cargo_executable="$CARGO_BINARY"
+  local corridor_name
+  local cargo_command=()
+  local cargo_environment=()
   local platform_environment=()
   case "$profile" in
-    apple-ios-device)
+    apple-ios-device|privacy-apple-ios-device-arm64)
+      expected_target="$DEVICE_TRIPLE"
       platform_environment=(
         --set "DEVELOPER_DIR=$XCODE_DEVELOPER_DIR"
         --set "IPHONEOS_DEPLOYMENT_TARGET=$IPHONEOS_DEPLOYMENT_TARGET"
         --set "SDKROOT=$sdkroot"
       )
       ;;
-    apple-ios-simulator)
+    apple-ios-simulator|privacy-apple-ios-simulator-arm64|privacy-apple-ios-simulator-x86_64)
+      case "$profile" in
+        *-arm64) expected_target="$SIM_ARM_TRIPLE" ;;
+        *-x86_64) expected_target="$SIM_X64_TRIPLE" ;;
+      esac
       platform_environment=(
         --set "DEVELOPER_DIR=$XCODE_DEVELOPER_DIR"
         --set "IPHONEOS_DEPLOYMENT_TARGET=$IPHONESIMULATOR_DEPLOYMENT_TARGET"
@@ -918,7 +1156,11 @@ run_hermetic_apple_cargo() {
         --set "SDKROOT=$sdkroot"
       )
       ;;
-    apple-macos)
+    apple-macos|privacy-apple-macos-arm64|privacy-apple-macos-x86_64)
+      case "$profile" in
+        *-arm64) expected_target="$MACOS_ARM_TRIPLE" ;;
+        *-x86_64) expected_target="$MACOS_X64_TRIPLE" ;;
+      esac
       platform_environment=(
         --set "DEVELOPER_DIR=$XCODE_DEVELOPER_DIR"
         --set "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
@@ -930,33 +1172,106 @@ run_hermetic_apple_cargo() {
       exit 1
       ;;
   esac
+  if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then
+    case "$profile" in
+      privacy-apple-*) ;;
+      *)
+        echo "[-] Authenticated NoritoBridge builds require an exact privacy Apple profile" >&2
+        exit 1
+        ;;
+    esac
+    cargo_executable="$CARGO_WRAPPER_BINARY"
+    cargo_environment=(
+      --set "CARGO=$CARGO_WRAPPER_BINARY"
+      --set "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
+      --set "CARGO_ENCODED_RUSTFLAGS="
+      --set "CARGO_HOME=$MOBILE_CARGO_HOME"
+      --set "CARGO_INCREMENTAL=0"
+      --set "CARGO_NET_OFFLINE=true"
+      --set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+      --set "HOME=$USER_HOME_DIR"
+      --set "LANG=C.UTF-8"
+      --set "LC_ALL=C.UTF-8"
+      --set "NORITO_SKIP_BINDINGS_SYNC=1"
+      --set "PATH=/usr/bin:/bin"
+      --set "RUSTC_BOOTSTRAP=1"
+      --set "TMPDIR=$MOBILE_TMPDIR"
+    )
+    for corridor_name in \
+      IROHA_PRIVACY_CARGO_LOCKFILE_PATH \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_SEAL \
+      IROHA_PRIVACY_AUTHENTICATED_WORKSPACE_CARGO_LOCK_STATE \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME_DIRECTORY_STATE \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_REGISTRY_LINK_STATE \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_GIT_LINK_STATE \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIRECTORY_STATE \
+      IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH \
+      IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL \
+      IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR \
+      IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH \
+      IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH \
+      IROHA_PRIVACY_AUTHENTICATED_CARGO_SEAL \
+      IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH \
+      IROHA_PRIVACY_AUTHENTICATED_RUSTC_SEAL \
+      IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH \
+      IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_SEAL \
+      IROHA_PRIVACY_SDK_ROOT \
+      IROHA_PRIVACY_REAL_CARGO \
+      IROHA_PRIVACY_CARGO_AUDIT_PATH \
+      IROHA_PRIVACY_LOCKFILE_PYTHON_BIN \
+      IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_PATH \
+      IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGETS_MANIFEST_SEAL; do
+      cargo_environment+=(--set "$corridor_name=${!corridor_name}")
+    done
+    cargo_environment+=(
+      --set "IROHA_PRIVACY_AUTHENTICATED_APPLE_CARGO_PROFILE=$profile"
+      --set "IROHA_PRIVACY_AUTHENTICATED_APPLE_TARGET=$expected_target"
+      --set "IROHA_PRIVACY_AUTHENTICATED_DEVELOPER_DIR=$XCODE_DEVELOPER_DIR"
+      --set "IROHA_PRIVACY_AUTHENTICATED_SDKROOT=$sdkroot"
+    )
+    cargo_command=("$cargo_executable" "$cargo_subcommand" "$@")
+  else
+    cargo_environment=(
+      --set "CARGO=$CARGO_BINARY"
+      --set "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
+      --set "CARGO_HOME=$MOBILE_CARGO_HOME"
+      --set "CARGO_INCREMENTAL=0"
+      --set "CARGO_NET_OFFLINE=true"
+      --set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+      --set "HOME=$USER_HOME_DIR"
+      --set "LANG=C.UTF-8"
+      --set "LC_ALL=C.UTF-8"
+      --set "NORITO_SKIP_BINDINGS_SYNC=1"
+      --set "PATH=${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:/usr/bin:/bin"
+      --set "RUSTC=$RUSTC_BINARY"
+      --set "RUSTC_BOOTSTRAP=1"
+      --set "RUSTDOC=$RUSTDOC_BINARY"
+      --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME"
+      --set "TMPDIR=$MOBILE_TMPDIR"
+    )
+    cargo_command=(
+      "$cargo_executable" "$cargo_subcommand"
+      -Z unstable-options --lockfile-path "$CARGO_LOCKFILE" "$@"
+    )
+  fi
   assert_selected_cargo_lock "the $profile Cargo preflight"
   if run_isolated_python "$HERMETIC_RUNNER" \
       --profile "$profile" \
-      --set "CARGO=$CARGO_BINARY" \
-      --set "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
-      --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
-      --set "CARGO_INCREMENTAL=0" \
-      --set "CARGO_NET_OFFLINE=true" \
-      --set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
-      --set "HOME=$USER_HOME_DIR" \
-      --set "LANG=C.UTF-8" \
-      --set "LC_ALL=C.UTF-8" \
-      --set "NORITO_SKIP_BINDINGS_SYNC=1" \
-      --set "PATH=${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:/usr/bin:/bin" \
-      --set "RUSTC=$RUSTC_BINARY" \
-      --set "RUSTC_BOOTSTRAP=1" \
-      --set "RUSTDOC=$RUSTDOC_BINARY" \
-      --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
-      --set "TMPDIR=$MOBILE_TMPDIR" \
+      "${cargo_environment[@]}" \
       "${platform_environment[@]}" \
-      -- "$CARGO_BINARY" "$cargo_subcommand" \
-      -Z unstable-options --lockfile-path "$CARGO_LOCKFILE" "$@"; then
+      -- "${cargo_command[@]}"; then
     cargo_status=0
   else
     cargo_status=$?
   fi
   assert_selected_cargo_lock "the $profile Cargo invocation"
+  assert_authenticated_privacy_corridor
   return "$cargo_status"
 }
 
@@ -965,43 +1280,62 @@ echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_ARM_
 
 echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_ARM_TRIPLE $MACOS_X64_TRIPLE)" >&2
 
+AUTHENTICATED_CARGO_AUDIT_START=""
+if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then
+  assert_authenticated_privacy_corridor
+  verify_authenticated_apple_targets all
+  AUTHENTICATED_CARGO_AUDIT_START="$(authenticated_cargo_audit_snapshot)"
+fi
+
 # Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
 # while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
 run_hermetic_apple_cargo \
-  apple-ios-device "$IPHONEOS_SDKROOT" \
+  "$DEVICE_CARGO_PROFILE" "$IPHONEOS_SDKROOT" \
   build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
   --target "$DEVICE_TRIPLE" \
   "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
 assert_bridge_source_seal "the iOS device build"
 LIB_DEV=$(stage_cargo_library "$DEVICE_TRIPLE" "iOS device")
 run_hermetic_apple_cargo \
-  apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
+  "$SIM_ARM_CARGO_PROFILE" "$IPHONESIMULATOR_SDKROOT" \
   build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
   --target "$SIM_ARM_TRIPLE" \
   "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
 assert_bridge_source_seal "the arm64 simulator build"
 LIB_SIM_ARM=$(stage_cargo_library "$SIM_ARM_TRIPLE" "arm64 simulator")
 run_hermetic_apple_cargo \
-  apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
+  "$SIM_X64_CARGO_PROFILE" "$IPHONESIMULATOR_SDKROOT" \
   build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
   --target "$SIM_X64_TRIPLE" \
   "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
 assert_bridge_source_seal "the x86_64 simulator build"
 LIB_SIM_X64=$(stage_cargo_library "$SIM_X64_TRIPLE" "x86_64 simulator")
 run_hermetic_apple_cargo \
-  apple-macos "$MACOSX_SDKROOT" \
+  "$MACOS_ARM_CARGO_PROFILE" "$MACOSX_SDKROOT" \
   build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
   --target "$MACOS_ARM_TRIPLE" \
   "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
 assert_bridge_source_seal "the arm64 macOS build"
 LIB_MAC_ARM=$(stage_cargo_library "$MACOS_ARM_TRIPLE" "arm64 macOS")
 run_hermetic_apple_cargo \
-  apple-macos "$MACOSX_SDKROOT" \
+  "$MACOS_X64_CARGO_PROFILE" "$MACOSX_SDKROOT" \
   build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
   --target "$MACOS_X64_TRIPLE" \
   "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
 assert_bridge_source_seal "the x86_64 macOS build"
 LIB_MAC_X64=$(stage_cargo_library "$MACOS_X64_TRIPLE" "x86_64 macOS")
+
+if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then
+  assert_exact_authenticated_cargo_audit \
+    "$AUTHENTICATED_CARGO_AUDIT_START" \
+    $'build\tprivacy-apple-ios-device-arm64\taarch64-apple-ios' \
+    $'build\tprivacy-apple-ios-simulator-arm64\taarch64-apple-ios-sim' \
+    $'build\tprivacy-apple-ios-simulator-x86_64\tx86_64-apple-ios' \
+    $'build\tprivacy-apple-macos-arm64\taarch64-apple-darwin' \
+    $'build\tprivacy-apple-macos-x86_64\tx86_64-apple-darwin'
+  verify_authenticated_apple_targets all
+  assert_authenticated_privacy_corridor
+fi
 
 assert_bridge_source_seal "Apple slice staging"
 
@@ -1166,6 +1500,57 @@ if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
   CARGO_FEATURES_JSON='["privacy-production-enabled"]'
 fi
+BUILD_ENVIRONMENT_SCHEMA="iroha.mobile-native-build-environment.v1"
+HERMETIC_RUNNER_SCHEMA="iroha.mobile-hermetic-command.v1"
+HERMETIC_MANIFEST_PROFILE_NAMES=(
+  apple-ios-device
+  apple-ios-simulator
+  apple-macos
+)
+if [[ -n "$AUTHENTICATED_PRIVACY_LOCK" ]]; then
+  BUILD_ENVIRONMENT_SCHEMA="iroha.mobile-native-build-environment.v2"
+  HERMETIC_RUNNER_SCHEMA="iroha.mobile-hermetic-command.v2"
+  HERMETIC_MANIFEST_PROFILE_NAMES=(
+    privacy-apple-ios-device-arm64
+    privacy-apple-ios-simulator-arm64
+    privacy-apple-ios-simulator-x86_64
+    privacy-apple-macos-arm64
+    privacy-apple-macos-x86_64
+  )
+fi
+HERMETIC_ENVIRONMENT_PROFILES_JSON="$(
+  run_isolated_python - \
+    "$HERMETIC_RUNNER" "${HERMETIC_MANIFEST_PROFILE_NAMES[@]}" <<'PY'
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+runner_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location(
+    "norito_bridge_hermetic_profile_manifest", runner_path
+)
+if spec is None or spec.loader is None:
+    raise SystemExit("unable to load hermetic runner profile inventory")
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
+profile_names = tuple(sys.argv[2:])
+legacy_names = ("apple-ios-device", "apple-ios-simulator", "apple-macos")
+privacy_names = (
+    "privacy-apple-ios-device-arm64",
+    "privacy-apple-ios-simulator-arm64",
+    "privacy-apple-ios-simulator-x86_64",
+    "privacy-apple-macos-arm64",
+    "privacy-apple-macos-x86_64",
+)
+if profile_names not in (legacy_names, privacy_names):
+    raise SystemExit("hermetic Apple manifest profile selection is not exact")
+if set(runner.PRIVACY_WRAPPED_APPLE_PROFILES) != set(privacy_names):
+    raise SystemExit("hermetic privacy Apple profile inventory is not exact")
+profiles = {name: sorted(runner.PROFILES[name]) for name in profile_names}
+print(json.dumps(profiles, sort_keys=True, separators=(",", ":")))
+PY
+)" || exit 1
 
 cat > "$PUBLISH_MANIFEST" <<EOF
 {
@@ -1174,75 +1559,10 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
   "cargo_features": $CARGO_FEATURES_JSON,
   "build_environment": {
-    "schema": "iroha.mobile-native-build-environment.v1",
-    "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
+    "schema": "$BUILD_ENVIRONMENT_SCHEMA",
+    "hermetic_runner_schema": "$HERMETIC_RUNNER_SCHEMA",
     "hermetic_runner_sha256": "$HERMETIC_RUNNER_SHA256",
-    "environment_profiles": {
-      "apple-ios-device": [
-        "CARGO",
-        "CARGO_BUILD_JOBS",
-        "CARGO_HOME",
-        "CARGO_INCREMENTAL",
-        "CARGO_NET_OFFLINE",
-        "CARGO_TARGET_DIR",
-        "DEVELOPER_DIR",
-        "HOME",
-        "IPHONEOS_DEPLOYMENT_TARGET",
-        "LANG",
-        "LC_ALL",
-        "NORITO_SKIP_BINDINGS_SYNC",
-        "PATH",
-        "RUSTC",
-        "RUSTC_BOOTSTRAP",
-        "RUSTDOC",
-        "RUSTUP_HOME",
-        "SDKROOT",
-        "TMPDIR"
-      ],
-      "apple-ios-simulator": [
-        "CARGO",
-        "CARGO_BUILD_JOBS",
-        "CARGO_HOME",
-        "CARGO_INCREMENTAL",
-        "CARGO_NET_OFFLINE",
-        "CARGO_TARGET_DIR",
-        "DEVELOPER_DIR",
-        "HOME",
-        "IPHONEOS_DEPLOYMENT_TARGET",
-        "IPHONESIMULATOR_DEPLOYMENT_TARGET",
-        "LANG",
-        "LC_ALL",
-        "NORITO_SKIP_BINDINGS_SYNC",
-        "PATH",
-        "RUSTC",
-        "RUSTC_BOOTSTRAP",
-        "RUSTDOC",
-        "RUSTUP_HOME",
-        "SDKROOT",
-        "TMPDIR"
-      ],
-      "apple-macos": [
-        "CARGO",
-        "CARGO_BUILD_JOBS",
-        "CARGO_HOME",
-        "CARGO_INCREMENTAL",
-        "CARGO_NET_OFFLINE",
-        "CARGO_TARGET_DIR",
-        "DEVELOPER_DIR",
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "MACOSX_DEPLOYMENT_TARGET",
-        "NORITO_SKIP_BINDINGS_SYNC",
-        "PATH",
-        "RUSTC",
-        "RUSTC_BOOTSTRAP",
-        "RUSTDOC",
-        "RUSTUP_HOME",
-        "SDKROOT",
-        "TMPDIR"
-      ]
-    },
+    "environment_profiles": $HERMETIC_ENVIRONMENT_PROFILES_JSON,
     "cargo_build_jobs": 1,
     "rust_toolchain_channel": "$PINNED_RUST_TOOLCHAIN",
     "cargo_release": "$CARGO_RELEASE",
@@ -1272,7 +1592,9 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "source_commit": "$SOURCE_COMMIT",
   "source_tree_dirty": $SOURCE_TREE_DIRTY,
   "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
-  "cargo_lock_sha256": "$CARGO_LOCK_SHA256_START",
+  "workspace_cargo_lock_sha256": "$WORKSPACE_CARGO_LOCK_SHA256_START",
+  "build_cargo_lock_sha256": "$CARGO_LOCK_SHA256_START",
+  "build_cargo_lock_authority": "$BUILD_CARGO_LOCK_AUTHORITY",
   "bridge_header_sha256": "$HEADER_HASH",
   "required_symbols": [
     "connect_norito_bridge_abi_version",
@@ -1290,6 +1612,25 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_inspect_signed_exact12_action_v1",
+    "iroha_privacy_authenticated_transaction_details_prepare_v1",
+    "iroha_privacy_authenticated_transaction_details_finalize_v1",
+    "iroha_privacy_authenticated_transaction_details_project_result_v1",
+    "iroha_privacy_authenticated_transaction_details_prepare_v2",
+    "iroha_privacy_authenticated_transaction_details_finalize_v2",
+    "iroha_privacy_authenticated_transaction_details_project_result_v2",
+    "iroha_privacy_authenticated_finality_proof_page_bind_v1",
+    "iroha_privacy_authenticated_finality_page_verify_v1",
+    "iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1",
+    "iroha_privacy_authenticated_finalized_action_rejection_project_v1",
+    "iroha_privacy_kagemusha_topup_finality_project_v4",
+    "iroha_privacy_authenticated_offline_device_registration_result_project_v1",
+    "iroha_privacy_authenticated_action_receipt_prepare_v1",
+    "iroha_privacy_authenticated_action_receipt_finalize_v1",
+    "iroha_privacy_authenticated_action_receipt_project_result_v1",
+    "iroha_privacy_authenticated_state_query_prepare_v1",
+    "iroha_privacy_authenticated_state_query_finalize_v1",
+    "iroha_privacy_authenticated_state_query_project_result_v1",
     "iroha_privacy_free_buffer",
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
@@ -1297,6 +1638,13 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
+    "connect_norito_offline_device_policy_proof_request_v1",
+    "connect_norito_offline_device_policy_proof_verify_v1",
+    "connect_norito_offline_device_eligibility_request_v1",
+    "connect_norito_offline_device_eligibility_response_verify_v1",
+    "connect_norito_offline_device_attestation_policy_view_verify_v1",
+    "connect_norito_offline_device_eligibility_credential_verify_v1",
+    "connect_norito_offline_device_eligibility_peer_certificate_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",
@@ -1345,6 +1693,12 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
+    "connect_norito_kagemusha_eligibility_payment_prepare_v1",
+    "connect_norito_kagemusha_eligibility_payment_signing_bytes_v1",
+    "connect_norito_kagemusha_eligibility_payment_finalize_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_static_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1",
+    "connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
   ],
   "forbidden_symbols": [
@@ -1720,7 +2074,8 @@ run_isolated_python \
   --manifest "$PUBLISH_MANIFEST" \
   --manifest-link "$PUBLISH_MANIFEST_LINK" \
   --expected-link-target "$CANONICAL_MANIFEST_RELATIVE_TARGET" \
-  --swift-loader "$PUBLISH_PROSPECTIVE_LOADER"
+  --swift-loader "$PUBLISH_PROSPECTIVE_LOADER" \
+  --lockfile-path "$CARGO_LOCKFILE"
 
 assert_bridge_source_seal "staged artifact validation"
 
@@ -1937,6 +2292,7 @@ if [[ -n "$ARCHIVE_OUTPUT" ]]; then
     NORITO_BRIDGE_SEAL_RUSTDOC="$RUSTDOC_BINARY" \
     NORITO_BRIDGE_SEAL_RUSTUP="$RUSTUP_BINARY" \
     NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    NORITO_BRIDGE_SELECTED_CARGO_LOCKFILE="$CARGO_LOCKFILE" \
     "$PYTHON_BINARY" -I -S -B "$ARCHIVE_OWNER" \
       --xcframework "$FINAL_XCFRAMEWORK" \
       --output "$ARCHIVE_OUTPUT" \

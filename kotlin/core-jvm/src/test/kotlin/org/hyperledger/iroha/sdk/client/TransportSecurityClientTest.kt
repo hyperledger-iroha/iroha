@@ -108,6 +108,22 @@ class TransportSecurityClientTest {
     }
 
     @Test
+    fun opaqueSignedQueryBodyAlwaysRequiresAuthenticatedTls() {
+        assertFailsWith<IllegalArgumentException> {
+            TransportSecurity.requireAuthenticatedHttpRequestAllowed(
+                context = "HttpClientTransport authenticated signed query",
+                baseUri = URI.create("http://example.com"),
+                targetUri = URI.create("http://example.com/v1/pipeline/transactions/details"),
+            )
+        }
+        TransportSecurity.requireAuthenticatedHttpRequestAllowed(
+            context = "HttpClientTransport authenticated signed query",
+            baseUri = URI.create("https://example.com"),
+            targetUri = URI.create("https://example.com/v1/pipeline/transactions/details"),
+        )
+    }
+
+    @Test
     fun eventStreamRejectsInsecureAuthorizationHeader() {
         val client = ToriiEventStreamClient(
             baseUri = URI.create("http://example.com"),

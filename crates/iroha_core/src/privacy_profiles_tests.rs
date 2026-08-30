@@ -1,6 +1,13 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "zk-stark")]
+    use crate::privacy_engines::zk_ace::{
+        ZK_ACE_RELEASE_READINESS_BLOCKER_V2, zk_ace_public_release_pins_complete_v2,
+        zk_ace_release_evidence_pins_complete_v2,
+    };
+    #[cfg(all(feature = "zk-stark", feature = "privacy-release-evidence"))]
+    use crate::privacy_engines::zk_ace::zk_ace_nonshipping_release_candidate_available_v2;
     use iroha_data_model::privacy::{
         AnonymousPgcActivationLimitsV1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
         PrivacyProposedLifecycleV1,
@@ -199,8 +206,8 @@ mod tests {
             ))
     }
     fn vega_activation() -> PrivacyProtocolActivationRecordV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("fixed Vega profile derives")
+        vega_release_candidate_profile_material_v1()
+            .expect("fixed Vega candidate profile derives")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
@@ -281,7 +288,7 @@ mod tests {
         #[cfg(feature = "zk-stark")]
         assert_eq!(
             ZK_ACE_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1"
+            b"goldilocks-dense-mds-poseidon-x7-four-lane-transparent-stark-v2"
         );
         for stale_geometry in [
             b"mask255".as_slice(),
@@ -487,17 +494,25 @@ mod tests {
         let mut expected = vec![
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        ];
+        if vega_figure9_release_prerequisite_pins_complete_v1() {
+            expected.push(PrivacyProtocolIdV1::VegaExistingCredentialZkV0);
+        }
+        if require_activation_readiness_v1(zk_x509_activation_readiness_v1()).is_ok() {
+            expected.push(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
+        }
+        expected.extend([
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
             PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             PrivacyProtocolIdV1::PqMaspStarkV0,
-        ];
-        if require_activation_readiness_v1(zk_x509_activation_readiness_v1()).is_ok() {
-            expected.push(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
-        }
+        ]);
+        assert!(
+            vega_release_candidate_profile_material_v1().is_ok(),
+            "Vega candidate material must derive independently of governance release"
+        );
         assert!(
             zk_x509_release_candidate_profile_material_v1().is_ok(),
             "X.509 candidate material must derive independently of governance release"
@@ -1225,12 +1240,78 @@ mod tests {
         }
     }
     #[test]
-    fn zk_ace_remains_fail_closed_without_a_128_bit_commitment_profile() {
+    #[cfg(feature = "zk-stark")]
+    fn zk_ace_four_lane_profile_is_bound_and_release_gate_is_pin_derived() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        let candidate = zk_ace_release_candidate_profile_material_v2()
+            .expect("release-candidate profile material");
         assert_eq!(
-            compiled_privacy_profile_v1(protocol_id),
-            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+            candidate,
+            zk_ace_release_candidate_profile_material_v2()
+                .expect("deterministic release-candidate profile material")
         );
+        assert_eq!(candidate.protocol_id, protocol_id);
+        for digest in [
+            *candidate.parameter_id.as_bytes(),
+            *candidate.parameter_digest.as_bytes(),
+            *candidate.verifier_digest.as_bytes(),
+            *candidate.statement_schema_digest.as_bytes(),
+            *candidate.engine_manifest_digest.as_bytes(),
+        ] {
+            assert_ne!(digest, [0; 32]);
+        }
+        assert_ne!(zk_ace_compiled_profile_digest_v1(), [0; 32]);
+        assert!(
+            core::str::from_utf8(ZK_ACE_COMMITMENT_BINDING_PROFILE_V2)
+                .expect("binding profile is UTF-8")
+                .contains("classical-rom-generic-collision-target-128-bits")
+        );
+        assert!(
+            core::str::from_utf8(ZK_ACE_RELEASE_READINESS_BLOCKER_V2)
+                .expect("release blocker is UTF-8")
+                .contains("zero-pin-means-unavailable")
+        );
+        assert_eq!(
+            ZK_ACE_FULL_ENGINE_AVAILABLE_V1,
+            zk_ace_public_release_pins_complete_v2()
+        );
+        if ZK_ACE_FULL_ENGINE_AVAILABLE_V1 {
+            assert_eq!(
+                compiled_privacy_profile_v1(protocol_id),
+                Ok(candidate),
+                "closing the native-stage evidence gate must expose the exact reviewed candidate"
+            );
+        } else {
+            assert_eq!(
+                compiled_privacy_profile_v1(protocol_id),
+                Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+            );
+        }
+        assert!(
+            !zk_ace_public_release_pins_complete_v2() || zk_ace_release_evidence_pins_complete_v2(),
+            "public release evidence cannot be complete before native-stage evidence"
+        );
+        #[cfg(feature = "privacy-release-evidence")]
+        if zk_ace_nonshipping_release_candidate_available_v2() {
+            assert!(!ZK_ACE_FULL_ENGINE_AVAILABLE_V1);
+            assert_eq!(
+                nonshipping_zk_ace_release_candidate_profile_v2(),
+                Ok(candidate)
+            );
+            let activation = candidate.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 10,
+                    activate_at_height: 310,
+                },
+            ));
+            assert_eq!(
+                validate_compiled_privacy_activation_v1(&activation),
+                Err(CompiledPrivacyProfileValidationErrorV1::Profile(
+                    CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }
+                )),
+                "ordinary governance must remain closed in an evidence-feature build"
+            );
+        }
     }
     #[test]
     fn zk_ams_profile_is_unavailable_until_every_mkhe_gate_closes() {
@@ -1446,11 +1527,23 @@ mod tests {
     }
     #[test]
     fn vega_profile_is_deterministic_complete_and_bounded() {
-        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("profile");
-        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("profile");
+        let first = vega_release_candidate_profile_material_v1().expect("candidate profile");
+        let second = vega_release_candidate_profile_material_v1().expect("candidate profile");
         assert_eq!(first, second);
+        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+        if let Some(release_binding) = vega_figure9_release_activation_binding_digest_v1() {
+            assert!(vega_figure9_release_prerequisite_pins_complete_v1());
+            assert_eq!(
+                compiled_privacy_profile_v1(protocol_id),
+                vega_production_profile_material_with_release_binding_v1(release_binding)
+            );
+        } else {
+            assert!(!vega_figure9_release_prerequisite_pins_complete_v1());
+            assert_eq!(
+                compiled_privacy_profile_v1(protocol_id),
+                Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+            );
+        }
         assert_eq!(
             first.proof_system_id,
             PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256
@@ -1485,22 +1578,67 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "9fa2a07d17989e07bb7ff804bb408e95e127b80ab5e01258b77af9b00c82607d".to_owned(),
-                "cf6bb53805e982444751db072c04d8b52dd9e14712cb90bbf23f68bbf2650c82".to_owned(),
-                "6056ad21ff647212dcc81ff5508e5348400ca734a230073ac6367fa9c7b5ba3f".to_owned(),
-                "f45032acceaf4b65e5afe114ca1f87fde477a73040e07c60a2c99e831f4cdc63".to_owned(),
-                "c701b59a7083969770841a85a784608543c61e5849fed0670bfd97c2aa845009".to_owned(),
+                "b88ecc7d9efe0d209a776c890b7ad8db71efc70505f7e897f04802b70289c5dc".to_owned(),
+                "c7fe5486b13a97613491382a4df54c4d2a915fe6486cd88ff852bca9e31e7268".to_owned(),
+                "86d0ce5b22f463785d07936034ddefc487461634f2fe2cfc470bf30bde3d6827".to_owned(),
+                "7a08f9e1715553095ba92c70bac25155eae72c874b4dd508f38e16716683616a".to_owned(),
+                "b4258a005a4c99a2a8f0a47e1e7c2770afab397e2d7b9c28214d73cdea2bf389".to_owned(),
             )
+        );
+    }
+    #[test]
+    fn vega_production_release_binding_changes_and_isolates_the_candidate_tuple() {
+        let candidate = vega_release_candidate_profile_material_v1().expect("candidate profile");
+        let production_a = vega_production_profile_material_with_release_binding_v1([0xA5; 32])
+            .expect("synthetic nonzero release binding");
+        let production_b = vega_production_profile_material_with_release_binding_v1([0xB6; 32])
+            .expect("distinct synthetic nonzero release binding");
+
+        let mut expected = candidate;
+        expected.engine_manifest_digest = production_a.engine_manifest_digest;
+        assert_eq!(production_a, expected);
+        assert_ne!(
+            production_a.engine_manifest_digest,
+            candidate.engine_manifest_digest
+        );
+        assert_ne!(
+            production_a.engine_manifest_digest,
+            production_b.engine_manifest_digest
+        );
+        assert_eq!(
+            vega_production_profile_material_with_release_binding_v1([0; 32]),
+            Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed {
+                protocol_id: PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            })
+        );
+
+        let candidate_activation = vega_activation();
+        assert_eq!(
+            validate_compiled_privacy_activation_against_profile_v1(
+                &candidate_activation,
+                &production_a,
+            ),
+            Err(CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch),
+            "candidate-only evidence must not satisfy the governed production tuple"
         );
     }
     #[test]
     #[ignore = "operator-only KAT regeneration after an intentional compiled-profile change"]
     fn print_all_compiled_profile_tuples() {
         for protocol_id in PrivacyProtocolIdV1::ALL {
-            let profile = if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
-                zk_x509_release_candidate_profile_material_v1()
-            } else {
-                compiled_privacy_profile_v1(protocol_id)
+            let profile = match protocol_id {
+                #[cfg(feature = "zk-stark")]
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
+                    zk_ace_release_candidate_profile_material_v2()
+                }
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+                    zk_x509_release_candidate_profile_material_v1()
+                }
+                PrivacyProtocolIdV1::IrohaZkAmsV1 => zk_ams_release_candidate_profile_material_v1(),
+                PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
+                    vega_release_candidate_profile_material_v1()
+                }
+                _ => compiled_privacy_profile_v1(protocol_id),
             }
             .unwrap_or_else(|error| {
                 panic!(
@@ -1522,7 +1660,9 @@ mod tests {
     #[test]
     fn vega_compiled_profile_rejects_every_binding_mismatch() {
         let valid = vega_activation();
-        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
+        let candidate = vega_release_candidate_profile_material_v1().expect("candidate profile");
+        validate_compiled_privacy_activation_against_profile_v1(&valid, &candidate)
+            .expect("exact candidate profile");
         let mutations: [(
             CompiledPrivacyProfileValidationErrorV1,
             fn(&mut PrivacyProtocolActivationRecordV1),
@@ -1562,7 +1702,7 @@ mod tests {
             let mut changed = valid;
             mutate(&mut changed);
             assert_eq!(
-                validate_compiled_privacy_activation_v1(&changed),
+                validate_compiled_privacy_activation_against_profile_v1(&changed, &candidate),
                 Err(expected)
             );
         }

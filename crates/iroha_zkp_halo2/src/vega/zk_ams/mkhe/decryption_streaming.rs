@@ -43,7 +43,9 @@ use super::super::{
         ZkAmsMkhePersistentDecryptionVerificationContextV1,
         ZkAmsMkheStreamingDecryptionAuthorityV1,
     },
-    ring_multiplication_work, signed_mod,
+    ring_multiplication_work,
+    rns_native_receipt_consumers::ZkAmsMkheRnsNativeSplitDecryptionUseV1,
+    signed_mod,
     wire::ZkAmsMkheGovernedRosterWireV1,
     zk_ams_mkhe_security_certificate_v1,
 };
@@ -65,6 +67,10 @@ use super::{
 use crate::{generalized_bulletproof::try_exact_capacity_vec_v1, vega::sponge::Keccak256};
 use core::{fmt, mem::size_of};
 const STREAMING_RESOURCE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.decryption-streaming-resource";
+const RNS_LINK_DECRYPTION_STATEMENT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-link.split-decryption-statement";
+const RNS_LINK_DECRYPTION_OPERATIONAL_CONTEXT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.rns-link.split-decryption-operational-context";
 const DECRYPTION_PROOF_TAG_V1: [u8; 4] = *b"ZADP";
 const DECRYPTION_SPLIT_MANIFEST_TAG_V1: [u8; 4] = *b"ZDSM";
 const DECRYPTION_SPLIT_COMPONENT_COUNT_V1: u8 = 2;
@@ -1085,6 +1091,9 @@ impl ZkAmsMkheDecryptionStreamingSnapshotV1 {
 pub struct ZkAmsMkheStreamingFullRosterDecryptionResultV1 {
     result: ZkAmsMkheFullRosterDecryptionResultV1,
     snapshot: ZkAmsMkheDecryptionStreamingSnapshotV1,
+    profile_digest: [u8; 32],
+    ciphertext_digest: [u8; 32],
+    ciphertext_record_index: u32,
 }
 impl ZkAmsMkheStreamingFullRosterDecryptionResultV1 {
     /// Verified plaintext, residual bound, and ordered-share-set digest.
@@ -1096,6 +1105,21 @@ impl ZkAmsMkheStreamingFullRosterDecryptionResultV1 {
     #[must_use]
     pub const fn snapshot(&self) -> ZkAmsMkheDecryptionStreamingSnapshotV1 {
         self.snapshot
+    }
+    /// Exact BGV profile verified by the split-decryption path.
+    #[must_use]
+    pub const fn profile_digest(&self) -> [u8; 32] {
+        self.profile_digest
+    }
+    /// Authenticated ciphertext identity whose exact shares were combined.
+    #[must_use]
+    pub const fn ciphertext_digest(&self) -> [u8; 32] {
+        self.ciphertext_digest
+    }
+    /// Explicit source-record ordinal bound by all eight verified shares.
+    #[must_use]
+    pub const fn ciphertext_record_index(&self) -> u32 {
+        self.ciphertext_record_index
     }
     /// Consume the snapshot wrapper and return the existing result type.
     #[must_use]
@@ -1430,6 +1454,43 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
     #[must_use]
     pub const fn ciphertext_snapshot(&self) -> ZkAmsMkheDecryptionStreamingSnapshotV1 {
         self.ciphertext_snapshot
+    }
+    /// Canonical statement identity consumed by the replacement RNS-Link proof.
+    ///
+    /// This digest binds the exact corrected-profile decryption statement. It
+    /// is intentionally distinct from the legacy `ZDSM` transcript and must
+    /// be supplied as the confidential-source `statement_digest` before an
+    /// RNS algebraic receipt can authorize any staged share prover.
+    #[must_use]
+    pub fn rns_link_statement_digest_v1(&self) -> [u8; 32] {
+        let mut hash = Keccak256::new();
+        hash.update(RNS_LINK_DECRYPTION_STATEMENT_DOMAIN_V1);
+        hash.update(&[MKHE_VERSION_V1]);
+        hash.update(&self.ciphertext_axes.profile_digest());
+        hash.update(&self.ciphertext_axes.roster_digest());
+        hash.update(&self.ciphertext_axes.epoch().to_be_bytes());
+        hash.update(&self.ciphertext_axes.transcript_digest());
+        hash.update(&self.ciphertext_axes.ciphertext_digest());
+        hash.update(&self.ciphertext_axes.ciphertext_record_index().to_be_bytes());
+        hash.update(&self.ciphertext_axes.sample_index().to_be_bytes());
+        hash.update(&[self.ciphertext_axes.level()]);
+        hash.update(&self.key_context_digest);
+        hash.finalize()
+    }
+    /// Canonical provider/snapshot identity consumed by the RNS-Link proof.
+    ///
+    /// This value must be supplied as the confidential-source
+    /// `operational_context_digest`; a receipt from another immutable provider
+    /// revision therefore cannot be replayed into this statement.
+    #[must_use]
+    pub fn rns_link_operational_context_digest_v1(&self) -> [u8; 32] {
+        let mut hash = Keccak256::new();
+        hash.update(RNS_LINK_DECRYPTION_OPERATIONAL_CONTEXT_DOMAIN_V1);
+        hash.update(&[MKHE_VERSION_V1]);
+        hash.update(&self.rns_link_statement_digest_v1());
+        hash.update(&self.ciphertext_snapshot.provider_identity());
+        hash.update(&self.ciphertext_snapshot.snapshot_identity());
+        hash.finalize()
     }
     /// Mint the exact ordered move-only party-use set for bounded staged proving.
     ///
@@ -2681,6 +2742,7 @@ where
 pub fn prove_zk_ams_mkhe_decryption_share_staged_v1<R, P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
     party_index: usize,
+    rns_link_use: ZkAmsMkheRnsNativeSplitDecryptionUseV1,
     persistent_use: ZkAmsMkhePersistentDecryptionPartyUseV1,
     party_state: &ZkAmsMkheCollectivePartyStateV1,
     party_secret: &ZkAmsMkheActivePartySecretV1,
@@ -2708,6 +2770,10 @@ where
     // Freeze the fully validated profile/roster/transcript frame before the
     // move-only party use, injected randomness, or CAS publisher is touched.
     let common_a_context = statement.prepare_common_a_context(&profile)?;
+    // The RNS-Link use is move-only, party-indexed, and consumed before the
+    // persistent secret use, prover randomness, or CAS publication. A failed
+    // later transition cannot replay this exact verified algebraic receipt.
+    rns_link_use.consume_for_split_decryption_v1(statement, party_index)?;
     let binding = statement.consume_party_use_v1(party_index, persistent_use, party_state)?;
     if party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
         || party_secret.party()? != statement.parties.parties[party_index]
@@ -3898,6 +3964,7 @@ where
     statement.validate_compact().map_err(|_| binding_abort(0))?;
     let manifests = preflight_manifests(statement, manifest_bytes)?;
     let profile = release_profile_v1();
+    let profile_digest = profile.digest().map_err(|_| binding_abort(0))?;
     let noise = zk_ams_mkhe_noise_certificate_v1().map_err(|_| binding_abort(0))?;
     let smudge_bits = usize::from(noise.decryption_smudge_quotient_bits);
     let final_residual_bits = usize::from(noise.final_decryption_residual_bits);
@@ -4117,6 +4184,9 @@ where
             ordered_share_set_digest: set_hash.finalize(),
         },
         snapshot: snapshot.finish().map_err(|_| binding_abort(0))?,
+        profile_digest,
+        ciphertext_digest: statement.ciphertext_digest(),
+        ciphertext_record_index: statement.ciphertext_record_index(),
     })
 }
 #[cfg(test)]

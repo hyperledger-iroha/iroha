@@ -3,9 +3,15 @@
 
 package org.hyperledger.iroha.android.offline;
 
+import android.annotation.TargetApi;
+import android.app.admin.DevicePolicyManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.security.AttestedKeyPair;
+import android.security.KeyChain;
+import android.security.KeyChainException;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyInfo;
 import android.security.keystore.KeyProperties;
@@ -23,6 +29,7 @@ import java.security.ProviderException;
 import java.security.Signature;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateEncodingException;
+import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPublicKey;
 import java.security.spec.ECGenParameterSpec;
 import java.util.ArrayList;
@@ -32,26 +39,30 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerificationException;
+import org.hyperledger.iroha.android.crypto.keystore.attestation.AttestationVerifier;
 
 /**
  * Physical Android KeyMint path for one-use Kagemusha request authorization.
  *
  * <p>This class is deliberately separate from the generic transaction keystore. It is available
- * only in the Android artifact and requires Android 12 / API 31 plus
- * {@link PackageManager#FEATURE_KEYSTORE_SINGLE_USE_KEY}. Those gates are required because Core
- * admits Android registration only when {@code usageCountLimit == 1} is attested in the
- * hardware-enforced authorization list. Devices that can expose only a software-enforced usage
- * count are rejected before key generation.
+ * only in the Android artifact. Android 12+ uses hardware-enforced
+ * {@code usageCountLimit == 1}. API 28--30 is supported only for a device/profile-owner app via
+ * {@link DevicePolicyManager#generateKeyPair}, {@link DevicePolicyManager#ID_TYPE_BASE_INFO}, and
+ * required StrongBox; that explicit profile never claims KeyMint tag 405 and relies on
+ * receipt-first ledger consumption plus immediate alias deletion.
  *
- * <p>The generated key has the exact profile {@code EC/secp256r1}, sign-only purpose,
- * {@code SHA-256}, the caller-supplied canonical attestation challenge, and maximum usage count
- * one. {@link #authorize} signs the complete preparation preimage with
+ * <p>Every generated key has the exact profile {@code EC/secp256r1}, sign-only purpose,
+ * {@code SHA-256}, and the caller-supplied canonical attestation challenge. Android 12+ also has
+ * a hardware-enforced maximum usage count of one; the managed pre-12 profile explicitly has no
+ * such tag. {@link #authorize} signs the complete preparation preimage with
  * {@code SHA256withECDSA}, validates the strict DER result, feeds it to the existing native
  * authorization finalizer, and removes the exhausted alias. StrongBox is requested only through
  * {@link StrongBoxPolicy#REQUIRED}; failure never falls back to TEE.
  */
 public final class KagemushaAndroidKeyMint {
-  public static final int MINIMUM_API_LEVEL = Build.VERSION_CODES.S;
+  public static final int MINIMUM_API_LEVEL = Build.VERSION_CODES.P;
+  public static final int HARDWARE_USAGE_LIMIT_MINIMUM_API_LEVEL = Build.VERSION_CODES.S;
   public static final String KEY_ALGORITHM = KeyProperties.KEY_ALGORITHM_EC;
   public static final String CURVE_NAME = "secp256r1";
   public static final String DIGEST = KeyProperties.DIGEST_SHA256;
@@ -69,12 +80,56 @@ public final class KagemushaAndroidKeyMint {
     REQUIRED,
   }
 
+  /** Closed assertion profiles; neither profile may be silently relabelled as the other. */
+  public enum AssertionProfile {
+    HARDWARE_USAGE_LIMIT(
+        DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME, MAX_USAGE_COUNT),
+    MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST(
+        DeviceAttestationRegistration.ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME, null);
+
+    private final String scheme;
+    private final Integer usageCountLimit;
+
+    AssertionProfile(final String scheme, final Integer usageCountLimit) {
+      this.scheme = scheme;
+      this.usageCountLimit = usageCountLimit;
+    }
+
+    public String scheme() {
+      return scheme;
+    }
+
+    public Integer usageCountLimit() {
+      return usageCountLimit;
+    }
+  }
+
   private final Backend backend;
   private final Object owner = new Object();
 
   /** Create the physical KeyMint service for the current Android application. */
   public KagemushaAndroidKeyMint(final Context context) throws GeneralSecurityException {
-    this(new PlatformBackend(Objects.requireNonNull(context, "context").getApplicationContext()));
+    this(
+        context,
+        new ComponentName(
+            Objects.requireNonNull(context, "context").getApplicationContext(),
+            KagemushaManagedDeviceAdminReceiver.class));
+  }
+
+  /**
+   * Create the physical service with the exact active device-admin component used by a managed
+   * API 28--30 deployment.
+   *
+   * <p>Android 12+ callers may use the simpler constructor. A pre-12 embedding application that
+   * provisions its own {@code DeviceAdminReceiver} must pass that active component here; package
+   * ownership alone is insufficient authority for {@link DevicePolicyManager#generateKeyPair}.
+   */
+  public KagemushaAndroidKeyMint(final Context context, final ComponentName deviceAdmin)
+      throws GeneralSecurityException {
+    this(
+        new PlatformBackend(
+            Objects.requireNonNull(context, "context").getApplicationContext(),
+            Objects.requireNonNull(deviceAdmin, "deviceAdmin")));
   }
 
   KagemushaAndroidKeyMint(final Backend backend) {
@@ -95,9 +150,15 @@ public final class KagemushaAndroidKeyMint {
       throws GeneralSecurityException {
     final RegistrationParameters requiredParameters =
         Objects.requireNonNull(parameters, "parameters");
+    final AssertionProfile assertionProfile = selectAssertionProfile(strongBoxPolicy);
     final RegistrationMaterial material =
         generateRegistrationMaterial(
-            alias, requiredParameters.attestationChallenge(), strongBoxPolicy);
+            alias,
+            requiredParameters.attestationChallenge(assertionProfile),
+            strongBoxPolicy,
+            assertionProfile,
+            requiredParameters.androidPackageName,
+            requiredParameters.androidSigningCertificateSha256);
     try {
       return new GeneratedRegistration(
           requiredParameters.registration(material), material);
@@ -112,7 +173,7 @@ public final class KagemushaAndroidKeyMint {
   }
 
   /**
-   * Generate one hardware-enforced, single-use assertion key and return registration material.
+   * Generate one operation-scoped assertion key and return registration material.
    *
    * <p>This lower-level two-stage primitive is for applications that must persist the challenge
    * before generation. The challenge must come from
@@ -128,22 +189,58 @@ public final class KagemushaAndroidKeyMint {
       final byte[] attestationChallenge,
       final StrongBoxPolicy strongBoxPolicy)
       throws GeneralSecurityException {
+    return generateRegistrationMaterial(
+        alias,
+        attestationChallenge,
+        strongBoxPolicy,
+        selectAssertionProfile(strongBoxPolicy),
+        null,
+        null);
+  }
+
+  private RegistrationMaterial generateRegistrationMaterial(
+      final String alias,
+      final byte[] attestationChallenge,
+      final StrongBoxPolicy strongBoxPolicy,
+      final AssertionProfile assertionProfile,
+      final String expectedPackageName,
+      final byte[] expectedSigningCertificateSha256)
+      throws GeneralSecurityException {
     final String canonicalAlias = requireAlias(alias);
     final byte[] challenge = requireChallenge(attestationChallenge);
     final StrongBoxPolicy policy = Objects.requireNonNull(strongBoxPolicy, "strongBoxPolicy");
-    requirePlatformCapabilities(policy);
+    final AssertionProfile profile =
+        Objects.requireNonNull(assertionProfile, "assertionProfile");
+    requirePlatformCapabilities(policy, profile);
+    if (profile == AssertionProfile.MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST
+        && (expectedPackageName == null || expectedSigningCertificateSha256 == null)) {
+      throw new GeneralSecurityException(
+          "managed pre-Android-12 registration requires the high-level app-bound flow");
+    }
 
     final GenerationRequest request =
-        new GenerationRequest(canonicalAlias, challenge, policy == StrongBoxPolicy.REQUIRED);
+        new GenerationRequest(
+            canonicalAlias,
+            challenge,
+            policy == StrongBoxPolicy.REQUIRED,
+            profile,
+            expectedPackageName,
+            expectedSigningCertificateSha256);
     final GeneratedKey generated = backend.generate(request);
     try {
       if (!generated.insideSecureHardware()) {
         throw new GeneralSecurityException(
             "Kagemusha KeyMint assertion key is not inside secure hardware");
       }
-      if (generated.remainingUsageCount() != MAX_USAGE_COUNT) {
+      if (profile == AssertionProfile.HARDWARE_USAGE_LIMIT
+          && !Integer.valueOf(MAX_USAGE_COUNT).equals(generated.remainingUsageCount())) {
         throw new GeneralSecurityException(
             "Kagemusha KeyMint assertion key does not expose one remaining hardware use");
+      }
+      if (profile == AssertionProfile.MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST
+          && generated.remainingUsageCount() != null) {
+        throw new GeneralSecurityException(
+            "managed pre-Android-12 StrongBox assertion must not claim a hardware usage limit");
       }
       if (policy == StrongBoxPolicy.REQUIRED && !generated.strongBoxBacked()) {
         throw new GeneralSecurityException(
@@ -161,9 +258,11 @@ public final class KagemushaAndroidKeyMint {
           publicKey,
           certificateChain,
           attestationReport,
-          generated.strongBoxBacked());
+          generated.strongBoxBacked(),
+          generated.attestedDeviceProperties(),
+          profile);
     } catch (final GeneralSecurityException | RuntimeException | Error failure) {
-      deleteAfterRejectedGeneration(canonicalAlias, failure);
+      deleteAfterRejectedGeneration(canonicalAlias, profile, failure);
       throw failure;
     }
   }
@@ -197,12 +296,18 @@ public final class KagemushaAndroidKeyMint {
 
     final byte[] signatureDer;
     try {
-      signatureDer = backend.sign(requiredMaterial.alias, SIGNATURE_ALGORITHM, message);
+      signatureDer =
+          backend.sign(
+              requiredMaterial.alias,
+              SIGNATURE_ALGORITHM,
+              message,
+              requiredMaterial.assertionProfile);
     } catch (final GeneralSecurityException | RuntimeException | Error failure) {
-      deleteAfterRejectedGeneration(requiredMaterial.alias, failure);
+      deleteAfterRejectedGeneration(
+          requiredMaterial.alias, requiredMaterial.assertionProfile, failure);
       throw failure;
     }
-    backend.delete(requiredMaterial.alias);
+    backend.delete(requiredMaterial.alias, requiredMaterial.assertionProfile);
     KagemushaP256Codec.rawLowSFromStrictDer(signatureDer);
     return signatureDer.clone();
   }
@@ -211,18 +316,46 @@ public final class KagemushaAndroidKeyMint {
   public void delete(final RegistrationMaterial material) throws GeneralSecurityException {
     final RegistrationMaterial requiredMaterial = requireOwnedMaterial(material);
     requiredMaterial.consumed.set(true);
-    backend.delete(requiredMaterial.alias);
+    backend.delete(requiredMaterial.alias, requiredMaterial.assertionProfile);
   }
 
-  private void requirePlatformCapabilities(final StrongBoxPolicy policy)
+  private AssertionProfile selectAssertionProfile(final StrongBoxPolicy strongBoxPolicy)
+      throws GeneralSecurityException {
+    final StrongBoxPolicy policy = Objects.requireNonNull(strongBoxPolicy, "strongBoxPolicy");
+    if (backend.apiLevel() >= HARDWARE_USAGE_LIMIT_MINIMUM_API_LEVEL) {
+      return AssertionProfile.HARDWARE_USAGE_LIMIT;
+    }
+    if (backend.apiLevel() >= MINIMUM_API_LEVEL
+        && policy == StrongBoxPolicy.REQUIRED
+        && backend.supportsStrongBox()
+        && backend.supportsManagedDevicePropertiesAttestation()) {
+      return AssertionProfile.MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST;
+    }
+    throw new GeneralSecurityException(
+        "pre-Android-12 eligibility requires a device/profile-owner StrongBox "
+            + "ID_TYPE_BASE_INFO attestation path; ordinary applications remain drain-only");
+  }
+
+  private void requirePlatformCapabilities(
+      final StrongBoxPolicy policy, final AssertionProfile assertionProfile)
       throws GeneralSecurityException {
     if (backend.apiLevel() < MINIMUM_API_LEVEL) {
       throw new GeneralSecurityException(
-          "Kagemusha KeyMint single-use assertions require Android 12 / API 31");
+          "Kagemusha KeyMint assertions require Android 9 / API 28 or newer");
     }
-    if (!backend.supportsHardwareSingleUse()) {
+    if (assertionProfile == AssertionProfile.HARDWARE_USAGE_LIMIT
+        && (backend.apiLevel() < HARDWARE_USAGE_LIMIT_MINIMUM_API_LEVEL
+            || !backend.supportsHardwareSingleUse())) {
       throw new GeneralSecurityException(
           "device lacks hardware-enforced AndroidKeyStore single-use keys");
+    }
+    if (assertionProfile
+            == AssertionProfile.MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST
+        && (backend.apiLevel() >= HARDWARE_USAGE_LIMIT_MINIMUM_API_LEVEL
+            || policy != StrongBoxPolicy.REQUIRED
+            || !backend.supportsManagedDevicePropertiesAttestation())) {
+      throw new GeneralSecurityException(
+          "managed pre-Android-12 assertions require device/profile ownership and StrongBox");
     }
     if (policy == StrongBoxPolicy.REQUIRED && !backend.supportsStrongBox()) {
       throw new GeneralSecurityException(
@@ -239,10 +372,11 @@ public final class KagemushaAndroidKeyMint {
     return value;
   }
 
-  private void deleteAfterRejectedGeneration(final String alias, final Throwable failure)
+  private void deleteAfterRejectedGeneration(
+      final String alias, final AssertionProfile assertionProfile, final Throwable failure)
       throws GeneralSecurityException {
     try {
-      backend.delete(alias);
+      backend.delete(alias, assertionProfile);
     } catch (final GeneralSecurityException cleanupFailure) {
       if (failure != null) {
         failure.addSuppressed(cleanupFailure);
@@ -385,6 +519,8 @@ public final class KagemushaAndroidKeyMint {
     private final List<byte[]> certificateChainDer;
     private final byte[] attestationReport;
     private final boolean strongBoxBacked;
+    private final OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties;
+    private final AssertionProfile assertionProfile;
     private final AtomicBoolean consumed = new AtomicBoolean();
 
     private RegistrationMaterial(
@@ -393,13 +529,17 @@ public final class KagemushaAndroidKeyMint {
         final byte[] publicKeySec1,
         final List<byte[]> certificateChainDer,
         final byte[] attestationReport,
-        final boolean strongBoxBacked) {
+        final boolean strongBoxBacked,
+        final OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties,
+        final AssertionProfile assertionProfile) {
       this.owner = owner;
       this.alias = alias;
       this.publicKeySec1 = publicKeySec1.clone();
       this.certificateChainDer = certificateChainDer;
       this.attestationReport = attestationReport.clone();
       this.strongBoxBacked = strongBoxBacked;
+      this.attestedDeviceProperties = attestedDeviceProperties;
+      this.assertionProfile = Objects.requireNonNull(assertionProfile, "assertionProfile");
     }
 
     public String alias() {
@@ -431,8 +571,19 @@ public final class KagemushaAndroidKeyMint {
       return strongBoxBacked;
     }
 
+    /**
+     * Exact leaf-derived Offline V2 properties, present only for the high-level registration flow.
+     */
+    public OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties() {
+      return attestedDeviceProperties;
+    }
+
     public boolean isConsumed() {
       return consumed.get();
+    }
+
+    public AssertionProfile assertionProfile() {
+      return assertionProfile;
     }
   }
 
@@ -491,6 +642,24 @@ public final class KagemushaAndroidKeyMint {
       return attestationChallenge.clone();
     }
 
+    private byte[] attestationChallenge(final AssertionProfile assertionProfile) {
+      final AssertionProfile profile =
+          Objects.requireNonNull(assertionProfile, "assertionProfile");
+      return DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash(
+          DeviceAttestationRegistration.REGISTRATION_VERSION,
+          deviceId,
+          accountId,
+          assetDefinitionId,
+          androidPackageName,
+          androidSigningCertificateSha256,
+          deviceAuthorityPublicKey,
+          recentBlockHeight,
+          recentBlockHash,
+          expiresAtMs,
+          profile.scheme(),
+          profile.usageCountLimit());
+    }
+
     private DeviceAttestationRegistration registration(
         final RegistrationMaterial material) {
       return new DeviceAttestationRegistration(
@@ -505,13 +674,16 @@ public final class KagemushaAndroidKeyMint {
           null,
           androidPackageName,
           androidSigningCertificateSha256,
+          Objects.requireNonNull(
+              material.attestedDeviceProperties(),
+              "high-level Android registration requires leaf-derived device properties"),
           deviceAuthorityPublicKey,
-          DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME,
+          material.assertionProfile.scheme(),
           DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
           material.assertionPublicKeySec1(),
-          MAX_USAGE_COUNT,
+          material.assertionProfile.usageCountLimit(),
           true,
-          attestationChallenge,
+          attestationChallenge(material.assertionProfile),
           null,
           material.attestationReport(),
           null,
@@ -547,12 +719,31 @@ public final class KagemushaAndroidKeyMint {
     private final String alias;
     private final byte[] challenge;
     private final boolean strongBoxRequired;
+    private final AssertionProfile assertionProfile;
+    private final String expectedPackageName;
+    private final byte[] expectedSigningCertificateSha256;
 
     GenerationRequest(
-        final String alias, final byte[] challenge, final boolean strongBoxRequired) {
+        final String alias,
+        final byte[] challenge,
+        final boolean strongBoxRequired,
+        final AssertionProfile assertionProfile,
+        final String expectedPackageName,
+        final byte[] expectedSigningCertificateSha256) {
       this.alias = alias;
       this.challenge = challenge.clone();
       this.strongBoxRequired = strongBoxRequired;
+      this.assertionProfile =
+          Objects.requireNonNull(assertionProfile, "assertionProfile");
+      if ((expectedPackageName == null) != (expectedSigningCertificateSha256 == null)) {
+        throw new IllegalArgumentException(
+            "Offline V2 package and signing-certificate bindings must be supplied together");
+      }
+      this.expectedPackageName = expectedPackageName;
+      this.expectedSigningCertificateSha256 =
+          expectedSigningCertificateSha256 == null
+              ? null
+              : expectedSigningCertificateSha256.clone();
     }
 
     String alias() {
@@ -565,6 +756,24 @@ public final class KagemushaAndroidKeyMint {
 
     boolean strongBoxRequired() {
       return strongBoxRequired;
+    }
+
+    AssertionProfile assertionProfile() {
+      return assertionProfile;
+    }
+
+    boolean requiresDevicePropertiesProjection() {
+      return expectedPackageName != null && expectedSigningCertificateSha256 != null;
+    }
+
+    String expectedPackageName() {
+      return expectedPackageName;
+    }
+
+    byte[] expectedSigningCertificateSha256() {
+      return expectedSigningCertificateSha256 == null
+          ? null
+          : expectedSigningCertificateSha256.clone();
     }
 
     String keyAlgorithm() {
@@ -583,8 +792,8 @@ public final class KagemushaAndroidKeyMint {
       return DIGEST;
     }
 
-    int maxUsageCount() {
-      return MAX_USAGE_COUNT;
+    Integer maxUsageCount() {
+      return assertionProfile.usageCountLimit();
     }
   }
 
@@ -593,19 +802,22 @@ public final class KagemushaAndroidKeyMint {
     private final List<byte[]> certificateChainDer;
     private final boolean insideSecureHardware;
     private final boolean strongBoxBacked;
-    private final int remainingUsageCount;
+    private final Integer remainingUsageCount;
+    private final OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties;
 
     GeneratedKey(
         final byte[] publicKeySec1,
         final List<byte[]> certificateChainDer,
         final boolean insideSecureHardware,
         final boolean strongBoxBacked,
-        final int remainingUsageCount) {
+        final Integer remainingUsageCount,
+        final OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties) {
       this.publicKeySec1 = publicKeySec1.clone();
       this.certificateChainDer = certificateChainDer;
       this.insideSecureHardware = insideSecureHardware;
       this.strongBoxBacked = strongBoxBacked;
       this.remainingUsageCount = remainingUsageCount;
+      this.attestedDeviceProperties = attestedDeviceProperties;
     }
 
     byte[] publicKeySec1() {
@@ -624,8 +836,12 @@ public final class KagemushaAndroidKeyMint {
       return strongBoxBacked;
     }
 
-    int remainingUsageCount() {
+    Integer remainingUsageCount() {
       return remainingUsageCount;
+    }
+
+    OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties() {
+      return attestedDeviceProperties;
     }
   }
 
@@ -636,18 +852,39 @@ public final class KagemushaAndroidKeyMint {
 
     boolean supportsStrongBox();
 
+    default boolean supportsManagedDevicePropertiesAttestation() {
+      return false;
+    }
+
     GeneratedKey generate(GenerationRequest request) throws GeneralSecurityException;
 
-    byte[] sign(String alias, String algorithm, byte[] message) throws GeneralSecurityException;
+    byte[] sign(
+        String alias,
+        String algorithm,
+        byte[] message,
+        AssertionProfile assertionProfile)
+        throws GeneralSecurityException;
 
-    void delete(String alias) throws GeneralSecurityException;
+    void delete(String alias, AssertionProfile assertionProfile) throws GeneralSecurityException;
   }
 
   private static final class PlatformBackend implements Backend {
     private final Context context;
+    private final DevicePolicyManager devicePolicyManager;
+    private final ComponentName deviceAdmin;
 
-    private PlatformBackend(final Context context) throws GeneralSecurityException {
+    private PlatformBackend(final Context context, final ComponentName deviceAdmin)
+        throws GeneralSecurityException {
       this.context = Objects.requireNonNull(context, "context");
+      this.devicePolicyManager =
+          Objects.requireNonNull(
+              context.getSystemService(DevicePolicyManager.class),
+              "DevicePolicyManager unavailable");
+      this.deviceAdmin = Objects.requireNonNull(deviceAdmin, "deviceAdmin");
+      if (!context.getPackageName().equals(deviceAdmin.getPackageName())) {
+        throw new GeneralSecurityException(
+            "managed device-admin component must belong to the embedding application");
+      }
       loadKeyStore();
     }
 
@@ -658,18 +895,51 @@ public final class KagemushaAndroidKeyMint {
 
     @Override
     public boolean supportsHardwareSingleUse() {
-      return context.getPackageManager().hasSystemFeature(
-          PackageManager.FEATURE_KEYSTORE_SINGLE_USE_KEY);
+      return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+          && context
+              .getPackageManager()
+              .hasSystemFeature(PackageManager.FEATURE_KEYSTORE_SINGLE_USE_KEY);
     }
 
     @Override
     public boolean supportsStrongBox() {
-      return context.getPackageManager().hasSystemFeature(
-          PackageManager.FEATURE_STRONGBOX_KEYSTORE);
+      return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+          && context
+              .getPackageManager()
+              .hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE);
+    }
+
+    @Override
+    public boolean supportsManagedDevicePropertiesAttestation() {
+      return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+          && Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+          && supportsStrongBox()
+          && devicePolicyManager.isAdminActive(deviceAdmin)
+          && (devicePolicyManager.isDeviceOwnerApp(context.getPackageName())
+              || devicePolicyManager.isProfileOwnerApp(context.getPackageName()));
     }
 
     @Override
     public GeneratedKey generate(final GenerationRequest request)
+        throws GeneralSecurityException {
+      if (request.assertionProfile()
+          == AssertionProfile.MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P
+            || Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          throw new GeneralSecurityException(
+              "managed pre-Android-12 assertions require API 28--30");
+        }
+        return generateManagedPreAndroid12(request);
+      }
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        throw new GeneralSecurityException(
+            "hardware usage-count assertions require Android 12 / API 31");
+      }
+      return generateHardwareUsageLimit(request);
+    }
+
+    @TargetApi(Build.VERSION_CODES.S)
+    private GeneratedKey generateHardwareUsageLimit(final GenerationRequest request)
         throws GeneralSecurityException {
       final KeyStore keyStore = loadKeyStore();
       // An existing alias is not owned by this generation attempt and must never be removed by
@@ -684,6 +954,7 @@ public final class KagemushaAndroidKeyMint {
                 .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
                 .setDigests(KeyProperties.DIGEST_SHA256)
                 .setAttestationChallenge(request.challenge())
+                .setDevicePropertiesAttestationIncluded(true)
                 .setMaxUsageCount(1);
         if (request.strongBoxRequired()) {
           builder.setIsStrongBoxBacked(true);
@@ -730,44 +1001,239 @@ public final class KagemushaAndroidKeyMint {
           throw new GeneralSecurityException(
               "KeyMint attestation leaf does not bind the generated assertion key");
         }
+        final OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties;
+        if (request.requiresDevicePropertiesProjection()) {
+          try {
+            attestedDeviceProperties =
+                AttestationVerifier.projectOfflineDeviceRegistrationProperties(
+                    certificateChain.get(0),
+                    request.challenge(),
+                    request.expectedPackageName(),
+                    request.expectedSigningCertificateSha256(),
+                    AttestationVerifier.OfflineDeviceAssertionProfile.HARDWARE_USAGE_LIMIT);
+          } catch (final AttestationVerificationException failure) {
+            throw new GeneralSecurityException(
+                "Android KeyMint leaf does not satisfy Offline Device Attestation V2",
+                failure);
+          }
+        } else {
+          attestedDeviceProperties = null;
+        }
         return new GeneratedKey(
             generatedPublicKey,
             certificateChain,
             true,
             strongBox,
-            keyInfo.getRemainingUsageCount());
+            keyInfo.getRemainingUsageCount(),
+            attestedDeviceProperties);
       } catch (final CertificateEncodingException | ProviderException failure) {
         final GeneralSecurityException wrapped =
             new GeneralSecurityException("Android KeyMint key generation failed", failure);
-        deleteWithSuppressed(request.alias(), wrapped);
+        deleteWithSuppressed(request.alias(), request.assertionProfile(), wrapped);
         throw wrapped;
       } catch (final GeneralSecurityException failure) {
-        deleteWithSuppressed(request.alias(), failure);
+        deleteWithSuppressed(request.alias(), request.assertionProfile(), failure);
         throw failure;
       } catch (final RuntimeException | Error failure) {
-        deleteWithSuppressed(request.alias(), failure);
+        deleteWithSuppressed(request.alias(), request.assertionProfile(), failure);
         throw failure;
       }
     }
 
     @Override
-    public byte[] sign(final String alias, final String algorithm, final byte[] message)
+    public byte[] sign(
+        final String alias,
+        final String algorithm,
+        final byte[] message,
+        final AssertionProfile assertionProfile)
         throws GeneralSecurityException {
-      final KeyStore keyStore = loadKeyStore();
-      final KeyStore.Entry entry = keyStore.getEntry(alias, null);
-      if (!(entry instanceof KeyStore.PrivateKeyEntry privateKeyEntry)) {
-        throw new GeneralSecurityException("Kagemusha KeyMint assertion alias is unavailable");
+      final PrivateKey privateKey;
+      if (assertionProfile
+          == AssertionProfile.MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST) {
+        requireManagedOwnership();
+        privateKey = managedPrivateKey(alias);
+        final X509Certificate[] certificateChain = managedCertificateChain(alias);
+        if (privateKey == null || certificateChain == null || certificateChain.length == 0) {
+          throw new GeneralSecurityException("managed Kagemusha assertion alias is unavailable");
+        }
+        requireHardwareBacked(privateKey);
+      } else {
+        final KeyStore keyStore = loadKeyStore();
+        final KeyStore.Entry entry = keyStore.getEntry(alias, null);
+        if (!(entry instanceof KeyStore.PrivateKeyEntry privateKeyEntry)) {
+          throw new GeneralSecurityException("Kagemusha KeyMint assertion alias is unavailable");
+        }
+        privateKey = privateKeyEntry.getPrivateKey();
       }
       final Signature signature = Signature.getInstance(algorithm);
-      signature.initSign(privateKeyEntry.getPrivateKey());
+      signature.initSign(privateKey);
       signature.update(message);
       return signature.sign();
     }
 
     @Override
-    public void delete(final String alias) throws GeneralSecurityException {
+    public void delete(final String alias, final AssertionProfile assertionProfile)
+        throws GeneralSecurityException {
+      if (assertionProfile
+          == AssertionProfile.MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST) {
+        requireManagedOwnership();
+        if (managedAliasHasAnyMaterial(alias)) {
+          if (!devicePolicyManager.removeKeyPair(deviceAdmin, alias)
+              || managedAliasHasAnyMaterial(alias)) {
+            throw new GeneralSecurityException(
+                "managed Kagemusha assertion alias could not be deleted");
+          }
+        }
+        return;
+      }
       final KeyStore keyStore = loadKeyStore();
       if (keyStore.containsAlias(alias)) keyStore.deleteEntry(alias);
+    }
+
+    @TargetApi(Build.VERSION_CODES.P)
+    private GeneratedKey generateManagedPreAndroid12(final GenerationRequest request)
+        throws GeneralSecurityException {
+      if (!supportsManagedDevicePropertiesAttestation()
+          || !request.strongBoxRequired()
+          || request.maxUsageCount() != null) {
+        throw new GeneralSecurityException(
+            "managed pre-Android-12 generation requires device/profile ownership and StrongBox");
+      }
+      if (managedAliasHasAnyMaterial(request.alias())) {
+        throw new GeneralSecurityException(
+            "managed KeyChain alias already exists: " + request.alias());
+      }
+      try {
+        final KeyGenParameterSpec specification =
+            new KeyGenParameterSpec.Builder(request.alias(), KeyProperties.PURPOSE_SIGN)
+                .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setAttestationChallenge(request.challenge())
+                .setUserAuthenticationRequired(true)
+                .setUserAuthenticationValidityDurationSeconds(30)
+                .setUnlockedDeviceRequired(true)
+                .setIsStrongBoxBacked(true)
+                .build();
+        final AttestedKeyPair attested =
+            devicePolicyManager.generateKeyPair(
+                deviceAdmin,
+                KeyProperties.KEY_ALGORITHM_EC,
+                specification,
+                DevicePolicyManager.ID_TYPE_BASE_INFO);
+        if (attested == null || attested.getKeyPair() == null) {
+          throw new GeneralSecurityException(
+              "DevicePolicyManager did not return a managed StrongBox key pair");
+        }
+        final KeyPair keyPair = attested.getKeyPair();
+        requireHardwareBacked(keyPair.getPrivate());
+        final List<Certificate> certificates = attested.getAttestationRecord();
+        if (certificates == null || certificates.isEmpty()) {
+          throw new GeneralSecurityException(
+              "managed StrongBox device-property attestation chain is unavailable");
+        }
+        final List<byte[]> certificateChain = new ArrayList<>(certificates.size());
+        for (final Certificate certificate : certificates) {
+          certificateChain.add(certificate.getEncoded());
+        }
+        final byte[] generatedPublicKey = uncompressedSec1(keyPair.getPublic());
+        if (!MessageDigest.isEqual(
+            generatedPublicKey, uncompressedSec1(certificates.get(0).getPublicKey()))) {
+          throw new GeneralSecurityException(
+              "managed StrongBox attestation leaf does not bind the assertion key");
+        }
+        final OfflineAndroidAttestedDevicePropertiesV2 properties =
+            AttestationVerifier.projectOfflineDeviceRegistrationProperties(
+                certificateChain.get(0),
+                request.challenge(),
+                request.expectedPackageName(),
+                request.expectedSigningCertificateSha256(),
+                AttestationVerifier.OfflineDeviceAssertionProfile
+                    .MANAGED_PRE_ANDROID_12_STRONGBOX_RECEIPT_FIRST);
+        return new GeneratedKey(
+            generatedPublicKey,
+            certificateChain,
+            true,
+            true,
+            null,
+            properties);
+      } catch (final CertificateEncodingException | ProviderException failure) {
+        final GeneralSecurityException wrapped =
+            new GeneralSecurityException(
+                "managed pre-Android-12 StrongBox generation failed", failure);
+        deleteWithSuppressed(request.alias(), request.assertionProfile(), wrapped);
+        throw wrapped;
+      } catch (final AttestationVerificationException failure) {
+        final GeneralSecurityException wrapped =
+            new GeneralSecurityException(
+                "managed StrongBox evidence does not satisfy Offline Device Attestation V2",
+                failure);
+        deleteWithSuppressed(request.alias(), request.assertionProfile(), wrapped);
+        throw wrapped;
+      } catch (final GeneralSecurityException failure) {
+        deleteWithSuppressed(request.alias(), request.assertionProfile(), failure);
+        throw failure;
+      } catch (final RuntimeException | Error failure) {
+        deleteWithSuppressed(request.alias(), request.assertionProfile(), failure);
+        throw failure;
+      }
+    }
+
+    private void requireManagedOwnership() throws GeneralSecurityException {
+      if (!supportsManagedDevicePropertiesAttestation()) {
+        throw new GeneralSecurityException(
+            "managed pre-Android-12 assertion requires current device/profile ownership");
+      }
+    }
+
+    private PrivateKey managedPrivateKey(final String alias) throws GeneralSecurityException {
+      try {
+        return KeyChain.getPrivateKey(context, alias);
+      } catch (final InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        throw new GeneralSecurityException(
+            "interrupted while loading managed assertion key", failure);
+      } catch (final KeyChainException failure) {
+        throw new GeneralSecurityException("failed to load managed assertion key", failure);
+      }
+    }
+
+    private X509Certificate[] managedCertificateChain(final String alias)
+        throws GeneralSecurityException {
+      try {
+        return KeyChain.getCertificateChain(context, alias);
+      } catch (final InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        throw new GeneralSecurityException(
+            "interrupted while loading managed assertion certificate chain", failure);
+      } catch (final KeyChainException failure) {
+        throw new GeneralSecurityException(
+            "failed to load managed assertion certificate chain", failure);
+      }
+    }
+
+    private boolean managedAliasHasAnyMaterial(final String alias)
+        throws GeneralSecurityException {
+      final X509Certificate[] certificateChain = managedCertificateChain(alias);
+      return managedPrivateKey(alias) != null
+          || (certificateChain != null && certificateChain.length != 0);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void requireHardwareBacked(final PrivateKey privateKey)
+        throws GeneralSecurityException {
+      final KeyFactory factory =
+          KeyFactory.getInstance(privateKey.getAlgorithm(), ANDROID_KEYSTORE);
+      final KeyInfo keyInfo = factory.getKeySpec(privateKey, KeyInfo.class);
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        final int level = keyInfo.getSecurityLevel();
+        if (level != KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT
+            && level != KeyProperties.SECURITY_LEVEL_STRONGBOX) {
+          throw new GeneralSecurityException("Kagemusha assertion key is software-backed");
+        }
+      } else if (!keyInfo.isInsideSecureHardware()) {
+        throw new GeneralSecurityException(
+            "managed pre-Android-12 assertion key is not inside secure hardware");
+      }
     }
 
     private KeyStore loadKeyStore() throws GeneralSecurityException {
@@ -780,9 +1246,12 @@ public final class KagemushaAndroidKeyMint {
       }
     }
 
-    private void deleteWithSuppressed(final String alias, final Throwable failure) {
+    private void deleteWithSuppressed(
+        final String alias,
+        final AssertionProfile assertionProfile,
+        final Throwable failure) {
       try {
-        delete(alias);
+        delete(alias, assertionProfile);
       } catch (final GeneralSecurityException cleanupFailure) {
         failure.addSuppressed(cleanupFailure);
       }

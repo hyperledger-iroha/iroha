@@ -11,18 +11,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-GENERIC11_PROTOCOLS: Final[tuple[str, ...]] = (
-    "zk-ace-pq-authorization-v0",
-    "anonymous-pgc-k-out-of-n-v1",
-    "verange-transparent-range-v1",
-    "iroha-zk-ams-v1",
-    "vega-existing-credential-zk-v0",
-    "iroha-jindo-polynomial-commitment-v0",
-    "iroha-bootle-lantern-anoncred-v1",
-    "orchard-halo2-actions-v1",
-    "monero-fcmp-plus-plus-v1",
-    "iroha-ivm-private-note-stark-v1",
-    "pq-masp-stark-v0",
+GENERIC11_OPERATION_SCHEMAS: Final[
+    tuple[tuple[str, tuple[str, ...]], ...]
+] = (
+    ("zk-ace-pq-authorization-v0", ("zk_ace_authorization_action_v1",)),
+    ("anonymous-pgc-k-out-of-n-v1", ("anonymous_pgc_payment_action_v1",)),
+    ("verange-transparent-range-v1", ("verange_range_proof_v1",)),
+    (
+        "iroha-zk-ams-v1",
+        (
+            "zk_ams_batch_admission_action_v1",
+            "zk_ams_provision_account_action_v1",
+        ),
+    ),
+    ("vega-existing-credential-zk-v0", ("vega_credential_presentation_v1",)),
+    (
+        "iroha-jindo-polynomial-commitment-v0",
+        ("jindo_polynomial_evaluation_v1",),
+    ),
+    (
+        "iroha-bootle-lantern-anoncred-v1",
+        ("bootle_lantern_credential_presentation_v1",),
+    ),
+    ("orchard-halo2-actions-v1", ("orchard_note_action_v1",)),
+    ("monero-fcmp-plus-plus-v1", ("fcmp_membership_payment_v1",)),
+    ("iroha-ivm-private-note-stark-v1", ("ivm_private_note_action_v1",)),
+    ("pq-masp-stark-v0", ("pq_masp_note_action_v1",)),
+)
+GENERIC11_PROTOCOLS: Final[tuple[str, ...]] = tuple(
+    protocol for protocol, _ in GENERIC11_OPERATION_SCHEMAS
 )
 ZK_X509_PROTOCOL: Final = "iroha-zk-x509-stark-p256-v0"
 DIRECT_BUNDLE_METHODS: Final[tuple[str, ...]] = (
@@ -94,6 +111,7 @@ WORKER_TOP_LEVEL_EXPORTS: Final[tuple[str, ...]] = (
     "PRIVACY_WALLET_WORKER_MAX_TTL_MILLIS_V1",
     "PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1",
     "PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1",
+    "PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V2",
     "PrivacyWalletSignedActionV1",
     "PrivacyWalletWitnessBindingV1",
     "PrivacyWalletWitnessHandleV1",
@@ -222,7 +240,9 @@ def _rust_pymethods_impl(source: str, type_name: str) -> str:
     return ""
 
 
-def _literal_registry(tree: ast.Module, errors: list[str]) -> tuple[str, ...]:
+def _literal_registry(
+    tree: ast.Module, errors: list[str]
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
     for node in tree.body:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
@@ -239,12 +259,17 @@ def _literal_registry(tree: ast.Module, errors: list[str]) -> tuple[str, ...]:
             errors.append(f"generic-11 worker registry is not literal: {error}")
             return ()
         if not isinstance(value, dict) or not all(
-            isinstance(key, str) and isinstance(item, str)
-            for key, item in value.items()
+            isinstance(key, str)
+            and isinstance(items, tuple)
+            and bool(items)
+            and all(isinstance(item, str) and item for item in items)
+            for key, items in value.items()
         ):
-            errors.append("generic-11 worker registry is not a string mapping")
+            errors.append(
+                "generic-11 worker registry is not a string-to-nonempty-string-tuple mapping"
+            )
             return ()
-        return tuple(value)
+        return tuple((key, tuple(items)) for key, items in value.items())
     errors.append("generic-11 worker registry is missing")
     return ()
 
@@ -366,9 +391,11 @@ def inspect_repository(root: Path) -> BoundaryReport:
             )
 
     registry = _literal_registry(worker_tree, errors)
-    if registry != GENERIC11_PROTOCOLS:
-        errors.append("Python worker registry is not the exact ordered generic 11")
-    if ZK_X509_PROTOCOL in registry:
+    if registry != GENERIC11_OPERATION_SCHEMAS:
+        errors.append(
+            "Python worker registry is not the exact ordered generic 11 operation mapping"
+        )
+    if any(protocol == ZK_X509_PROTOCOL for protocol, _ in registry):
         errors.append("ZK-X509 is incorrectly routed through the generic worker")
     worker_exports = _literal_string_sequence(worker_tree, "__all__", errors)
     if worker_exports != WORKER_TOP_LEVEL_EXPORTS:

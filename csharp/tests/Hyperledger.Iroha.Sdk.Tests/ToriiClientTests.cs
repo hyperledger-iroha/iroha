@@ -12591,6 +12591,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             return JsonResponse($$"""
                 {
                   "hash": "{{transactionHash}}",
+                  "block_height": 17,
                   "transaction": {},
                   "trigger_completions": []
                 }
@@ -12604,8 +12605,41 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             TestContext.Current.CancellationToken);
 
         Assert.Equal(transactionHash, details.RootElement.GetProperty("hash").GetString());
+        Assert.Equal((ulong)17, details.RootElement.GetProperty("block_height").GetUInt64());
         Assert.Equal(JsonValueKind.Object, details.RootElement.GetProperty("transaction").ValueKind);
         Assert.Empty(details.RootElement.GetProperty("trigger_completions").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task GetPipelineTransactionDetailsAsyncRequiresPositiveCommittedHeight()
+    {
+        var transactionHash = new string('1', 64);
+        var signedQuery = new SignedIterableQueryBuilder(
+            CanonicalAccountId,
+            NetworkId.Parse(CanonicalNetworkId))
+            .FindTransactionDetails(transactionHash)
+            .BuildSigned(
+                CanonicalPrivateKeySeed,
+                1_735_689_600_000,
+                100_000,
+                Enumerable.Repeat((byte)0x5A, 32).ToArray());
+        using var handler = new RecordingHandler(_ => JsonResponse($$"""
+            {
+              "hash": "{{transactionHash}}",
+              "block_height": 0,
+              "transaction": {},
+              "trigger_completions": []
+            }
+            """));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.GetPipelineTransactionDetailsAsync(
+                signedQuery,
+                transactionHash,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("block_height", error.Message);
     }
 
     [Fact]

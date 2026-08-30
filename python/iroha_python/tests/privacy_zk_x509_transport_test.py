@@ -25,6 +25,11 @@ SIGNED_OTHER_WIRE = b"canonical-signed-other-protocol-wire"
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 FOREIGN_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
+TRANSACTION_HASH = bytes([7]) * 32
+TRANSACTION_INTENT_DIGEST = bytes([8]) * 32
+STATEMENT_DIGEST = bytes([9]) * 32
+PROOF_ENVELOPE_HASH = bytes([10]) * 32
+MANIFEST_DIGEST = bytes([11]) * 32
 CANONICAL_AUTH = ToriiCanonicalRequestAuth(
     network_id=NETWORK_ID.literal,
     account_id=AccountAddress.from_account(
@@ -34,9 +39,11 @@ CANONICAL_AUTH = ToriiCanonicalRequestAuth(
     timestamp_ms=4_102_444_801_000,
     nonce="privacy-capability-test",
 )
-CANONICAL_AUTH_HEADER = AccountAddress.parse_encoded(
-    CANONICAL_AUTH.account_id, expected_discriminant=0x02F1
-).canonical_hex()
+AUTOMATIC_AUTH = ToriiCanonicalRequestAuth(
+    network_id=CANONICAL_AUTH.network_id,
+    account_id=CANONICAL_AUTH.account_id,
+    signer=CANONICAL_AUTH.signer,
+)
 
 
 class _FakeCrypto:
@@ -47,7 +54,8 @@ class _FakeCrypto:
         self.events = events
         self.envelope = SimpleNamespace(
             signed_transaction_versioned=SIGNED_X509_WIRE,
-            hash=bytes([7]) * 32,
+            hash=TRANSACTION_HASH,
+            authority=AUTOMATIC_AUTH.account_id,
         )
 
     def privacy_exact12_capability_manifest_v1(
@@ -69,7 +77,15 @@ class _FakeCrypto:
             raise ValueError("wrong privacy protocol")
         if network_id != NETWORK_ID:
             raise ValueError("wrong NetworkId")
-        return {"protocol_id": X509_PROTOCOL}
+        return {
+            "protocol_id": X509_PROTOCOL,
+            "execution_classification": "presentation_action",
+            "ledger_effect": "zk_x509_certificate_nullifier",
+            "transaction_hash": TRANSACTION_HASH,
+            "transaction_intent_digest": TRANSACTION_INTENT_DIGEST,
+            "statement_digest": STATEMENT_DIGEST,
+            "proof_envelope_hash": PROOF_ENVELOPE_HASH,
+        }
 
     def signed_transaction_envelope_from_versioned_v1(
         self,
@@ -83,6 +99,8 @@ class _FakeCrypto:
 
 
 class _FakeManifest:
+    manifest_digest = MANIFEST_DIGEST
+
     def __init__(self, error: str | None = None) -> None:
         self.error = error
 
@@ -93,8 +111,10 @@ class _FakeManifest:
             raise RuntimeError("wrong selected protocol")
         return {
             "protocol_id": X509_PROTOCOL,
-            "operation_schema": "zk_x509_identity_presentation_v1",
+            "operation_schemas": ["zk_x509_identity_presentation_v1"],
             "execution_mode": "presentation_action",
+            "manifest_digest": MANIFEST_DIGEST,
+            "committed_height": 19,
             "privacy_feature_mask": 2,
             "readiness": "available",
             "activation_state": "active",
@@ -147,20 +167,20 @@ def test_privacy_capabilities_fetches_and_preserves_exact_norito_manifest(
                 method,
                 path,
                 kwargs.get("headers"),
-                kwargs.get("allow_retry"),
-                kwargs.get("allow_redirects"),
+                kwargs.get("canonical_auth"),
+                kwargs.get("context"),
             )
         )
         return response
 
-    monkeypatch.setattr(client, "_request", request)
+    monkeypatch.setattr(client, "_privacy_action_account_request_v1", request)
     manifest = client.privacy_capabilities_v1(canonical_auth=CANONICAL_AUTH)
 
     assert isinstance(manifest, _FakeManifest)
     assert requests[0][:2] == ("GET", "/v1/privacy/capabilities")
     assert requests[0][2]["Accept"] == "application/x-norito"
-    assert requests[0][2]["X-Iroha-Account"] == CANONICAL_AUTH_HEADER
-    assert requests[0][3:] == (False, False)
+    assert requests[0][3] is CANONICAL_AUTH
+    assert requests[0][4] == "Exact12 privacy capability manifest"
     assert events == ["decode-capabilities"]
 
 
@@ -174,11 +194,50 @@ def test_privacy_capabilities_rejects_json_and_never_invokes_native_decoder(
         content=b"{}",
         text="",
     )
-    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(
+        client,
+        "_privacy_action_account_request_v1",
+        lambda *_args, **_kwargs: response,
+    )
 
     with pytest.raises(ValueError, match="application/x-norito"):
         client.privacy_capabilities_v1(canonical_auth=CANONICAL_AUTH)
     assert events == []
+
+
+def test_exact12_account_request_preserves_deferred_canonical_one_shot_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _, _events = _client_with_crypto(monkeypatch)
+    response = SimpleNamespace(status_code=202, headers={})
+    calls: list[dict[str, object]] = []
+
+    def request(_client: object, method: str, path: str, **kwargs: object) -> object:
+        calls.append({"method": method, "path": path, **kwargs})
+        return response
+
+    monkeypatch.setattr(client_module._BaseToriiClient, "_request", request)
+    monkeypatch.setattr(client, "_enforce_sorafs_alias_policy", lambda _response: None)
+
+    result = client._privacy_action_account_request_v1(  # noqa: SLF001
+        "POST",
+        "/v1/pipeline/transactions",
+        canonical_auth=CANONICAL_AUTH,
+        data=SIGNED_X509_WIRE,
+        headers={"Content-Type": "application/x-norito"},
+        timeout=7.0,
+        context="Exact12 canonical transport test",
+    )
+
+    assert result is response
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["path"] == "/v1/pipeline/transactions"
+    assert calls[0]["data"] == SIGNED_X509_WIRE
+    assert calls[0]["timeout"] == 7.0
+    assert calls[0]["allow_retry"] is False
+    assert calls[0]["allow_redirects"] is False
+    header_plan = calls[0]["headers"]
+    assert getattr(header_plan, "canonical_auth") is CANONICAL_AUTH
 
 
 def test_crypto_x509_inspector_is_public_and_forwards_exact_network_id(
@@ -346,36 +405,40 @@ def test_x509_transport_authenticates_live_gates_and_submits_exactly_once(
     capability_calls = 0
 
     def capabilities(*, canonical_auth: object) -> _FakeManifest:
-        assert canonical_auth is CANONICAL_AUTH
+        assert canonical_auth is AUTOMATIC_AUTH
         nonlocal capability_calls
         capability_calls += 1
         events.append("capabilities")
         return _FakeManifest()
 
-    submissions: list[object] = []
+    submissions: list[tuple[bytes, object, object]] = []
 
-    def submit(envelope: object) -> dict[str, str]:
+    def submit(
+        wire: bytes,
+        *,
+        canonical_auth: object,
+        timeout: object,
+    ) -> None:
         events.append("submit")
-        submissions.append(envelope)
-        return {"status": "queued"}
+        submissions.append((wire, canonical_auth, timeout))
 
     monkeypatch.setattr(client, "privacy_capabilities_v1", capabilities)
-    monkeypatch.setattr(client, "submit_transaction_envelope", submit)
+    monkeypatch.setattr(client, "_submit_signed_privacy_action_wire_v1", submit)
 
     envelope, result = (
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
-            canonical_auth=CANONICAL_AUTH,
+            canonical_auth=AUTOMATIC_AUTH,
             network_id=NETWORK_ID,
             wait=False,
         )
     )
 
     assert envelope is fake_crypto.envelope
-    assert result == {"status": "queued"}
-    assert submissions == [fake_crypto.envelope]
+    assert result.local_state == "submitted"
+    assert submissions == [(SIGNED_X509_WIRE, AUTOMATIC_AUTH, 30.0)]
     assert capability_calls == 1
-    assert events == ["inspect", "capabilities", "reconstruct", "submit"]
+    assert events == ["inspect", "reconstruct", "capabilities", "submit"]
 
 
 def test_x509_transport_wait_path_submits_through_wait_helper_exactly_once(
@@ -384,50 +447,73 @@ def test_x509_transport_wait_path_submits_through_wait_helper_exactly_once(
     client, fake_crypto, events = _client_with_crypto(monkeypatch)
 
     def capabilities(*, canonical_auth: object) -> _FakeManifest:
-        assert canonical_auth is CANONICAL_AUTH
+        assert canonical_auth is AUTOMATIC_AUTH
         events.append("capabilities")
         return _FakeManifest()
 
     waits: list[tuple[object, dict[str, object]]] = []
 
-    def submit_and_wait(envelope: object, **kwargs: object) -> dict[str, str]:
+    def submit_and_wait(operation: object, **kwargs: object) -> object:
         events.append("wait")
-        waits.append((envelope, kwargs))
-        return {"status": "Committed"}
+        waits.append((operation, kwargs))
+        return type(operation)(
+            **{
+                **operation.__dict__,
+                "local_state": "terminal",
+                "terminal_chain_state": "Applied",
+                "committed_height": 23,
+                "execution_capability_manifest_digest": (bytes([12]) * 32).hex(),
+                "execution_capability_committed_height": 19,
+                "execution_receipt_finalized_height": 24,
+                "execution_receipt_finalized_block_hash": (bytes([13]) * 32).hex(),
+            }
+        )
 
     monkeypatch.setattr(client, "privacy_capabilities_v1", capabilities)
     monkeypatch.setattr(
         client,
-        "submit_transaction_envelope",
-        lambda _: pytest.fail("wait path performed a separate direct submission"),
+        "_submit_signed_privacy_action_wire_v1",
+        lambda *_args, **_kwargs: events.append("submit"),
     )
     monkeypatch.setattr(
         client,
-        "submit_transaction_envelope_and_wait",
+        "_wait_for_privacy_action_terminal_status_v1",
         submit_and_wait,
+    )
+    monkeypatch.setattr(
+        client,
+        "get_pipeline_transaction_details_with_canonical_auth",
+        lambda *_args, **_kwargs: {
+            "transaction_hash": TRANSACTION_HASH.hex(),
+            "block_height": 23,
+            "result_ok": True,
+            "rejection_code": None,
+            "rejection_message": None,
+        },
     )
 
     envelope, result = (
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
-            canonical_auth=CANONICAL_AUTH,
+            canonical_auth=AUTOMATIC_AUTH,
             network_id=NETWORK_ID,
             interval=0.25,
             timeout=5.0,
             max_attempts=3,
-            scope="local",
+            scope="global",
         )
     )
 
     assert envelope is fake_crypto.envelope
-    assert result == {"status": "Committed"}
+    assert result.terminal_chain_state == "Applied"
+    assert result.committed_height == 23
     assert len(waits) == 1
-    assert waits[0][0] is fake_crypto.envelope
+    assert waits[0][0].transaction_hash == TRANSACTION_HASH.hex()
     assert waits[0][1]["interval"] == 0.25
     assert waits[0][1]["timeout"] == 5.0
     assert waits[0][1]["max_attempts"] == 3
-    assert waits[0][1]["scope"] == "local"
-    assert events == ["inspect", "capabilities", "reconstruct", "wait"]
+    assert waits[0][1]["canonical_auth"] is AUTOMATIC_AUTH
+    assert events == ["inspect", "reconstruct", "capabilities", "submit", "wait"]
 
 
 def test_x509_transport_rejects_raw_aliases_and_foreign_network_before_inspection(
@@ -441,22 +527,22 @@ def test_x509_transport_rejects_raw_aliases_and_foreign_network_before_inspectio
     )
     monkeypatch.setattr(
         client,
-        "submit_transaction_envelope",
-        lambda _: pytest.fail("invalid network was submitted"),
+        "_submit_signed_privacy_action_wire_v1",
+        lambda *_args, **_kwargs: pytest.fail("invalid network was submitted"),
     )
 
     for retired in (CANONICAL_GENESIS_HASH, "chain/dev", "genesis"):
         with pytest.raises(TypeError, match="network_id must be a NetworkId"):
             client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
                 SIGNED_X509_WIRE,
-                canonical_auth=CANONICAL_AUTH,
+                canonical_auth=AUTOMATIC_AUTH,
                 network_id=retired,  # type: ignore[arg-type]
                 wait=False,
             )
     with pytest.raises(ValueError, match="does not match"):
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
-            canonical_auth=CANONICAL_AUTH,
+            canonical_auth=AUTOMATIC_AUTH,
             network_id=FOREIGN_NETWORK_ID,
             wait=False,
         )
@@ -474,14 +560,14 @@ def test_x509_transport_rejects_wrong_protocol_before_capability_fetch(
     )
     monkeypatch.setattr(
         client,
-        "submit_transaction_envelope",
-        lambda _: pytest.fail("wrong protocol was submitted"),
+        "_submit_signed_privacy_action_wire_v1",
+        lambda *_args, **_kwargs: pytest.fail("wrong protocol was submitted"),
     )
 
     with pytest.raises(ValueError, match="wrong privacy protocol"):
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_OTHER_WIRE,
-            canonical_auth=CANONICAL_AUTH,
+            canonical_auth=AUTOMATIC_AUTH,
             network_id=NETWORK_ID,
             wait=False,
         )
@@ -509,18 +595,20 @@ def test_x509_transport_rejects_malformed_capability_bindings_before_submission(
     )
     monkeypatch.setattr(
         client,
-        "submit_transaction_envelope",
-        lambda _: pytest.fail("malformed capability row permitted submission"),
+        "_submit_signed_privacy_action_wire_v1",
+        lambda *_args, **_kwargs: pytest.fail(
+            "malformed capability row permitted submission"
+        ),
     )
 
     with pytest.raises(RuntimeError, match=message):
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
-            canonical_auth=CANONICAL_AUTH,
+            canonical_auth=AUTOMATIC_AUTH,
             network_id=NETWORK_ID,
             wait=False,
         )
-    assert events == ["inspect"]
+    assert events == ["inspect", "reconstruct"]
 
 
 @pytest.mark.parametrize(
@@ -546,15 +634,15 @@ def test_x509_transport_fails_closed_for_unavailable_or_inactive_capability(
     )
     monkeypatch.setattr(
         client,
-        "submit_transaction_envelope",
-        lambda _: pytest.fail("inactive X509 protocol was submitted"),
+        "_submit_signed_privacy_action_wire_v1",
+        lambda *_args, **_kwargs: pytest.fail("inactive X509 protocol was submitted"),
     )
 
     with pytest.raises(RuntimeError, match=message):
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
-            canonical_auth=CANONICAL_AUTH,
+            canonical_auth=AUTOMATIC_AUTH,
             network_id=NETWORK_ID,
             wait=False,
         )
-    assert events == ["inspect"]
+    assert events == ["inspect", "reconstruct"]

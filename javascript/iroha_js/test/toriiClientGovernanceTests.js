@@ -1361,6 +1361,7 @@ export function registerToriiClientGovernanceTests({
   test("governance ballots reject retired identity keys and unbound authentication", async () => {
     let fetchCalls = 0;
     const client = new ToriiClient(BASE_URL, {
+      canonicalRequestAuth: null,
       fetchImpl: async () => {
         fetchCalls += 1;
         throw new Error("invalid ballot identity reached fetch");
@@ -2075,6 +2076,8 @@ export function registerToriiClientGovernanceTests({
     assert.equal(captures[0].url, `${BASE_URL}/v1/gov/protected-namespaces`);
     assert.equal(captures[0].init.method, "POST");
     assert.equal(captures[0].init.signal, controller.signal);
+    assert.equal(captures[0].init.redirect, "error");
+    assert.equal(typeof captures[0].init.headers["X-Iroha-Signature"], "string");
     assert.deepEqual(JSON.parse(String(captures[0].init.body)), {
       namespaces: ["apps", "system"],
     });
@@ -2085,6 +2088,8 @@ export function registerToriiClientGovernanceTests({
     assert.equal(captures[1].url, `${BASE_URL}/v1/gov/protected-namespaces`);
     assert.equal(captures[1].init.method, "GET");
     assert.equal(captures[1].init.signal, controller.signal);
+    assert.equal(captures[1].init.redirect, "error");
+    assert.equal(typeof captures[1].init.headers["X-Iroha-Signature"], "string");
     assert.equal(getResponse.found, true);
     assert.deepEqual(getResponse.namespaces, ["apps", "system"]);
   });
@@ -2106,6 +2111,16 @@ export function registerToriiClientGovernanceTests({
     await assert.rejects(
       () => client.getProtectedNamespaces(123),
       /getProtectedNamespaces options must be an object/,
+    );
+    const unauthenticated = new ToriiClient(BASE_URL, {
+      canonicalRequestAuth: null,
+      fetchImpl: async () => {
+        throw new Error("unauthenticated protected-namespace call reached fetch");
+      },
+    });
+    await assert.rejects(
+      () => unauthenticated.setProtectedNamespaces(["apps"]),
+      /setProtectedNamespaces options\.canonicalAuth is required/,
     );
     for (const invalid of ["", " apps", "apps ", "app space", "apps\t", "\u0000apps", "åpps"]) {
       await assert.rejects(

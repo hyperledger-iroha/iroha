@@ -4,7 +4,10 @@
 //!
 //! Builds a minimal Torii instance and checks that a couple of App API
 //! endpoints are reachable via the consolidated helper-built router.
-use axum::http::{Request, StatusCode, Uri, header::CONTENT_TYPE};
+use axum::http::{
+    Request, StatusCode, Uri,
+    header::{ACCEPT, CONTENT_TYPE},
+};
 use std::sync::Arc;
 // use iroha_config::base::WithOrigin; // unused in this smoke test
 use iroha_core::{
@@ -108,12 +111,17 @@ async fn app_api_router_smoke() {
         }
     };
     let app = torii.api_router_for_tests();
-    for path in ["/v1/soracloud/status", "/v1/soracloud/apps/status"] {
+    for path in [
+        "/v1/soracloud/status",
+        "/v1/soracloud/apps/status",
+        "/v1/offline/device-attestation-policy",
+    ] {
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .uri(path)
+                    .header(ACCEPT, "application/json")
                     .body(axum::body::Body::empty())
                     .expect("unsigned Soracloud GET"),
             )
@@ -124,6 +132,12 @@ async fn app_api_router_smoke() {
             StatusCode::UNAUTHORIZED,
             "{path} must reject missing canonical account authentication"
         );
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("canonical authentication error body");
+        let error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&body).expect("canonical authentication error envelope");
+        assert_eq!(error.code(), "canonical_authentication_required", "{path}");
     }
     assert_route_is_not_auth_denied(
         app.clone(),

@@ -12,7 +12,7 @@ use crate::vega::zk_ams::mkhe::phase23_rns_link::q_pcs::v2_soundness::{
     ProverFriLayer0FoldCompleteV2,
 };
 use core::convert::Infallible;
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use iroha_crypto::confidential_spool::ConfidentialSpoolChunkV1;
 use std::path::Path;
 #[path = "batch_fri_v2/storage_v2.rs"]
 mod storage_v2;

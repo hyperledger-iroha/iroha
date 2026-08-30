@@ -2265,6 +2265,12 @@ async fn core_info_handlers_ok() {
     );
     assert_eq!(
         health
+            .get("eligibility_cash_handoff_capability")
+            .and_then(norito::json::Value::as_str),
+        Some("cash_handoff_eligibility_v1")
+    );
+    assert_eq!(
+        health
             .get("required_bridge_abi_version")
             .and_then(norito::json::Value::as_u64),
         Some(22)

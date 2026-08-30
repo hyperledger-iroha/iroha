@@ -1,9 +1,9 @@
 //! Private Phase-23 materialize/encrypt/source correspondence transition.
 //!
-//! The only production constructor is deliberately uninhabited until the
-//! parent RNS-Link module can mint a context-correspondence seal from its
-//! otherwise private context axes.  The implementation behind that seal is
-//! complete enough to freeze the one-pass ownership and memory topology: one validated packed chunk
+//! The production entry consumes the sole move-only RNS-Link context owner,
+//! which validates the native proof, terminal, governed-batch, direct-key,
+//! and live encryption-authority axes before returning its context. The
+//! implementation freezes the one-pass ownership and memory topology: one validated packed chunk
 //! is borrowed by the exact live encryption witnesses, persisted in canonical source order before
 //! C0/C1 publication, and then moved unchanged into scalar materialization.
 //!
@@ -12,7 +12,7 @@
 
 #![allow(
     dead_code,
-    reason = "the production context-correspondence seal is intentionally uninhabited"
+    reason = "the production context owner is wired, while later source-algebra authorities remain intentionally uninhabited"
 )]
 use super::super::super::{
     ZkAmsMkheErrorV1,
@@ -26,15 +26,15 @@ use super::super::super::{
         materialize_release_accumulator_chunk_stream_with_decoder_v1, validate_materialized,
     },
     phase23_rns_link::{
-        ZkAmsPhase23RnsLinkContextV1, ZkAmsPhase23RnsLinkExternalSourceAssemblyV1,
+        ZkAmsPhase23RnsLinkContextOwnerV1, ZkAmsPhase23RnsLinkExternalSourceAssemblyV1,
         ZkAmsPhase23RnsLinkExternalSourcePublicationV1, ZkAmsPhase23RnsLinkFamilyV1,
         ZkAmsPhase23RnsLinkSecretChunkV1,
     },
 };
 use super::{
-    MaskedRelaxedRandomSourceV1, ZkAmsMkheDirectObjectCasPublicationV1,
-    ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
-    ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    MaskedRelaxedRandomSourceV1, VerifiedStreamingNativeBgvOpeningReceiptV1,
+    ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectReadAtProviderV1,
+    ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
     encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1,
 };
 use crate::vega::sponge::Keccak256;
@@ -52,6 +52,8 @@ const PHASE23_RING_DEGREE_V1: usize = 131_072;
 const PHASE23_MANIFEST_CAPACITY_V1: usize = PHASE23_RECORD_COUNT_V1;
 const PHASE23_BUNDLE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.materialize-encrypt-source-bundle";
+const PHASE23_NATIVE_BGV_OPENING_RECEIPT_SET_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.phase23.native-bgv-opening-receipt-set";
 const PHASE23_X_VALUES_V1: u32 = 89;
 const PHASE23_U_AND_E_VALUES_V1: u32 = 1_048_576;
 const PHASE23_RE_VALUES_V1: u32 = 1_024;
@@ -65,6 +67,9 @@ const PHASE23_ONE_PACKED_CHUNK_BYTES_V1: usize = PHASE23_RING_DEGREE_V1 * 32;
 const PHASE23_DECODER_WORKSPACE_BYTES_V1: usize = 8 * 1_048_576;
 const PHASE23_ENCRYPTION_OWNER_BYTES_V1: usize = 10_066_330; // conservative 9.6 MiB
 const PHASE23_COMPACT_MANIFEST_OWNER_BYTES_V1: usize = 4_718_592; // 4.5 MiB
+const PHASE23_NATIVE_BGV_OPENING_RECEIPT_OWNER_BYTES_V1: usize = PHASE23_RECORD_COUNT_V1
+    * core::mem::size_of::<VerifiedStreamingNativeBgvOpeningReceiptV1>()
+    + core::mem::size_of::<Vec<VerifiedStreamingNativeBgvOpeningReceiptV1>>();
 const PHASE23_SECRET_CHUNK_POOL_PAYLOAD_BYTES_V1: usize =
     PHASE23_MAIN_BLOCKS_PER_RECORD_V1 * PHASE23_MAIN_BLOCK_BYTES_V1 + PHASE23_NONCE_BYTES_V1;
 const PHASE23_SECRET_CHUNK_POOL_METADATA_BYTES_V1: usize = PHASE23_MAIN_BLOCKS_PER_RECORD_V1
@@ -77,6 +82,7 @@ const PHASE23_NAMED_HEAP_PEAK_BYTES_V1: usize = PHASE23_MATERIALIZED_SCALAR_OWNE
     + PHASE23_DECODER_WORKSPACE_BYTES_V1
     + PHASE23_ENCRYPTION_OWNER_BYTES_V1
     + PHASE23_COMPACT_MANIFEST_OWNER_BYTES_V1
+    + PHASE23_NATIVE_BGV_OPENING_RECEIPT_OWNER_BYTES_V1
     + PHASE23_SECRET_CHUNK_POOL_PAYLOAD_BYTES_V1
     + PHASE23_SECRET_CHUNK_POOL_METADATA_BYTES_V1
     + PHASE23_SMALL_SPOOL_HANDLE_BYTES_V1;
@@ -89,12 +95,6 @@ const _: () = {
     assert!(PHASE23_SECRET_CHUNK_POOL_PAYLOAD_BYTES_V1 == 7_340_064);
     assert!(PHASE23_NAMED_HEAP_PEAK_BYTES_V1 < PHASE23_NAMED_HEAP_CEILING_BYTES_V1);
 };
-/// Production has no variant. Tests can exercise framing helpers without
-/// claiming that the parent-private context axes have been connected.
-enum Phase23ContextCorrespondenceSealV1 {
-    #[cfg(test)]
-    TestOnly,
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Phase23RecordPositionV1 {
     ordinal: u16,
@@ -318,8 +318,40 @@ struct Phase23BundleDigestAxesV1 {
     key_authority_digest: [u8; 32],
     key_epoch: u64,
     source_receipt_digest: [u8; 32],
+    native_bgv_opening_receipt_set_digest: [u8; 32],
     public_artifact_manifest_bound: bool,
 }
+
+fn phase23_native_bgv_opening_receipt_set_digest_v1(
+    receipts: &[VerifiedStreamingNativeBgvOpeningReceiptV1],
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    if receipts.len() != PHASE23_RECORD_COUNT_V1 {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    let mut hash = Keccak256::new();
+    hash.update(PHASE23_NATIVE_BGV_OPENING_RECEIPT_SET_DOMAIN_V1);
+    hash.update(&[PHASE23_ORCHESTRATOR_VERSION_V1]);
+    hash.update(&(PHASE23_RECORD_COUNT_V1 as u16).to_be_bytes());
+    for (ordinal, receipt) in receipts.iter().enumerate() {
+        let position = phase23_record_position_v1(
+            u16::try_from(ordinal).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+        )?;
+        let receipt_digest = receipt.receipt_digest_v1();
+        if receipt_digest == [0; 32] {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        hash.update(&position.ordinal.to_be_bytes());
+        hash.update(&[position.family as u8]);
+        hash.update(&position.chunk_index.to_be_bytes());
+        hash.update(&receipt_digest);
+    }
+    let digest = hash.finalize();
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+    }
+    Ok(digest)
+}
+
 fn phase23_bundle_digest_from_frames_v1(
     axes: Phase23BundleDigestAxesV1,
     ordered_manifest_digests: &[[u8; 32]; PHASE23_RECORD_COUNT_V1],
@@ -334,6 +366,7 @@ fn phase23_bundle_digest_from_frames_v1(
         axes.key_digest,
         axes.key_authority_digest,
         axes.source_receipt_digest,
+        axes.native_bgv_opening_receipt_set_digest,
     ]
     .contains(&[0; 32])
         || axes.fold_count == 0
@@ -367,6 +400,7 @@ fn phase23_bundle_digest_from_frames_v1(
     hash.update(&axes.key_authority_digest);
     hash.update(&axes.key_epoch.to_be_bytes());
     hash.update(&axes.source_receipt_digest);
+    hash.update(&axes.native_bgv_opening_receipt_set_digest);
     hash.update(&[axes.public_artifact_manifest_bound as u8]);
     hash.update(&(PHASE23_RECORD_COUNT_V1 as u16).to_be_bytes());
     for (ordinal, manifest_digest) in ordered_manifest_digests.iter().enumerate() {
@@ -403,11 +437,13 @@ fn require_exact_release_shape_v1(
 struct ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
     materialized: ZkAmsPhase23MaterializedAccumulatorsV1,
     manifests: Vec<ZkAmsMkheStreamingCollectiveCiphertextV1>,
+    native_bgv_opening_receipts: Vec<VerifiedStreamingNativeBgvOpeningReceiptV1>,
     source: ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
     authority: ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
     key_provider: K,
     ciphertext_publisher: P,
     public_artifact_manifest_bound: bool,
+    native_bgv_opening_receipt_set_digest: [u8; 32],
     bundle_digest: [u8; 32],
 }
 impl<K, P> ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
@@ -425,6 +461,7 @@ impl<K, P> ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
             key_authority_digest: self.authority.authority_digest(),
             key_epoch: self.authority.epoch(),
             source_receipt_digest: self.source.receipt_v1().receipt_digest_v1(),
+            native_bgv_opening_receipt_set_digest: self.native_bgv_opening_receipt_set_digest,
             public_artifact_manifest_bound: self.public_artifact_manifest_bound,
         }
     }
@@ -433,6 +470,8 @@ impl<K, P> ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
         require_exact_release_shape_v1(self.materialized.shape)?;
         if self.manifests.len() != PHASE23_MANIFEST_CAPACITY_V1
             || self.manifests.capacity() != PHASE23_MANIFEST_CAPACITY_V1
+            || self.native_bgv_opening_receipts.len() != PHASE23_MANIFEST_CAPACITY_V1
+            || self.native_bgv_opening_receipts.capacity() != PHASE23_MANIFEST_CAPACITY_V1
             || self.authority.next_sample_index() != PHASE23_RECORD_COUNT_V1 as u64
             || self.authority.profile_digest() != self.materialized.profile_digest
             || self.authority.roster_digest() != self.materialized.roster_digest
@@ -441,8 +480,14 @@ impl<K, P> ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
         let mut manifest_digests = [[0_u8; 32]; PHASE23_RECORD_COUNT_V1];
-        for (ordinal, manifest) in self.manifests.iter().enumerate() {
+        for (ordinal, (manifest, native_bgv_opening_receipt)) in self
+            .manifests
+            .iter()
+            .zip(&self.native_bgv_opening_receipts)
+            .enumerate()
+        {
             manifest.validate_for_authority_v1(&self.authority)?;
+            native_bgv_opening_receipt.validate_for_manifest_v1(manifest)?;
             let position = phase23_record_position_v1(
                 u16::try_from(ordinal).map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
             )?;
@@ -454,6 +499,11 @@ impl<K, P> ZkAmsPhase23MaterializedEncryptedSourceOwnerV1<K, P> {
                 return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
             }
             manifest_digests[ordinal] = manifest.manifest_digest();
+        }
+        if self.native_bgv_opening_receipt_set_digest
+            != phase23_native_bgv_opening_receipt_set_digest_v1(&self.native_bgv_opening_receipts)?
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
         if self.bundle_digest
             != phase23_bundle_digest_from_frames_v1(self.digest_axes_v1(), &manifest_digests)?
@@ -471,6 +521,7 @@ struct Phase23MaterializeEncryptChunkStreamV1<'a, I, R, K, P> {
     ciphertext_publisher: &'a mut P,
     source: &'a mut ZkAmsPhase23RnsLinkExternalSourceAssemblyV1,
     manifests: &'a mut Vec<ZkAmsMkheStreamingCollectiveCiphertextV1>,
+    native_bgv_opening_receipts: &'a mut Vec<VerifiedStreamingNativeBgvOpeningReceiptV1>,
     next_record: u16,
 }
 impl<I, R, K, P> Iterator for Phase23MaterializeEncryptChunkStreamV1<'_, I, R, K, P>
@@ -509,6 +560,8 @@ where
         // never reach source persistence or output publication.
         if self.manifests.len() != usize::from(self.next_record)
             || self.manifests.capacity() != PHASE23_MANIFEST_CAPACITY_V1
+            || self.native_bgv_opening_receipts.len() != usize::from(self.next_record)
+            || self.native_bgv_opening_receipts.capacity() != PHASE23_MANIFEST_CAPACITY_V1
         {
             return Some(Err(ZkAmsMkheErrorV1::InvalidPhase23Fold));
         }
@@ -524,7 +577,8 @@ where
                 || {
                     let pool = Phase23SecretRecordChunkPoolV1::try_new_exact_v1()?;
                     Ok(
-                        move |canonical_plaintext: &[[u8; 32]],
+                        move |_ciphertext_publisher: &mut P,
+                              canonical_plaintext: &[[u8; 32]],
                               ephemeral: &[i64],
                               error_zero: &[i64],
                               error_one: &[i64],
@@ -542,8 +596,12 @@ where
                     )
                 },
             );
-        let manifest = match result {
-            Ok(manifest) => manifest,
+        let product = match result {
+            Ok(product) => product,
+            Err(error) => return Some(Err(error)),
+        };
+        let (manifest, native_bgv_opening_receipt) = match product.into_verified_parts_v1() {
+            Ok(parts) => parts,
             Err(error) => return Some(Err(error)),
         };
         if manifest.sample_index != u64::from(position.ordinal)
@@ -554,6 +612,8 @@ where
             return Some(Err(ZkAmsMkheErrorV1::InvalidPhase23Fold));
         }
         self.manifests.push(manifest);
+        self.native_bgv_opening_receipts
+            .push(native_bgv_opening_receipt);
         self.next_record += 1;
         Some(Ok(packed))
     }
@@ -561,11 +621,10 @@ where
 #[allow(
     dead_code,
     clippy::too_many_arguments,
-    reason = "production remains uninhabited until the parent mints a context-correspondence seal"
+    reason = "the next source-algebra authority remains intentionally uninhabited"
 )]
 fn materialize_encrypt_and_publish_phase23_source_v1<I, R, K, P>(
-    _correspondence: Phase23ContextCorrespondenceSealV1,
-    context: ZkAmsPhase23RnsLinkContextV1,
+    context_owner: ZkAmsPhase23RnsLinkContextOwnerV1,
     directory: impl AsRef<Path>,
     mut authority: ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
     mut random: R,
@@ -587,9 +646,11 @@ where
     P: ZkAmsMkheDirectObjectCasPublicationV1,
 {
     require_exact_release_shape_v1(shape)?;
+    authority.validate_release_v1()?;
     if authority.next_sample_index() != 0
         || authority.profile_digest() != profile_digest
         || authority.roster_digest() != roster_digest
+        || authority.transcript_digest() != transcript_digest
         || [
             profile_digest,
             roster_digest,
@@ -601,11 +662,29 @@ where
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
+    let context = context_owner.into_context_for_materialization_v1(
+        profile_digest,
+        roster_digest,
+        authority.epoch(),
+        transcript_digest,
+        batch_id,
+        ordered_batch_input_digest,
+        fold_count,
+        authority.key_digest(),
+        authority.key_material_digest(),
+    )?;
     let mut manifests = Vec::new();
     manifests
         .try_reserve_exact(PHASE23_MANIFEST_CAPACITY_V1)
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     if manifests.capacity() != PHASE23_MANIFEST_CAPACITY_V1 {
+        return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+    }
+    let mut native_bgv_opening_receipts = Vec::new();
+    native_bgv_opening_receipts
+        .try_reserve_exact(PHASE23_MANIFEST_CAPACITY_V1)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if native_bgv_opening_receipts.capacity() != PHASE23_MANIFEST_CAPACITY_V1 {
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
     }
     let mut source = ZkAmsPhase23RnsLinkExternalSourceAssemblyV1::begin_v1(context, directory)?;
@@ -617,6 +696,7 @@ where
         ciphertext_publisher: &mut ciphertext_publisher,
         source: &mut source,
         manifests: &mut manifests,
+        native_bgv_opening_receipts: &mut native_bgv_opening_receipts,
         next_record: 0,
     };
     let materialized = materialize_release_accumulator_chunk_stream_with_decoder_v1(
@@ -643,6 +723,8 @@ where
     )?;
     if manifests.len() != PHASE23_RECORD_COUNT_V1
         || manifests.capacity() != PHASE23_MANIFEST_CAPACITY_V1
+        || native_bgv_opening_receipts.len() != PHASE23_RECORD_COUNT_V1
+        || native_bgv_opening_receipts.capacity() != PHASE23_MANIFEST_CAPACITY_V1
         || authority.next_sample_index() != PHASE23_RECORD_COUNT_V1 as u64
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -653,6 +735,8 @@ where
     for (ordinal, manifest) in manifests.iter().enumerate() {
         manifest_digests[ordinal] = manifest.manifest_digest();
     }
+    let native_bgv_opening_receipt_set_digest =
+        phase23_native_bgv_opening_receipt_set_digest_v1(&native_bgv_opening_receipts)?;
     let axes = Phase23BundleDigestAxesV1 {
         profile_digest: materialized.profile_digest,
         roster_digest: materialized.roster_digest,
@@ -666,17 +750,20 @@ where
         key_authority_digest: authority.authority_digest(),
         key_epoch: authority.epoch(),
         source_receipt_digest: source.receipt_v1().receipt_digest_v1(),
+        native_bgv_opening_receipt_set_digest,
         public_artifact_manifest_bound: true,
     };
     let bundle_digest = phase23_bundle_digest_from_frames_v1(axes, &manifest_digests)?;
     let owner = ZkAmsPhase23MaterializedEncryptedSourceOwnerV1 {
         materialized,
         manifests,
+        native_bgv_opening_receipts,
         source,
         authority,
         key_provider,
         ciphertext_publisher,
         public_artifact_manifest_bound: true,
+        native_bgv_opening_receipt_set_digest,
         bundle_digest,
     };
     owner.validate_v1()?;

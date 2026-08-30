@@ -243,7 +243,33 @@ mod model {
         /// Canonical raw low-S P-256 signature (`r || s`).
         pub signature: KagemushaDeviceSignatureV2,
     }
-    /// Typed platform assertion, without a stringly-typed fallback variant.
+    /// Finalized current-policy binding for the same-account drain-only redemption path.
+    ///
+    /// This carries no device credential or P-256 signature. Consensus accepts it only inside a
+    /// redemption submitted by the exact single-key Ed25519 recipient account, after verifying
+    /// the current governed policy and the finalized block binding. It is never valid for top-up.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    pub struct KagemushaDrainOnlyRedemptionPolicyBindingV1 {
+        /// Monotonic epoch of the synchronized governed policy.
+        pub policy_epoch: u64,
+        /// Canonical Iroha hash of the synchronized policy bytes.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub policy_hash: [u8; 32],
+        /// Exclusive freshness deadline authenticated by the finalized policy view.
+        pub freshness_deadline_ms: u64,
+        /// Exact finalized block height carrying the synchronized policy state.
+        pub finalized_block_height: u64,
+        /// Exact finalized block hash at `finalized_block_height`.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub finalized_block_hash: [u8; 32],
+        /// Finalized block timestamp authenticated by the policy finality proof.
+        pub finalized_block_timestamp_ms: u64,
+        /// Canonical hash of the exact finality-evidence archive.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub finality_evidence_hash: [u8; 32],
+    }
+    /// Typed online authorization proof, without a stringly-typed fallback variant.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "platform", content = "assertion", rename_all = "snake_case")]
@@ -252,6 +278,8 @@ mod model {
         AndroidKeyMint(KagemushaAndroidKeyMintHardwareAssertionV1),
         /// Apple App Attest assertion over authenticatorData || clientDataHash.
         IosAppAttest(KagemushaIosAppAttestHardwareAssertionV1),
+        /// Same-account online redemption under the outer Ed25519 account authority.
+        AccountAuthorityDrainOnly(KagemushaDrainOnlyRedemptionPolicyBindingV1),
     }
     /// Self-contained payer/recipient hardware authorization carried inside one V2 archive.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -281,6 +309,9 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub payload_digest: [u8; 32],
         /// Canonical Iroha hash of the exact registration admitted by consensus.
+        ///
+        /// This is exactly zero only for `account_authority_drain_only`, which has no device
+        /// registration and is rejected outside same-account redemption.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub registration_hash: [u8; 32],
         /// Typed assertion from the registered online hardware key.
@@ -2212,6 +2243,48 @@ mod model {
         pub recipient_membership_witness: KagemushaNoteMembershipWitnessV2,
         /// Complete authenticated provenance needed for offline receiver verification.
         pub topup_provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
+    }
+    /// Unsigned eligibility-gated handoff payload carried by IPM1 PAYMENT schema `0x0103`.
+    ///
+    /// `payment_v4_norito` is the complete canonical ABI-21/V4 payment archive,
+    /// not a re-encoded or relabelled nested payment. Keeping those bytes opaque
+    /// preserves the frozen recursive-proof protocol while ABI 22 adds current
+    /// device-policy admission around it.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    pub struct KagemushaEligibilityPaymentEnvelopePayloadV1 {
+        /// Eligibility-envelope layout marker. This is independent of ABI-21/V4.
+        pub version: u16,
+        /// Exact Iroha network shared by the request, payment, and credential.
+        pub network_id: NetworkId,
+        /// One-use peer-spend operation identifier copied from the V4 transition.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub operation_id: [u8; 32],
+        /// Digest of the receiver-signed, short-lived payment request.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        pub recipient_request_digest: [u8; 32],
+        /// Byte-for-byte canonical `KagemushaRecursiveSpendPeerPaymentV4` archive.
+        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+        pub payment_v4_norito: Vec<u8>,
+        /// Current issuer-signed sender eligibility credential.
+        pub sender_eligibility_credential: OfflineDeviceEligibilityCredentialV1,
+        /// Exact wallet device key that makes the operation signature one-use.
+        ///
+        /// The platform assertion key remains independently bound inside the
+        /// eligibility credential and is never repurposed as a raw signer.
+        pub sender_device_public_key: KagemushaDevicePublicKeyV2,
+    }
+    /// Eligibility-gated peer payment advertised as `cash_handoff_eligibility_v1`.
+    ///
+    /// This is a new outer protocol. It must never be decoded as, or advertised
+    /// in place of, the legacy `cash_handoff_v1` ABI-21/V4 payment body.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    pub struct KagemushaEligibilityPaymentEnvelopeV1 {
+        /// Canonical operation, payment, credential, and wallet-device-key binding.
+        pub payload: KagemushaEligibilityPaymentEnvelopePayloadV1,
+        /// Raw low-S P-256 signature made by the credential's wallet device key.
+        pub sender_device_signature: KagemushaDeviceSignatureV2,
     }
     /// Complete finalized V4 origin carried to an offline receiver.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]

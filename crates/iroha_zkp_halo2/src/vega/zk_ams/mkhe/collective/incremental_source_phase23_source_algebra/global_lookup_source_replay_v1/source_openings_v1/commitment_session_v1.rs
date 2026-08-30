@@ -27,7 +27,7 @@ use crate::vega::{
     bulletproof_t256::ZeroizingT256ScalarCopyV1, sponge::Keccak256,
 };
 use core::{convert::Infallible, marker::PhantomData};
-use iroha_confidential_spool::ConfidentialSpoolChunkV1;
+use iroha_crypto::confidential_spool::ConfidentialSpoolChunkV1;
 
 const COMMITMENT_SESSION_VERSION_V1: u8 = 1;
 const TEST_ENTROPY_DOMAIN_V1: &[u8] =

@@ -634,7 +634,9 @@ fn remove_created_file_if_unchanged_v1(path: &Path, file: &File) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_core::privacy_profiles::zk_x509_release_candidate_profile_material_v1;
+    use iroha_core::privacy_profiles::{
+        vega_release_candidate_profile_material_v1, zk_x509_release_candidate_profile_material_v1,
+    };
     use iroha_data_model::{
         Level,
         isi::Log,
@@ -648,13 +650,17 @@ mod tests {
                 let profiles = PrivacyProtocolIdV1::ALL
                     .into_iter()
                     .map(|protocol_id| {
-                        compiled_privacy_profile_v1(protocol_id).or_else(|error| {
-                            if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
-                                zk_x509_release_candidate_profile_material_v1()
-                            } else {
-                                Err(error)
-                            }
-                        })
+                        compiled_privacy_profile_v1(protocol_id).or_else(
+                            |error| match protocol_id {
+                                PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
+                                    vega_release_candidate_profile_material_v1()
+                                }
+                                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+                                    zk_x509_release_candidate_profile_material_v1()
+                                }
+                                _ => Err(error),
+                            },
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .expect("derive twelve native test profiles");

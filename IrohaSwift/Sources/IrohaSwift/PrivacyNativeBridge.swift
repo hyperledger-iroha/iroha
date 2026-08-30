@@ -314,6 +314,241 @@ public enum PrivacyNativeBridge {
         return status
     }
 
+    /// Authenticate one exact signed transaction as the requested closed operation.
+    ///
+    /// This verifies signature, NetworkId, exact canonical authenticated authority, privacy
+    /// intent, and statement/proof shape. It never treats local proof inspection as transaction
+    /// acceptance.
+    public static func inspectSignedExact12ActionV1(
+        _ request: PrivacyExact12ActionRequestV1,
+        networkId: NetworkId,
+        authorityAccountId: String
+    ) throws -> PrivacyExact12ActionInspectionV1 {
+        guard isNativeAvailable,
+              let projection = try NoritoNativeBridge.shared
+                .privacyInspectSignedExact12ActionV1(
+                    signedTransaction: request.signedTransactionVersioned,
+                    networkId: networkId.bytes,
+                    authorityAccountId: authorityAccountId,
+                    operationIndex: Int32(request.operation.rawValue)
+                ) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        return try PrivacyExact12ActionInspectionV1(nativeProjection: projection)
+    }
+
+    static func prepareAuthenticatedTransactionDetailsV1(
+        networkId: NetworkId,
+        authority: String,
+        transactionHashHex: String,
+        creationTimeMs: UInt64,
+        nonce: Data
+    ) throws -> PrivacyAuthenticatedTransactionDetailsPreparationV1 {
+        guard isNativeAvailable,
+              let prepared = try NoritoNativeBridge.shared
+                .authenticatedTransactionDetailsPrepareV1(
+                    networkId: networkId.bytes,
+                    authority: authority,
+                    transactionHashHex: transactionHashHex,
+                    creationTimeMs: creationTimeMs,
+                    nonce: nonce
+                ),
+              prepared.signingDigest.count == 32 else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        return PrivacyAuthenticatedTransactionDetailsPreparationV1(
+            archive: prepared.preparation,
+            signingDigest: prepared.signingDigest
+        )
+    }
+
+    static func finalizeAuthenticatedTransactionDetailsV1(
+        _ preparation: PrivacyAuthenticatedTransactionDetailsPreparationV1,
+        signature: Data
+    ) throws -> Data {
+        guard isNativeAvailable,
+              let request = try NoritoNativeBridge.shared
+                .authenticatedTransactionDetailsFinalizeV1(
+                    preparation: preparation.archive,
+                    signature: signature
+                ) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        return request
+    }
+
+    static func projectAuthenticatedTransactionDetailsResultV1(
+        _ preparation: PrivacyAuthenticatedTransactionDetailsPreparationV1,
+        response: Data
+    ) throws -> AuthenticatedCommittedTransactionResultV1 {
+        guard isNativeAvailable,
+              let projection = try NoritoNativeBridge.shared
+                .authenticatedTransactionDetailsProjectResultV1(
+                    preparation: preparation.archive,
+                    response: response
+                ) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        do {
+            return try JSONDecoder().decode(
+                AuthenticatedCommittedTransactionResultV1.self,
+                from: projection
+            )
+        } catch {
+            throw PrivacyCompiledProfileCatalogBridgeError.invalidArchive
+        }
+    }
+
+    static func projectAuthenticatedOfflineDeviceRegistrationResultV1(
+        _ preparation: PrivacyAuthenticatedTransactionDetailsPreparationV1,
+        response: Data
+    ) throws -> AuthenticatedOfflineDeviceRegistrationResultV1 {
+        guard isNativeAvailable,
+              let projection = try NoritoNativeBridge.shared
+                .authenticatedOfflineDeviceRegistrationResultProjectV1(
+                    preparation: preparation.archive,
+                    response: response
+                ) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        do {
+            return try JSONDecoder().decode(
+                AuthenticatedOfflineDeviceRegistrationResultV1.self,
+                from: projection
+            )
+        } catch {
+            throw PrivacyCompiledProfileCatalogBridgeError.invalidArchive
+        }
+    }
+
+    static func prepareAuthenticatedActionReceiptV1(
+        networkId: NetworkId,
+        authority: String,
+        operationIndex: UInt32,
+        transactionHashHex: String,
+        actionIndex: UInt32,
+        requestedActionBinding: Data,
+        creationTimeMs: UInt64,
+        nonce: Data
+    ) throws -> PrivacyAuthenticatedActionReceiptPreparationV1 {
+        guard let exactOperationIndex = Int32(exactly: operationIndex),
+              isNativeAvailable,
+              let prepared = try NoritoNativeBridge.shared
+                .authenticatedActionReceiptPrepareV1(
+                    networkId: networkId.bytes,
+                    authority: authority,
+                    operationIndex: exactOperationIndex,
+                    transactionHashHex: transactionHashHex,
+                    actionIndex: actionIndex,
+                    requestedActionBinding: requestedActionBinding,
+                    creationTimeMs: creationTimeMs,
+                    nonce: nonce
+                ),
+              prepared.signingDigest.count == 32 else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        return PrivacyAuthenticatedActionReceiptPreparationV1(
+            archive: prepared.preparation,
+            signingDigest: prepared.signingDigest
+        )
+    }
+
+    static func finalizeAuthenticatedActionReceiptV1(
+        _ preparation: PrivacyAuthenticatedActionReceiptPreparationV1,
+        signature: Data
+    ) throws -> Data {
+        guard isNativeAvailable,
+              let request = try NoritoNativeBridge.shared
+                .authenticatedActionReceiptFinalizeV1(
+                    preparation: preparation.archive,
+                    signature: signature
+                ) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        return request
+    }
+
+    static func projectAuthenticatedActionReceiptResultV1(
+        _ preparation: PrivacyAuthenticatedActionReceiptPreparationV1,
+        response: Data
+    ) throws -> AuthenticatedPrivacyActionExecutionReceiptV1 {
+        guard isNativeAvailable,
+              let projection = try NoritoNativeBridge.shared
+                .authenticatedActionReceiptProjectResultV1(
+                    preparation: preparation.archive,
+                    response: response
+                ) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        do {
+            return try JSONDecoder().decode(
+                AuthenticatedPrivacyActionExecutionReceiptV1.self,
+                from: projection
+            )
+        } catch {
+            throw PrivacyCompiledProfileCatalogBridgeError.invalidArchive
+        }
+    }
+
+    static func prepareAuthenticatedPrivacyStateQueryV1(
+        networkId: NetworkId,
+        authority: String,
+        queryId: UInt32,
+        protocolIndex: UInt32,
+        requestBinding: Data,
+        creationTimeMs: UInt64,
+        nonce: Data
+    ) throws -> PrivacyAuthenticatedStateQueryPreparationV1 {
+        guard isNativeAvailable,
+              let prepared = try NoritoNativeBridge.shared
+                .authenticatedPrivacyStateQueryPrepareV1(
+                    networkId: networkId.bytes,
+                    authority: authority,
+                    queryId: queryId,
+                    protocolIndex: protocolIndex,
+                    requestBinding: requestBinding,
+                    creationTimeMs: creationTimeMs,
+                    nonce: nonce
+                ),
+              prepared.signingDigest.count == 32 else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        return PrivacyAuthenticatedStateQueryPreparationV1(
+            archive: prepared.preparation,
+            signingDigest: prepared.signingDigest
+        )
+    }
+
+    static func finalizeAuthenticatedPrivacyStateQueryV1(
+        _ preparation: PrivacyAuthenticatedStateQueryPreparationV1,
+        signature: Data
+    ) throws -> Data {
+        guard isNativeAvailable,
+              let request = try NoritoNativeBridge.shared
+                .authenticatedPrivacyStateQueryFinalizeV1(
+                    preparation: preparation.archive,
+                    signature: signature
+                ) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        return request
+    }
+
+    static func projectAuthenticatedPrivacyStateQueryResultV1(
+        _ preparation: PrivacyAuthenticatedStateQueryPreparationV1,
+        response: Data
+    ) throws -> Data {
+        guard isNativeAvailable,
+              let projection = try NoritoNativeBridge.shared
+                .authenticatedPrivacyStateQueryProjectResultV1(
+                    preparation: preparation.archive,
+                    response: response
+                ) else {
+            throw PrivacyCompiledProfileCatalogBridgeError.nativeUnavailable
+        }
+        return projection
+    }
+
     static func requireCompiledProfileCatalogV1(_ archive: Data) throws -> Data {
         guard !archive.isEmpty,
               archive.count <= compiledProfileCatalogArchiveMaximumBytes,

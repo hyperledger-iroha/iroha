@@ -2028,18 +2028,53 @@ fn validate_payment_witness(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     witness: &AnonymousPgcPaymentWitnessV1<'_>,
 ) -> Result<(Vec<usize>, Vec<usize>, u32), AnonymousPgcError> {
-    let n = statement.anonymity_set_size();
-    if witness.transfer_values.len() != n
-        || witness.transfer_randomness.len() != n
-        || witness.sender_index >= n
+    let (recipients, decoys, transfers, post_balance) = validate_wallet_payment_material_v1(
+        statement.public_keys,
+        statement.current_balance_ciphertexts,
+        witness.transfer_values,
+        witness.transfer_randomness,
+        witness.sender_index,
+        witness.sender_secret,
+    )?;
+    if recipients.len() != statement.recipient_count()
+        || transfers.as_slice() != statement.transfer_ciphertexts
     {
         return Err(AnonymousPgcError::InvalidPaymentWitness);
+    }
+    Ok((recipients, decoys, post_balance))
+}
+fn validate_wallet_payment_material_v1(
+    public_keys: &[TwistedElGamalPublicKeyV1],
+    current_balance_ciphertexts: &[TwistedElGamalCiphertextV1],
+    transfer_values: &[i64],
+    transfer_randomness: &[SecretScalarV1],
+    sender_index: usize,
+    sender_secret: &SecretScalarV1,
+) -> Result<(Vec<usize>, Vec<usize>, Vec<TwistedElGamalCiphertextV1>, u32), AnonymousPgcError> {
+    let n = public_keys.len();
+    if !PGC_PAYMENT_ANONYMITY_SET_SIZES_V1.contains(&n)
+        || current_balance_ciphertexts.len() != n
+        || transfer_values.len() != n
+        || transfer_randomness.len() != n
+        || sender_index >= n
+    {
+        return Err(AnonymousPgcError::InvalidPaymentWitness);
+    }
+    for (index, key) in public_keys.iter().enumerate() {
+        let _ = key.point.to_projective()?;
+        if index > 0 && public_keys[index - 1].point >= key.point {
+            return Err(AnonymousPgcError::PaymentKeysNotStrictlyIncreasing);
+        }
+    }
+    for ciphertext in current_balance_ciphertexts {
+        ciphertext.validate()?;
     }
     let mut recipients = Vec::new();
     let mut decoys = Vec::new();
     let mut senders = Vec::new();
+    let mut transfers = Vec::with_capacity(n);
     let mut sum = 0_i128;
-    for (index, value) in witness.transfer_values.iter().copied().enumerate() {
+    for (index, value) in transfer_values.iter().copied().enumerate() {
         let _ = payment_value_scalar(value)?;
         sum = sum
             .checked_add(i128::from(value))
@@ -2049,34 +2084,56 @@ fn validate_payment_witness(
             core::cmp::Ordering::Equal => decoys.push(index),
             core::cmp::Ordering::Less => senders.push(index),
         }
-        if encrypt_signed_with_randomness(
-            statement.public_keys[index],
+        transfers.push(encrypt_signed_with_randomness(
+            public_keys[index],
             value,
-            &witness.transfer_randomness[index],
-        )? != statement.transfer_ciphertexts[index]
-        {
-            return Err(AnonymousPgcError::InvalidPaymentWitness);
-        }
+            &transfer_randomness[index],
+        )?);
     }
     if sum != 0
-        || recipients.len() != statement.recipient_count()
-        || decoys.len() != n - statement.recipient_count() - 1
-        || senders.as_slice() != [witness.sender_index]
+        || recipients.is_empty()
+        || recipients.len() > PGC_PAYMENT_MAX_RECIPIENTS_V1
+        || decoys.len() != n - recipients.len() - 1
+        || senders.as_slice() != [sender_index]
     {
         return Err(AnonymousPgcError::InvalidPaymentWitness);
     }
     let parameters = AnonymousPgcParametersV1::get()?;
-    if parameters.g * witness.sender_secret.expose_scalar()
-        != statement.public_keys[witness.sender_index]
-            .point
-            .to_projective()?
+    if parameters.g * sender_secret.expose_scalar()
+        != public_keys[sender_index].point.to_projective()?
     {
         return Err(AnonymousPgcError::InvalidPaymentWitness);
     }
-    let updates = derive_atomic_ciphertext_updates(statement)?;
-    let post_balance = super::decrypt_u32(witness.sender_secret, updates[witness.sender_index])
+    let updates = current_balance_ciphertexts
+        .iter()
+        .copied()
+        .zip(transfers.iter().copied())
+        .map(|(current, transfer)| super::add_ciphertexts(current, transfer))
+        .collect::<Result<Vec<_>, _>>()?;
+    let post_balance = super::decrypt_u32(sender_secret, updates[sender_index])
         .map_err(|_| AnonymousPgcError::InvalidPaymentWitness)?;
-    Ok((recipients, decoys, post_balance))
+    Ok((recipients, decoys, transfers, post_balance))
+}
+
+/// Preflight all wallet-selected Anonymous-PGC payment semantics without a
+/// consensus transcript or proof allocation.
+pub fn preflight_anonymous_pgc_wallet_payment_v1(
+    public_keys: &[TwistedElGamalPublicKeyV1],
+    current_balance_ciphertexts: &[TwistedElGamalCiphertextV1],
+    transfer_values: &[i64],
+    transfer_randomness: &[SecretScalarV1],
+    sender_index: usize,
+    sender_secret: &SecretScalarV1,
+) -> Result<(), AnonymousPgcError> {
+    validate_wallet_payment_material_v1(
+        public_keys,
+        current_balance_ciphertexts,
+        transfer_values,
+        transfer_randomness,
+        sender_index,
+        sender_secret,
+    )
+    .map(drop)
 }
 /// Prove the complete Anonymous-PGC payment legality relation.
 ///

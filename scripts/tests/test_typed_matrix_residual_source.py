@@ -12,17 +12,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CARGO_LOCK = REPO_ROOT / "Cargo.lock"
 CARGO_LOCK_SHA256 = (
-    "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+    "179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7"
 )
 
 TOKEN_PATH = REPO_ROOT / "crates/iroha_crypto/src/soranet/token.rs"
-TOKEN_GIT_BLOB = "e5a83df83df5b11bea2cd536194e18a919fbc26d"
-TOKEN_SHA256 = "4e0e0ce38655c096fa69043aece5ae1a61f0b95826b2e9cdfe0a71dab1f6e84d"
-TOKEN_WHOLE_LINES = 2_387
-TOKEN_TOTAL_TESTS = 26
+TOKEN_GIT_BLOB = "3aeb78afc12df6d828767a0b6dfc0f9254a9d385"
+TOKEN_SHA256 = "594ee1fade42a15b1e8e41dfed96e5521272a45f774f3f6e5fe24ef97086a258"
+TOKEN_WHOLE_LINES = 2_892
+TOKEN_TOTAL_TESTS = 38
 TOKEN_BASELINE_LINES = 2_462
 TOKEN_LEGACY_SELECTED_LINES = 596
-TOKEN_SELECTED_CAP = 526
+TOKEN_SELECTED_CAP = 1_026
 TOKEN_ROWS_START = "// typed-matrix-residual:start token-rows"
 TOKEN_ROWS_END = "// typed-matrix-residual:end token-rows"
 TOKEN_RUNNERS_START = "// typed-matrix-residual:start token-runners"
@@ -31,7 +31,7 @@ TOKEN_IDS_SHA256 = (
     "4371babf92c8afa26f04ad58dc2764043185427e2cf6c0d3dd63fb83ae46e736"
 )
 TOKEN_DIRECT_SHA256 = (
-    "9ca590b7788c4e427b24622ac78a36baed428cc9e8b3beaa6136467856ec7e1e"
+    "e7f0ff5aacb12eb024484883068cf05d1b236df7570accafeab6c2da3a8c5542"
 )
 
 TOKEN_IDS = (
@@ -62,7 +62,10 @@ TOKEN_IDS = (
 
 TOKEN_RUNNERS = (
     ("admission_token_decode_matrix", (0, 1, 3, 8)),
-    ("admission_token_verifier_preflight_matrix", (2, 11, 12, 13, 14, 15)),
+    ("admission_token_verifier_rejects_invalid_public_keys_at_construction", (2, 11)),
+    ("admission_token_verifier_rejects_malformed_public_key_before_replay", (12,)),
+    ("admission_token_verifier_rejects_malformed_signatures_before_replay", (13, 14)),
+    ("admission_token_verifier_rejects_inert_signature_before_replay", (15,)),
     ("admission_token_mint_matrix", (4, 5, 6, 7)),
     ("admission_token_temporal_matrix", (9,)),
     ("admission_token_replay_store_matrix", (10,)),
@@ -72,6 +75,8 @@ TOKEN_RUNNERS = (
 TOKEN_DIRECT_TESTS = (
     "signing_body_matches_legacy_contiguous_layout",
     "encode_decode_round_trip",
+    "admission_token_debug_output_redacts_bearer_material",
+    "admission_token_zeroize_clears_all_bearer_fields",
     "decode_truncated_token_prefixes_fail_closed",
     "token_signature_reader_rejects_mismatch_and_overflow_without_advancing",
     "try_encode_rejects_oversized_direct_signature_without_panic",
@@ -80,16 +85,23 @@ TOKEN_DIRECT_TESTS = (
     "verify_rejects_relay_mismatch",
     "verify_rejects_invalid_temporal_bounds_before_signature_preflight",
     "frame_detection",
+    "mint_rejects_subsecond_timestamps_in_whole_second_wire_format",
     "mint_reports_rng_failure",
     "fill_random_rejects_all_zero_nonce_material",
     "token_store_limits_enforce_first_release_ceiling",
     "token_store_fails_closed_without_evicting_active_records",
+    "in_memory_store_never_regresses_observed_time",
     "verifier_retains_replay_marker_through_clock_skew_window",
     "invalid_signatures_do_not_poison_replay_store",
     "persistent_store_materializes_empty_ledger_on_load",
     "persistent_store_blocks_replay_after_restart",
+    "persistent_store_queries_do_not_write_and_rollback_fails_closed",
+    "persistent_store_durably_observes_rejected_insert_time",
+    "persistent_store_retries_dirty_snapshot_after_failed_write",
+    "persistent_store_preserves_subsecond_expiry_and_high_watermark",
     "persistent_store_capacity_preserves_active_records_across_restart",
     "persistent_store_prunes_expired_on_load",
+    "persistent_store_rejects_noncanonical_snapshot_nanoseconds",
 )
 
 TOKEN_SUPPORT_START = "    struct MintedTokenFixture {"

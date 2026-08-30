@@ -67,6 +67,12 @@ public final class TransportSecurity {
     if (!isSensitive(headers, body)) {
       return;
     }
+    requireAuthenticatedHttpRequestAllowed(context, baseUri, targetUri);
+  }
+
+  /** Rejects a request whose authentication is carried inside an opaque binary body. */
+  public static void requireAuthenticatedHttpRequestAllowed(
+      final String context, final URI baseUri, final URI targetUri) {
     final String targetScheme = normalize(targetUri.getScheme());
     if (!"https".equals(targetScheme)) {
       throw new IllegalArgumentException(

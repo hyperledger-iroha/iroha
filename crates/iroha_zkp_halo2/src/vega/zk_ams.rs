@@ -47,6 +47,7 @@ pub use mkhe::{
     ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULUS_BITS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1, ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_PROFILE_AUTHORITY_VERSION_V2,
     ZK_AMS_MKHE_RNS_NATIVE_PROFILE_MANIFEST_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_PROOF_MAX_BYTES_V1,
     ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
     ZK_AMS_MKHE_RNS_NATIVE_QUOTIENT_BITS_V1, ZK_AMS_MKHE_RNS_NATIVE_RADIX_LOG2_V1,
@@ -58,6 +59,7 @@ pub use mkhe::{
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_PLAINTEXT_BYTES_V1,
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_NONCE_SLOTS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_TOTAL_FILE_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_SOURCE_VERSION_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_SPLIT_DECRYPTION_RECORD_COUNT_V2,
     ZK_AMS_MKHE_RNS_NATIVE_SPOOL_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_SUMCHECK_ROUNDS_V1,
     ZK_AMS_MKHE_RNS_NATIVE_TARGET_SECURITY_BITS_V1, ZK_AMS_MKHE_RNS_NATIVE_WIDE_RESPONSE_BYTES_V1,
     ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1, ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1,
@@ -113,20 +115,29 @@ pub use mkhe::{
     ZkAmsMkhePersistentDecryptionVerificationContextV1, ZkAmsMkhePreparedCollectivePublicAV1,
     ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1, ZkAmsMkheReadinessV1,
     ZkAmsMkheReleaseKatEvidenceV1, ZkAmsMkheReleaseManifestV1, ZkAmsMkheResourceCertificateV1,
-    ZkAmsMkheResourceEvidenceV1, ZkAmsMkheRnsNativeFamilyV1, ZkAmsMkheRnsNativeProfileManifestV1,
-    ZkAmsMkheRnsNativeProfileV1, ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
-    ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
-    ZkAmsMkheRnsNativeSourceProviderV1, ZkAmsMkheRnsNativeSourceReceiptV1,
-    ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,
-    ZkAmsMkheRnsNativeTopologyV1, ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheRosterKeyProofV1,
-    ZkAmsMkheSecurityAttackRecordV1, ZkAmsMkheSecurityAttackV1, ZkAmsMkheSecurityCandidateV1,
-    ZkAmsMkheSecurityCertificateV1, ZkAmsMkheSecurityEstimatorSuiteV1,
-    ZkAmsMkheSeekableEvaluatedKeyAccountingV1, ZkAmsMkheStagedDecryptionShareV1,
-    ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
-    ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1, ZkAmsMkheStreamingDecryptionAuthorityV1,
-    ZkAmsMkheStreamingDecryptionStatementV1, ZkAmsMkheStreamingFullRosterDecryptionResultV1,
-    ZkAmsMkheTrustedCksContextV1, ZkAmsMkheTrustedSourceContextV1,
-    ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
+    ZkAmsMkheResourceEvidenceV1, ZkAmsMkheRnsNativeCiphertextEqualityInputV2,
+    ZkAmsMkheRnsNativeEncryptionWitnessKindV2, ZkAmsMkheRnsNativeEncryptionWitnessWriterV2,
+    ZkAmsMkheRnsNativeFamilyV1, ZkAmsMkheRnsNativeProfileAuthorityV2,
+    ZkAmsMkheRnsNativeProfileGenerationV2, ZkAmsMkheRnsNativeProfileManifestV1,
+    ZkAmsMkheRnsNativeProfileV1, ZkAmsMkheRnsNativeRepeatableSourceEvidenceV1,
+    ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSecretChunkV1,
+    ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceErrorV1,
+    ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceProviderV1,
+    ZkAmsMkheRnsNativeSourceReceiptV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
+    ZkAmsMkheRnsNativeSourceWriterV1, ZkAmsMkheRnsNativeSplitDecryptionRecordReceiptV2,
+    ZkAmsMkheRnsNativeSplitDecryptionSourceErrorV2,
+    ZkAmsMkheRnsNativeSplitDecryptionSourceSealReceiptV2,
+    ZkAmsMkheRnsNativeSplitDecryptionSourceSnapshotV2,
+    ZkAmsMkheRnsNativeSplitDecryptionSourceWriterV2, ZkAmsMkheRnsNativeTopologyV1,
+    ZkAmsMkheRnsNativeVerifiedSplitDecryptionRecordV2, ZkAmsMkheRnsPolynomialWireV1,
+    ZkAmsMkheRosterKeyProofV1, ZkAmsMkheSecurityAttackRecordV1, ZkAmsMkheSecurityAttackV1,
+    ZkAmsMkheSecurityCandidateV1, ZkAmsMkheSecurityCertificateV1,
+    ZkAmsMkheSecurityEstimatorSuiteV1, ZkAmsMkheSeekableEvaluatedKeyAccountingV1,
+    ZkAmsMkheStagedDecryptionShareV1, ZkAmsMkheStreamingCollectiveAutomorphismAccountingV1,
+    ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    ZkAmsMkheStreamingDecryptionAuthorityV1, ZkAmsMkheStreamingDecryptionStatementV1,
+    ZkAmsMkheStreamingFullRosterDecryptionResultV1, ZkAmsMkheTrustedCksContextV1,
+    ZkAmsMkheTrustedSourceContextV1, ZkAmsMkheValidatedCollectiveEvaluatedKeyV1,
     ZkAmsMkheValidatedCollectiveSourceEvidenceReceiptV1,
     ZkAmsMkheVerifiedEvaluatedKeyEvidenceSetV1, ZkAmsMkheWireBindingV1, ZkAmsMkheWireEvidenceV1,
     ZkAmsPhase3BatchAnchorV1, ZkAmsPhase3FoldHistoryV1, ZkAmsPhase3GovernedBatchV1,
@@ -147,7 +158,8 @@ pub use mkhe::{
     ZkAmsT256PackingLayoutV1, ZkAmsT256ReleasePackingCertificateV1, ZkAmsT256RotationCertificateV1,
     ZkAmsT256RotationDirectionV1, ZkAmsT256RotationV1,
     admit_zk_ams_mkhe_direct_contribution_set_v1,
-    automorphism_switch_zk_ams_mkhe_collective_streaming_v1, commit_zk_ams_phase23_freshness_v1,
+    automorphism_switch_zk_ams_mkhe_collective_streaming_v1,
+    bind_zk_ams_mkhe_rns_native_ciphertext_equality_input_v2, commit_zk_ams_phase23_freshness_v1,
     decode_zk_ams_t256_packed_plaintext_v1, encode_zk_ams_t256_packed_plaintext_v1,
     encrypt_zk_ams_mkhe_collective_packed_streaming_v1, finalize_zk_ams_phase23_freshness_v1,
     generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1,
@@ -155,11 +167,12 @@ pub use mkhe::{
     prepare_zk_ams_mkhe_collective_public_a_v1, prove_zk_ams_mkhe_active_collective_public_key_v1,
     prove_zk_ams_mkhe_decryption_share_staged_v1, prove_zk_ams_phase3_terminal_v1,
     read_zk_ams_phase23_materialized_accumulators_canonical_exact_v1,
-    rotate_zk_ams_t256_packed_plaintext_v1, validate_zk_ams_t256_galois_key_exponents_v1,
-    validate_zk_ams_t256_galois_key_schedule_v1,
+    resolve_zk_ams_mkhe_rns_native_profile_authority_v2, rotate_zk_ams_t256_packed_plaintext_v1,
+    validate_zk_ams_t256_galois_key_exponents_v1, validate_zk_ams_t256_galois_key_schedule_v1,
     verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1,
     verify_zk_ams_mkhe_active_collective_public_key_v1,
-    verify_zk_ams_mkhe_evaluated_key_evidence_set_v1, verify_zk_ams_phase3_terminal_v1,
+    verify_zk_ams_mkhe_evaluated_key_evidence_set_v1,
+    verify_zk_ams_mkhe_rns_native_source_repeatability_v1, verify_zk_ams_phase3_terminal_v1,
     write_zk_ams_phase23_materialized_accumulators_canonical_v1,
     zk_ams_mkhe_active_collective_public_a_v1, zk_ams_mkhe_active_rkg_linear_proof_security_v1,
     zk_ams_mkhe_cks_resource_evidence_v1, zk_ams_mkhe_cks_statement_digest_v1,
@@ -174,9 +187,9 @@ pub use mkhe::{
     zk_ams_mkhe_resource_certificate_digest_v1, zk_ams_mkhe_resource_certificate_v1,
     zk_ams_mkhe_resource_evidence_v1, zk_ams_mkhe_rns_native_profile_manifest_v1,
     zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
-    zk_ams_mkhe_rns_native_topology_v1, zk_ams_mkhe_security_candidate_input_digest_v1,
-    zk_ams_mkhe_security_candidate_v1, zk_ams_mkhe_security_certificate_v1,
-    zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
+    zk_ams_mkhe_rns_native_split_decryption_authority_v2, zk_ams_mkhe_rns_native_topology_v1,
+    zk_ams_mkhe_security_candidate_input_digest_v1, zk_ams_mkhe_security_candidate_v1,
+    zk_ams_mkhe_security_certificate_v1, zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
     zk_ams_mkhe_streaming_collective_automorphism_accounting_v1, zk_ams_mkhe_wire_evidence_v1,
     zk_ams_phase3_nifs_verifier_digest_v1, zk_ams_phase3_ordered_public_inputs_digest_v1,
     zk_ams_phase3_terminal_implementation_v1, zk_ams_phase23_cross_term_v1,
@@ -199,9 +212,16 @@ pub use mkhe::{
     validate_zk_ams_mkhe_direct_object_v1,
 };
 pub use mkhe::{
+    ZK_AMS_MKHE_RNS_NATIVE_ALGEBRAIC_RECEIPT_VERSION_V1,
     ZK_AMS_MKHE_RNS_NATIVE_COMPOSITE_VERIFICATION_VERSION_V1,
+    ZK_AMS_MKHE_RNS_NATIVE_VERIFIER_TRANSPORT_VERSION_V1, ZkAmsMkheRnsNativeAlgebraicReceiptV1,
     ZkAmsMkheRnsNativeCompositeCandidateReceiptV1, ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
-    ZkAmsMkheRnsNativeVerificationStageV1, verify_zk_ams_mkhe_rns_native_composite_v1,
+    ZkAmsMkheRnsNativeSplitDecryptionUseV1, ZkAmsMkheRnsNativeTerminalMaterializationUseV1,
+    ZkAmsMkheRnsNativeVerificationStageV1, ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1,
+    bind_zk_ams_mkhe_rns_native_split_decryption_uses_v1,
+    bind_zk_ams_mkhe_rns_native_terminal_materialization_use_v1,
+    verify_zk_ams_mkhe_rns_native_algebraic_v1, verify_zk_ams_mkhe_rns_native_composite_v1,
+    zk_ams_mkhe_rns_native_terminal_materialization_binding_v1,
 };
 pub use mkhe::{
     ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_LOOKUP_SECTION_MAX_BYTES_V1,
@@ -692,6 +712,30 @@ pub fn prove_zk_ams_admission_relation_v1<R: MaskedRelaxedRandomSourceV1>(
     require_mkhe_release_ready_v1()?;
     prove_zk_ams_admission_relation_inner_v1(context, public_inputs, witnesses, config, random)
 }
+/// Prove the exact immutable ZK-AMS release candidate without opening the
+/// production MKHE readiness gate.
+///
+/// This surface is compiled only for the non-shipping Exact12 evidence
+/// corridor. It validates the candidate profile digest before entering the
+/// same native prover used by production after readiness closes.
+///
+/// # Errors
+///
+/// Returns a closed context, batch, candidate-profile, witness, randomness,
+/// encoding, or self-verification failure.
+#[cfg(feature = "privacy-release-evidence")]
+pub fn prove_zk_ams_release_candidate_admission_relation_v1<R: MaskedRelaxedRandomSourceV1>(
+    context: &ZkAmsProofContextV1<'_>,
+    public_inputs: &[ZkAmsAdmissionPublicInputV1],
+    witnesses: &[ZkAmsAdmissionRelationWitnessV1<'_>],
+    config: ZkAmsMaskedProverConfigV1,
+    random: &mut R,
+) -> Result<Vec<u8>, ZkAmsAdmissionRelationErrorV1> {
+    validate_context(context)?;
+    validate_batch(public_inputs, witnesses.len())?;
+    zk_ams_release_candidate_profile_digest_v1()?;
+    prove_zk_ams_admission_relation_inner_v1(context, public_inputs, witnesses, config, random)
+}
 fn prove_zk_ams_admission_relation_inner_v1<R: MaskedRelaxedRandomSourceV1>(
     context: &ZkAmsProofContextV1<'_>,
     public_inputs: &[ZkAmsAdmissionPublicInputV1],
@@ -748,6 +792,24 @@ pub fn verify_zk_ams_admission_relation_v1(
     validate_context(context)?;
     validate_batch(public_inputs, public_inputs.len())?;
     require_mkhe_release_ready_v1()?;
+    verify_zk_ams_admission_relation_inner_v1(context, public_inputs, proof_bytes)
+}
+/// Verify the exact immutable ZK-AMS release candidate without opening the
+/// production MKHE readiness gate.
+///
+/// # Errors
+///
+/// Returns a closed context, batch, candidate-profile, decoding, or native
+/// verification failure.
+#[cfg(feature = "privacy-release-evidence")]
+pub fn verify_zk_ams_release_candidate_admission_relation_v1(
+    context: &ZkAmsProofContextV1<'_>,
+    public_inputs: &[ZkAmsAdmissionPublicInputV1],
+    proof_bytes: &[u8],
+) -> Result<(), ZkAmsAdmissionRelationErrorV1> {
+    validate_context(context)?;
+    validate_batch(public_inputs, public_inputs.len())?;
+    zk_ams_release_candidate_profile_digest_v1()?;
     verify_zk_ams_admission_relation_inner_v1(context, public_inputs, proof_bytes)
 }
 fn verify_zk_ams_admission_relation_inner_v1(

@@ -72,6 +72,17 @@ import {
   privacyExact12CapabilityManifestTransportV1,
 } from "./privacyCapabilityTransport.js";
 import {
+  getPrivacyExact12CapabilityManifestV1,
+  requirePrivacyExact12CapabilityTupleV1,
+} from "./privacyCapabilities.js";
+import {
+  PRIVACY_EXACT12_ACTION_OPERATIONS_V1,
+  PrivacyActionOperationViewV1,
+  PrivacyExact12ActionRequestV1,
+  privacyExact12LedgerEffectKindV1,
+  privacyExact12ProtocolIdV1,
+} from "./privacyExact12ActionModels.js";
+import {
   parseStrictLosslessIntegerJson,
   stringifyStrictLosslessIntegerJson,
 } from "./strictLosslessJson.js";
@@ -215,6 +226,77 @@ const AUTHORITATIVE_PIPELINE_STATUS_KINDS = new Set([
   "Rejected",
   "Expired",
 ]);
+const PRIVACY_EXACT12_ACTION_ADMISSION_V1 = Object.freeze({
+  zk_ace_authorization_action_v1: Object.freeze({
+    executionMode: "authorization_action",
+    manifestOperations: Object.freeze(["zk_ace_authorization_action_v1"]),
+  }),
+  anonymous_pgc_payment_action_v1: Object.freeze({
+    executionMode: "payment_action",
+    manifestOperations: Object.freeze(["anonymous_pgc_payment_action_v1"]),
+  }),
+  verange_range_proof_v1: Object.freeze({
+    executionMode: "component",
+    manifestOperations: Object.freeze(["verange_range_proof_v1"]),
+  }),
+  zk_ams_batch_admission_action_v1: Object.freeze({
+    executionMode: "admission_action",
+    manifestOperations: Object.freeze([
+      "zk_ams_batch_admission_action_v1",
+      "zk_ams_provision_account_action_v1",
+    ]),
+  }),
+  zk_ams_provision_account_action_v1: Object.freeze({
+    executionMode: "admission_action",
+    manifestOperations: Object.freeze([
+      "zk_ams_batch_admission_action_v1",
+      "zk_ams_provision_account_action_v1",
+    ]),
+  }),
+  vega_credential_presentation_v1: Object.freeze({
+    executionMode: "presentation_action",
+    manifestOperations: Object.freeze(["vega_credential_presentation_v1"]),
+  }),
+  zk_x509_identity_presentation_v1: Object.freeze({
+    executionMode: "presentation_action",
+    manifestOperations: Object.freeze(["zk_x509_identity_presentation_v1"]),
+  }),
+  jindo_polynomial_evaluation_v1: Object.freeze({
+    executionMode: "component",
+    manifestOperations: Object.freeze(["jindo_polynomial_evaluation_v1"]),
+  }),
+  bootle_lantern_credential_presentation_v1: Object.freeze({
+    executionMode: "presentation_action",
+    manifestOperations: Object.freeze([
+      "bootle_lantern_credential_presentation_v1",
+    ]),
+  }),
+  orchard_note_action_v1: Object.freeze({
+    executionMode: "note_action",
+    manifestOperations: Object.freeze(["orchard_note_action_v1"]),
+  }),
+  fcmp_membership_payment_v1: Object.freeze({
+    executionMode: "payment_action",
+    manifestOperations: Object.freeze(["fcmp_membership_payment_v1"]),
+  }),
+  ivm_private_note_action_v1: Object.freeze({
+    executionMode: "note_action",
+    manifestOperations: Object.freeze(["ivm_private_note_action_v1"]),
+  }),
+  pq_masp_note_action_v1: Object.freeze({
+    executionMode: "note_action",
+    manifestOperations: Object.freeze(["pq_masp_note_action_v1"]),
+  }),
+});
+const PRIVACY_EXACT12_ACTION_NATIVE_METHODS_V1 = Object.freeze([
+  "privacyInspectSignedExact12ActionV1",
+  "privacyBuildFindPrivacyActionExecutionReceiptQueryV1",
+  "privacyInspectPrivacyActionExecutionReceiptResponseV1",
+  "privacyBuildFinalizedStateQueryV1",
+  "privacyInspectFinalizedStateQueryResponseV1",
+  "privacyBuildFindCommittedTransactionQueryV1",
+  "privacyInspectPipelineTransactionDetailsV1",
+]);
 const DEFAULT_TX_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TX_STATUS_TIMEOUT_MS = 30_000;
 const IVM_ARTIFACT_MAX_BASE64_LENGTH =
@@ -237,6 +319,8 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
+const PRIVACY_TRANSACTION_DETAILS_MAX_BYTES_V1 = 64 * 1024 * 1024;
+const PRIVACY_ACTION_EXECUTION_RECEIPT_MAX_BYTES_V1 = 256 * 1024;
 const SORAFS_REPUTATION_JSON_MAX_BYTES = 4 * 1024 * 1024;
 const SORAFS_REPUTATION_EVENT_DEFAULT_LIMIT_V1 = 50;
 const SORAFS_HEDGING_BILLING_JSON_MAX_BYTES = 1024 * 1024;
@@ -419,6 +503,42 @@ const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "failureStatuses",
   "onStatus",
 ]);
+const PRIVACY_ACTION_SUBMIT_OPTION_KEYS_V1 = new Set([
+  "canonicalAuth",
+  "networkId",
+  "wait",
+  "signal",
+  "intervalMs",
+  "timeoutMs",
+  "maxAttempts",
+  "onStatus",
+  "scope",
+]);
+const PRIVACY_ACTION_STATUS_OPTION_KEYS_V1 = new Set([
+  "canonicalAuth",
+  "networkId",
+  "signal",
+  "scope",
+]);
+const PRIVACY_STATE_QUERY_OPTION_KEYS_V1 = new Set([
+  "canonicalAuth",
+  "networkId",
+  "signal",
+  "scope",
+]);
+const PRIVACY_FINALIZED_STATE_QUERY_MAX_BYTES_V1 = 256 * 1024;
+const PRIVACY_PROOF_MANAGED_QUERY_PROTOCOL_INDEX_V1 = Object.freeze({
+  "monero-fcmp-plus-plus-v1": 0,
+  "iroha-ivm-private-note-stark-v1": 1,
+  "pq-masp-stark-v0": 2,
+});
+// Public operation views are useful immutable display values, but only a view
+// minted by an authenticated native inspection on this client may drive a
+// status query. Keeping this provenance in a module-private WeakMap prevents a
+// caller from manufacturing protocol/proof/effect metadata around an arbitrary
+// transaction hash and then laundering it through an authenticated status
+// response.
+const privacyActionViewProvenanceV1 = new WeakMap();
 const GET_METRICS_OPTION_KEYS = new Set(["asText", "signal"]);
 const CONNECT_APP_LIST_OPTION_KEYS = new Set(["limit", "cursor", "signal"]);
 const GET_TX_STATUS_OPTION_KEYS = new Set([
@@ -2646,7 +2766,7 @@ export class ToriiClient {
       "uploadAttachment options.contentType",
     );
     const body = normalizeAttachmentUploadPayload(data, "uploadAttachment data");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(normalizedOptions, "uploadAttachment", UPLOAD_ATTACHMENT_OPTION_KEYS);
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, normalizedOptions, "uploadAttachment", UPLOAD_ATTACHMENT_OPTION_KEYS);
     const response = await this._request("POST", "/v1/zk/attachments", {
       headers: { "Content-Type": normalizedContentType },
       body, signal, canonicalAuth,
@@ -2661,7 +2781,7 @@ export class ToriiClient {
    * @returns {Promise<ReadonlyArray<ToriiAttachmentMetadata>>}
    */
   async listAttachments(options = {}) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "listAttachments");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "listAttachments");
     const response = await this._request("GET", "/v1/zk/attachments", { signal, canonicalAuth });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -2675,7 +2795,7 @@ export class ToriiClient {
    */
   async getAttachment(attachmentId, options = {}) {
     const normalizedId = requireNonEmptyString(attachmentId, "attachmentId");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getAttachment");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getAttachment");
     const response = await this._request("GET", `/v1/zk/attachments/${encodeURIComponent(normalizedId)}`, {
       signal, canonicalAuth,
     });
@@ -2691,7 +2811,7 @@ export class ToriiClient {
    */
   async deleteAttachment(attachmentId, options = {}) {
     const normalizedId = requireNonEmptyString(attachmentId, "attachmentId");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "deleteAttachment");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "deleteAttachment");
     const response = await this._request("DELETE", `/v1/zk/attachments/${encodeURIComponent(normalizedId)}`, {
       signal, canonicalAuth,
     });
@@ -3036,6 +3156,7 @@ export class ToriiClient {
       "findFeeSponsorProgramById.programId",
     );
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "findFeeSponsorProgramById",
     );
@@ -3073,6 +3194,7 @@ export class ToriiClient {
     const candidate = payloadOrDraft?.payload ?? payloadOrDraft;
     const payload = ensureRecord(candidate, "quoteFees payload");
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "quoteFees",
     );
@@ -3120,6 +3242,7 @@ export class ToriiClient {
         ? normalizedBinding.checkpoint
         : normalizeValidationFeeCheckpointV1(checkpoint);
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "getValidationFeeCurrentPolicyProofPage",
     );
@@ -5762,6 +5885,727 @@ export class ToriiClient {
   }
 
   /**
+   * Authenticate, fresh-gate, and submit one closed Exact12 signed action.
+   *
+   * Native inspection authenticates only the signed transaction and its exact operation shape;
+   * it never accepts the proof. Successful semantics require both a committed Torii result and
+   * the finalized typed execution receipt written atomically with the native ledger effect.
+   * Independent QC verification remains available through the authenticated block-proof API.
+   * @param {PrivacyExact12ActionRequestV1} request
+   * @param {object} options
+   * @returns {Promise<PrivacyActionOperationViewV1>}
+   */
+  async submitSignedPrivacyActionV1(request, options) {
+    if (
+      !(request instanceof PrivacyExact12ActionRequestV1)
+      || Object.getPrototypeOf(request) !== PrivacyExact12ActionRequestV1.prototype
+    ) {
+      throw new TypeError(
+        "submitSignedPrivacyActionV1 request must be an exact PrivacyExact12ActionRequestV1",
+      );
+    }
+    const normalized = normalizePrivacyActionSubmitOptionsV1(this, options);
+    const native = requirePrivacyExact12ActionNativeV1();
+    const wire = request.signedTransactionVersioned;
+    const inspection = inspectSignedPrivacyActionNativeV1(
+      native,
+      wire,
+      normalized.networkId,
+      request.operation,
+      normalized.canonicalAuth.accountId,
+    );
+    const protocolId = privacyExact12ProtocolIdV1(request.operation);
+    const ledgerEffectKind = privacyExact12LedgerEffectKindV1(request.operation);
+    const admissionSpec = PRIVACY_EXACT12_ACTION_ADMISSION_V1[request.operation];
+
+    const manifest = await getPrivacyExact12CapabilityManifestV1(this, {
+      canonicalAuth: normalized.canonicalAuth,
+      signal: normalized.signal,
+    });
+    const manifestDigest = exactNonzeroFixed32V1(
+      manifest.manifest_digest,
+      "fresh Exact12 capability manifest digest",
+    );
+    const expectedManifestDigest = request.expectedManifestDigest;
+    if (
+      expectedManifestDigest !== null
+      && !timingSafeEqual(
+        Buffer.from(expectedManifestDigest),
+        Buffer.from(manifestDigest),
+      )
+    ) {
+      throw new Error(
+        "fresh Exact12 capability manifest does not match the requested digest",
+      );
+    }
+    const admission = requirePrivacyExact12CapabilityTupleV1(manifest, protocolId);
+    validatePrivacyActionAdmissionV1(
+      admission,
+      admissionSpec,
+      protocolId,
+      request.operation,
+      manifestDigest,
+    );
+
+    const submitted = new PrivacyActionOperationViewV1({
+      protocolId,
+      operationSchema: request.operation,
+      ...inspection,
+      localState: "submitted",
+      terminalChainState: null,
+      committedHeight: null,
+      rejectionReason: null,
+      ledgerEffectKind,
+      capabilityManifestDigest: manifestDigest,
+      capabilityCommittedHeight: admission.committed_height,
+      executionCapabilityManifestDigest: null,
+      executionCapabilityCommittedHeight: null,
+      executionReceiptFinalizedHeight: null,
+      executionReceiptFinalizedBlockHash: null,
+    });
+    await this._submitSignedPrivacyActionWireV1(wire, normalized);
+    bindPrivacyActionViewProvenanceV1(submitted, this, normalized.networkId);
+    if (!normalized.wait) {
+      return submitted;
+    }
+    return this._waitForPrivacyActionTerminalV1(submitted, normalized);
+  }
+
+  /**
+   * Refresh one Exact12 operation without allowing terminal-state regression.
+   * @param {PrivacyActionOperationViewV1} operation
+   * @param {object} options
+   * @returns {Promise<PrivacyActionOperationViewV1>}
+   */
+  async getPrivacyActionStatusV1(operation, options) {
+    if (
+      !(operation instanceof PrivacyActionOperationViewV1)
+      || Object.getPrototypeOf(operation) !== PrivacyActionOperationViewV1.prototype
+    ) {
+      throw new TypeError(
+        "getPrivacyActionStatusV1 operation must be an exact PrivacyActionOperationViewV1",
+      );
+    }
+    const normalized = normalizePrivacyActionStatusOptionsV1(this, options);
+    requirePrivacyActionViewProvenanceV1(
+      operation,
+      this,
+      normalized.networkId,
+    );
+    const status = await this._getAuthenticatedPrivacyActionStatusV1(
+      Buffer.from(operation.transactionHash).toString("hex"),
+      normalized,
+    );
+    return this._resolvePrivacyActionStatusV1(operation, status, normalized);
+  }
+
+  /** Resolve finalized provenance for one consumed ZK-ACE replay nullifier. */
+  async getPrivacyZkAceReplayNullifierV1(request, options) {
+    const binding = privacyFinalizedStateRequestBindingV1(
+      request,
+      ["policyId", "replayNullifier"],
+      "getPrivacyZkAceReplayNullifierV1",
+    );
+    return this._getPrivacyFinalizedStateV1(0, 0, binding, options,
+      "getPrivacyZkAceReplayNullifierV1");
+  }
+
+  /** Resolve finalized state for one FCMP++, private-IVM, or PQ-MASP pool. */
+  async getPrivacyProofManagedPoolStateV1(request, options) {
+    const context = "getPrivacyProofManagedPoolStateV1";
+    const record = requirePlainObjectOption(request, `${context} request`);
+    assertSupportedOptionKeys(
+      record,
+      new Set(["protocolId", "poolId"]),
+      `${context} request`,
+    );
+    if (
+      typeof record.protocolId !== "string"
+      || !Object.hasOwn(
+        PRIVACY_PROOF_MANAGED_QUERY_PROTOCOL_INDEX_V1,
+        record.protocolId,
+      )
+    ) {
+      throw new TypeError(
+        `${context}.protocolId must be FCMP++, private-IVM, or PQ-MASP`,
+      );
+    }
+    const binding = privacyFinalizedStateRequestBindingV1(
+      { poolId: record.poolId },
+      ["poolId"],
+      context,
+    );
+    return this._getPrivacyFinalizedStateV1(
+      1,
+      PRIVACY_PROOF_MANAGED_QUERY_PROTOCOL_INDEX_V1[record.protocolId],
+      binding,
+      options,
+      context,
+    );
+  }
+
+  /** Resolve finalized state for one governed Orchard pool. */
+  async getPrivacyOrchardPoolStateV1(request, options) {
+    const binding = privacyFinalizedStateRequestBindingV1(
+      request,
+      ["poolId"],
+      "getPrivacyOrchardPoolStateV1",
+    );
+    return this._getPrivacyFinalizedStateV1(2, 0, binding, options,
+      "getPrivacyOrchardPoolStateV1");
+  }
+
+  /** Resolve finalized provenance for one consumed Orchard nullifier. */
+  async getPrivacyOrchardNullifierV1(request, options) {
+    const binding = privacyFinalizedStateRequestBindingV1(
+      request,
+      ["poolId", "nullifier"],
+      "getPrivacyOrchardNullifierV1",
+    );
+    return this._getPrivacyFinalizedStateV1(3, 0, binding, options,
+      "getPrivacyOrchardNullifierV1");
+  }
+
+  /** Resolve finalized public state for one Anonymous PGC pool. */
+  async getPrivacyAnonymousPgcPoolStateV1(request, options) {
+    const binding = privacyFinalizedStateRequestBindingV1(
+      request,
+      ["poolId"],
+      "getPrivacyAnonymousPgcPoolStateV1",
+    );
+    return this._getPrivacyFinalizedStateV1(4, 0, binding, options,
+      "getPrivacyAnonymousPgcPoolStateV1");
+  }
+
+  /** Resolve finalized provenance for one admitted ZK-AMS PHC anchor. */
+  async getPrivacyZkAmsAdmissionV1(request, options) {
+    const binding = privacyFinalizedStateRequestBindingV1(
+      request,
+      ["issuerId", "registryId", "policyId", "phcHash"],
+      "getPrivacyZkAmsAdmissionV1",
+    );
+    return this._getPrivacyFinalizedStateV1(5, 0, binding, options,
+      "getPrivacyZkAmsAdmissionV1");
+  }
+
+  /** Resolve finalized provenance for one anonymous ZK-AMS account provision. */
+  async getPrivacyZkAmsProvisionV1(request, options) {
+    const binding = privacyFinalizedStateRequestBindingV1(
+      request,
+      ["issuerId", "registryId", "policyId", "keyImage"],
+      "getPrivacyZkAmsProvisionV1",
+    );
+    return this._getPrivacyFinalizedStateV1(6, 0, binding, options,
+      "getPrivacyZkAmsProvisionV1");
+  }
+
+  /** Resolve finalized provenance for one consumed ZK-X509 certificate nullifier. */
+  async getPrivacyZkX509CertificateNullifierV1(request, options) {
+    const binding = privacyFinalizedStateRequestBindingV1(
+      request,
+      ["trustAnchorId", "policyId", "nullifier"],
+      "getPrivacyZkX509CertificateNullifierV1",
+    );
+    return this._getPrivacyFinalizedStateV1(7, 0, binding, options,
+      "getPrivacyZkX509CertificateNullifierV1");
+  }
+
+  async _getPrivacyFinalizedStateV1(
+    queryIndex,
+    protocolIndex,
+    requestBinding,
+    options,
+    context,
+  ) {
+    const normalized = normalizePrivacyStateQueryOptionsV1(this, options, context);
+    const native = requirePrivacyExact12ActionNativeV1();
+    let signedQuery;
+    try {
+      signedQuery = native.privacyBuildFinalizedStateQueryV1(
+        normalized.canonicalAuth.accountId,
+        normalized.canonicalAuth.privateKey,
+        networkIdBytes(normalized.networkId, `${context} NetworkId`),
+        queryIndex,
+        protocolIndex,
+        requestBinding,
+      );
+    } catch (cause) {
+      throw new Error(`${context} native signed-query construction failed`, { cause });
+    }
+    const queryBytes = exactBoundedBytesV1(
+      signedQuery,
+      64 * 1024,
+      `${context} native signed query`,
+    );
+    const response = await this._request(
+      "POST",
+      "/v1/query",
+      {
+        headers: {
+          "Content-Type": APPLICATION_NORITO,
+          Accept: APPLICATION_NORITO,
+        },
+        body: Buffer.from(queryBytes),
+        canonicalAuth: normalized.canonicalAuth,
+        exactNetworkId: normalized.networkId,
+        disableRetries: true,
+        redirect: "error",
+        signal: normalized.signal,
+      },
+    );
+    if (response.status === 404) {
+      cancelResponseBodyBestEffort(response, `discarding ${context} not-found response`);
+      return null;
+    }
+    await this._expectStatus(response, [200], { signal: normalized.signal });
+    const contentType = this._getHeader(response, "content-type");
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(response, `discarding non-Norito ${context} response`);
+      throw new TypeError(`${context} response must use exactly ${APPLICATION_NORITO}`);
+    }
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      PRIVACY_FINALIZED_STATE_QUERY_MAX_BYTES_V1,
+      `${context} response`,
+      { signal: normalized.signal },
+    );
+    let projectionText;
+    try {
+      projectionText = native.privacyInspectFinalizedStateQueryResponseV1(
+        networkIdBytes(normalized.networkId, `${context} NetworkId`),
+        queryIndex,
+        protocolIndex,
+        requestBinding,
+        Uint8Array.from(bytes),
+      );
+    } catch (cause) {
+      throw new Error(`${context} native response inspection failed`, { cause });
+    }
+    return parsePrivacyFinalizedStateProjectionV1(projectionText, context);
+  }
+
+  async _submitSignedPrivacyActionWireV1(wire, options) {
+    const response = await this._request(
+      "POST",
+      "/v1/pipeline/transactions",
+      {
+        headers: {
+          "Content-Type": APPLICATION_NORITO,
+          Accept: `${APPLICATION_NORITO}, ${APPLICATION_JSON}`,
+        },
+        body: Buffer.from(wire),
+        canonicalAuth: options.canonicalAuth,
+        exactNetworkId: options.networkId,
+        disableRetries: true,
+        redirect: "error",
+        signal: options.signal,
+      },
+    );
+    await this._expectStatus(response, [202], {
+      signal: options.signal,
+    });
+    cancelResponseBodyBestEffort(
+      response,
+      "discarding non-authoritative Exact12 ingress receipt",
+    );
+  }
+
+  async _getAuthenticatedPrivacyActionStatusV1(hashHex, options) {
+    const response = await this._request(
+      "GET",
+      "/v1/pipeline/transactions/status",
+      {
+        params: { hash: hashHex, scope: "global" },
+        canonicalAuth: options.canonicalAuth,
+        exactNetworkId: options.networkId,
+        disableRetries: true,
+        redirect: "error",
+        signal: options.signal,
+      },
+    );
+    if (response.status === 404) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding authenticated Exact12 status not-found response",
+      );
+      return null;
+    }
+    await this._expectStatus(response, [200, 202, 204], { signal: options.signal });
+    if (response.status === 204) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding empty authenticated Exact12 status response",
+      );
+      return null;
+    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      PIPELINE_STATUS_JSON_MAX_BYTES,
+      "authenticated Exact12 pipeline status response",
+      { signal: options.signal },
+    );
+    if (payload === null || payload === undefined) return null;
+    return assertPipelineTransactionStatusMatchesHash(
+      normalizePipelineTransactionStatus(
+        payload,
+        "authenticated Exact12 pipeline status response",
+        { losslessBlockHeight: true },
+      ),
+      hashHex,
+      "authenticated Exact12 pipeline status response",
+    );
+  }
+
+  async _getAuthenticatedPrivacyActionDetailsV1(hashHex, options) {
+    const native = requirePrivacyExact12ActionNativeV1();
+    let signedQuery;
+    try {
+      signedQuery = native.privacyBuildFindCommittedTransactionQueryV1(
+        options.canonicalAuth.accountId,
+        options.canonicalAuth.privateKey,
+        networkIdBytes(options.networkId, "Exact12 details NetworkId"),
+        hashHex,
+      );
+    } catch (cause) {
+      throw new Error(
+        "native authenticated Exact12 transaction-details query construction failed",
+        { cause },
+      );
+    }
+    const queryBytes = exactBoundedBytesV1(
+      signedQuery,
+      64 * 1024,
+      "native Exact12 transaction-details query",
+    );
+    const response = await this._request(
+      "POST",
+      "/v1/pipeline/transactions/details",
+      {
+        headers: {
+          "Content-Type": APPLICATION_NORITO,
+          Accept: APPLICATION_NORITO,
+        },
+        body: Buffer.from(queryBytes),
+        canonicalAuth: options.canonicalAuth,
+        exactNetworkId: options.networkId,
+        disableRetries: true,
+        redirect: "error",
+        signal: options.signal,
+      },
+    );
+    if (response.status === 404) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding authenticated Exact12 transaction-details not-found response",
+      );
+      return null;
+    }
+    await this._expectStatus(response, [200], { signal: options.signal });
+    const contentType = this._getHeader(response, "content-type");
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding non-Norito authenticated Exact12 transaction details",
+      );
+      throw new TypeError(
+        `authenticated Exact12 transaction details must use exactly ${APPLICATION_NORITO}`,
+      );
+    }
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      PRIVACY_TRANSACTION_DETAILS_MAX_BYTES_V1,
+      "authenticated Exact12 transaction details",
+      { signal: options.signal },
+    );
+    let projectionText;
+    try {
+      projectionText = native.privacyInspectPipelineTransactionDetailsV1(
+        hashHex,
+        networkIdBytes(options.networkId, "Exact12 details NetworkId"),
+        options.canonicalAuth.accountId,
+        Uint8Array.from(bytes),
+      );
+    } catch (cause) {
+      throw new Error(
+        "native authenticated Exact12 transaction-details inspection failed",
+        { cause },
+      );
+    }
+    return parsePrivacyActionDetailsProjectionV1(projectionText, hashHex);
+  }
+
+  async _getAuthenticatedPrivacyActionReceiptV1(operation, options) {
+    const native = requirePrivacyExact12ActionNativeV1();
+    const operationIndex = PRIVACY_EXACT12_ACTION_OPERATIONS_V1.indexOf(
+      operation.operationSchema,
+    );
+    if (operationIndex < 0) {
+      throw new TypeError("Exact12 receipt operation is outside the closed union");
+    }
+    const hashHex = Buffer.from(operation.transactionHash).toString("hex");
+    let signedQuery;
+    try {
+      signedQuery = native.privacyBuildFindPrivacyActionExecutionReceiptQueryV1(
+        options.canonicalAuth.accountId,
+        options.canonicalAuth.privateKey,
+        networkIdBytes(options.networkId, "Exact12 receipt NetworkId"),
+        operationIndex,
+        hashHex,
+        0,
+      );
+    } catch (cause) {
+      throw new Error(
+        "native authenticated Exact12 execution-receipt query construction failed",
+        { cause },
+      );
+    }
+    const queryBytes = exactBoundedBytesV1(
+      signedQuery,
+      64 * 1024,
+      "native Exact12 execution-receipt query",
+    );
+    const response = await this._request(
+      "POST",
+      "/v1/query",
+      {
+        headers: {
+          "Content-Type": APPLICATION_NORITO,
+          Accept: APPLICATION_NORITO,
+        },
+        body: Buffer.from(queryBytes),
+        canonicalAuth: options.canonicalAuth,
+        exactNetworkId: options.networkId,
+        disableRetries: true,
+        redirect: "error",
+        signal: options.signal,
+      },
+    );
+    if (response.status === 404) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding authenticated Exact12 execution-receipt not-found response",
+      );
+      return null;
+    }
+    await this._expectStatus(response, [200], { signal: options.signal });
+    const contentType = this._getHeader(response, "content-type");
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding non-Norito authenticated Exact12 execution receipt",
+      );
+      throw new TypeError(
+        `authenticated Exact12 execution receipt must use exactly ${APPLICATION_NORITO}`,
+      );
+    }
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      PRIVACY_ACTION_EXECUTION_RECEIPT_MAX_BYTES_V1,
+      "authenticated Exact12 execution receipt",
+      { signal: options.signal },
+    );
+    let projectionText;
+    try {
+      const requestedActionBinding = Buffer.concat([
+        Buffer.from(operation.transactionIntentDigest),
+        Buffer.from(operation.statementDigest),
+        Buffer.from(operation.proofEnvelopeHash),
+      ]);
+      projectionText = native.privacyInspectPrivacyActionExecutionReceiptResponseV1(
+        networkIdBytes(options.networkId, "Exact12 receipt NetworkId"),
+        operationIndex,
+        hashHex,
+        0,
+        requestedActionBinding,
+        Uint8Array.from(bytes),
+      );
+    } catch (cause) {
+      throw new Error(
+        "native authenticated Exact12 execution-receipt inspection failed",
+        { cause },
+      );
+    }
+    return parsePrivacyActionReceiptProjectionV1(
+      projectionText,
+      operation,
+      options.networkId,
+    );
+  }
+
+  async _resolvePrivacyActionStatusV1(operation, status, options) {
+    if (status === null) {
+      if (operation.localState === "terminal") {
+        throw new Error("terminal Exact12 action disappeared from authenticated status");
+      }
+      return operation;
+    }
+    const hashHex = Buffer.from(operation.transactionHash).toString("hex");
+    const resolution = classifyPipelineTransactionStatusResolution(
+      status,
+      hashHex,
+      "authenticated Exact12 pipeline status response",
+    );
+    const kind = resolution.kind;
+    if (kind === "Queued" || kind === "Approved" || kind === "Committed") {
+      if (operation.localState === "terminal") {
+        throw new Error("terminal Exact12 action status regressed");
+      }
+      // Pipeline Committed precedes state application and is explicitly
+      // nonterminal. Only Applied plus the typed native receipt can establish
+      // successful Exact12 semantics.
+      return operation;
+    }
+    if (kind === "Expired") {
+      if (resolution.resolvedFrom === "cache") {
+        // A cache-only expiry is not durable ledger evidence. The waiter keeps
+        // polling within its existing budget instead of manufacturing a
+        // terminal state from a non-consensus local eviction decision.
+        return operation;
+      }
+      if (
+        resolution.resolvedFrom !== "state"
+        || status.status.block_height !== undefined
+      ) {
+        throw new Error(
+          "expired Exact12 action lacks exact authenticated state evidence",
+        );
+      }
+      return requireStablePrivacyActionTerminalV1(
+        operation,
+        privacyActionTerminalViewV1(operation, "Expired", null, null),
+      );
+    }
+    if (!new Set(["Applied", "Rejected"]).has(kind)) {
+      throw new Error("authenticated Exact12 action status kind is unsupported");
+    }
+    if (resolution.resolvedFrom !== "state" && resolution.resolvedFrom !== "cache") {
+      throw new Error("terminal Exact12 action lacks committed-state status evidence");
+    }
+    const [details, receipt] = await Promise.all([
+      this._getAuthenticatedPrivacyActionDetailsV1(hashHex, options),
+      this._getAuthenticatedPrivacyActionReceiptV1(operation, options),
+    ]);
+    if (status.status.block_height !== undefined) {
+      const publicHeight = BigInt(status.status.block_height);
+      if (details !== null && publicHeight !== details.committedHeight) {
+        throw new Error(
+          "Exact12 pipeline status height differs from authenticated committed details",
+        );
+      }
+      if (receipt !== null && publicHeight !== receipt.admittedAtHeight) {
+        throw new Error(
+          "Exact12 pipeline status height differs from finalized execution receipt",
+        );
+      }
+    }
+    let rejectionReason = null;
+    if (kind === "Rejected") {
+      if (receipt !== null) {
+        throw new Error(
+          "rejected Exact12 action has a finalized native execution receipt",
+        );
+      }
+      if (details === null) {
+        return operation;
+      }
+      if (details.resultOk) {
+        throw new Error(
+          "rejected Exact12 action resolved to a successful committed result",
+        );
+      }
+      rejectionReason = details.rejectionMessage;
+      if (rejectionReason === null) {
+        throw new Error(
+          "rejected Exact12 action omitted its authenticated committed reason",
+        );
+      }
+    } else {
+      if (details !== null && !details.resultOk) {
+        throw new Error(
+          "successful Exact12 action status resolved to a rejected committed result",
+        );
+      }
+      if (details === null || receipt === null) {
+        // Global status can become visible before the validator's committed
+        // details index and finalized privacy receipt query converge. Absence
+        // is nonterminal; any evidence that is present has already been fully
+        // authenticated and remains subject to the contradictions above.
+        return operation;
+      }
+      if (receipt.admittedAtHeight !== details.committedHeight) {
+        throw new Error(
+          "Exact12 execution-receipt admission height differs from committed details",
+        );
+      }
+    }
+    return requireStablePrivacyActionTerminalV1(
+      operation,
+      privacyActionTerminalViewV1(
+        operation,
+        kind === "Rejected" ? "Rejected" : "Applied",
+        details.committedHeight,
+        rejectionReason,
+        kind === "Rejected" ? null : receipt,
+      ),
+    );
+  }
+
+  async _waitForPrivacyActionTerminalV1(operation, options) {
+    const poll = ToriiClient._normalizeTransactionStatusPollOptions(
+      {
+        signal: options.signal,
+        intervalMs: options.intervalMs,
+        timeoutMs: options.timeoutMs,
+        maxAttempts: options.maxAttempts,
+        onStatus: options.onStatus,
+      },
+      "submitSignedPrivacyActionV1 poll options",
+    );
+    const timeoutBudgetMs = poll.timeoutMs ?? Number.POSITIVE_INFINITY;
+    const deadline = poll.timeoutMs === null
+      ? Number.POSITIVE_INFINITY
+      : Date.now() + poll.timeoutMs;
+    const hashHex = Buffer.from(operation.transactionHash).toString("hex");
+    let attempts = 0;
+    let lastStatus = null;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      throwIfAborted(poll.signal);
+      attempts += 1;
+      lastStatus = await this._getAuthenticatedPrivacyActionStatusV1(hashHex, options);
+      const kind = extractPipelineStatusKind(lastStatus);
+      if (poll.onStatus) {
+        await poll.onStatus(kind, lastStatus, attempts);
+      }
+      const refreshed = await this._resolvePrivacyActionStatusV1(
+        operation,
+        lastStatus,
+        options,
+      );
+      if (refreshed.localState === "terminal") return refreshed;
+      if (poll.maxAttempts !== null && attempts >= poll.maxAttempts) {
+        throw new TransactionTimeoutError(
+          `Exact12 action ${hashHex} did not reach a terminal status after ${attempts} attempts`,
+          hashHex,
+          attempts,
+          lastStatus,
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new TransactionTimeoutError(
+          `Exact12 action ${hashHex} did not reach a terminal status within ${timeoutBudgetMs}ms`,
+          hashHex,
+          attempts,
+          lastStatus,
+        );
+      }
+      if (poll.intervalMs > 0) {
+        await delay(poll.intervalMs, poll.signal);
+      }
+    }
+  }
+
+  /**
    * Query pipeline status for a transaction hash (hex encoded).
    * @param {string} hashHex
    * @param {{
@@ -6307,7 +7151,7 @@ export class ToriiClient {
   }
 
   async _submitSoracloudAppInfraMutation(path, request, options, context) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, context);
     if (request == null || typeof request !== "object" || Array.isArray(request)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -6372,7 +7216,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiNodeCapabilities>}
    */
   async getNodeCapabilities(options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getNodeCapabilities");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getNodeCapabilities");
     const response = await this._request("GET", "/v1/node/capabilities", {
       headers: JSON_ACCEPT_HEADERS,
       signal, canonicalAuth,
@@ -6389,7 +7233,7 @@ export class ToriiClient {
 
   /** @internal Raw bounded transport for the optional privacy-capabilities API. */
   async [privacyCapabilityTransportV1](options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getPrivacyCapabilitiesV1");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getPrivacyCapabilitiesV1");
     const response = await this._request("GET", "/v1/privacy/capabilities", {
       headers: JSON_ACCEPT_HEADERS,
       signal, canonicalAuth,
@@ -6407,6 +7251,7 @@ export class ToriiClient {
   /** @internal Raw bounded canonical manifest transport for N-API admission. */
   async [privacyExact12CapabilityManifestTransportV1](options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "getPrivacyExact12CapabilityManifestV1",
     );
@@ -6723,7 +7568,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiRuntimeAbiActiveResponse>}
    */
   async getRuntimeAbiActive(options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getRuntimeAbiActive");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getRuntimeAbiActive");
     const response = await this._request("GET", "/v1/runtime/abi/active", {
       headers: JSON_ACCEPT_HEADERS,
       signal, canonicalAuth,
@@ -6755,7 +7600,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiRuntimeMetrics>}
    */
   async getRuntimeMetrics(options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getRuntimeMetrics");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getRuntimeMetrics");
     const response = await this._request("GET", "/v1/runtime/metrics", {
       headers: JSON_ACCEPT_HEADERS,
       signal, canonicalAuth,
@@ -6995,6 +7840,7 @@ export class ToriiClient {
    */
   async createVpnQuote(request, options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "createVpnQuote",
     );
@@ -7021,6 +7867,7 @@ export class ToriiClient {
    */
   async createVpnSession(request = {}, options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "createVpnSession",
     );
@@ -7048,6 +7895,7 @@ export class ToriiClient {
   async getVpnSession(sessionId, options) {
     const normalizedSessionId = normalizeHex32String(sessionId, "sessionId");
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "getVpnSession",
     );
@@ -7081,6 +7929,7 @@ export class ToriiClient {
   async deleteVpnSession(sessionId, options) {
     const normalizedSessionId = normalizeHex32String(sessionId, "sessionId");
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "deleteVpnSession",
     );
@@ -7113,6 +7962,7 @@ export class ToriiClient {
    */
   async submitVpnReceipt(request, options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "submitVpnReceipt",
     );
@@ -7137,6 +7987,7 @@ export class ToriiClient {
    */
   async listVpnReceipts(options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "listVpnReceipts",
     );
@@ -7229,7 +8080,7 @@ export class ToriiClient {
    */
   async getGovernanceProposal(proposalId, options) {
     const normalized = requireExactLowerHex32String(proposalId, "proposalId");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getGovernanceProposal");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getGovernanceProposal");
     const response = await this._request(
       "GET",
       `/v1/gov/proposals/${encodeURIComponent(normalized)}`,
@@ -7269,7 +8120,7 @@ export class ToriiClient {
    */
   async getGovernanceReferendum(referendumId, options) {
     const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getGovernanceReferendum");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getGovernanceReferendum");
     const response = await this._request(
       "GET",
       `/v1/gov/referenda/${encodeURIComponent(normalized)}`,
@@ -7309,7 +8160,7 @@ export class ToriiClient {
    */
   async getGovernanceTally(referendumId, options) {
     const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getGovernanceTally");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getGovernanceTally");
     const response = await this._request(
       "GET",
       `/v1/gov/tally/${encodeURIComponent(normalized)}`,
@@ -7351,7 +8202,7 @@ export class ToriiClient {
    */
   async getGovernanceLocks(referendumId, options) {
     const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getGovernanceLocks");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getGovernanceLocks");
     const response = await this._request(
       "GET",
       `/v1/gov/locks/${encodeURIComponent(normalized)}`,
@@ -7390,7 +8241,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceUnlockStats(options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getGovernanceUnlockStats");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getGovernanceUnlockStats");
     const response = await this._request("GET", "/v1/gov/unlocks/stats", {
       headers: JSON_ACCEPT_HEADERS,
       signal, canonicalAuth,
@@ -7422,6 +8273,7 @@ export class ToriiClient {
    */
   async getGovernanceCouncilCurrent(options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "getGovernanceCouncilCurrent",
     );
@@ -7441,7 +8293,7 @@ export class ToriiClient {
    */
   async draftMinistryAgendaProposal(payload, options) {
     const normalized = normalizeMinistryAgendaProposalDraftRequest(payload);
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "draftMinistryAgendaProposal");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "draftMinistryAgendaProposal");
     if (canonicalAuth.accountId !== normalized.authority) throw new TypeError("draftMinistryAgendaProposal canonicalAuth.accountId must equal payload.authority");
     const body = stringifyStrictLosslessIntegerJson(
       normalized,
@@ -7472,6 +8324,7 @@ export class ToriiClient {
       "getMinistryAgendaProposal.proposalId",
     );
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "getMinistryAgendaProposal",
     );
@@ -7538,7 +8391,7 @@ export class ToriiClient {
       normalizeGovernanceEnactPayload(payload),
       "governance enact request",
     );
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "governanceEnactProposal");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "governanceEnactProposal");
     const response = await this._request("POST", "/v1/gov/enact", {
       headers: JSON_REQUEST_HEADERS,
       body,
@@ -7566,6 +8419,7 @@ export class ToriiClient {
    */
   async governanceProposeDeployContract(payload, options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "governanceProposeDeployContract",
     );
@@ -7595,7 +8449,11 @@ export class ToriiClient {
   async governanceSubmitPlainBallot(payload, options) {
     const normalized = normalizeGovernancePlainBallotPayload(payload);
     const requestIdentity = normalizeGovernanceBallotIdentity(
-      normalized, options, this._localSigningContext, "governanceSubmitPlainBallot",
+      normalized,
+      options,
+      this._localSigningContext,
+      this._canonicalRequestAuth,
+      "governanceSubmitPlainBallot",
     );
     const body = stringifyStrictLosslessIntegerJson(
       normalized,
@@ -7623,7 +8481,11 @@ export class ToriiClient {
   async governanceSubmitParliamentBallot(payload, options) {
     const normalized = normalizeGovernanceParliamentBallotPayload(payload);
     const requestIdentity = normalizeGovernanceBallotIdentity(
-      normalized, options, this._localSigningContext, "governanceSubmitParliamentBallot",
+      normalized,
+      options,
+      this._localSigningContext,
+      this._canonicalRequestAuth,
+      "governanceSubmitParliamentBallot",
     );
     const body = stringifyStrictLosslessIntegerJson(
       normalized,
@@ -7654,7 +8516,11 @@ export class ToriiClient {
   async governanceSubmitZkBallotV1(payload, options) {
     const normalized = normalizeGovernanceZkBallotV1Payload(payload);
     const requestIdentity = normalizeGovernanceBallotIdentity(
-      normalized, options, this._localSigningContext, "governanceSubmitZkBallotV1",
+      normalized,
+      options,
+      this._localSigningContext,
+      this._canonicalRequestAuth,
+      "governanceSubmitZkBallotV1",
     );
     const body = stringifyStrictLosslessIntegerJson(
       normalized,
@@ -7682,7 +8548,11 @@ export class ToriiClient {
   async governanceSubmitZkBallotProofV1(payload, options) {
     const normalized = normalizeGovernanceZkBallotProofPayload(payload);
     const requestIdentity = normalizeGovernanceBallotIdentity(
-      normalized, options, this._localSigningContext, "governanceSubmitZkBallotProofV1",
+      normalized,
+      options,
+      this._localSigningContext,
+      this._canonicalRequestAuth,
+      "governanceSubmitZkBallotProofV1",
     );
     const body = stringifyStrictLosslessIntegerJson(
       normalized,
@@ -7710,13 +8580,18 @@ export class ToriiClient {
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ProtectedNamespacesApplyResponse>}
    */
-  async setProtectedNamespaces(namespaces, options = {}) {
+  async setProtectedNamespaces(namespaces, options) {
     const values = normalizeProtectedNamespaceList(namespaces);
-    const { signal } = normalizeSignalOnlyOption(options, "setProtectedNamespaces");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
+      options,
+      "setProtectedNamespaces",
+    );
     const response = await this._request("POST", "/v1/gov/protected-namespaces", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify({ namespaces: values }),
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -7732,7 +8607,7 @@ export class ToriiClient {
    * @returns {Promise<ProtectedNamespacesGetResponse>}
    */
   async getProtectedNamespaces(options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getProtectedNamespaces");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getProtectedNamespaces");
     const response = await this._request("GET", "/v1/gov/protected-namespaces", {
       headers: JSON_ACCEPT_HEADERS,
       signal, canonicalAuth,
@@ -9008,7 +9883,7 @@ export class ToriiClient {
       IVM_PROOF_REQUEST_MAX_BYTES,
       "IVM derive request",
     );
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "deriveIvmProved");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "deriveIvmProved");
     if (canonicalAuth.accountId !== payload.authority) throw new TypeError("deriveIvmProved canonicalAuth.accountId must equal the exact payload authority");
     const response = await this._request("POST", "/v1/zk/ivm/derive", {
       headers: JSON_REQUEST_HEADERS,
@@ -9038,6 +9913,7 @@ export class ToriiClient {
    */
   async startIvmProve(request = {}, options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "startIvmProve",
     );
@@ -9082,6 +9958,7 @@ export class ToriiClient {
    */
   async getIvmProveJob(jobId, options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "getIvmProveJob",
     );
@@ -9121,6 +9998,7 @@ export class ToriiClient {
    */
   async cancelIvmProveJob(jobId, options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      this._canonicalRequestAuth,
       options,
       "cancelIvmProveJob",
     );
@@ -9388,7 +10266,7 @@ export class ToriiClient {
    * @returns {Promise<object>}
    */
   async getMultisigSpec(request = {}, options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getMultisigSpec");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getMultisigSpec");
     const payload = normalizeMultisigSelectorOnlyRequest(request, "getMultisigSpec request");
     const requestBody = JSON.stringify(payload);
     const response = await this._request("POST", "/v1/multisig/spec", {
@@ -9412,7 +10290,7 @@ export class ToriiClient {
    * @returns {Promise<object>}
    */
   async queryMultisigProposals(request = {}, options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "queryMultisigProposals");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "queryMultisigProposals");
     const payload = normalizeMultisigProposalsQueryRequest(
       request,
       "queryMultisigProposals request",
@@ -9439,7 +10317,7 @@ export class ToriiClient {
    * @returns {Promise<object>}
    */
   async resolveMultisigProposal(request = {}, options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "resolveMultisigProposal");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "resolveMultisigProposal");
     const payload = normalizeMultisigProposalsResolveRequest(request);
     const requestBody = JSON.stringify(payload);
     const response = await this._request("POST", "/v1/multisig/proposals/resolve", {
@@ -9492,7 +10370,7 @@ export class ToriiClient {
    * @returns {Promise<ContractCodeBytesRecord | null>}
    */
   async getContractCodeBytes(codeHashHex, options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getContractCodeBytes");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getContractCodeBytes");
     const normalizedHash = normalizeIrohaHashHex32(codeHashHex, "codeHashHex");
     const response = await this._request(
       "GET",
@@ -9527,7 +10405,7 @@ export class ToriiClient {
    */
   async getGovernanceContract(contractAddress, options) {
     const normalizedAddress = requireNonEmptyString(contractAddress, "contractAddress");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getGovernanceContract");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, "getGovernanceContract");
     const response = await this._request(
       "GET",
       `/v1/gov/contracts/${encodeURIComponent(normalizedAddress)}`,
@@ -9942,7 +10820,7 @@ export class ToriiClient {
   }
 
   async _submitSubscriptionMutation(path, payload, options, context, expectedStatus) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(this._canonicalRequestAuth, options, context);
     if (canonicalAuth.accountId !== payload.authority) {
       throw new TypeError(`${context} canonicalAuth.accountId must equal payload.authority`);
     }
@@ -13681,6 +14559,696 @@ export class ToriiClient {
   }
 }
 
+function normalizePrivacyActionAuthContextV1(client, options, allowedKeys, context) {
+  const record = requirePlainObjectOption(options, `${context} options`);
+  assertSupportedOptionKeys(record, allowedKeys, `${context} options`);
+  if (client._baseProtocol !== "https:") {
+    throw new TypeError(`${context} requires an HTTPS Torii endpoint`);
+  }
+  const normalizedCanonicalAuth = ToriiClient._normalizeCanonicalAuth(
+    record.canonicalAuth,
+    `${context}.canonicalAuth`,
+  );
+  if (normalizedCanonicalAuth === null) {
+    throw new TypeError(`${context}.canonicalAuth is required`);
+  }
+  const canonicalAuth = {
+    ...normalizedCanonicalAuth,
+    accountId: ensureCanonicalAccountId(
+      normalizedCanonicalAuth.accountId,
+      `${context}.canonicalAuth.accountId`,
+    ),
+  };
+  const networkId = record.networkId;
+  networkIdBytes(networkId, `${context}.networkId`);
+  if (!(client._localSigningContext instanceof LocalSigningContext)) {
+    throw new TypeError(`${context} requires an immutable LocalSigningContext`);
+  }
+  if (!client._localSigningContext.networkId.equals(networkId)) {
+    throw new TypeError(
+      `${context}.networkId must equal ToriiClient localSigningContext.networkId`,
+    );
+  }
+  if (record.scope !== undefined && record.scope !== "global") {
+    throw new TypeError(`${context}.scope must be global`);
+  }
+  const { signal } = normalizeSignalOption(record, context);
+  return { canonicalAuth, networkId, signal, scope: "global" };
+}
+
+function normalizePrivacyActionSubmitOptionsV1(client, options) {
+  const context = "submitSignedPrivacyActionV1";
+  const record = requirePlainObjectOption(options, `${context} options`);
+  const auth = normalizePrivacyActionAuthContextV1(
+    client,
+    record,
+    PRIVACY_ACTION_SUBMIT_OPTION_KEYS_V1,
+    context,
+  );
+  if (
+    record.wait !== undefined
+    && record.wait !== null
+    && typeof record.wait !== "boolean"
+  ) {
+    throw new TypeError(`${context}.wait must be a boolean`);
+  }
+  const poll = ToriiClient._normalizeTransactionStatusPollOptions(
+    {
+      signal: auth.signal,
+      intervalMs: record.intervalMs,
+      timeoutMs: record.timeoutMs,
+      maxAttempts: record.maxAttempts,
+      onStatus: record.onStatus,
+    },
+    `${context} poll options`,
+  );
+  return {
+    ...auth,
+    wait: record.wait !== false,
+    intervalMs: poll.intervalMs,
+    timeoutMs: poll.timeoutMs,
+    maxAttempts: poll.maxAttempts,
+    onStatus: poll.onStatus,
+  };
+}
+
+function normalizePrivacyActionStatusOptionsV1(client, options) {
+  return normalizePrivacyActionAuthContextV1(
+    client,
+    options,
+    PRIVACY_ACTION_STATUS_OPTION_KEYS_V1,
+    "getPrivacyActionStatusV1",
+  );
+}
+
+function normalizePrivacyStateQueryOptionsV1(client, options, context) {
+  return normalizePrivacyActionAuthContextV1(
+    client,
+    options,
+    PRIVACY_STATE_QUERY_OPTION_KEYS_V1,
+    context,
+  );
+}
+
+function privacyFinalizedStateRequestBindingV1(request, fields, context) {
+  const record = requirePlainObjectOption(request, `${context} request`);
+  assertSupportedOptionKeys(record, new Set(fields), `${context} request`);
+  const chunks = fields.map((field) => exactNonzeroFixed32V1(
+    record[field],
+    `${context}.${field}`,
+  ));
+  return Uint8Array.from(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+}
+
+function parsePrivacyFinalizedStateProjectionV1(value, context) {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || Buffer.byteLength(value, "utf8") > PRIVACY_FINALIZED_STATE_QUERY_MAX_BYTES_V1
+  ) {
+    throw new TypeError(`${context} native projection must be bounded JSON`);
+  }
+  let projection;
+  try {
+    projection = JSON.parse(value);
+  } catch (cause) {
+    throw new TypeError(`${context} native projection is invalid JSON`, { cause });
+  }
+  if (
+    projection === null
+    || typeof projection !== "object"
+    || Array.isArray(projection)
+  ) {
+    throw new TypeError(`${context} native projection must be an object`);
+  }
+  // The projection came from a closed native data-model variant. Recursively freezing it keeps
+  // the authenticated finality binding immutable when callers retain nested transition details.
+  const pending = [projection];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const nested of Object.values(current)) {
+      if (nested !== null && typeof nested === "object" && !Object.isFrozen(nested)) {
+        pending.push(nested);
+      }
+    }
+    Object.freeze(current);
+  }
+  return projection;
+}
+
+function requirePrivacyExact12ActionNativeV1() {
+  let native;
+  try {
+    native = getNativeBinding();
+  } catch (cause) {
+    throw new Error(
+      "authenticated Exact12 actions require the verified iroha_js_host native binding",
+      { cause },
+    );
+  }
+  let abiVersion;
+  try {
+    abiVersion = native?.connectNoritoBridgeAbiVersion?.();
+  } catch (cause) {
+    throw new Error("Exact12 action native ABI probe failed", { cause });
+  }
+  if (abiVersion !== 22) {
+    throw new Error("authenticated Exact12 actions require exact native ABI22");
+  }
+  for (const method of PRIVACY_EXACT12_ACTION_NATIVE_METHODS_V1) {
+    if (typeof native?.[method] !== "function") {
+      throw new Error(`Exact12 action native binding is missing ${method}`);
+    }
+  }
+  return native;
+}
+
+function exactBoundedBytesV1(value, maximumBytes, context) {
+  let bytes;
+  if (value instanceof ArrayBuffer) {
+    bytes = new Uint8Array(value.slice(0));
+  } else if (ArrayBuffer.isView(value)) {
+    if (!(value.buffer instanceof ArrayBuffer)) {
+      throw new TypeError(`${context} must not use shared memory`);
+    }
+    bytes = Uint8Array.from(
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    );
+  } else {
+    throw new TypeError(`${context} must be contiguous bytes`);
+  }
+  if (bytes.byteLength === 0 || bytes.byteLength > maximumBytes) {
+    throw new RangeError(`${context} violates its 1..${maximumBytes} byte bound`);
+  }
+  return bytes;
+}
+
+function exactNonzeroFixed32V1(value, context) {
+  let bytes;
+  if (Array.isArray(value)) {
+    if (!value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) {
+      throw new TypeError(`${context} must contain exact byte values`);
+    }
+    bytes = Uint8Array.from(value);
+  } else {
+    bytes = exactBoundedBytesV1(value, 32, context);
+  }
+  if (bytes.byteLength !== 32 || !bytes.some((byte) => byte !== 0)) {
+    throw new TypeError(`${context} must contain exactly 32 non-zero bytes`);
+  }
+  return bytes;
+}
+
+function inspectSignedPrivacyActionNativeV1(
+  native,
+  wire,
+  networkId,
+  operation,
+  expectedAuthority,
+) {
+  const operationIndex = PRIVACY_EXACT12_ACTION_OPERATIONS_V1.indexOf(operation);
+  if (operationIndex < 0) {
+    throw new TypeError("Exact12 action operation is outside the closed union");
+  }
+  let rawProjection;
+  try {
+    rawProjection = native.privacyInspectSignedExact12ActionV1(
+      wire,
+      networkIdBytes(networkId, "Exact12 action NetworkId"),
+      expectedAuthority,
+      operationIndex,
+    );
+  } catch (cause) {
+    throw new Error("native Exact12 signed-action inspection failed", { cause });
+  }
+  const projection = exactBoundedBytesV1(
+    rawProjection,
+    128,
+    "native Exact12 signed-action projection",
+  );
+  if (projection.byteLength !== 128) {
+    throw new Error("native Exact12 signed-action projection must contain exactly 128 bytes");
+  }
+  return {
+    transactionHash: exactNonzeroFixed32V1(
+      projection.slice(0, 32),
+      "native Exact12 transaction hash",
+    ),
+    transactionIntentDigest: exactNonzeroFixed32V1(
+      projection.slice(32, 64),
+      "native Exact12 transaction-intent digest",
+    ),
+    statementDigest: exactNonzeroFixed32V1(
+      projection.slice(64, 96),
+      "native Exact12 statement digest",
+    ),
+    proofEnvelopeHash: exactNonzeroFixed32V1(
+      projection.slice(96, 128),
+      "native Exact12 proof-envelope hash",
+    ),
+  };
+}
+
+function privacyActionViewBindingV1(operation) {
+  return {
+    protocolId: operation.protocolId,
+    operationSchema: operation.operationSchema,
+    transactionHash: Uint8Array.from(operation.transactionHash),
+    transactionIntentDigest: Uint8Array.from(operation.transactionIntentDigest),
+    statementDigest: Uint8Array.from(operation.statementDigest),
+    proofEnvelopeHash: Uint8Array.from(operation.proofEnvelopeHash),
+    ledgerEffectKind: operation.ledgerEffectKind,
+    capabilityManifestDigest: Uint8Array.from(operation.capabilityManifestDigest),
+    capabilityCommittedHeight: operation.capabilityCommittedHeight,
+    executionCapabilityManifestDigest:
+      operation.executionCapabilityManifestDigest === null
+        ? null
+        : Uint8Array.from(operation.executionCapabilityManifestDigest),
+    executionCapabilityCommittedHeight:
+      operation.executionCapabilityCommittedHeight,
+    executionReceiptFinalizedHeight: operation.executionReceiptFinalizedHeight,
+    executionReceiptFinalizedBlockHash:
+      operation.executionReceiptFinalizedBlockHash === null
+        ? null
+        : Uint8Array.from(operation.executionReceiptFinalizedBlockHash),
+  };
+}
+
+function privacyActionOptionalBytesEqualV1(observed, expected) {
+  if (observed === null || expected === null) return observed === expected;
+  return observed.byteLength === expected.byteLength
+    && timingSafeEqual(Buffer.from(observed), Buffer.from(expected));
+}
+
+function privacyActionViewBindingsEqualV1(observed, expected) {
+  return observed.protocolId === expected.protocolId
+    && observed.operationSchema === expected.operationSchema
+    && observed.ledgerEffectKind === expected.ledgerEffectKind
+    && observed.capabilityCommittedHeight === expected.capabilityCommittedHeight
+    && observed.executionCapabilityCommittedHeight
+      === expected.executionCapabilityCommittedHeight
+    && observed.executionReceiptFinalizedHeight
+      === expected.executionReceiptFinalizedHeight
+    && timingSafeEqual(
+      Buffer.from(observed.transactionHash),
+      Buffer.from(expected.transactionHash),
+    )
+    && timingSafeEqual(
+      Buffer.from(observed.transactionIntentDigest),
+      Buffer.from(expected.transactionIntentDigest),
+    )
+    && timingSafeEqual(
+      Buffer.from(observed.statementDigest),
+      Buffer.from(expected.statementDigest),
+    )
+    && timingSafeEqual(
+      Buffer.from(observed.proofEnvelopeHash),
+      Buffer.from(expected.proofEnvelopeHash),
+    )
+    && timingSafeEqual(
+      Buffer.from(observed.capabilityManifestDigest),
+      Buffer.from(expected.capabilityManifestDigest),
+    )
+    && privacyActionOptionalBytesEqualV1(
+      observed.executionCapabilityManifestDigest,
+      expected.executionCapabilityManifestDigest,
+    )
+    && privacyActionOptionalBytesEqualV1(
+      observed.executionReceiptFinalizedBlockHash,
+      expected.executionReceiptFinalizedBlockHash,
+    );
+}
+
+function bindPrivacyActionViewProvenanceV1(operation, client, networkId) {
+  if (privacyActionViewProvenanceV1.has(operation)) {
+    throw new Error("Exact12 action view already carries authenticated provenance");
+  }
+  privacyActionViewProvenanceV1.set(operation, Object.freeze({
+    client,
+    networkId: Uint8Array.from(
+      networkIdBytes(networkId, "Exact12 action provenance NetworkId"),
+    ),
+    binding: Object.freeze(privacyActionViewBindingV1(operation)),
+  }));
+  return operation;
+}
+
+function inheritPrivacyActionViewProvenanceV1(operation, previous) {
+  const provenance = privacyActionViewProvenanceV1.get(previous);
+  if (provenance === undefined) {
+    throw new Error("Exact12 action view lacks authenticated native provenance");
+  }
+  if (privacyActionViewProvenanceV1.has(operation)) {
+    throw new Error("Exact12 action view already carries authenticated provenance");
+  }
+  privacyActionViewProvenanceV1.set(operation, Object.freeze({
+    client: provenance.client,
+    networkId: provenance.networkId,
+    binding: Object.freeze(privacyActionViewBindingV1(operation)),
+  }));
+  return operation;
+}
+
+function requirePrivacyActionViewProvenanceV1(operation, client, networkId) {
+  const provenance = privacyActionViewProvenanceV1.get(operation);
+  if (provenance === undefined) {
+    throw new Error(
+      "Exact12 action status requires a view returned by authenticated submission",
+    );
+  }
+  const expectedNetworkId = networkIdBytes(
+    networkId,
+    "Exact12 action status NetworkId",
+  );
+  if (
+    provenance.client !== client
+    || provenance.networkId.byteLength !== expectedNetworkId.byteLength
+    || !timingSafeEqual(
+      Buffer.from(provenance.networkId),
+      Buffer.from(expectedNetworkId),
+    )
+  ) {
+    throw new Error(
+      "Exact12 action status client or NetworkId differs from authenticated submission",
+    );
+  }
+  const observed = privacyActionViewBindingV1(operation);
+  const expected = provenance.binding;
+  if (!privacyActionViewBindingsEqualV1(observed, expected)) {
+    throw new Error("Exact12 action view differs from its authenticated native provenance");
+  }
+  return provenance;
+}
+
+function validatePrivacyActionAdmissionV1(
+  admission,
+  spec,
+  protocolId,
+  operation,
+  manifestDigest,
+) {
+  if (
+    admission === null
+    || typeof admission !== "object"
+    || admission.protocol_id !== protocolId
+    || admission.execution_mode !== spec.executionMode
+    || admission.activation_state !== "active"
+    || !["available", "available-experimental"].includes(admission.readiness)
+  ) {
+    throw new Error("Exact12 capability admission returned a mismatched native tuple");
+  }
+  if (
+    !Array.isArray(admission.operation_schemas)
+    || admission.operation_schemas.length !== spec.manifestOperations.length
+    || !admission.operation_schemas.every(
+      (value, index) => value === spec.manifestOperations[index],
+    )
+    || !admission.operation_schemas.includes(operation)
+  ) {
+    throw new Error("Exact12 capability admission returned mismatched operation schemas");
+  }
+  const admittedDigest = exactNonzeroFixed32V1(
+    admission.manifest_digest,
+    "Exact12 capability admission manifest digest",
+  );
+  if (!timingSafeEqual(Buffer.from(admittedDigest), Buffer.from(manifestDigest))) {
+    throw new Error("Exact12 capability admission is not bound to the fresh manifest");
+  }
+  if (
+    typeof admission.committed_height !== "bigint"
+    || admission.committed_height <= 0n
+    || admission.committed_height > 0xffff_ffff_ffff_ffffn
+  ) {
+    throw new Error("Exact12 capability admission has an invalid committed height");
+  }
+}
+
+function parsePrivacyActionDetailsProjectionV1(value, expectedHash) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 16 * 1024) {
+    throw new TypeError("native Exact12 transaction-details projection must be bounded JSON");
+  }
+  let projection;
+  try {
+    projection = JSON.parse(value);
+  } catch (cause) {
+    throw new TypeError("native Exact12 transaction-details projection is invalid JSON", {
+      cause,
+    });
+  }
+  const expectedKeys = [
+    "transaction_hash",
+    "block_hash",
+    "result_hash",
+    "result_ok",
+    "rejection_code",
+    "rejection_message",
+    "committed_height",
+  ];
+  if (
+    projection === null
+    || typeof projection !== "object"
+    || Array.isArray(projection)
+    || Object.keys(projection).length !== expectedKeys.length
+    || !expectedKeys.every((key) => Object.hasOwn(projection, key))
+  ) {
+    throw new TypeError("native Exact12 transaction-details projection has invalid fields");
+  }
+  for (const field of ["transaction_hash", "block_hash", "result_hash"]) {
+    if (
+      typeof projection[field] !== "string"
+      || !/^[0-9a-f]{64}$/u.test(projection[field])
+    ) {
+      throw new TypeError(`native Exact12 transaction-details ${field} is not canonical`);
+    }
+  }
+  if (projection.transaction_hash !== expectedHash) {
+    throw new Error("native Exact12 transaction-details projection changed the transaction hash");
+  }
+  if (typeof projection.result_ok !== "boolean") {
+    throw new TypeError("native Exact12 transaction-details result_ok must be boolean");
+  }
+  if (
+    typeof projection.committed_height !== "string"
+    || !/^[1-9][0-9]*$/u.test(projection.committed_height)
+  ) {
+    throw new TypeError("native Exact12 transaction-details committed height is invalid");
+  }
+  const committedHeight = BigInt(projection.committed_height);
+  if (committedHeight > 0xffff_ffff_ffff_ffffn) {
+    throw new RangeError("native Exact12 transaction-details committed height exceeds u64");
+  }
+  let rejectionMessage = null;
+  if (projection.result_ok) {
+    if (projection.rejection_code !== null || projection.rejection_message !== null) {
+      throw new TypeError("successful Exact12 committed result carries rejection fields");
+    }
+  } else {
+    if (
+      ![
+        "account_does_not_exist",
+        "limit_check",
+        "validation",
+        "instruction_execution",
+        "ivm_execution",
+        "trigger_execution",
+      ].includes(projection.rejection_code)
+      || typeof projection.rejection_message !== "string"
+      || projection.rejection_message.length === 0
+      || Buffer.byteLength(projection.rejection_message, "utf8") > 1_024
+      || projection.rejection_message.trim() !== projection.rejection_message
+      || /[\u0000-\u001f\u007f-\u009f]/u.test(projection.rejection_message)
+    ) {
+      throw new TypeError("rejected Exact12 committed result has invalid rejection evidence");
+    }
+    rejectionMessage = projection.rejection_message;
+  }
+  return {
+    resultOk: projection.result_ok,
+    rejectionMessage,
+    committedHeight,
+  };
+}
+
+function parsePrivacyActionReceiptProjectionV1(value, operation, networkId) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 32 * 1024) {
+    throw new TypeError("native Exact12 execution-receipt projection must be bounded JSON");
+  }
+  let projection;
+  try {
+    projection = JSON.parse(value);
+  } catch (cause) {
+    throw new TypeError("native Exact12 execution-receipt projection is invalid JSON", {
+      cause,
+    });
+  }
+  const expectedKeys = [
+    "version",
+    "network_id",
+    "protocol_id",
+    "operation_schema",
+    "ledger_effect_kind",
+    "transaction_hash",
+    "action_index",
+    "transaction_intent_digest",
+    "statement_digest",
+    "proof_envelope_hash",
+    "capability_manifest_digest",
+    "capability_committed_height",
+    "admitted_at_height",
+    "finalized_height",
+    "finalized_block_hash",
+  ];
+  if (
+    projection === null
+    || typeof projection !== "object"
+    || Array.isArray(projection)
+    || Object.keys(projection).length !== expectedKeys.length
+    || !expectedKeys.every((key) => Object.hasOwn(projection, key))
+  ) {
+    throw new TypeError("native Exact12 execution-receipt projection has invalid fields");
+  }
+  if (projection.version !== 1 || projection.action_index !== 0) {
+    throw new TypeError("native Exact12 execution receipt has an unsupported version or position");
+  }
+  const fixedHexFields = [
+    "network_id",
+    "transaction_hash",
+    "transaction_intent_digest",
+    "statement_digest",
+    "proof_envelope_hash",
+    "capability_manifest_digest",
+    "finalized_block_hash",
+  ];
+  for (const field of fixedHexFields) {
+    if (
+      typeof projection[field] !== "string"
+      || !/^[0-9a-f]{64}$/u.test(projection[field])
+      || /^0{64}$/u.test(projection[field])
+    ) {
+      throw new TypeError(
+        `native Exact12 execution-receipt ${field} is not canonical non-zero hex`,
+      );
+    }
+  }
+  const expectedBindings = {
+    network_id: Buffer.from(
+      networkIdBytes(networkId, "Exact12 receipt projection NetworkId"),
+    ).toString("hex"),
+    protocol_id: operation.protocolId,
+    operation_schema: operation.operationSchema,
+    ledger_effect_kind: operation.ledgerEffectKind,
+    transaction_hash: Buffer.from(operation.transactionHash).toString("hex"),
+    transaction_intent_digest: Buffer.from(
+      operation.transactionIntentDigest,
+    ).toString("hex"),
+    statement_digest: Buffer.from(operation.statementDigest).toString("hex"),
+    proof_envelope_hash: Buffer.from(operation.proofEnvelopeHash).toString("hex"),
+  };
+  for (const [field, expected] of Object.entries(expectedBindings)) {
+    if (projection[field] !== expected) {
+      throw new Error(
+        `native Exact12 execution receipt changed its authenticated ${field} binding`,
+      );
+    }
+  }
+  const parseHeight = (field) => {
+    const encoded = projection[field];
+    if (typeof encoded !== "string" || !/^[1-9][0-9]*$/u.test(encoded)) {
+      throw new TypeError(`native Exact12 execution-receipt ${field} is invalid`);
+    }
+    const height = BigInt(encoded);
+    if (height > 0xffff_ffff_ffff_ffffn) {
+      throw new RangeError(`native Exact12 execution-receipt ${field} exceeds u64`);
+    }
+    return height;
+  };
+  const capabilityCommittedHeight = parseHeight("capability_committed_height");
+  const admittedAtHeight = parseHeight("admitted_at_height");
+  const finalizedHeight = parseHeight("finalized_height");
+  if (
+    admittedAtHeight < capabilityCommittedHeight
+    || finalizedHeight < admittedAtHeight
+  ) {
+    throw new Error("native Exact12 execution-receipt heights are inconsistent");
+  }
+  return Object.freeze({
+    executionCapabilityManifestDigest: Uint8Array.from(
+      Buffer.from(projection.capability_manifest_digest, "hex"),
+    ),
+    executionCapabilityCommittedHeight: capabilityCommittedHeight,
+    admittedAtHeight,
+    executionReceiptFinalizedHeight: finalizedHeight,
+    executionReceiptFinalizedBlockHash: Uint8Array.from(
+      Buffer.from(projection.finalized_block_hash, "hex"),
+    ),
+  });
+}
+
+function privacyActionTerminalViewV1(
+  operation,
+  state,
+  height,
+  rejectionReason,
+  executionReceipt,
+) {
+  const terminal = new PrivacyActionOperationViewV1({
+    protocolId: operation.protocolId,
+    operationSchema: operation.operationSchema,
+    transactionHash: operation.transactionHash,
+    transactionIntentDigest: operation.transactionIntentDigest,
+    statementDigest: operation.statementDigest,
+    proofEnvelopeHash: operation.proofEnvelopeHash,
+    localState: "terminal",
+    terminalChainState: state,
+    committedHeight: height,
+    rejectionReason,
+    ledgerEffectKind: operation.ledgerEffectKind,
+    capabilityManifestDigest: operation.capabilityManifestDigest,
+    capabilityCommittedHeight: operation.capabilityCommittedHeight,
+    executionCapabilityManifestDigest:
+      executionReceipt?.executionCapabilityManifestDigest ?? null,
+    executionCapabilityCommittedHeight:
+      executionReceipt?.executionCapabilityCommittedHeight ?? null,
+    executionReceiptFinalizedHeight:
+      executionReceipt?.executionReceiptFinalizedHeight ?? null,
+    executionReceiptFinalizedBlockHash:
+      executionReceipt?.executionReceiptFinalizedBlockHash ?? null,
+  });
+  return inheritPrivacyActionViewProvenanceV1(terminal, operation);
+}
+
+function requireStablePrivacyActionTerminalV1(previous, refreshed) {
+  if (previous.localState !== "terminal") return refreshed;
+  if (
+    previous.terminalChainState !== refreshed.terminalChainState
+    || previous.committedHeight !== refreshed.committedHeight
+    || previous.rejectionReason !== refreshed.rejectionReason
+    || previous.executionCapabilityCommittedHeight
+      !== refreshed.executionCapabilityCommittedHeight
+    || !privacyActionOptionalBytesEqualV1(
+      previous.executionCapabilityManifestDigest,
+      refreshed.executionCapabilityManifestDigest,
+    )
+    || (
+      previous.executionReceiptFinalizedHeight !== null
+      && refreshed.executionReceiptFinalizedHeight !== null
+      && refreshed.executionReceiptFinalizedHeight
+        < previous.executionReceiptFinalizedHeight
+    )
+    || (
+      previous.executionReceiptFinalizedHeight
+        === refreshed.executionReceiptFinalizedHeight
+      && !privacyActionOptionalBytesEqualV1(
+        previous.executionReceiptFinalizedBlockHash,
+        refreshed.executionReceiptFinalizedBlockHash,
+      )
+    )
+  ) {
+    throw new Error("terminal Exact12 action status changed");
+  }
+  return previous;
+}
+
 function normalizeUint64DecimalString(value, name, options = {}) {
   const allowZero = options.allowZero !== false;
   let integer;
@@ -16009,19 +17577,29 @@ function assertVpnResponseFields(record, requiredFields, context) {
   }
 }
 
-function normalizeVpnSessionOptions(options, context, supportedKeys = VPN_SESSION_OPTION_KEYS) {
-  if (options === undefined) {
+function normalizeVpnSessionOptions(
+  defaultCanonicalAuth,
+  options,
+  context,
+  supportedKeys = VPN_SESSION_OPTION_KEYS,
+) {
+  if (options === undefined && !defaultCanonicalAuth) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
       `${context} options.canonicalAuth is required`,
       `${context}.canonicalAuth`,
     );
   }
-  const record = ensureRecord(options, `${context} options`);
+  const record = options === undefined
+    ? {}
+    : ensureRecord(options, `${context} options`);
   assertSupportedOptionKeys(record, supportedKeys, `${context} options`);
   const { signal } = normalizeSignalOption(record, context);
+  const canonicalAuthInput = Object.prototype.hasOwnProperty.call(record, "canonicalAuth")
+    ? record.canonicalAuth
+    : defaultCanonicalAuth;
   const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
-    record.canonicalAuth,
+    canonicalAuthInput,
     `${context}.canonicalAuth`,
   );
   if (!canonicalAuth) {
@@ -26771,6 +28349,7 @@ function normalizeSorafsPinRegisterResponse(
 function normalizePipelineTransactionStatus(
   payload,
   context = "pipeline transaction status response",
+  { losslessBlockHeight = false } = {},
 ) {
   const record = ensureRecord(payload ?? {}, context);
   assertSupportedOptionKeys(
@@ -26817,11 +28396,16 @@ function normalizePipelineTransactionStatus(
   }
   const normalizedStatus = { kind: statusKind };
   if (statusRecord.block_height !== undefined) {
-    normalizedStatus.block_height = ToriiClient._normalizeUnsignedInteger(
-      statusRecord.block_height,
-      `${context}.status.block_height`,
-      { allowZero: false },
-    );
+    normalizedStatus.block_height = losslessBlockHeight
+      ? normalizeExactPositiveUint64V1(
+          statusRecord.block_height,
+          `${context}.status.block_height`,
+        )
+      : ToriiClient._normalizeUnsignedInteger(
+          statusRecord.block_height,
+          `${context}.status.block_height`,
+          { allowZero: false },
+        );
   }
   return Object.freeze({
     hash,
@@ -26829,6 +28413,29 @@ function normalizePipelineTransactionStatus(
     scope,
     resolved_from: resolvedFrom,
   });
+}
+
+function normalizeExactPositiveUint64V1(value, path) {
+  let integer;
+  if (typeof value === "bigint") {
+    integer = value;
+  } else if (Number.isSafeInteger(value) && !Object.is(value, -0)) {
+    integer = BigInt(value);
+  } else {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${path} must be an exact positive unsigned 64-bit integer`,
+      path,
+    );
+  }
+  if (integer <= 0n || integer > MAX_UINT64_BIGINT) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${path} must be in the range 1..${MAX_UINT64_BIGINT.toString(10)}`,
+      path,
+    );
+  }
+  return integer;
 }
 
 function assertPipelineTransactionStatusMatchesHash(payload, expectedHash, context) {
@@ -26901,8 +28508,14 @@ function classifyPipelineTransactionStatusResolution(
   }
   if (kind === "Applied") {
     if (
-      !Number.isSafeInteger(status.block_height) ||
-      status.block_height <= 0
+      !(
+        (Number.isSafeInteger(status.block_height) && status.block_height > 0)
+        || (
+          typeof status.block_height === "bigint"
+          && status.block_height > 0n
+          && status.block_height <= MAX_UINT64_BIGINT
+        )
+      )
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,

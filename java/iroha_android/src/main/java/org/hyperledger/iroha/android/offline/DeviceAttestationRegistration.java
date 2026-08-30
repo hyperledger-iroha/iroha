@@ -16,7 +16,8 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
  * Strict first-release model for one finalized platform device attestation.
  *
  * <p>This type mirrors {@code OfflineDeviceAttestationRegistration} exactly. Native clients use
- * bridge ABI 22; the registration's on-chain format marker remains version 1.
+ * bridge ABI 22 and the registration's on-chain format marker is version 2. This does not relabel
+ * the underlying Kagemusha recursive proof/artifact ABI-21/V4 protocol.
  */
 public final class DeviceAttestationRegistration {
 
@@ -24,11 +25,13 @@ public final class DeviceAttestationRegistration {
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;
 
   /** Sole on-chain registration format marker. */
-  public static final int REGISTRATION_VERSION = 1;
+  public static final int REGISTRATION_VERSION = 2;
 
   public static final String ANDROID_KEYMINT_PLATFORM = "android-keymint";
   public static final String ANDROID_KEYMINT_ASSERTION_SCHEME =
       "android-keymint-ecdsa-p256-usage-limit-v1";
+  public static final String ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME =
+      "android-keymint-managed-pre12-receipt-first-v1";
   public static final String ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM = "ecdsa-p256-sha256";
   public static final String IOS_APP_ATTEST_PLATFORM = "ios-appattest";
   public static final String IOS_APP_ATTEST_ASSERTION_SCHEME = "apple-appattest-counter-v1";
@@ -40,6 +43,7 @@ public final class DeviceAttestationRegistration {
 
   private static final int MAX_REPORT_BYTES = 64 * 1024;
   private static final int MAX_EVIDENCE_BYTES = 128 * 1024;
+  private static final long ANDROID_12_OS_VERSION_FLOOR = 120_000L;
   private static final byte[] EVIDENCE_PREFIX_BYTES =
       DEVICE_ATTESTATION_EVIDENCE_PREFIX.getBytes(StandardCharsets.UTF_8);
 
@@ -54,6 +58,7 @@ public final class DeviceAttestationRegistration {
   private final String iosEnvironment;
   private final String androidPackageName;
   private final byte[] androidSigningCertificateSha256;
+  private final OfflineAndroidAttestedDevicePropertiesV2 androidAttestedDeviceProperties;
   private final KagemushaDevicePublicKeyV2 publicKey;
   private final String assertionScheme;
   private final String assertionKeyAlgorithm;
@@ -88,6 +93,7 @@ public final class DeviceAttestationRegistration {
       final String iosEnvironment,
       final String androidPackageName,
       final byte[] androidSigningCertificateSha256,
+      final OfflineAndroidAttestedDevicePropertiesV2 androidAttestedDeviceProperties,
       final KagemushaDevicePublicKeyV2 publicKey,
       final String assertionScheme,
       final String assertionKeyAlgorithm,
@@ -114,6 +120,7 @@ public final class DeviceAttestationRegistration {
     this.androidPackageName =
         requireOptionalExactText(androidPackageName, "android_package_name");
     this.androidSigningCertificateSha256 = copyNullable(androidSigningCertificateSha256);
+    this.androidAttestedDeviceProperties = androidAttestedDeviceProperties;
     this.publicKey = Objects.requireNonNull(publicKey, "public_key");
     this.assertionScheme = requireExactText(assertionScheme, "assertion_scheme");
     this.assertionKeyAlgorithm =
@@ -216,12 +223,43 @@ public final class DeviceAttestationRegistration {
         Objects.requireNonNull(publicKey, "publicKey").sec1Bytes(),
         recentBlockHeight,
         recentBlockHash,
-        expiresAtMs);
+        expiresAtMs,
+        ANDROID_KEYMINT_ASSERTION_SCHEME,
+        1);
+  }
+
+  /** Build a canonical Android challenge for one explicit assertion profile. */
+  public static byte[] androidPreKeyGenerationChallengeHash(
+      final int version,
+      final String deviceId,
+      final String accountId,
+      final String assetDefinitionId,
+      final String androidPackageName,
+      final byte[] androidSigningCertificateSha256,
+      final KagemushaDevicePublicKeyV2 publicKey,
+      final long recentBlockHeight,
+      final byte[] recentBlockHash,
+      final long expiresAtMs,
+      final String assertionScheme,
+      final Integer assertionUsageCountLimit) {
+    return OfflineDeviceAttestationCodec.androidPreKeyGenerationChallengeHash(
+        version,
+        deviceId,
+        accountId,
+        assetDefinitionId,
+        androidPackageName,
+        androidSigningCertificateSha256,
+        Objects.requireNonNull(publicKey, "publicKey").sec1Bytes(),
+        recentBlockHeight,
+        recentBlockHash,
+        expiresAtMs,
+        assertionScheme,
+        assertionUsageCountLimit);
   }
 
   private void requireCore() {
     if (version != REGISTRATION_VERSION) {
-      throw new IllegalArgumentException("registration version must be exactly 1");
+      throw new IllegalArgumentException("registration version must be exactly 2");
     }
     if (!oneUse) {
       throw new IllegalArgumentException("device attestation authority must be one-use");
@@ -247,11 +285,26 @@ public final class DeviceAttestationRegistration {
   private void requirePlatformProfile() {
     KagemushaP256Codec.requireUncompressedPublicKey(assertionPublicKey);
     if (ANDROID_KEYMINT_PLATFORM.equals(platform)) {
-      if (!ANDROID_KEYMINT_ASSERTION_SCHEME.equals(assertionScheme)
-          || !ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM.equals(assertionKeyAlgorithm)
-          || !Integer.valueOf(1).equals(assertionUsageCountLimit)) {
+      final boolean hardwareUsageLimitProfile =
+          ANDROID_KEYMINT_ASSERTION_SCHEME.equals(assertionScheme)
+              && Integer.valueOf(1).equals(assertionUsageCountLimit)
+              && (androidAttestedDeviceProperties == null
+                  || androidAttestedDeviceProperties.osVersion()
+                      >= ANDROID_12_OS_VERSION_FLOOR);
+      final boolean managedPre12ReceiptFirstProfile =
+          ANDROID_KEYMINT_MANAGED_PRE12_ASSERTION_SCHEME.equals(assertionScheme)
+              && assertionUsageCountLimit == null
+              && androidAttestedDeviceProperties != null
+              && androidAttestedDeviceProperties.osVersion()
+                  < ANDROID_12_OS_VERSION_FLOOR
+              && androidAttestedDeviceProperties.securityLevel()
+                  == OfflineAndroidAttestedDevicePropertiesV2.SecurityLevel.STRONG_BOX
+              && androidAttestedDeviceProperties.isCompleteV2();
+      if ((!hardwareUsageLimitProfile && !managedPre12ReceiptFirstProfile)
+          || !ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM.equals(assertionKeyAlgorithm)) {
         throw new IllegalArgumentException(
-            "Android KeyMint requires the canonical one-use P-256 assertion profile");
+            "Android KeyMint requires either the Android 12+ hardware usage-limit profile "
+                + "or the complete managed pre-Android-12 StrongBox receipt-first profile");
       }
       if (androidPackageName == null) {
         throw new IllegalArgumentException("Android KeyMint requires android_package_name");
@@ -261,6 +314,10 @@ public final class DeviceAttestationRegistration {
           || allZero(androidSigningCertificateSha256)) {
         throw new IllegalArgumentException(
             "Android KeyMint requires a non-zero 32-byte signing certificate SHA-256");
+      }
+      if (androidAttestedDeviceProperties == null) {
+        throw new IllegalArgumentException(
+            "Android KeyMint requires exact hardware-attested device properties");
       }
       if (iosTeamId != null || iosBundleId != null || iosEnvironment != null) {
         throw new IllegalArgumentException("Android KeyMint must not carry iOS app metadata");
@@ -295,7 +352,9 @@ public final class DeviceAttestationRegistration {
         throw new IllegalArgumentException(
             "ios_environment must be production or development");
       }
-      if (androidPackageName != null || androidSigningCertificateSha256 != null) {
+      if (androidPackageName != null
+          || androidSigningCertificateSha256 != null
+          || androidAttestedDeviceProperties != null) {
         throw new IllegalArgumentException("iOS App Attest must not carry Android app metadata");
       }
       return;
@@ -422,6 +481,10 @@ public final class DeviceAttestationRegistration {
     return copyNullable(androidSigningCertificateSha256);
   }
 
+  public OfflineAndroidAttestedDevicePropertiesV2 androidAttestedDeviceProperties() {
+    return androidAttestedDeviceProperties;
+  }
+
   public KagemushaDevicePublicKeyV2 publicKey() {
     return publicKey;
   }
@@ -500,6 +563,7 @@ public final class DeviceAttestationRegistration {
         && Objects.equals(iosEnvironment, other.iosEnvironment)
         && Objects.equals(androidPackageName, other.androidPackageName)
         && Arrays.equals(androidSigningCertificateSha256, other.androidSigningCertificateSha256)
+        && Objects.equals(androidAttestedDeviceProperties, other.androidAttestedDeviceProperties)
         && publicKey.equals(other.publicKey)
         && assertionScheme.equals(other.assertionScheme)
         && assertionKeyAlgorithm.equals(other.assertionKeyAlgorithm)
@@ -527,6 +591,7 @@ public final class DeviceAttestationRegistration {
             iosBundleId,
             iosEnvironment,
             androidPackageName,
+            androidAttestedDeviceProperties,
             publicKey,
             assertionScheme,
             assertionKeyAlgorithm,

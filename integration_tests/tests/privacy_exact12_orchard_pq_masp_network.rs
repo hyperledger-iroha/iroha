@@ -3,9 +3,16 @@
 //! Four-peer DA/RBC, lifecycle, atomicity, nullifier replay, and restart gate
 //! for the retained native Orchard and PQ-MASP production actions.
 use eyre::{Result, WrapErr as _, ensure, eyre};
-use integration_tests::sandbox;
+use integration_tests::{
+    privacy_exact12_controller::{
+        require_applied_privacy_action_v1, require_privacy_action_receipt_on_peer_v1,
+        submit_signed_privacy_action_and_wait_async_v1,
+    },
+    sandbox,
+};
 use iroha::{
     client::Client,
+    crypto::PrivateKey,
     data_model::{
         Level,
         account::Account,
@@ -28,9 +35,12 @@ use iroha::{
         privacy::{
             PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1,
             PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
-            PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyPoolIdV1,
+            PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1,
+            PrivacyOperationSchemaV1, PrivacyOrchardNullifierProvenanceV1,
+            PrivacyOrchardPoolStateViewV1, PrivacyPoolIdV1, PrivacyProofManagedPoolStateViewV1,
             PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
-            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
+            PrivacyStatementDigestV1, PrivacyStatementV1,
         },
         query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
         transaction::{
@@ -42,8 +52,10 @@ use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
     privacy_release_evidence::{
-        PrivacyReleaseOrchardNetworkActionV1, PrivacyReleasePqMaspNetworkActionsV1,
-        PrivacyReleaseTransactionContextV1, build_privacy_release_orchard_network_action_v1,
+        PrivacyReleaseOrchardNetworkActionV1, PrivacyReleaseOrchardNetworkActionsV1,
+        PrivacyReleasePqMaspNetworkActionsV1, PrivacyReleaseTransactionContextV1,
+        build_privacy_release_orchard_network_action_v1,
+        build_privacy_release_orchard_network_actions_v1,
         build_privacy_release_pq_masp_network_actions_v1,
     },
 };
@@ -416,7 +428,7 @@ async fn wait_for_asset_quantities(
     }
 }
 fn independently_resign_corrupted_proof(
-    client: &Client,
+    signing_key: &PrivateKey,
     valid: &SignedTransaction,
 ) -> Result<SignedTransaction> {
     let (valid_intent, submission) = valid
@@ -442,7 +454,7 @@ fn independently_resign_corrupted_proof(
     let corrupted = TransactionBuilder::from_payload(valid.payload().clone())
         .wrap_err("re-open canonical retained-native payload")?
         .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-        .try_sign(client.key_pair.private_key())
+        .try_sign(signing_key)
         .wrap_err("independently sign corrupted retained-native proof")?;
     corrupted
         .verify_signature()
@@ -508,6 +520,63 @@ async fn wait_for_common_v2_subject(
         sleep(POLL_INTERVAL).await;
     }
 }
+fn assert_pq_masp_transition_view(
+    client: &Client,
+    view: &PrivacyProofManagedPoolStateViewV1,
+    pool_id: PrivacyPoolIdV1,
+    asset_definition_id: &AssetDefinitionId,
+    statement_digest: PrivacyStatementDigestV1,
+    parent_epoch: u64,
+    nullifier_count: usize,
+    appended_output_count: usize,
+    total_output_count: u64,
+    context: &str,
+) -> Result<()> {
+    view.validate()
+        .map_err(|error| eyre!("{context}: invalid finalized PQ-MASP pool view: {error}"))?;
+    let transition = view
+        .latest_transition
+        .as_ref()
+        .ok_or_else(|| eyre!("{context}: finalized PQ-MASP view omitted its latest transition"))?;
+    ensure!(
+        view.network_id == client.network_id
+            && view.protocol_id == PQ_MASP_PROTOCOL
+            && view.pool_id == pool_id
+            && &view.asset_definition_id == asset_definition_id
+            && view.root_role == PrivacyRootRoleV1::NoteCommitmentAnchor
+            && view.current_epoch == parent_epoch.saturating_add(1)
+            && view.output_count == total_output_count
+            && transition.statement_digest == statement_digest
+            && transition.successor_epoch == view.current_epoch
+            && transition.nullifier_count
+                == u32::try_from(nullifier_count).expect("native nullifier count fits u32")
+            && transition.output_count
+                == u32::try_from(appended_output_count).expect("native output count fits u32")
+            && transition.admitted_at_height <= view.finalized_height,
+        "{context}: finalized typed PQ-MASP state differs from the exact committed ledger effect: {view:?}"
+    );
+    Ok(())
+}
+fn assert_orchard_finalized_post_state(
+    client: &Client,
+    actions: &PrivacyReleaseOrchardNetworkActionsV1,
+    context: &str,
+) -> Result<()> {
+    let pool_state: PrivacyOrchardPoolStateViewV1 = client
+        .query_single(actions.state_query.clone())
+        .wrap_err_with(|| format!("{context}: query finalized Orchard pool state"))?;
+    let nullifier: PrivacyOrchardNullifierProvenanceV1 = client
+        .query_single(actions.nullifier_query.clone())
+        .wrap_err_with(|| format!("{context}: query finalized Orchard nullifier provenance"))?;
+    actions
+        .validate_finalized_post_state_v1(&pool_state, &nullifier)
+        .map_err(|error| eyre!("{context}: {error}"))?;
+    ensure!(
+        pool_state.network_id == client.network_id && nullifier.network_id == client.network_id,
+        "{context}: finalized Orchard views came from a different network"
+    );
+    Ok(())
+}
 fn action_context(
     client: &Client,
     genesis_hash: [u8; 32],
@@ -525,6 +594,17 @@ fn action_context(
         genesis_hash,
     }
 }
+fn action_context_for_authority(
+    client: &Client,
+    authority: AccountId,
+    genesis_hash: [u8; 32],
+    creation_time: Duration,
+    nonce: u32,
+) -> PrivacyReleaseTransactionContextV1 {
+    let mut context = action_context(client, genesis_hash, creation_time, nonce);
+    context.authority = authority;
+    context
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart()
 -> Result<()> {
@@ -533,6 +613,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         stringify!(canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart);
     let privacy_domain = DomainId::try_new("privacy", "universal")?;
     let (reserve_account, _) = gen_account_in("privacy");
+    let (receiver_account, receiver_key_pair) = gen_account_in("privacy");
     let orchard_asset = AssetDefinitionId::derive_from_components(
         privacy_domain.clone(),
         "orchard_note".parse::<Name>()?,
@@ -543,6 +624,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
     );
     let orchard_asset_at_alice = AssetId::new(orchard_asset.clone(), ALICE_ID.clone());
     let orchard_asset_at_reserve = AssetId::new(orchard_asset.clone(), reserve_account.clone());
+    let orchard_asset_at_receiver = AssetId::new(orchard_asset.clone(), receiver_account.clone());
     let transaction_budget =
         NonZeroU64::new(TRANSACTION_BUDGET_BYTES).expect("fixed transaction budget is nonzero");
     let builder = NetworkBuilder::new()
@@ -587,6 +669,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         )))
         .with_genesis_instruction(Register::domain(Domain::new(privacy_domain.clone())))
         .with_genesis_instruction(Register::account(Account::new(reserve_account.clone())))
+        .with_genesis_instruction(Register::account(Account::new(receiver_account.clone())))
         .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
             orchard_asset.clone(),
             "orchard_note".to_owned(),
@@ -603,9 +686,14 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             100_u32,
             orchard_asset_at_alice.clone(),
         ));
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| {
+            eyre!(
+                "{context}: release-evidence qualification requires the four-peer localnet; \
+                 the semantic gate cannot pass by skipping network execution"
+            )
+        })?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -615,6 +703,9 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             .ensure_blocks_with(|height| height.total >= 1)
             .await?;
         let client = bounded_client(network.client());
+        let mut receiver_client = client.clone();
+        receiver_client.account = receiver_account.clone();
+        receiver_client.key_pair = receiver_key_pair.clone();
         let all_clients = network
             .peers()
             .iter()
@@ -678,45 +769,55 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             .duration_since(UNIX_EPOCH)
             .wrap_err("system clock is before the Unix epoch")?;
         let signing_key = client.key_pair.private_key().clone();
+        let receiver_signing_key = receiver_key_pair.private_key().clone();
         let pre_orchard_context = action_context(
             &client,
             genesis_hash,
             creation_time + Duration::from_millis(1),
             101,
         );
-        let final_orchard_context = action_context(
+        let orchard_funding_context = action_context(
             &client,
             genesis_hash,
             creation_time + Duration::from_millis(2),
             102,
         );
-        let pre_pq_context = action_context(
+        let orchard_spend_context = action_context_for_authority(
             &client,
+            receiver_account.clone(),
             genesis_hash,
             creation_time + Duration::from_millis(3),
             103,
         );
-        let final_pq_context = action_context(
+        let pre_pq_context = action_context(
             &client,
             genesis_hash,
             creation_time + Duration::from_millis(4),
             104,
         );
-        let replay_pq_context = action_context(
+        let final_pq_context = action_context(
             &client,
             genesis_hash,
             creation_time + Duration::from_millis(5),
             105,
         );
-        let post_restart_replay_pq_context = action_context(
+        let replay_pq_context = action_context(
             &client,
             genesis_hash,
             creation_time + Duration::from_millis(6),
             106,
         );
+        let post_restart_replay_pq_context = action_context(
+            &client,
+            genesis_hash,
+            creation_time + Duration::from_millis(7),
+            107,
+        );
         let orchard_pool = PrivacyPoolIdV1::new([0x41; 32]);
         let reserve_for_builder = reserve_account.clone();
         let orchard_asset_for_builder = orchard_asset.clone();
+        let signing_key_for_builder = signing_key.clone();
+        let receiver_signing_key_for_builder = receiver_signing_key.clone();
         let build_actions = tokio::task::spawn_blocking(move || {
             let pre_orchard = build_privacy_release_orchard_network_action_v1(
                 pre_orchard_context,
@@ -725,40 +826,42 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
                 reserve_for_builder.clone(),
                 activation_height.saturating_add(1_000),
                 [0x31; 32],
-                &signing_key,
+                &signing_key_for_builder,
             )
             .map_err(|error| eyre!("build pre-activation Orchard action: {error:?}"))?;
-            let final_orchard = build_privacy_release_orchard_network_action_v1(
-                final_orchard_context,
+            let orchard_actions = build_privacy_release_orchard_network_actions_v1(
+                orchard_funding_context,
+                orchard_spend_context,
                 orchard_pool,
                 orchard_asset_for_builder,
                 reserve_for_builder,
                 activation_height.saturating_add(1_000),
                 [0x32; 32],
-                &signing_key,
+                &signing_key_for_builder,
+                &receiver_signing_key_for_builder,
             )
-            .map_err(|error| eyre!("build final Orchard action: {error:?}"))?;
+            .map_err(|error| eyre!("build Orchard semantic network actions: {error:?}"))?;
             let pq_actions = build_privacy_release_pq_masp_network_actions_v1(
                 pre_pq_context,
                 final_pq_context,
                 replay_pq_context,
                 post_restart_replay_pq_context,
                 [0x50; 32],
-                &signing_key,
+                &signing_key_for_builder,
             )
             .map_err(|error| eyre!("build PQ-MASP network actions: {error:?}"))?;
-            Ok::<_, eyre::Report>((pre_orchard, final_orchard, pq_actions))
+            Ok::<_, eyre::Report>((pre_orchard, orchard_actions, pq_actions))
         });
-        let (pre_orchard, final_orchard, pq_actions): (
+        let (pre_orchard, orchard_actions, pq_actions): (
             PrivacyReleaseOrchardNetworkActionV1,
-            PrivacyReleaseOrchardNetworkActionV1,
+            PrivacyReleaseOrchardNetworkActionsV1,
             PrivacyReleasePqMaspNetworkActionsV1,
         ) = timeout(PROVER_TIMEOUT, build_actions)
             .await
             .map_err(|_| eyre!("retained-native action proving exceeded {PROVER_TIMEOUT:?}"))?
             .map_err(|error| eyre!("retained-native prover task failed: {error}"))??;
         ensure!(
-            pre_orchard.bootstrap == final_orchard.bootstrap,
+            pre_orchard.bootstrap == orchard_actions.bootstrap,
             "Orchard fixtures disagree on the governed pool bootstrap"
         );
         ensure!(
@@ -766,8 +869,11 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "PQ-MASP fixture asset differs from the genesis asset"
         );
         ensure!(
-            pre_orchard.transaction.hash() != final_orchard.transaction.hash(),
-            "pre-activation and final Orchard actions must be distinct"
+            pre_orchard.transaction.hash() != orchard_actions.funding_transaction.hash()
+                && orchard_actions.funding_transaction.hash()
+                    != orchard_actions.spend_transaction.hash()
+                && orchard_actions.receiver_account == receiver_account,
+            "pre-activation, funding, and real-note-spend Orchard artifacts must be distinct and exact"
         );
         let advance_target = activation_height
             .checked_sub(3)
@@ -821,8 +927,9 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             &[
                 orchard_asset_at_alice.clone(),
                 orchard_asset_at_reserve.clone(),
+                orchard_asset_at_receiver.clone(),
             ],
-            &[Some(Quantity::from(100_u32)), None],
+            &[Some(Quantity::from(100_u32)), None, None],
             "pre-activation rejections must preserve public bridge balances",
         )
         .await?;
@@ -863,7 +970,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         submit_instructions(
             &client,
             vec![
-                BootstrapPrivacyOrchardPoolV1::new(final_orchard.bootstrap.clone()).into(),
+                BootstrapPrivacyOrchardPoolV1::new(orchard_actions.bootstrap.clone()).into(),
                 BootstrapPrivacyProofManagedPoolV1::new(pq_actions.bootstrap.clone()).into(),
             ],
             "bootstrap authoritative Orchard and PQ-MASP pools",
@@ -878,15 +985,20 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             &[
                 orchard_asset_at_alice.clone(),
                 orchard_asset_at_reserve.clone(),
+                orchard_asset_at_receiver.clone(),
             ],
-            &[Some(Quantity::from(100_u32)), None],
+            &[Some(Quantity::from(100_u32)), None, None],
             "pool bootstrap must preserve public bridge balances",
         )
         .await?;
-        let corrupted_orchard =
-            independently_resign_corrupted_proof(&client, &final_orchard.transaction)?;
-        let corrupted_pq =
-            independently_resign_corrupted_proof(&client, &pq_actions.canonical_transaction)?;
+        let corrupted_orchard = independently_resign_corrupted_proof(
+            &signing_key,
+            &orchard_actions.funding_transaction,
+        )?;
+        let corrupted_pq = independently_resign_corrupted_proof(
+            &signing_key,
+            &pq_actions.canonical_transaction,
+        )?;
         let corrupted_orchard_error = submit_signed_transaction(
             &client,
             &corrupted_orchard,
@@ -931,8 +1043,9 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             &[
                 orchard_asset_at_alice.clone(),
                 orchard_asset_at_reserve.clone(),
+                orchard_asset_at_receiver.clone(),
             ],
-            &[Some(Quantity::from(100_u32)), None],
+            &[Some(Quantity::from(100_u32)), None, None],
             "proof failures must preserve every public bridge balance",
         )
         .await?;
@@ -958,30 +1071,24 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             .filter(|(index, _)| *index != restart_index)
             .map(|(_, peer)| bounded_client(peer.client()))
             .collect::<Vec<_>>();
-        submit_signed_transaction(
+        let orchard_funding_handle = submit_signed_privacy_action_and_wait_async_v1(
             &client,
-            &final_orchard.transaction,
-            "submit canonical active Orchard action through DA/RBC",
+            PrivacyOperationSchemaV1::OrchardNoteActionV1,
+            &orchard_actions.funding_transaction,
+            SUBMISSION_TIMEOUT,
+            POLL_INTERVAL,
         )
-        .await?;
+        .await
+        .wrap_err("submit canonical Orchard funding through authenticated controller")?;
+        require_applied_privacy_action_v1(
+            &orchard_funding_handle,
+            PrivacyOperationSchemaV1::OrchardNoteActionV1,
+        )?;
         wait_for_transaction_result_on_peers(
             &healthy_clients,
-            &final_orchard.transaction,
+            &orchard_actions.funding_transaction,
             true,
-            "healthy-peer Orchard finality",
-        )
-        .await?;
-        submit_signed_transaction(
-            &client,
-            &pq_actions.canonical_transaction,
-            "submit canonical active PQ-MASP action through DA/RBC",
-        )
-        .await?;
-        wait_for_transaction_result_on_peers(
-            &healthy_clients,
-            &pq_actions.canonical_transaction,
-            true,
-            "healthy-peer PQ-MASP finality",
+            "healthy-peer Orchard funding finality",
         )
         .await?;
         wait_for_asset_quantities(
@@ -989,9 +1096,130 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             &[
                 orchard_asset_at_alice.clone(),
                 orchard_asset_at_reserve.clone(),
+                orchard_asset_at_receiver.clone(),
             ],
-            &[Some(Quantity::from(83_u32)), Some(Quantity::from(17_u32))],
-            "canonical Orchard deposit must apply atomically",
+            &[
+                Some(Quantity::from(77_u32)),
+                Some(Quantity::from(23_u32)),
+                None,
+            ],
+            "Orchard funding must debit Alice by 23 and credit the governed reserve by 23",
+        )
+        .await?;
+        let orchard_spend_handle = submit_signed_privacy_action_and_wait_async_v1(
+            &receiver_client,
+            PrivacyOperationSchemaV1::OrchardNoteActionV1,
+            &orchard_actions.spend_transaction,
+            SUBMISSION_TIMEOUT,
+            POLL_INTERVAL,
+        )
+        .await
+        .wrap_err("submit canonical Orchard spend through authenticated controller")?;
+        require_applied_privacy_action_v1(
+            &orchard_spend_handle,
+            PrivacyOperationSchemaV1::OrchardNoteActionV1,
+        )?;
+        wait_for_transaction_result_on_peers(
+            &healthy_clients,
+            &orchard_actions.spend_transaction,
+            true,
+            "healthy-peer Orchard real-note-spend finality",
+        )
+        .await?;
+        wait_for_asset_quantities(
+            &healthy_clients,
+            &[
+                orchard_asset_at_alice.clone(),
+                orchard_asset_at_reserve.clone(),
+                orchard_asset_at_receiver.clone(),
+            ],
+            &[
+                Some(Quantity::from(77_u32)),
+                Some(Quantity::from(6_u32)),
+                Some(Quantity::from(17_u32)),
+            ],
+            "Orchard spend must leave Alice at 77, reserve at six, and receiver at 17",
+        )
+        .await?;
+        for (peer_index, peer) in healthy_clients.iter().enumerate() {
+            require_privacy_action_receipt_on_peer_v1(peer, &orchard_funding_handle)
+                .wrap_err_with(|| format!("healthy peer {peer_index} Orchard funding receipt"))?;
+            require_privacy_action_receipt_on_peer_v1(peer, &orchard_spend_handle)
+                .wrap_err_with(|| format!("healthy peer {peer_index} Orchard spend receipt"))?;
+            assert_orchard_finalized_post_state(
+                peer,
+                &orchard_actions,
+                &format!("healthy peer {peer_index} finalized Orchard semantic state"),
+            )?;
+        }
+        let pq_handle = submit_signed_privacy_action_and_wait_async_v1(
+            &client,
+            PrivacyOperationSchemaV1::PqMaspNoteActionV1,
+            &pq_actions.canonical_transaction,
+            SUBMISSION_TIMEOUT,
+            POLL_INTERVAL,
+        )
+        .await
+        .wrap_err("submit canonical PQ-MASP action through authenticated controller")?;
+        require_applied_privacy_action_v1(
+            &pq_handle,
+            PrivacyOperationSchemaV1::PqMaspNoteActionV1,
+        )?;
+        wait_for_transaction_result_on_peers(
+            &healthy_clients,
+            &pq_actions.canonical_transaction,
+            true,
+            "healthy-peer PQ-MASP finality",
+        )
+        .await?;
+        let pq_statement_digest =
+            PrivacyStatementV1::PqMaspStarkV0(pq_actions.canonical_statement.clone())
+                .digest()
+                .wrap_err("derive canonical PQ-MASP statement digest")?;
+        let pq_total_output_count = u64::try_from(
+            pq_actions
+                .bootstrap
+                .initial_note_commitments()
+                .ok_or_else(|| eyre!("PQ-MASP bootstrap omitted its note commitments"))?
+                .len()
+                .checked_add(pq_actions.canonical_statement.output_commitments.len())
+                .ok_or_else(|| eyre!("PQ-MASP output count overflow"))?,
+        )
+        .wrap_err("PQ-MASP output count does not fit u64")?;
+        for (peer_index, peer) in healthy_clients.iter().enumerate() {
+            require_privacy_action_receipt_on_peer_v1(peer, &pq_handle)
+                .wrap_err_with(|| format!("healthy peer {peer_index} PQ-MASP receipt"))?;
+            let state: PrivacyProofManagedPoolStateViewV1 = peer
+                .query_single(pq_actions.state_query.clone())
+                .wrap_err_with(|| {
+                    format!("query finalized PQ-MASP state from peer {peer_index}")
+                })?;
+            assert_pq_masp_transition_view(
+                peer,
+                &state,
+                pq_actions.canonical_statement.pool_id,
+                &pq_actions.canonical_statement.asset_definition_id,
+                pq_statement_digest,
+                pq_actions.canonical_statement.anchor_epoch,
+                pq_actions.canonical_statement.nullifiers.len(),
+                pq_actions.canonical_statement.output_commitments.len(),
+                pq_total_output_count,
+                &format!("healthy peer {peer_index} finalized PQ-MASP transition"),
+            )?;
+        }
+        wait_for_asset_quantities(
+            &healthy_clients,
+            &[
+                orchard_asset_at_alice.clone(),
+                orchard_asset_at_reserve.clone(),
+                orchard_asset_at_receiver.clone(),
+            ],
+            &[
+                Some(Quantity::from(77_u32)),
+                Some(Quantity::from(6_u32)),
+                Some(Quantity::from(17_u32)),
+            ],
+            "PQ-MASP admission must preserve the exact Orchard semantic balances",
         )
         .await?;
         let pq_replay_error = submit_signed_transaction(
@@ -1020,8 +1248,13 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             &[
                 orchard_asset_at_alice.clone(),
                 orchard_asset_at_reserve.clone(),
+                orchard_asset_at_receiver.clone(),
             ],
-            &[Some(Quantity::from(83_u32)), Some(Quantity::from(17_u32))],
+            &[
+                Some(Quantity::from(77_u32)),
+                Some(Quantity::from(6_u32)),
+                Some(Quantity::from(17_u32)),
+            ],
             "nullifier replay must preserve post-Orchard state",
         )
         .await?;
@@ -1030,7 +1263,8 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             .wrap_err("query height before exact retained-native replays")?
             .committed_height;
         for (label, transaction) in [
-            ("Orchard", &final_orchard.transaction),
+            ("Orchard funding", &orchard_actions.funding_transaction),
+            ("Orchard spend", &orchard_actions.spend_transaction),
             ("PQ-MASP", &pq_actions.canonical_transaction),
         ] {
             let replay_error = client
@@ -1076,6 +1310,69 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             .map(|peer| bounded_client(peer.client()))
             .collect::<Vec<_>>();
         let restarted_client = bounded_client(restart_peer.client());
+        for (peer_index, peer) in recovered_clients.iter().enumerate() {
+            require_privacy_action_receipt_on_peer_v1(peer, &orchard_funding_handle)
+                .wrap_err_with(|| format!("recovered peer {peer_index} Orchard funding receipt"))?;
+            require_privacy_action_receipt_on_peer_v1(peer, &orchard_spend_handle)
+                .wrap_err_with(|| format!("recovered peer {peer_index} Orchard spend receipt"))?;
+            require_privacy_action_receipt_on_peer_v1(peer, &pq_handle)
+                .wrap_err_with(|| format!("recovered peer {peer_index} PQ-MASP receipt"))?;
+            assert_orchard_finalized_post_state(
+                peer,
+                &orchard_actions,
+                &format!("recovered peer {peer_index} finalized Orchard semantic state"),
+            )?;
+            let state: PrivacyProofManagedPoolStateViewV1 = peer
+                .query_single(pq_actions.state_query.clone())
+                .wrap_err_with(|| {
+                    format!("query recovered finalized PQ-MASP state from peer {peer_index}")
+                })?;
+            assert_pq_masp_transition_view(
+                peer,
+                &state,
+                pq_actions.canonical_statement.pool_id,
+                &pq_actions.canonical_statement.asset_definition_id,
+                pq_statement_digest,
+                pq_actions.canonical_statement.anchor_epoch,
+                pq_actions.canonical_statement.nullifiers.len(),
+                pq_actions.canonical_statement.output_commitments.len(),
+                pq_total_output_count,
+                &format!("recovered peer {peer_index} finalized PQ-MASP transition"),
+            )?;
+        }
+        let recovered_height = restarted_client
+            .get_privacy_capabilities()
+            .wrap_err("query restarted-peer height before exact replay probes")?
+            .committed_height;
+        ensure!(
+            recovered_height >= finalized_height,
+            "restarted peer recovered only through height {recovered_height}, expected at least \
+             {finalized_height}"
+        );
+        for (label, transaction) in [
+            ("Orchard funding", &orchard_actions.funding_transaction),
+            ("Orchard spend", &orchard_actions.spend_transaction),
+            ("PQ-MASP", &pq_actions.canonical_transaction),
+        ] {
+            let replay_error = restarted_client
+                .submit_transaction(transaction)
+                .expect_err("restarted peer accepted an exact committed transaction replay");
+            ensure!(
+                is_exact_transaction_replay(&replay_error),
+                "restarted-peer exact {label} replay rejected for wrong reason: {replay_error:?}"
+            );
+            let observed_height = restarted_client
+                .get_privacy_capabilities()
+                .wrap_err_with(|| {
+                    format!("query restarted-peer height after exact {label} replay")
+                })?
+                .committed_height;
+            ensure!(
+                observed_height == recovered_height,
+                "restarted-peer exact {label} replay changed committed height from \
+                 {recovered_height} to {observed_height}"
+            );
+        }
         let post_restart_replay_error = submit_signed_transaction(
             &restarted_client,
             &pq_actions.post_restart_replay_transaction,
@@ -1108,7 +1405,16 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
              {post_restart_replay_height}"
         );
         for (transaction, expected_success, label) in [
-            (&final_orchard.transaction, true, "canonical Orchard"),
+            (
+                &orchard_actions.funding_transaction,
+                true,
+                "canonical Orchard funding",
+            ),
+            (
+                &orchard_actions.spend_transaction,
+                true,
+                "canonical Orchard spend",
+            ),
             (&pq_actions.canonical_transaction, true, "canonical PQ-MASP"),
             (
                 &pq_actions.replay_transaction,
@@ -1126,10 +1432,27 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             )
             .await?;
         }
+        for (peer_index, peer) in recovered_clients.iter().enumerate() {
+            assert_orchard_finalized_post_state(
+                peer,
+                &orchard_actions,
+                &format!(
+                    "post-replay recovered peer {peer_index} finalized Orchard semantic state"
+                ),
+            )?;
+        }
         wait_for_asset_quantities(
             &recovered_clients,
-            &[orchard_asset_at_alice, orchard_asset_at_reserve],
-            &[Some(Quantity::from(83_u32)), Some(Quantity::from(17_u32))],
+            &[
+                orchard_asset_at_alice,
+                orchard_asset_at_reserve,
+                orchard_asset_at_receiver,
+            ],
+            &[
+                Some(Quantity::from(77_u32)),
+                Some(Quantity::from(6_u32)),
+                Some(Quantity::from(17_u32)),
+            ],
             "post-restart authoritative Orchard state",
         )
         .await?;

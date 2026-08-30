@@ -1,7 +1,7 @@
 //! Purpose-bound authenticated column staging for the initial C0 pass.
 use super::*;
 use crate::vega::sponge::Keccak256;
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
     CONFIDENTIAL_SPOOL_MAX_SLOTS_V1, ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1,
     ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,

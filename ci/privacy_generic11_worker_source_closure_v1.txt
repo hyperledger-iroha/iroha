@@ -1,0 +1,15 @@
+.cargo/config.toml
+Cargo.lock
+Cargo.toml
+ci/privacy_generic11_worker_source_closure_v1.txt
+python/iroha_python/iroha_python_rs/Cargo.toml
+python/iroha_python/iroha_python_rs/build.rs
+python/iroha_python/iroha_python_rs/src/bin/iroha_privacy_wallet_worker.rs
+python/iroha_python/iroha_python_rs/src/lib.rs
+python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs
+python/iroha_python/iroha_python_rs/src/privacy_wallet_bundle.rs
+python/iroha_python/iroha_python_rs/src/privacy_wallet_worker.rs
+python/iroha_python/src/iroha_python/privacy_wallet_worker.py
+scripts/check_privacy_python_witness_boundary.py
+scripts/compute_workspace_source_manifest.py
+scripts/package_privacy_wallet_worker.py

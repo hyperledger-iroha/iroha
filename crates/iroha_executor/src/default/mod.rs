@@ -1617,6 +1617,7 @@ mod core_authorization_dispatch_tests {
             ios_environment: None,
             android_package_name: Some("org.hyperledger.iroha.executor".to_owned()),
             android_signing_certificate_sha256: Some(vec![0x51; 32]),
+            android_attested_device_properties: None,
             public_key,
             assertion_scheme: "android-keymint".to_owned(),
             assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
@@ -1679,12 +1680,14 @@ mod core_authorization_dispatch_tests {
                 offline_attestation_registration(authority.clone()),
             )),
             SetOfflineDeviceAttestationPolicy::new(OfflineDeviceAttestationPolicy {
-                version: 1,
+                version: 2,
+                policy_epoch: 1,
                 trusted_roots: Vec::new(),
                 revoked_certificate_tbs_sha256: Vec::new(),
                 ios_apps: Vec::new(),
                 android_apps: Vec::new(),
                 android_status_snapshot: None,
+                android_vulnerability_rules: Vec::new(),
                 require_ios_app_policy: false,
                 require_android_app_policy: false,
             })

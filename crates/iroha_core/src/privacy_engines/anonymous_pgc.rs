@@ -395,10 +395,7 @@ impl TwistedElGamalKeyPairV1 {
     ///
     /// Returns an error only if fixed parameter derivation fails.
     pub fn from_secret(secret: SecretScalarV1) -> Result<Self, AnonymousPgcError> {
-        let parameters = AnonymousPgcParametersV1::get()?;
-        let public = TwistedElGamalPublicKeyV1 {
-            point: CompressedPointV1::from_projective(parameters.g * secret.expose_scalar())?,
-        };
+        let public = derive_twisted_elgamal_public_key_v1(&secret)?;
         Ok(Self { secret, public })
     }
     /// Return the public key.
@@ -411,6 +408,24 @@ impl TwistedElGamalKeyPairV1 {
     pub const fn secret_scalar(&self) -> &SecretScalarV1 {
         &self.secret
     }
+}
+/// Derive the canonical Twisted-ElGamal public key for a retained wallet secret.
+///
+/// Unlike [`TwistedElGamalKeyPairV1::from_secret`], this helper borrows the
+/// zeroizing secret. Wallet import preflight can therefore authenticate a
+/// sender opening without cloning or transferring secret scalar bytes.
+///
+/// # Errors
+///
+/// Returns an error only if the fixed governed parameters cannot be loaded or
+/// the derived compressed point cannot be encoded canonically.
+pub fn derive_twisted_elgamal_public_key_v1(
+    secret: &SecretScalarV1,
+) -> Result<TwistedElGamalPublicKeyV1, AnonymousPgcError> {
+    let parameters = AnonymousPgcParametersV1::get()?;
+    Ok(TwistedElGamalPublicKeyV1 {
+        point: CompressedPointV1::from_projective(parameters.g * secret.expose_scalar())?,
+    })
 }
 /// Immutable supply provenance carried by every payment in one PGC pool.
 ///

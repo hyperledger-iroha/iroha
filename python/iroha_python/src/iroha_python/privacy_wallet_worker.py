@@ -2,9 +2,10 @@
 
 The controller deliberately has no API accepting an owner bundle or witness
 bytes.  It sends an absolute owner-only file path to the worker, then deals
-only in opaque handles, canonical public intent/plan bytes, and public signed
-transaction results.  The Rust process owns all credential reads, decoding,
-proving, signing, single-use custody, and zeroization.
+only in the caller-bound canonical public intent, opaque handles, public plan
+bytes, and public signed transaction results. The Rust process owns all
+credential reads, decoding, proving, signing, single-use custody, and
+zeroization.
 
 This IPWW controller is closed over the eleven generic protocols.  ZK-X509
 uses its separately authenticated, profile-owned worker transport and is
@@ -20,11 +21,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import stat
 import struct
 import subprocess
+import sys
+import tempfile
 import threading
 from dataclasses import dataclass
 from enum import IntEnum
@@ -32,6 +36,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1 = 1
+PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V2 = 2
 PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1 = 34 * 1_024 * 1_024
 PRIVACY_WALLET_WORKER_MAX_PUBLIC_INTENT_BYTES_V1 = 524_288
 PRIVACY_WALLET_WORKER_MAX_EXECUTION_PLAN_BYTES_V1 = 2 * 1_024 * 1_024
@@ -52,25 +57,31 @@ _MAX_PUBLIC_KEY_BYTES_V1 = 4_096
 _MAX_SIGNATURE_BYTES_V1 = 4_096
 _MAX_WORKER_BINARY_BYTES_V1 = 512 * 1_024 * 1_024
 _U64_MAX = (1 << 64) - 1
+_PUBLIC_ACTION_DIGEST_DOMAIN_V1 = b"iroha-privacy-wallet-bundle-public-action-v1\0"
 
 
-PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1: dict[str, str] = {
-    "zk-ace-pq-authorization-v0": "zk_ace_authorization_action_v1",
-    "anonymous-pgc-k-out-of-n-v1": "anonymous_pgc_payment_action_v1",
-    "verange-transparent-range-v1": "verange_range_proof_v1",
-    "iroha-zk-ams-v1": "zk_ams_admission_and_provisioning_v1",
-    "vega-existing-credential-zk-v0": "vega_credential_presentation_v1",
-    "iroha-jindo-polynomial-commitment-v0": "jindo_polynomial_evaluation_v1",
-    "iroha-bootle-lantern-anoncred-v1": "bootle_lantern_credential_presentation_v1",
-    "orchard-halo2-actions-v1": "orchard_note_action_v1",
-    "monero-fcmp-plus-plus-v1": "fcmp_membership_payment_v1",
-    "iroha-ivm-private-note-stark-v1": "ivm_private_note_action_v1",
-    "pq-masp-stark-v0": "pq_masp_note_action_v1",
+PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1: dict[str, tuple[str, ...]] = {
+    "zk-ace-pq-authorization-v0": ("zk_ace_authorization_action_v1",),
+    "anonymous-pgc-k-out-of-n-v1": ("anonymous_pgc_payment_action_v1",),
+    "verange-transparent-range-v1": ("verange_range_proof_v1",),
+    "iroha-zk-ams-v1": (
+        "zk_ams_batch_admission_action_v1",
+        "zk_ams_provision_account_action_v1",
+    ),
+    "vega-existing-credential-zk-v0": ("vega_credential_presentation_v1",),
+    "iroha-jindo-polynomial-commitment-v0": ("jindo_polynomial_evaluation_v1",),
+    "iroha-bootle-lantern-anoncred-v1": (
+        "bootle_lantern_credential_presentation_v1",
+    ),
+    "orchard-halo2-actions-v1": ("orchard_note_action_v1",),
+    "monero-fcmp-plus-plus-v1": ("fcmp_membership_payment_v1",),
+    "iroha-ivm-private-note-stark-v1": ("ivm_private_note_action_v1",),
+    "pq-masp-stark-v0": ("pq_masp_note_action_v1",),
 }
 
 
 class PrivacyWalletWorkerCommandV1(IntEnum):
-    """Closed IPWW v1 command registry."""
+    """Closed command registry transported by the IPWW v2 wire."""
 
     PING = 1
     IMPORT = 2
@@ -180,6 +191,14 @@ class PrivacyWalletWitnessLeaseV1:
     authority_public_key: str
     protocol_id: str
     operation_schema: str
+    public_action_digest: bytes
+
+    def __post_init__(self) -> None:
+        _require_nonzero_bytes(
+            self.public_action_digest,
+            _DIGEST_BYTES_V1,
+            "public_action_digest",
+        )
 
 
 @dataclass(frozen=True)
@@ -271,28 +290,43 @@ class PrivacyWalletWorkerControllerV1:
         *,
         expected_worker_sha256: str,
     ) -> None:
-        executable, initial_identity = _require_worker_executable(
+        launch = _prepare_verified_worker_launch_v1(
             worker_path, expected_worker_sha256
         )
         auth_key = bytearray(secrets.token_bytes(_AUTH_KEY_BYTES_V1))
         if len(auth_key) != _AUTH_KEY_BYTES_V1 or not any(auth_key):
             _zeroize(auth_key)
+            launch.close()
             raise PrivacyWalletWorkerErrorV1("secure worker authentication key is unavailable")
+        process: subprocess.Popen[bytes] | None = None
         try:
             process = subprocess.Popen(
-                [os.fspath(executable)],
+                [os.fspath(launch.invocation)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 bufsize=0,
                 close_fds=True,
+                pass_fds=launch.pass_fds,
                 cwd=os.path.abspath(os.sep),
                 env={},
                 start_new_session=True,
             )
+            launch.authenticate()
         except OSError as error:
             _zeroize(auth_key)
+            if process is not None:
+                process.kill()
             raise PrivacyWalletWorkerErrorV1("failed to start native privacy wallet worker") from error
+        except ValueError as error:
+            _zeroize(auth_key)
+            if process is not None:
+                process.kill()
+            raise PrivacyWalletWorkerErrorV1(
+                "native privacy wallet worker changed during authenticated launch"
+            ) from error
+        finally:
+            launch.close()
         if process.stdin is None or process.stdout is None:
             _zeroize(auth_key)
             process.kill()
@@ -303,13 +337,6 @@ class PrivacyWalletWorkerControllerV1:
         self._lock = threading.RLock()
         self._next_sequence = 1
         try:
-            _, launched_identity = _require_worker_executable(
-                executable, expected_worker_sha256
-            )
-            if launched_identity != initial_identity:
-                raise PrivacyWalletWorkerErrorV1(
-                    "native privacy wallet worker changed while it was started"
-                )
             process.stdin.write(auth_key)
             process.stdin.flush()
         except (BrokenPipeError, OSError, ValueError, PrivacyWalletWorkerErrorV1) as error:
@@ -346,20 +373,45 @@ class PrivacyWalletWorkerControllerV1:
         credential_path: str | os.PathLike[str],
         binding: PrivacyWalletWitnessBindingV1,
         *,
+        canonical_public_intent: bytes,
         ttl_millis: int,
     ) -> PrivacyWalletWitnessLeaseV1:
-        """Ask Rust to read and custody a bundle; Python never opens the path."""
+        """Ask Rust to bind and custody one exact public intent; Python never opens the bundle."""
 
         path = _require_credential_path(credential_path)
+        public_intent = _require_public_bytes(
+            canonical_public_intent,
+            PRIVACY_WALLET_WORKER_MAX_PUBLIC_INTENT_BYTES_V1,
+            "canonical_public_intent",
+        )
+        expected_operation_schema, expected_public_action_digest = (
+            _public_intent_expectations_v1(public_intent, binding)
+        )
         if type(ttl_millis) is not int or not (
             PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1
             <= ttl_millis
             <= PRIVACY_WALLET_WORKER_MAX_TTL_MILLIS_V1
         ):
             raise ValueError("ttl_millis is outside the closed worker range")
-        payload = _put_text(os.fspath(path)) + _encode_binding(binding) + struct.pack(">Q", ttl_millis)
+        payload = b"".join(
+            (
+                _put_text(os.fspath(path)),
+                _encode_binding(binding),
+                struct.pack(">I", len(public_intent)),
+                public_intent,
+                struct.pack(">Q", ttl_millis),
+            )
+        )
         response = self._exchange(PrivacyWalletWorkerCommandV1.IMPORT, payload)
-        return self._decode_lease(response, binding)
+        lease = self._decode_lease(response, binding)
+        if lease.operation_schema != expected_operation_schema or not hmac.compare_digest(
+            lease.public_action_digest,
+            expected_public_action_digest,
+        ):
+            raise self._malformed(
+                "import lease does not match the exact bound operation and public action"
+            )
+        return lease
 
     def inspect(
         self,
@@ -421,8 +473,16 @@ class PrivacyWalletWorkerControllerV1:
                 execution_plan,
             )
         )
+        expected_operation_schema = _operation_schema_from_public_intent_v1(
+            public_intent,
+            binding,
+        )
         response = self._exchange(PrivacyWalletWorkerCommandV1.EXECUTE, payload)
-        return self._decode_signed_action(response, binding)
+        return self._decode_signed_action(
+            response,
+            binding,
+            expected_operation_schema,
+        )
 
     def close(self) -> None:
         with self._lock:
@@ -514,13 +574,15 @@ class PrivacyWalletWorkerControllerV1:
             authority_public_key = cursor.text(_MAX_PUBLIC_KEY_BYTES_V1, "authority public key")
             protocol_id = cursor.text(_MAX_PROTOCOL_BYTES_V1, "protocol_id")
             operation_schema = cursor.text(_MAX_OPERATION_SCHEMA_BYTES_V1, "operation_schema")
+            public_action_digest = cursor.take(_DIGEST_BYTES_V1)
             cursor.finish()
-            expected_schema = PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1.get(protocol_id)
+            expected_schemas = PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1.get(protocol_id)
             if (
                 expires_at_millis == 0
                 or wallet_id != binding.signer_wallet_id
                 or protocol_id != binding.protocol_id
-                or expected_schema != operation_schema
+                or expected_schemas is None
+                or operation_schema not in expected_schemas
             ):
                 raise PrivacyWalletWorkerErrorV1("lease manifest does not match the request binding")
             return PrivacyWalletWitnessLeaseV1(
@@ -531,6 +593,7 @@ class PrivacyWalletWorkerControllerV1:
                 authority_public_key=authority_public_key,
                 protocol_id=protocol_id,
                 operation_schema=operation_schema,
+                public_action_digest=public_action_digest,
             )
         except (PrivacyWalletWorkerErrorV1, TypeError, ValueError) as error:
             if isinstance(error, PrivacyWalletWorkerRemoteErrorV1):
@@ -541,6 +604,7 @@ class PrivacyWalletWorkerControllerV1:
         self,
         payload: bytes,
         binding: PrivacyWalletWitnessBindingV1,
+        expected_operation_schema: str,
     ) -> PrivacyWalletSignedActionV1:
         try:
             cursor = _Cursor(payload)
@@ -562,10 +626,9 @@ class PrivacyWalletWorkerControllerV1:
             digests = tuple(cursor.take(_DIGEST_BYTES_V1) for _ in range(4))
             counts = tuple(cursor.u32() for _ in range(5))
             cursor.finish()
-            expected_schema = PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1.get(protocol_id)
             if (
                 protocol_id != binding.protocol_id
-                or operation_schema != expected_schema
+                or operation_schema != expected_operation_schema
                 or network_id != binding.network_id
             ):
                 raise PrivacyWalletWorkerErrorV1(
@@ -616,11 +679,131 @@ def privacy_wallet_public_intent_digest_v1(canonical_public_intent: bytes) -> by
     return hashlib.sha256(b"iroha-privacy-wallet-binding-v1\0" + value).digest()
 
 
+def _privacy_wallet_public_action_digest_v1(canonical_public_action: bytes) -> bytes:
+    """Return the exact domain-separated bundle public-action digest."""
+
+    value = _require_public_bytes(
+        canonical_public_action,
+        PRIVACY_WALLET_WORKER_MAX_PUBLIC_INTENT_BYTES_V1,
+        "canonical_public_action",
+    )
+    return hashlib.sha256(_PUBLIC_ACTION_DIGEST_DOMAIN_V1 + value).digest()
+
+
+def _reject_non_finite_json_number(_value: str) -> None:
+    raise ValueError("non-finite JSON numbers are not canonical")
+
+
+def _public_intent_expectations_v1(
+    canonical_public_intent: bytes,
+    binding: PrivacyWalletWitnessBindingV1,
+) -> tuple[str, bytes]:
+    """Select one exact operation and action digest from the bound canonical intent."""
+
+    if not hmac.compare_digest(
+        privacy_wallet_public_intent_digest_v1(canonical_public_intent),
+        binding.public_intent_digest,
+    ):
+        raise PrivacyWalletWorkerErrorV1(
+            "canonical_public_intent does not match the witness binding"
+        )
+    try:
+        value = json.loads(
+            canonical_public_intent,
+            parse_constant=_reject_non_finite_json_number,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise PrivacyWalletWorkerErrorV1(
+            "canonical_public_intent is not a JSON object"
+        ) from error
+    if type(value) is not dict:
+        raise PrivacyWalletWorkerErrorV1(
+            "canonical_public_intent is not a JSON object"
+        )
+    protocol_id = value.get("protocol_id")
+    operation_schema = value.get("operation_schema")
+    public_action = value.get("public_action")
+    allowed = PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1.get(binding.protocol_id)
+    if (
+        set(value)
+        != {
+            "algorithm_id",
+            "operation_schema",
+            "protocol_id",
+            "public_action",
+            "selected_criteria",
+            "selected_features",
+            "signer_wallet_id",
+        }
+        or value.get("algorithm_id") != binding.protocol_id
+        or protocol_id != binding.protocol_id
+        or value.get("signer_wallet_id") != binding.signer_wallet_id
+        or type(operation_schema) is not str
+        or allowed is None
+        or operation_schema not in allowed
+        or type(public_action) is not dict
+        or not public_action
+    ):
+        raise PrivacyWalletWorkerErrorV1(
+            "canonical_public_intent does not select an exact retained worker action"
+        )
+    try:
+        canonical = json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        canonical_public_action = json.dumps(
+            public_action,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as error:
+        raise PrivacyWalletWorkerErrorV1(
+            "canonical_public_intent is not canonical JSON"
+        ) from error
+    if canonical != canonical_public_intent:
+        raise PrivacyWalletWorkerErrorV1(
+            "canonical_public_intent is not canonical JSON"
+        )
+    return operation_schema, _privacy_wallet_public_action_digest_v1(canonical_public_action)
+
+
+def _operation_schema_from_public_intent_v1(
+    canonical_public_intent: bytes,
+    binding: PrivacyWalletWitnessBindingV1,
+) -> str:
+    """Select one exact worker action without collapsing ZK-AMS operations."""
+
+    operation_schema, _public_action_digest = _public_intent_expectations_v1(
+        canonical_public_intent,
+        binding,
+    )
+    return operation_schema
+
+
 def _require_worker_executable(
     value: str | os.PathLike[str], expected_sha256: str
 ) -> tuple[Path, tuple[int, int, int, int, str]]:
-    if os.name != "posix":
-        raise ValueError("privacy wallet worker requires a supported POSIX custody host")
+    launch = _prepare_verified_worker_launch_v1(value, expected_sha256)
+    try:
+        launch.authenticate()
+        return launch.source_path, (
+            launch.identity[0],
+            launch.identity[1],
+            launch.identity[5],
+            launch.identity[6],
+            launch.expected_sha256,
+        )
+    finally:
+        launch.close()
+
+
+def _require_worker_sha256_v1(expected_sha256: str) -> None:
     if (
         type(expected_sha256) is not str
         or len(expected_sha256) != 64
@@ -628,9 +811,274 @@ def _require_worker_executable(
         or any(character not in "0123456789abcdef" for character in expected_sha256)
     ):
         raise ValueError("expected_worker_sha256 must be one canonical non-zero SHA-256")
+
+
+def _require_secure_worker_ancestors_v1(path: Path) -> None:
+    """Reject replaceable path components outside a sticky root-owned boundary."""
+
+    effective_uid = os.geteuid()
+    current = path.parent
+    while True:
+        try:
+            metadata = current.lstat()
+        except OSError as error:
+            raise ValueError("privacy wallet worker parent is unavailable") from error
+        mode = stat.S_IMODE(metadata.st_mode)
+        sticky_root_directory = (
+            metadata.st_uid == 0
+            and bool(mode & stat.S_ISVTX)
+            and bool(mode & (stat.S_IWGRP | stat.S_IWOTH))
+        )
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid not in {0, effective_uid}
+            or (
+                bool(mode & (stat.S_IWGRP | stat.S_IWOTH))
+                and not sticky_root_directory
+            )
+        ):
+            raise ValueError(
+                "privacy wallet worker must have a secure non-symlink ancestor chain"
+            )
+        if current == current.parent:
+            break
+        current = current.parent
+
+
+def _worker_open_identity_v1(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _authenticate_worker_descriptor_v1(
+    descriptor: int,
+    expected_identity: tuple[int, ...],
+    expected_sha256: str,
+) -> None:
+    try:
+        before = os.fstat(descriptor)
+        digest = hashlib.sha256()
+        observed = 0
+        while observed < before.st_size:
+            chunk = os.pread(
+                descriptor,
+                min(1024 * 1024, before.st_size - observed),
+                observed,
+            )
+            if not chunk:
+                break
+            observed += len(chunk)
+            if observed > _MAX_WORKER_BINARY_BYTES_V1:
+                raise ValueError("privacy wallet worker exceeds the binary size bound")
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+    except OSError as error:
+        raise ValueError("privacy wallet worker descriptor became unavailable") from error
+    if (
+        _worker_open_identity_v1(before) != expected_identity
+        or _worker_open_identity_v1(after) != expected_identity
+        or observed != before.st_size
+        or not hmac.compare_digest(digest.hexdigest(), expected_sha256)
+    ):
+        raise ValueError("privacy wallet worker changed during authenticated launch")
+
+
+def _write_all_v1(descriptor: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError("short write while staging privacy wallet worker")
+        view = view[written:]
+
+
+class _VerifiedWorkerLaunchV1:
+    __slots__ = (
+        "descriptor",
+        "expected_sha256",
+        "identity",
+        "invocation",
+        "pass_fds",
+        "source_path",
+        "stage_directory",
+        "stage_identity",
+        "stage_path",
+    )
+
+    def __init__(
+        self,
+        *,
+        descriptor: int,
+        expected_sha256: str,
+        identity: tuple[int, ...],
+        invocation: Path,
+        pass_fds: tuple[int, ...],
+        source_path: Path,
+        stage_directory: Path | None = None,
+        stage_identity: tuple[int, ...] | None = None,
+        stage_path: Path | None = None,
+    ) -> None:
+        self.descriptor = descriptor
+        self.expected_sha256 = expected_sha256
+        self.identity = identity
+        self.invocation = invocation
+        self.pass_fds = pass_fds
+        self.source_path = source_path
+        self.stage_directory = stage_directory
+        self.stage_identity = stage_identity
+        self.stage_path = stage_path
+
+    def authenticate(self) -> None:
+        _authenticate_worker_descriptor_v1(
+            self.descriptor,
+            self.identity,
+            self.expected_sha256,
+        )
+        if self.stage_path is None or self.stage_identity is None:
+            return
+        try:
+            metadata = self.stage_path.lstat()
+            directory = self.stage_directory.lstat() if self.stage_directory else None
+        except OSError as error:
+            raise ValueError("sealed privacy wallet worker stage became unavailable") from error
+        if (
+            _worker_open_identity_v1(metadata) != self.stage_identity
+            or stat.S_IMODE(metadata.st_mode) != 0o500
+            or directory is None
+            or stat.S_IMODE(directory.st_mode) != 0o500
+            or directory.st_uid != os.geteuid()
+            or stat.S_ISLNK(directory.st_mode)
+            or not stat.S_ISDIR(directory.st_mode)
+        ):
+            raise ValueError("sealed privacy wallet worker stage changed during launch")
+
+    def close(self) -> None:
+        descriptor, self.descriptor = self.descriptor, -1
+        if descriptor >= 0:
+            os.close(descriptor)
+        if self.stage_directory is None or self.stage_path is None:
+            return
+        try:
+            os.chmod(self.stage_directory, 0o700, follow_symlinks=False)
+            self.stage_path.unlink(missing_ok=True)
+            self.stage_directory.rmdir()
+        except OSError:
+            # A changed stage already makes authenticate fail closed. Cleanup
+            # must not replace that primary diagnostic or widen the target.
+            pass
+        finally:
+            self.stage_directory = None
+            self.stage_path = None
+
+
+def _sealed_worker_stage_v1(
+    source_descriptor: int,
+    source_identity: tuple[int, ...],
+    expected_sha256: str,
+) -> tuple[Path, Path, tuple[int, ...]]:
+    raw_stage_directory = Path(
+        tempfile.mkdtemp(prefix="iroha-privacy-worker-launch-")
+    )
+    try:
+        stage_directory = raw_stage_directory.resolve(strict=True)
+    except OSError as error:
+        try:
+            raw_stage_directory.rmdir()
+        except OSError:
+            pass
+        raise ValueError("privacy wallet worker stage is unavailable") from error
+    stage_path = stage_directory / "iroha_privacy_wallet_worker"
+    destination = -1
+    try:
+        directory_metadata = stage_directory.lstat()
+        if (
+            stat.S_ISLNK(directory_metadata.st_mode)
+            or not stat.S_ISDIR(directory_metadata.st_mode)
+            or directory_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(directory_metadata.st_mode) != 0o700
+        ):
+            raise ValueError("privacy wallet worker stage is not private")
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        destination = os.open(stage_path, flags, 0o700)
+        source_size = source_identity[5]
+        copied = 0
+        digest = hashlib.sha256()
+        while copied < source_size:
+            chunk = os.pread(
+                source_descriptor,
+                min(1024 * 1024, source_size - copied),
+                copied,
+            )
+            if not chunk:
+                break
+            _write_all_v1(destination, chunk)
+            digest.update(chunk)
+            copied += len(chunk)
+        if copied != source_size or not hmac.compare_digest(
+            digest.hexdigest(), expected_sha256
+        ):
+            raise ValueError("privacy wallet worker staging copy is incomplete")
+        os.fsync(destination)
+        os.fchmod(destination, 0o500)
+        staged_metadata = os.fstat(destination)
+        if (
+            not stat.S_ISREG(staged_metadata.st_mode)
+            or staged_metadata.st_uid != os.geteuid()
+            or staged_metadata.st_nlink != 1
+            or staged_metadata.st_size != source_size
+            or stat.S_IMODE(staged_metadata.st_mode) != 0o500
+        ):
+            raise ValueError("privacy wallet worker staging copy is insecure")
+        stage_identity = _worker_open_identity_v1(staged_metadata)
+        os.close(destination)
+        destination = -1
+        os.chmod(stage_directory, 0o500, follow_symlinks=False)
+        _require_secure_worker_ancestors_v1(stage_path)
+        _authenticate_worker_descriptor_v1(
+            source_descriptor,
+            source_identity,
+            expected_sha256,
+        )
+        return stage_directory, stage_path, stage_identity
+    except BaseException:
+        if destination >= 0:
+            os.close(destination)
+        try:
+            os.chmod(stage_directory, 0o700, follow_symlinks=False)
+            stage_path.unlink(missing_ok=True)
+            stage_directory.rmdir()
+        except OSError:
+            pass
+        raise
+
+
+def _prepare_verified_worker_launch_v1(
+    value: str | os.PathLike[str], expected_sha256: str
+) -> _VerifiedWorkerLaunchV1:
+    if os.name != "posix":
+        raise ValueError("privacy wallet worker requires a supported POSIX custody host")
+    _require_worker_sha256_v1(expected_sha256)
     path = Path(os.fspath(value))
     if not path.is_absolute():
         raise ValueError("privacy wallet worker path must be absolute")
+    if path != Path(os.path.abspath(path)):
+        raise ValueError("privacy wallet worker path must already be normalized")
+    _require_secure_worker_ancestors_v1(path)
     try:
         metadata = path.lstat()
     except OSError as error:
@@ -639,7 +1087,9 @@ def _require_worker_executable(
         raise ValueError("privacy wallet worker path must name a regular non-symlink file")
     if metadata.st_mode & 0o022:
         raise ValueError("privacy wallet worker must not be group/world writable")
-    if not os.access(path, os.X_OK):
+    if metadata.st_uid not in {0, os.geteuid()} or metadata.st_nlink != 1:
+        raise ValueError("privacy wallet worker must be one owner-controlled inode")
+    if not metadata.st_mode & 0o111:
         raise ValueError("privacy wallet worker is not executable")
     flags = os.O_RDONLY
     if hasattr(os, "O_CLOEXEC"):
@@ -650,41 +1100,55 @@ def _require_worker_executable(
         descriptor = os.open(path, flags)
     except OSError as error:
         raise ValueError("privacy wallet worker could not be opened without following links") from error
-    try:
-        opened = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or opened.st_dev != metadata.st_dev
-            or opened.st_ino != metadata.st_ino
-            or opened.st_mode != metadata.st_mode
-            or opened.st_size != metadata.st_size
-            or opened.st_size <= 0
-            or opened.st_size > _MAX_WORKER_BINARY_BYTES_V1
-        ):
-            raise ValueError("privacy wallet worker changed before authenticated launch")
-        digest = hashlib.sha256()
-        observed = 0
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            observed += len(chunk)
-            if observed > _MAX_WORKER_BINARY_BYTES_V1:
-                raise ValueError("privacy wallet worker exceeds the binary size bound")
-            digest.update(chunk)
-        actual_sha256 = digest.hexdigest()
-    finally:
+    opened = os.fstat(descriptor)
+    identity = _worker_open_identity_v1(metadata)
+    if (
+        _worker_open_identity_v1(opened) != identity
+        or opened.st_size <= 0
+        or opened.st_size > _MAX_WORKER_BINARY_BYTES_V1
+    ):
         os.close(descriptor)
-    if observed != metadata.st_size or not hmac.compare_digest(actual_sha256, expected_sha256):
-        raise ValueError("privacy wallet worker does not match its admitted SHA-256")
-    identity = (
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        actual_sha256,
-    )
-    return path, identity
+        raise ValueError("privacy wallet worker changed before authenticated launch")
+    try:
+        _authenticate_worker_descriptor_v1(descriptor, identity, expected_sha256)
+    except ValueError as error:
+        os.close(descriptor)
+        raise ValueError(
+            "privacy wallet worker does not match its admitted SHA-256"
+        ) from error
+    except BaseException:
+        os.close(descriptor)
+        raise
+    try:
+        if sys.platform.startswith("linux"):
+            invocation = Path(f"/proc/self/fd/{descriptor}")
+            return _VerifiedWorkerLaunchV1(
+                descriptor=descriptor,
+                expected_sha256=expected_sha256,
+                identity=identity,
+                invocation=invocation,
+                pass_fds=(descriptor,),
+                source_path=path,
+            )
+        stage_directory, stage_path, stage_identity = _sealed_worker_stage_v1(
+            descriptor,
+            identity,
+            expected_sha256,
+        )
+        return _VerifiedWorkerLaunchV1(
+            descriptor=descriptor,
+            expected_sha256=expected_sha256,
+            identity=identity,
+            invocation=stage_path,
+            pass_fds=(),
+            source_path=path,
+            stage_directory=stage_directory,
+            stage_identity=stage_identity,
+            stage_path=stage_path,
+        )
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def _require_credential_path(value: str | os.PathLike[str]) -> Path:
@@ -774,7 +1238,7 @@ def _encode_frame(
     body = b"".join(
         (
             _MAGIC_V1,
-            bytes((PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1, int(command))),
+            bytes((PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V2, int(command))),
             struct.pack(">Q", sequence),
             struct.pack(">I", len(payload)),
             payload,
@@ -809,7 +1273,7 @@ def _read_frame(
     expected_tag = hmac.digest(auth_key, body, "sha256")
     if not hmac.compare_digest(actual_tag, expected_tag):
         raise PrivacyWalletWorkerErrorV1("worker response authentication failed")
-    if body[:4] != _MAGIC_V1 or body[4] != PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1:
+    if body[:4] != _MAGIC_V1 or body[4] != PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V2:
         raise PrivacyWalletWorkerErrorV1("worker response has the wrong protocol identity")
     try:
         command = PrivacyWalletWorkerCommandV1(body[5])
@@ -849,6 +1313,7 @@ __all__ = [
     "PRIVACY_WALLET_WORKER_MAX_TTL_MILLIS_V1",
     "PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1",
     "PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1",
+    "PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V2",
     "PrivacyWalletSignedActionV1",
     "PrivacyWalletWitnessBindingV1",
     "PrivacyWalletWitnessHandleV1",

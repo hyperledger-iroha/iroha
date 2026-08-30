@@ -23,9 +23,11 @@ use iroha_data_model::isi::transfer::{Transfer, TransferBox};
 use iroha_data_model::name::Name;
 use iroha_data_model::nexus::{DataSpaceId, UniversalAccountId};
 use iroha_data_model::offline::{
-    KagemushaDevicePublicKeyV2, OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+    KagemushaDevicePublicKeyV2, OFFLINE_ANDROID_ATTESTED_DEVICE_PROPERTIES_VERSION_V2,
+    OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
     OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME,
-    OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM, OfflineAndroidKeyMintChallenge,
+    OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM, OfflineAndroidAttestedDevicePropertiesV2,
+    OfflineAndroidDeviceSecurityLevelV2, OfflineAndroidKeyMintChallenge,
     OfflineDeviceAttestationRegistration,
 };
 use iroha_data_model::prelude::Quantity;
@@ -74,19 +76,19 @@ fn emit_offline_device_attestation() {
     );
     let account_id = parity_account_id();
     let assertion_public_key = hex::decode(P256_GENERATOR).expect("P-256 generator hex");
-    let signing_certificate_sha256 = sha256(b"abi20-unit-test-signing-certificate").to_vec();
+    let signing_certificate_sha256 = sha256(b"abi22-v2-unit-test-signing-certificate").to_vec();
     let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&assertion_public_key)
         .expect("canonical P-256 device authority");
-    let recent_block_hash = Hash::new(b"abi20-unit-test-block");
+    let recent_block_hash = Hash::new(b"abi22-v2-unit-test-block");
     let challenge = OfflineAndroidKeyMintChallenge {
-        version: 1,
-        device_id: "abi20-android-unit-test-device".to_owned(),
+        version: 2,
+        device_id: "abi22-v2-android-unit-test-device".to_owned(),
         account_id: account_id.clone(),
         asset_definition_id: None,
         ios_team_id: None,
         ios_bundle_id: None,
         ios_environment: None,
-        android_package_name: Some("org.hyperledger.iroha.abi20.fixture".to_owned()),
+        android_package_name: Some("org.hyperledger.iroha.abi22.v2.fixture".to_owned()),
         android_signing_certificate_sha256: Some(signing_certificate_sha256.clone()),
         public_key,
         assertion_scheme: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME.to_owned(),
@@ -101,13 +103,13 @@ fn emit_offline_device_attestation() {
     let challenge_hash = challenge
         .canonical_challenge_hash()
         .expect("encode Android KeyMint challenge");
-    let attestation_report = b"abi20-unit-test-not-physical-attestation-evidence".to_vec();
+    let attestation_report = b"abi22-v2-unit-test-not-physical-attestation-evidence".to_vec();
     let attestation_report_hash = Hash::new(&attestation_report);
     let mut evidence = b"offline-device-attestation-evidence-v1".to_vec();
     evidence.extend_from_slice(attestation_report_hash.as_ref());
     let evidence_hash = Hash::new(&evidence);
     let registration = OfflineDeviceAttestationRegistration {
-        version: 1,
+        version: 2,
         platform: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM.to_owned(),
         key_id: hex::encode(sha256(&assertion_public_key)),
         device_id: challenge.device_id,
@@ -118,6 +120,23 @@ fn emit_offline_device_attestation() {
         ios_environment: None,
         android_package_name: challenge.android_package_name,
         android_signing_certificate_sha256: Some(signing_certificate_sha256),
+        android_attested_device_properties: Some(OfflineAndroidAttestedDevicePropertiesV2 {
+            version: OFFLINE_ANDROID_ATTESTED_DEVICE_PROPERTIES_VERSION_V2,
+            attestation_version: 300,
+            keymint_version: 300,
+            security_level: OfflineAndroidDeviceSecurityLevelV2::StrongBox,
+            brand: "google".to_owned(),
+            device: "husky".to_owned(),
+            product: "husky".to_owned(),
+            manufacturer: "Google".to_owned(),
+            model: "Pixel 8 Pro".to_owned(),
+            os_version: 140_000,
+            os_patch_level: 202_608,
+            vendor_patch_level: 20_260_805,
+            boot_patch_level: 20_260_801,
+            verified_boot_key: vec![0x42; 32],
+            verified_boot_hash: [0x24; 32],
+        }),
         public_key,
         assertion_scheme: challenge.assertion_scheme,
         assertion_key_algorithm: challenge.assertion_key_algorithm,

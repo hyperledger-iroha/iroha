@@ -10732,6 +10732,14 @@ impl Metrics {
                 .inc_by(snapshot.evicted_completed);
         }
     }
+    fn clear_soranet_privacy_rtt(&self, mode_label: &str) {
+        for percentile in ["p50", "p90", "p99"] {
+            self.soranet_privacy_rtt_millis
+                .with_label_values(&[mode_label, percentile])
+                .set(0.0);
+        }
+    }
+
     /// Update Prometheus metrics with a newly aggregated SoraNet privacy bucket.
     ///
     /// Only fixed-cardinality labels are exported. Bucket timestamps and GAR category hashes remain
@@ -10758,11 +10766,7 @@ impl Metrics {
             self.soranet_privacy_active_circuits_max
                 .with_label_values(&[mode_label])
                 .set(0.0);
-            for percentile in ["p50", "p90", "p99"] {
-                self.soranet_privacy_rtt_millis
-                    .with_label_values(&[mode_label, percentile])
-                    .set(0.0);
-            }
+            self.clear_soranet_privacy_rtt(mode_label);
             return;
         }
         self.soranet_privacy_bucket_suppressed
@@ -10820,11 +10824,7 @@ impl Metrics {
         self.soranet_privacy_active_circuits_max
             .with_label_values(&[mode_label])
             .set(max_value);
-        for percentile in ["p50", "p90", "p99"] {
-            self.soranet_privacy_rtt_millis
-                .with_label_values(&[mode_label, percentile])
-                .set(0.0);
-        }
+        self.clear_soranet_privacy_rtt(mode_label);
         for percentile in &bucket.rtt_percentiles_ms {
             if matches!(percentile.label.as_str(), "p50" | "p90" | "p99") {
                 self.soranet_privacy_rtt_millis

@@ -10,6 +10,8 @@ pub mod http;
 pub mod kagami;
 /// Prometheus metrics parsing utilities shared by integration tests.
 pub mod metrics;
+/// Authenticated submit/status helpers for Exact12 release integration tests.
+pub mod privacy_exact12_controller;
 /// Bounded process helpers for integration tests.
 pub mod process;
 /// Sandbox-aware network helpers used across integration test binaries.

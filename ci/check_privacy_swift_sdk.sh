@@ -4,10 +4,11 @@ set -euo pipefail
 ROOT_DIR="${PRIVACY_SWIFT_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 SWIFTC_BIN="${PRIVACY_SWIFT_SDK_SWIFTC_BIN:-swiftc}"
 SWIFT_BIN="${PRIVACY_SWIFT_SDK_SWIFT_BIN:-swift}"
-FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+FROZEN_CARGO_LOCK_SHA256="31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d"
+TRACKED_ROOT_CARGO_LOCK_SHA256="179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7"
 PYTHON_BIN="${MOBILE_SDK_PYTHON_BINARY:-${PRIVACY_SWIFT_SDK_PYTHON_BIN:-}}"
 APPLE_ARTIFACT_CHECKER="${ROOT_DIR}/scripts/check_mobile_sdk_artifacts.sh"
+CARGO_LOCK_HELPER="${ROOT_DIR}/ci/privacy_sdk_cargo_lockfile.sh"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "error: privacy Swift native tests require an Apple macOS host" >&2
@@ -17,6 +18,10 @@ if [[ "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1" ]]; then
   echo "error: MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1 is required" >&2
   exit 1
 fi
+if [[ "${MOBILE_SDK_REQUIRE_PRIVACY_PRODUCTION_APPLE_ARTIFACT:-}" != "1" ]]; then
+  echo "error: MOBILE_SDK_REQUIRE_PRIVACY_PRODUCTION_APPLE_ARTIFACT=1 is required" >&2
+  exit 1
+fi
 if [[ -z "${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}" || \
   -z "${MOBILE_SDK_SWIFT_SCRATCH_DIR:-}" || \
   -z "${MOBILE_SDK_PYTHON_BINARY:-}" || \
@@ -24,6 +29,14 @@ if [[ -z "${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}" || \
   echo "error: authenticated external Apple artifact, Swift scratch, and Python paths are required" >&2
   exit 1
 fi
+[[ -f "${CARGO_LOCK_HELPER}" && ! -L "${CARGO_LOCK_HELPER}" ]] || {
+  echo "error: authenticated privacy Cargo lock helper is unavailable" >&2
+  exit 1
+}
+# shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
+source "${CARGO_LOCK_HELPER}"
+privacy_sdk_assert_ci_cargo_lock_state "${ROOT_DIR}" "${PYTHON_BIN}"
+privacy_sdk_assert_ci_executable_path_order
 if ! APPLE_ARTIFACT_DIRECTORY="$(cd "${MOBILE_SDK_APPLE_ARTIFACT_DIR}" && pwd -P)"; then
   echo "error: privacy Swift Apple artifact directory is unavailable" >&2
   exit 1
@@ -63,7 +76,7 @@ esac
   echo "error: privacy Swift tracked root Cargo.lock authority changed" >&2
   exit 1
 }
-PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
+PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH:-}"
 [[ -f "${PRIVACY_RELEASE_CARGO_LOCK}" && ! -L "${PRIVACY_RELEASE_CARGO_LOCK}" && \
   "${PRIVACY_RELEASE_CARGO_LOCK}" != "${ROOT_DIR}/Cargo.lock" ]] || {
   echo "error: privacy Swift gate requires a distinct external privacy release Cargo.lock" >&2
@@ -74,10 +87,10 @@ PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
   echo "error: privacy Swift external Cargo.lock is not the frozen release lock" >&2
   exit 1
 }
-echo \
-  "error: privacy Swift native tooling requires external-lock requalification before it can consume cd9e without replacing the tracked c90b root authority" \
-  >&2
-exit 1
+[[ "${IROHA_PRIVACY_CARGO_LOCKFILE_PATH:-}" == "${PRIVACY_RELEASE_CARGO_LOCK}" ]] || {
+  echo "error: privacy Swift authenticated lock aliases diverged" >&2
+  exit 1
+}
 
 DEVELOPER_DIR="$(xcode-select -p)"
 [[ "${DEVELOPER_DIR}" == */Xcode*.app/Contents/Developer ]] || {
@@ -90,6 +103,7 @@ cd "${ROOT_DIR}"
 
 MOBILE_SDK_APPLE_ARTIFACT_DIR="${APPLE_ARTIFACT_DIRECTORY}" \
 MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1 \
+MOBILE_SDK_REQUIRE_PRIVACY_PRODUCTION_APPLE_ARTIFACT=1 \
 MOBILE_SDK_PYTHON_BINARY="${PYTHON_BIN}" \
   bash "${APPLE_ARTIFACT_CHECKER}" --apple-only
 
@@ -97,7 +111,9 @@ MOBILE_SDK_PYTHON_BINARY="${PYTHON_BIN}" \
 "${SWIFTC_BIN}" -parse -parse-as-library \
   IrohaSwift/Sources/IrohaSwift/NativeBridge.swift \
   IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift \
+  IrohaSwift/Sources/IrohaSwift/AuthenticatedFinalizedKagemushaOutcomeV1.swift \
   IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift \
+  IrohaSwift/Sources/IrohaSwift/PrivacyExact12ActionModelsV1.swift \
   IrohaSwift/Sources/IrohaSwift/PrivacyExact12FixtureBundle.swift \
   IrohaSwift/Sources/IrohaSwift/ProofAttachment.swift \
   IrohaSwift/Sources/IrohaSwift/MusubiInstructionsV1.swift \
@@ -106,7 +122,9 @@ MOBILE_SDK_PYTHON_BINARY="${PYTHON_BIN}" \
   IrohaSwift/Sources/IrohaSwift/TxBuilder.swift \
   IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift \
   IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/AuthenticatedFinalizedKagemushaOutcomeV1Tests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12CapabilityManifestV1Tests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12ActionModelsV1Tests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/PrivacyExact12FixtureBundleTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ProofAttachmentNoritoTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/MusubiInstructionsV1Tests.swift \
@@ -116,5 +134,9 @@ MOBILE_SDK_PYTHON_BINARY="${PYTHON_BIN}" \
 
 "${SWIFT_BIN}" test \
   --package-path IrohaSwift \
+  --manifest-cache none \
   --disable-automatic-resolution \
   --scratch-path "${SWIFT_SCRATCH_DIRECTORY}"
+
+privacy_sdk_assert_ci_cargo_lock_state "${ROOT_DIR}" "${PYTHON_BIN}"
+privacy_sdk_assert_ci_executable_path_order

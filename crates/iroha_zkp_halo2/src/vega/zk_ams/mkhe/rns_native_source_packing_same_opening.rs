@@ -39,12 +39,13 @@
 //! requested from the predecessor and admitted only after the equation
 //! verifies.
 //!
-//! Production remains unavailable.  No live owner currently retains the 344
-//! reconstructed `D` masks plus 1,032 signed masks, and the authenticated source
-//! snapshot has no purpose-bound mutable replay path through the future
-//! combined direct-plus-membership predecessor.  The generic traits below are
-//! testable contracts, not evidence that either production owner exists.  This
-//! child grants no composite, readiness, receipt, or release authority.
+//! Production remains unavailable.  A private source-only predecessor now
+//! retains its authenticated radix alias and lends the recursively owned
+//! repeatable snapshot for an in-place verifier replay, but no live entry can
+//! construct that predecessor and no owner retains the 344 reconstructed `D`
+//! masks plus 1,032 signed masks needed by the prover.  The generic traits
+//! below and that private replay handoff grant no composite, readiness,
+//! receipt, or release authority.
 #![allow(
     dead_code,
     reason = "the private same-opening child remains fail-closed until authenticated replay and derived-mask owners exist"
@@ -119,6 +120,22 @@ const SIGNED_SCALAR_BYTES_V1: usize = 8;
 const SIGNED_SCALARS_PER_BLOCK_V1: usize = MAIN_SOURCE_BLOCK_BYTES_V1 / SIGNED_SCALAR_BYTES_V1;
 const MAX_CHALLENGE_ATTEMPTS_V1: u8 = 128;
 const ERROR_POLYNOMIAL_DEGREE_V1: usize = OWNERS_V1 - 1;
+
+/// Exact replay geometry shared with the purpose-bound sibling adapter.
+/// These are not configurable inputs and grant no construction authority.
+pub(super) const RNS_NATIVE_SOURCE_PACKING_OWNER_COUNT_V1: usize = OWNERS_V1;
+pub(super) const RNS_NATIVE_SOURCE_PACKING_VECTOR_COORDINATES_V1: usize = VECTOR_COORDINATES_V1;
+pub(super) const RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_GROUP_COUNT_V1: usize = DIFFERENCE_GROUPS_V1;
+pub(super) const RNS_NATIVE_SOURCE_PACKING_SIGNED_OWNER_COUNT_V1: usize = SIGNED_OWNERS_V1;
+pub(super) const RNS_NATIVE_SOURCE_PACKING_RADIX_LOW_DIGITS_V1: usize = RADIX_LOW_DIGITS_V1;
+pub(super) const RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_BLOCKS_PER_GROUP_V1: usize =
+    DIFFERENCE_BLOCKS_PER_LOCAL_GROUP_V1;
+pub(super) const RNS_NATIVE_SOURCE_PACKING_DIFFERENCE_SCALARS_PER_BLOCK_V1: usize =
+    DIFFERENCE_SCALARS_PER_BLOCK_V1;
+pub(super) const RNS_NATIVE_SOURCE_PACKING_SIGNED_BLOCKS_PER_PLANE_V1: usize =
+    SIGNED_BLOCKS_PER_PLANE_V1;
+pub(super) const RNS_NATIVE_SOURCE_PACKING_SIGNED_SCALARS_PER_BLOCK_V1: usize =
+    SIGNED_SCALARS_PER_BLOCK_V1;
 
 const MANIFEST_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-source-packing-same-opening.manifest";
@@ -1877,6 +1894,65 @@ where
     let equation_verified = verify_equation_kernel_v1(
         context,
         replay_source,
+        wire,
+        FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1,
+    )?;
+    let combined_outer_bindings = previous.combined_outer_bindings_v1();
+    let verified = finalize_verified_kernel_v1(equation_verified, combined_outer_bindings)?;
+    Ok(RnsNativeSourcePackingSameOpeningPrerequisiteV1 {
+        previous,
+        residual: verified.residual,
+        manifest_digest: verified.manifest_digest,
+        source_context_digest: verified.source_context_digest,
+        point_root: verified.point_root,
+        replay_receipt_digest: verified.replay_receipt_digest,
+        pre_challenge_binding_digest: verified.pre_challenge_binding_digest,
+        tau_digest: verified.tau_digest,
+        q_digest: verified.q_digest,
+        proof_digest: verified.proof_digest,
+        residual_digest: verified.residual_digest,
+        binding_digest: verified.binding_digest,
+    })
+}
+
+/// Consume a combined predecessor whose authenticated replay is borrowed
+/// directly from the same move-only owner.
+///
+/// Unlike [`verify_rns_native_source_packing_same_opening_v1`], this entry
+/// accepts no detached replay owner and no caller-supplied context. It derives
+/// every safe source axis from the embedded replay capability, combines those
+/// axes with the predecessor's successor-independent core, consumes the
+/// mutable borrow during the equation, and only then moves the still-whole
+/// predecessor into the verified prerequisite.
+pub(super) fn verify_rns_native_source_packing_same_opening_from_owned_replay_v1<'proof, P>(
+    mut previous: P,
+) -> Result<
+    RnsNativeSourcePackingSameOpeningPrerequisiteV1<'proof, P>,
+    RnsNativeSourcePackingSameOpeningErrorV1,
+>
+where
+    P: RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1<'proof>,
+    for<'owner> &'owner mut P: RnsNativeSourcePackingAggregateReplayV1,
+{
+    let wire: &'proof [u8] = previous.same_opening_successor_v1();
+    let safe_core = previous.successor_independent_safe_core_v1();
+    let source_axes = {
+        let replay = &mut previous;
+        RnsNativeSourcePackingAggregateReplayV1::authenticated_source_axes_v1(&replay)
+    };
+    let context = RnsNativeSourcePackingSameOpeningContextV1 {
+        profile_manifest_digest: source_axes.profile_manifest_digest,
+        source_binding_digest: source_axes.source_binding_digest,
+        main_snapshot_digest: source_axes.main_snapshot_digest,
+        nonce_snapshot_digest: source_axes.nonce_snapshot_digest,
+        source_receipt_digest: source_axes.source_receipt_digest,
+        source_formula_digest: source_axes.source_formula_digest,
+        source_mapping_digest: source_axes.source_mapping_digest,
+        safe_core,
+    };
+    let equation_verified = verify_equation_kernel_v1(
+        context,
+        &mut previous,
         wire,
         FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1,
     )?;

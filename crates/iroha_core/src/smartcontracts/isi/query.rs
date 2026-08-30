@@ -1096,6 +1096,33 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindNftById(q) => Ok(SingularQueryOutputBox::from(q.execute(state)?)),
+            SingularQueryBox::FindPrivacyZkAceReplayNullifierV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindPrivacyProofManagedPoolStateV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindPrivacyOrchardPoolStateV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindPrivacyOrchardNullifierV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindPrivacyAnonymousPgcPoolStateV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindPrivacyZkAmsAdmissionV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindPrivacyZkAmsProvisionV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindPrivacyZkX509CertificateNullifierV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindPrivacyActionExecutionReceiptV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
         }
     }
 }

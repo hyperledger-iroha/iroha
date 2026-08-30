@@ -308,6 +308,40 @@ class PrivacyNativeBridge private constructor() {
             return requireExact12CapabilityManifest(archive)
         }
 
+        /**
+         * Authenticate one canonical signed transaction as exactly [request]'s closed operation.
+         *
+         * This validates the transaction signature, exact [NetworkId], exact canonical
+         * authenticated authority, privacy intent binding, statement/proof variants, and
+         * consensus envelope limits. It never treats a local proof check as transaction
+         * acceptance.
+         */
+        @JvmStatic
+        fun inspectSignedExact12ActionV1(
+            request: PrivacyExact12ActionRequestV1,
+            networkId: NetworkId,
+            authorityAccountId: String,
+        ): PrivacyExact12ActionInspectionV1 {
+            check(nativeAvailable) { "native Exact12 signed-action inspection is unavailable" }
+            val projection = try {
+                nativeInspectSignedExact12ActionV1(
+                    request.signedTransactionVersioned,
+                    networkId.bytes(),
+                    authorityAccountId.toByteArray(Charsets.UTF_8),
+                    request.operation.ordinal,
+                )
+            } catch (error: RuntimeException) {
+                throw IllegalStateException("native Exact12 signed-action inspection failed", error)
+            } catch (error: LinkageError) {
+                throw IllegalStateException("native Exact12 signed-action inspection failed", error)
+            }
+            return PrivacyExact12ActionInspectionV1(
+                checkNotNull(projection) {
+                    "native Exact12 signed-action inspection returned no projection"
+                },
+            )
+        }
+
         /** Validates bytes as the exact compiled-profile catalog of the loaded binary. */
         @JvmStatic
         fun validateCompiledProfileCatalogV1(
@@ -598,6 +632,13 @@ class PrivacyNativeBridge private constructor() {
             protocolIndex: Int,
             instructionArchive: ByteArray?,
         ): Boolean
+
+        @JvmStatic private external fun nativeInspectSignedExact12ActionV1(
+            signedTransactionVersioned: ByteArray,
+            networkId: ByteArray,
+            authorityAccountId: ByteArray,
+            operationIndex: Int,
+        ): ByteArray?
 
         @JvmStatic private external fun nativeExact12FixtureBundle(): ByteArray?
 

@@ -15,4 +15,25 @@
 
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
     <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />
+
+    <application>
+        <!--
+          Optional managed-device receiver for the truthful API 28 to 30 StrongBox
+          compatibility profile. An embedding app must provision this package as a
+          device/profile owner; merely declaring the receiver confers no privileges.
+        -->
+        <receiver
+            android:name="org.hyperledger.iroha.android.offline.KagemushaManagedDeviceAdminReceiver"
+            android:description="@string/kagemusha_managed_device_admin_description"
+            android:exported="true"
+            android:label="@string/kagemusha_managed_device_admin_label"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/kagemusha_managed_device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

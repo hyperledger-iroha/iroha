@@ -35,7 +35,10 @@ use super::{
 };
 #[cfg(test)]
 use super::{
-    packing::packed_plaintext_to_rns_v1,
+    packing::{packed_plaintext_rns_binding_digest_v1, packed_plaintext_to_rns_v1},
+    phase23_rns_link::{
+        ZkAmsPhase23NativeBgvOpeningVerifierPermitV1, ZkAmsPhase23QNativeRelationAdapterSinkV1,
+    },
     wire::{
         ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheWireBindingV1,
     },
@@ -2582,7 +2585,48 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
     }
 }
 #[cfg(test)]
+pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierBindingV1 {
+    pub(super) permit: ZkAmsPhase23NativeBgvOpeningVerifierPermitV1,
+    pub(super) rns_binding_digest: [u8; 32],
+}
+#[cfg(test)]
 impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
+    /// Consume one fresh native encryption opening only after its exact public
+    /// context, packed-RNS image, and both RLWE equations have been checked.
+    /// The relation sink receives only an opaque permit and no witness borrow.
+    #[cfg(test)]
+    pub(super) fn verify_and_consume_phase23_native_bgv_opening_v1(
+        self,
+        binding: ZkAmsPhase23NativeBgvOpeningVerifierBindingV1,
+        relation_sink: &mut ZkAmsPhase23QNativeRelationAdapterSinkV1,
+        key: &ZkAmsMkheCollectivePublicKeyV1,
+        layout: ZkAmsT256PackingLayoutV1,
+        plaintext: &ZkAmsT256PackedPlaintextV1,
+        ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let profile = release_profile_v1();
+        let expected_message = ZeroizingRns(packed_plaintext_to_rns_v1(layout, plaintext)?);
+        let expected_rns_binding_digest =
+            packed_plaintext_rns_binding_digest_v1(layout, plaintext)?;
+        if binding.rns_binding_digest == [0; 32]
+            || binding.rns_binding_digest != expected_rns_binding_digest
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+        let input_topology = CollectiveEncryptionInputTopologyV1::from_packed(layout, plaintext);
+        self.with_validated_native_proof_witness_v1(
+            &profile,
+            key,
+            &expected_message.0,
+            &plaintext.coefficients,
+            input_topology,
+            ciphertext,
+            |_canonical_plaintext, _plaintext_lift, _ephemeral, _error_zero, _error_one| {
+                relation_sink.absorb_validated_opening_topology_v1(&binding.permit)
+            },
+        )
+    }
+
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     #[cfg(test)]
     fn with_validated_native_proof_witness_v1<T>(

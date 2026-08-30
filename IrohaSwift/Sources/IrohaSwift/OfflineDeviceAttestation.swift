@@ -4,7 +4,7 @@ import CryptoKit
 public enum KagemushaDeviceAttestation {
     public static let deviceAttestationChallengeDomain = "iroha:kagemusha:device-attestation-challenge:v1"
     public static let deviceAttestationEvidencePrefix = "offline-device-attestation-evidence-v1"
-    public static let registrationVersion: UInt16 = 1
+    public static let registrationVersion: UInt16 = 2
     public static let iosAppAttestPlatform = "ios-appattest"
     public static let iosAppAttestAssertionScheme = "apple-appattest-counter-v1"
     public static let iosAppAttestAssertionKeyAlgorithm = "app-attest-p256"
@@ -49,6 +49,159 @@ public enum KagemushaDeviceAttestationError: Error, LocalizedError, Equatable {
     }
 }
 
+/// Hardware security boundary authenticated by an Android KeyDescription.
+public enum OfflineAndroidDeviceSecurityLevelV2: UInt32, Sendable {
+    /// Key isolated by the device trusted execution environment.
+    case trustedEnvironment = 0
+    /// Key isolated by a discrete StrongBox secure element.
+    case strongBox = 1
+}
+
+/// Exact bounded Swift model of Rust `OfflineAndroidAttestedDevicePropertiesV2`.
+public struct OfflineAndroidAttestedDevicePropertiesV2: Equatable, Sendable {
+    public static let versionV2: UInt16 = 2
+    public static let osVersionMaximumV2: UInt32 = 999_999
+    public static let attestedPropertyMaximumBytesV2 = 128
+    public static let verifiedBootKeyMaximumBytesV2 = 1_024
+    public static let verifiedBootHashBytesV2 = 32
+
+    public let version: UInt16
+    public let attestationVersion: UInt32
+    public let keymintVersion: UInt32
+    public let securityLevel: OfflineAndroidDeviceSecurityLevelV2
+    public let brand: String
+    public let device: String
+    public let product: String
+    public let manufacturer: String
+    public let model: String
+    public let osVersion: UInt32
+    public let osPatchLevel: UInt32
+    public let vendorPatchLevel: UInt32
+    public let bootPatchLevel: UInt32
+    public let verifiedBootKey: Data
+    public let verifiedBootHash: Data
+
+    /// Construct one canonical property snapshot.
+    ///
+    /// Empty identity strings and zero version/patch values remain representable because native
+    /// policy classifies otherwise authenticated but incomplete evidence as drain-only. Call
+    /// `isCompleteV2()` before authorizing new offline activity.
+    public init(
+        version: UInt16 = Self.versionV2,
+        attestationVersion: UInt32,
+        keymintVersion: UInt32,
+        securityLevel: OfflineAndroidDeviceSecurityLevelV2,
+        brand: String,
+        device: String,
+        product: String,
+        manufacturer: String,
+        model: String,
+        osVersion: UInt32,
+        osPatchLevel: UInt32,
+        vendorPatchLevel: UInt32,
+        bootPatchLevel: UInt32,
+        verifiedBootKey: Data,
+        verifiedBootHash: Data
+    ) throws {
+        guard version == Self.versionV2 else {
+            throw KagemushaDeviceAttestationError.nonCanonicalField(
+                field: "android_attested_device_properties.version"
+            )
+        }
+        for (field, value) in [
+            ("brand", brand),
+            ("device", device),
+            ("product", product),
+            ("manufacturer", manufacturer),
+            ("model", model),
+        ] {
+            try Self.validateProperty(value, field: field)
+        }
+        guard verifiedBootKey.count <= Self.verifiedBootKeyMaximumBytesV2 else {
+            throw KagemushaDeviceAttestationError.nonCanonicalField(
+                field: "android_attested_device_properties.verified_boot_key"
+            )
+        }
+        guard verifiedBootHash.count == Self.verifiedBootHashBytesV2 else {
+            throw KagemushaDeviceAttestationError.invalidDigestLength(
+                field: "android_attested_device_properties.verified_boot_hash",
+                expected: Self.verifiedBootHashBytesV2,
+                actual: verifiedBootHash.count
+            )
+        }
+        self.version = version
+        self.attestationVersion = attestationVersion
+        self.keymintVersion = keymintVersion
+        self.securityLevel = securityLevel
+        self.brand = brand
+        self.device = device
+        self.product = product
+        self.manufacturer = manufacturer
+        self.model = model
+        self.osVersion = osVersion
+        self.osPatchLevel = osPatchLevel
+        self.vendorPatchLevel = vendorPatchLevel
+        self.bootPatchLevel = bootPatchLevel
+        self.verifiedBootKey = verifiedBootKey
+        self.verifiedBootHash = verifiedBootHash
+    }
+
+    /// Whether every property required for testnet eligibility is present and canonical.
+    public func isCompleteV2() -> Bool {
+        attestationVersion > 0
+            && keymintVersion > 0
+            && osVersion > 0
+            && osVersion <= Self.osVersionMaximumV2
+            && Self.canonicalPatchMonth(osPatchLevel)
+            && Self.canonicalPatchDate(vendorPatchLevel)
+            && Self.canonicalPatchDate(bootPatchLevel)
+            && !verifiedBootKey.isEmpty
+            && verifiedBootHash.contains(where: { $0 != 0 })
+            && [brand, device, product, manufacturer, model].allSatisfy {
+                !$0.isEmpty && $0.unicodeScalars.allSatisfy { $0.isASCII }
+            }
+    }
+
+    private static func validateProperty(_ value: String, field: String) throws {
+        guard value.utf8.count <= attestedPropertyMaximumBytesV2,
+              value.unicodeScalars.allSatisfy({
+                  !CharacterSet.controlCharacters.contains($0)
+              }),
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw KagemushaDeviceAttestationError.nonCanonicalField(
+                field: "android_attested_device_properties.\(field)"
+            )
+        }
+    }
+
+    private static func canonicalPatchMonth(_ value: UInt32) -> Bool {
+        let year = value / 100
+        let month = value % 100
+        return (2_000...9_999).contains(year) && (1...12).contains(month)
+    }
+
+    private static func canonicalPatchDate(_ value: UInt32) -> Bool {
+        let year = value / 10_000
+        let month = (value / 100) % 100
+        let day = value % 100
+        guard (2_000...9_999).contains(year), (1...12).contains(month) else {
+            return false
+        }
+        let leap = year.isMultiple(of: 4)
+            && (!year.isMultiple(of: 100) || year.isMultiple(of: 400))
+        let maximumDay: UInt32
+        switch month {
+        case 2:
+            maximumDay = leap ? 29 : 28
+        case 4, 6, 9, 11:
+            maximumDay = 30
+        default:
+            maximumDay = 31
+        }
+        return (1...maximumDay).contains(day)
+    }
+}
+
 public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
     public let version: UInt16
     public let platform: String
@@ -61,6 +214,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
     public let iosEnvironment: String?
     public let androidPackageName: String?
     public let androidSigningCertificateSha256: Data?
+    public let androidAttestedDeviceProperties: OfflineAndroidAttestedDevicePropertiesV2?
     public let publicKey: KagemushaDevicePublicKeyV2
     public let assertionScheme: String
     public let assertionKeyAlgorithm: String
@@ -89,6 +243,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
                 iosEnvironment: String? = nil,
                 androidPackageName: String? = nil,
                 androidSigningCertificateSha256: Data? = nil,
+                androidAttestedDeviceProperties: OfflineAndroidAttestedDevicePropertiesV2?,
                 publicKey: KagemushaDevicePublicKeyV2,
                 assertionScheme: String,
                 assertionKeyAlgorithm: String,
@@ -135,6 +290,18 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
             assertionPublicKey: assertionPublicKey,
             assertionUsageCountLimit: assertionUsageCountLimit
         )
+        if platform == KagemushaDeviceAttestation.androidKeyMintPlatform,
+           androidAttestedDeviceProperties == nil {
+            throw KagemushaDeviceAttestationError.unsupportedDeviceAttestationProfile(
+                "Android KeyMint requires exact hardware-attested device properties"
+            )
+        }
+        if platform == KagemushaDeviceAttestation.iosAppAttestPlatform,
+           androidAttestedDeviceProperties != nil {
+            throw KagemushaDeviceAttestationError.unsupportedDeviceAttestationProfile(
+                "iOS App Attest must encode Android attested-device properties as None"
+            )
+        }
         guard !attestationReport.isEmpty else {
             throw KagemushaDeviceAttestationError.nonCanonicalField(field: "attestation_report")
         }
@@ -211,6 +378,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
         self.iosEnvironment = iosEnvironment
         self.androidPackageName = androidPackageName
         self.androidSigningCertificateSha256 = androidSigningCertificateSha256
+        self.androidAttestedDeviceProperties = androidAttestedDeviceProperties
         self.publicKey = publicKey
         self.assertionScheme = assertionScheme
         self.assertionKeyAlgorithm = assertionKeyAlgorithm
@@ -448,6 +616,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
             iosEnvironment: iosEnvironment,
             androidPackageName: androidPackageName,
             androidSigningCertificateSha256: androidSigningCertificateSha256,
+            androidAttestedDeviceProperties: androidAttestedDeviceProperties,
             publicKey: publicKey,
             assertionScheme: assertionScheme,
             assertionKeyAlgorithm: assertionKeyAlgorithm,
@@ -935,6 +1104,10 @@ enum KagemushaDeviceAttestationEncoding {
             registration.androidSigningCertificateSha256,
             encode: encodeBytesVec
         ))
+        writer.writeField(try CompactNorito.encodeOption(
+            registration.androidAttestedDeviceProperties,
+            encode: encodeAndroidAttestedDeviceProperties
+        ))
         writer.writeField(registration.publicKey.sec1Bytes)
         writer.writeField(CompactNorito.encodeString(registration.assertionScheme))
         writer.writeField(CompactNorito.encodeString(registration.assertionKeyAlgorithm))
@@ -1086,6 +1259,28 @@ enum KagemushaDeviceAttestationEncoding {
         // enclosing struct uses COMPACT_LEN for field framing.
         writer.writeUInt64LE(UInt64(bytes.count))
         writer.writeBytes(bytes)
+        return writer.data
+    }
+
+    private static func encodeAndroidAttestedDeviceProperties(
+        _ properties: OfflineAndroidAttestedDevicePropertiesV2
+    ) -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeUInt16(properties.version))
+        writer.writeField(CompactNorito.encodeUInt32(properties.attestationVersion))
+        writer.writeField(CompactNorito.encodeUInt32(properties.keymintVersion))
+        writer.writeField(CompactNorito.encodeUInt32(properties.securityLevel.rawValue))
+        writer.writeField(CompactNorito.encodeString(properties.brand))
+        writer.writeField(CompactNorito.encodeString(properties.device))
+        writer.writeField(CompactNorito.encodeString(properties.product))
+        writer.writeField(CompactNorito.encodeString(properties.manufacturer))
+        writer.writeField(CompactNorito.encodeString(properties.model))
+        writer.writeField(CompactNorito.encodeUInt32(properties.osVersion))
+        writer.writeField(CompactNorito.encodeUInt32(properties.osPatchLevel))
+        writer.writeField(CompactNorito.encodeUInt32(properties.vendorPatchLevel))
+        writer.writeField(CompactNorito.encodeUInt32(properties.bootPatchLevel))
+        writer.writeField(encodeBytesVec(properties.verifiedBootKey))
+        writer.writeField(properties.verifiedBootHash)
         return writer.data
     }
 }

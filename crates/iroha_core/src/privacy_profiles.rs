@@ -5,14 +5,16 @@
 //! derived statement-schema, engine-manifest, and limit bindings exactly match the proposed
 //! activation record. A protocol whose complete verifier is not compiled is rejected before it
 //! enters world state.
+#[cfg(all(feature = "zk-stark", feature = "privacy-release-evidence"))]
+use crate::privacy_engines::zk_ace::zk_ace_nonshipping_release_candidate_available_v2;
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{
     ZK_ACE_AIR_RELATION_SCHEMA_V1, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
-    ZK_ACE_FULL_ENGINE_AVAILABLE_V1, ZK_ACE_POSEIDON_MANIFEST_SHA256_V1,
-    ZK_ACE_POSEIDON_PROFILE_V1, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
-    ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1,
-    ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1, ZK_ACE_SOURCE_PROFILE_V1,
-    zk_ace_compiled_profile_digest_v1, zk_ace_stark_profile_descriptor_v1,
+    ZK_ACE_COMMITMENT_BINDING_PROFILE_V2, ZK_ACE_FULL_ENGINE_AVAILABLE_V1,
+    ZK_ACE_POSEIDON_MANIFEST_SHA256_V1, ZK_ACE_POSEIDON_PROFILE_V1,
+    ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1,
+    ZK_ACE_SOURCE_PROFILE_V1, zk_ace_compiled_profile_digest_v1,
+    zk_ace_stark_profile_descriptor_v1,
 };
 use crate::privacy_engines::{
     anonymous_pgc::{
@@ -148,6 +150,8 @@ use crate::privacy_engines::{
     },
     vega::{
         VEGA_MDL_DEVICE_AUTHENTICATION_DOMAIN_V1, VEGA_MDL_DEVICE_AUTHENTICATION_FRAME_VERSION_V1,
+        vega_figure9_release_activation_binding_digest_v1,
+        vega_figure9_release_prerequisite_pins_complete_v1,
     },
     verange::{
         VERANGE_TYPE1_PROOF_VERSION_V1, VERANGE_TYPE1_SOURCE_PROFILE_V1, VERANGE_TYPE1_SUITE_V1,
@@ -168,7 +172,7 @@ use crate::privacy_engines::{
             ZK_X509_PROOF_VERSION_V1, ZK_X509_SOURCE_PROFILE_V1,
             ZK_X509_STARK_PROFILE_DESCRIPTOR_V1, ZK_X509_SUITE_V1, ZkX509ProfileErrorV1,
             require_activation_readiness_v1, validate_profile_v1 as validate_zk_x509_profile_v1,
-            zk_x509_activation_readiness_v1,
+            zk_x509_activation_prerequisite_pins_complete_v1, zk_x509_activation_readiness_v1,
         },
         stark::{ZK_X509_MAIN_PROOF_DESCRIPTOR_V1, ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1},
     },
@@ -219,6 +223,8 @@ use iroha_data_model::privacy::{
     ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1, ZkAmsActivationLimitsV1,
     validate_privacy_compiled_profile_catalog_archive_v1,
 };
+#[cfg(feature = "zk-stark")]
+use iroha_data_model::zk::ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1;
 use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
 #[cfg(test)]
 use iroha_zkp_halo2::vega::vega_mdl_verifier_digest_v1;
@@ -323,6 +329,7 @@ const VEGA_PROOF_WIRE_LABEL_V1: &[u8] =
     b"IROVEGMC:version-u8+context-keccak32+bincode-1.3.3-fixed-le-microsoft-vega-mc:strict-exact:v1";
 const VEGA_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:microsoft-vega-prover:c0ee259053cd12eaf43ed71b5cde375452b3ee4d:vega-mc:figure9-2+6-sha256:external-rng-fail-closed-patch:v1";
+const VEGA_GOVERNED_RELEASE_ACTIVATION_SCHEMA_V1: &[u8] = b"production-only:source-pinned-exact-pk-vk-artifact-manifest+content-addressed-package+four-stage-evidence+reviewed-governance-authorization:v1";
 const VEGA_AUTHORITATIVE_ISSUER_RUNTIME_SCHEMA_V1: &[u8] = b"issuer-governance:record-v1:issuer-id32+epoch-u64be+compressed-p256-33+document-policy+namespace-policy+digest-policy+issuer-auth-policy+device-auth-policy+predecessor-option32+lifecycle+self-digest32|lineage:immutable-append-only+epoch-one-origin+one-step-cas-rotation+terminal-preserving-revocation+bounded-global-and-per-lineage+permanent-global-p256-key-ownership+retired-p256-key-never-reactivated|statement:exact-issuer-id+record-epoch+record-digest+key+all-algorithm-policy|ledger-verifier:current-active-exact-record-before-native-proof";
 const VEGA_DEVICE_AUTHENTICATION_GOVERNANCE_FRAME_SCHEMA_V1: &[u8] = b"length-framed:domain+frame-version+upstream-commit+chain-id+genesis-hash+action-index+transaction-intent-digest+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+issuer-record-epoch+issuer-record-digest+document-type+namespace+digest-algorithm+issuer-authentication+device-authentication+issuer-public-key+presentation-date+minimum-age+reader-challenge+session-transcript-digest";
 const VEGA_CANONICAL_MDL_WITNESS_SCHEMA_V1: &[u8] = b"figure9-v1:issuer-sig-structure-exact+embedded-mso-exact+birth-item-exact+birth-random-exact+full-date10+rfc3339-utc-seconds20+signed-not-after-valid-from-full-seconds+presentation-validity-date-granularity+presentation-year-closed+satisfiable-valid-until+age-threshold-closed";
@@ -342,7 +349,7 @@ const ZK_AMS_PROVISION_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|c
 const ZK_ACE_PROTOCOL_LABEL_V1: &[u8] = b"zk-ace-pq-authorization-v0";
 #[cfg(feature = "zk-stark")]
 const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] =
-    b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1";
+    b"goldilocks-dense-mds-poseidon-x7-four-lane-transparent-stark-v2";
 const ZK_X509_PARAMETER_SET_LABEL_V1: &[u8] =
     b"goldilocks-fp4-sha256-p256-rfc5280-fixed-capacity-v1";
 const ZK_X509_PROOF_WIRE_LABEL_V1: &[u8] =
@@ -525,7 +532,7 @@ pub fn committed_privacy_capability_snapshot_v1(
         .into_iter()
         .map(|protocol_id| PrivacyCapabilityRowV1 {
             protocol_id,
-            compiled_profile: compiled_privacy_profile_snapshot_result_v1(protocol_id),
+            compiled_profile: runtime_privacy_profile_snapshot_result_v1(protocol_id),
             activation: activation_for(protocol_id),
         })
         .collect();
@@ -537,6 +544,22 @@ pub fn committed_privacy_capability_snapshot_v1(
     };
     snapshot.validate()?;
     Ok(snapshot)
+}
+fn runtime_privacy_profile_snapshot_result_v1(
+    protocol_id: PrivacyProtocolIdV1,
+) -> PrivacyCompiledProfileResultV1 {
+    #[cfg(all(feature = "zk-stark", feature = "privacy-release-evidence"))]
+    if protocol_id == PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        && zk_ace_nonshipping_release_candidate_available_v2()
+    {
+        return match nonshipping_zk_ace_release_candidate_profile_v2() {
+            Ok(profile) => PrivacyCompiledProfileResultV1::Available(profile.into()),
+            Err(_) => PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::ProfileInitializationFailed,
+            ),
+        };
+    }
+    compiled_privacy_profile_snapshot_result_v1(protocol_id)
 }
 /// Return the exact compiled profile exposed to privacy governance.
 ///
@@ -576,6 +599,9 @@ pub fn compiled_privacy_profile_v1(
 fn compiled_zk_x509_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1>
 {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+    if !zk_x509_activation_prerequisite_pins_complete_v1() {
+        return Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id });
+    }
     match require_activation_readiness_v1(zk_x509_activation_readiness_v1()) {
         Ok(()) => zk_x509_release_candidate_profile_material_v1(),
         Err(ZkX509ProfileErrorV1::EngineIncomplete) => {
@@ -1537,6 +1563,36 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
     if !ZK_ACE_FULL_ENGINE_AVAILABLE_V1 {
         return Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id });
     }
+    zk_ace_profile_material_v2()
+}
+/// Derive the deterministic ZK-ACE release-candidate profile material.
+///
+/// This accessor is compiled only for tests and the non-shipping release-evidence lane. It binds
+/// the exact candidate relation without exposing it to governance. Success does not imply that
+/// the four native stages or committed-network semantic flow were captured, reviewed, or pinned.
+/// Production paths must use [`compiled_privacy_profile_v1`], which remains unavailable until all
+/// reviewed evidence pins are populated.
+#[cfg(all(feature = "zk-stark", any(test, feature = "privacy-release-evidence")))]
+pub(crate) fn zk_ace_release_candidate_profile_material_v2()
+-> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    zk_ace_profile_material_v2()
+}
+/// Select the bounded ZK-ACE candidate for non-shipping consensus evidence.
+///
+/// This selector is intentionally unavailable to ordinary builds and does
+/// not consult or modify the public compiled-profile catalog.
+#[cfg(all(feature = "zk-stark", feature = "privacy-release-evidence"))]
+pub fn nonshipping_zk_ace_release_candidate_profile_v2()
+-> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    if !zk_ace_nonshipping_release_candidate_available_v2() {
+        return Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id });
+    }
+    zk_ace_release_candidate_profile_material_v2()
+}
+#[cfg(feature = "zk-stark")]
+fn zk_ace_profile_material_v2() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
     let compiled_profile_digest = zk_ace_compiled_profile_digest_v1();
     let proof_bytes = u64::from(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1);
     if compiled_profile_digest == [0; 32]
@@ -1559,7 +1615,7 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
+            ZK_ACE_COMMITMENT_BINDING_PROFILE_V2,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1573,10 +1629,11 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_SOURCE_PROFILE_V1,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
             ZK_ACE_AIR_RELATION_SCHEMA_V1,
+            ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
+            ZK_ACE_COMMITMENT_BINDING_PROFILE_V2,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1599,10 +1656,11 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes(),
             ZK_ACE_PROOF_WIRE_V1,
             ZK_ACE_AIR_RELATION_SCHEMA_V1,
+            ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
+            ZK_ACE_COMMITMENT_BINDING_PROFILE_V2,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1622,10 +1680,11 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes(),
             ZK_ACE_PROOF_WIRE_V1,
             ZK_ACE_AIR_RELATION_SCHEMA_V1,
+            ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
+            ZK_ACE_COMMITMENT_BINDING_PROFILE_V2,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1867,6 +1926,45 @@ fn zk_ams_profile_material_v1(
     })
 }
 fn compiled_vega_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    if !vega_figure9_release_prerequisite_pins_complete_v1() {
+        return Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id });
+    }
+    let release_activation_binding = vega_figure9_release_activation_binding_digest_v1()
+        .ok_or(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })?;
+    vega_production_profile_material_with_release_binding_v1(release_activation_binding)
+}
+
+fn vega_production_profile_material_with_release_binding_v1(
+    release_activation_binding: [u8; 32],
+) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    if release_activation_binding == [0; 32] {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+    let mut profile = vega_release_candidate_profile_material_v1()?;
+    profile.engine_manifest_digest = PrivacyEngineManifestDigestV1::new(digest_fields_v1(
+        ENGINE_MANIFEST_DIGEST_DOMAIN_V1,
+        &[
+            VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1,
+            VEGA_GOVERNED_RELEASE_ACTIVATION_SCHEMA_V1,
+            profile.engine_manifest_digest.as_bytes(),
+            &release_activation_binding,
+        ],
+    ));
+    Ok(profile)
+}
+/// Derive the deterministic Vega Figure 9 release-candidate profile material.
+///
+/// This accessor exists only for offline qualification, evidence generation,
+/// and construction of a structurally exact governance probe. Success does
+/// not imply that canonical PK/VK bytes were released, that the evidence
+/// package was reviewed, or that governance authorized activation. Production
+/// admission must use [`compiled_privacy_profile_v1`], which remains
+/// unavailable until every immutable release prerequisite pin is populated
+/// and validated.
+pub fn vega_release_candidate_profile_material_v1()
+-> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
     let canonical_relation_digest = vega_mdl_canonical_relation_digest_v1();
     let compiled_profile_digest = vega_mdl_compiled_profile_digest_v1();

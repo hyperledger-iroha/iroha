@@ -709,6 +709,86 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
     );
     drop(guards);
 }
+fn exact12_public_status_queries_for_test() -> [iroha_data_model::query::SingularQueryBox; 9] {
+    use iroha_data_model::{
+        privacy::{
+            PrivacyIssuerIdV1, PrivacyNullifierV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+            PrivacyProtocolIdV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
+            PrivacyZkAmsRegistryIdV1,
+        },
+        query::{
+            SingularQueryBox,
+            privacy::prelude::{
+                FindPrivacyActionExecutionReceiptV1, FindPrivacyAnonymousPgcPoolStateV1,
+                FindPrivacyOrchardNullifierV1, FindPrivacyOrchardPoolStateV1,
+                FindPrivacyProofManagedPoolStateV1, FindPrivacyZkAceReplayNullifierV1,
+                FindPrivacyZkAmsAdmissionV1, FindPrivacyZkAmsProvisionV1,
+                FindPrivacyZkX509CertificateNullifierV1,
+            },
+        },
+    };
+
+    let issuer_id = PrivacyIssuerIdV1::new([0xA1; 32]);
+    let registry_id = PrivacyZkAmsRegistryIdV1::new([0xA2; 32]);
+    let policy_id = PrivacyPolicyIdV1::new([0xA3; 32]);
+    [
+        SingularQueryBox::from(FindPrivacyZkAceReplayNullifierV1::new(
+            policy_id,
+            PrivacyNullifierV1::new([0xA0; 32]),
+        )),
+        SingularQueryBox::from(FindPrivacyProofManagedPoolStateV1::new(
+            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            PrivacyPoolIdV1::new([0xA1; 32]),
+        )),
+        SingularQueryBox::from(FindPrivacyOrchardPoolStateV1::new(PrivacyPoolIdV1::new(
+            [0xA2; 32],
+        ))),
+        SingularQueryBox::from(FindPrivacyOrchardNullifierV1::new(
+            PrivacyPoolIdV1::new([0xA3; 32]),
+            [0xA4; 32],
+        )),
+        SingularQueryBox::from(FindPrivacyAnonymousPgcPoolStateV1::new(
+            PrivacyPoolIdV1::new([0xA5; 32]),
+        )),
+        SingularQueryBox::from(FindPrivacyZkAmsAdmissionV1::new(
+            issuer_id,
+            registry_id,
+            policy_id,
+            PrivacyZkAmsPhcHashV1::new([0xA6; 32]),
+        )),
+        SingularQueryBox::from(FindPrivacyZkAmsProvisionV1::new(
+            issuer_id,
+            registry_id,
+            policy_id,
+            PrivacyZkAmsKeyImageV1::new([0xA7; 32]),
+        )),
+        SingularQueryBox::from(FindPrivacyZkX509CertificateNullifierV1::new(
+            issuer_id,
+            policy_id,
+            PrivacyNullifierV1::new([0xA8; 32]),
+        )),
+        SingularQueryBox::from(FindPrivacyActionExecutionReceiptV1::new(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            [0xA9; 32],
+            0,
+        )),
+    ]
+}
+#[test]
+fn signed_query_scope_classifies_exact12_public_status_as_local_replicated() {
+    let authority =
+        checked_torii_test_account_id(0xd6, "derive Exact12 status authority fixture key");
+    for query in exact12_public_status_queries_for_test() {
+        let request = request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Singular(query),
+        );
+        assert_eq!(
+            super::signed_query_scope(&request),
+            super::SignedQueryScope::LocalReplicated
+        );
+    }
+}
 #[test]
 fn signed_query_scope_classifies_trigger_inventory_queries_as_local_replicated() {
     let key_pair =
@@ -1550,6 +1630,25 @@ async fn signed_query_authorization_gates_global_history_and_replicated_inventor
         let scope = super::signed_query_scope_for_app(app.as_ref(), request);
         super::torii_authorized_signed_query_routes(app.as_ref(), request, &scope)
             .expect("an exact grant for every restricted route should allow a global read");
+    }
+}
+#[tokio::test]
+async fn signed_query_authorization_allows_registered_exact12_status_without_global_read_grant() {
+    let authority =
+        checked_torii_test_account_id(0xd5, "derive Exact12 status authorization fixture key");
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    configure_private_ingress_routes_for_test(&mut app);
+
+    for query in exact12_public_status_queries_for_test() {
+        let request = request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Singular(query),
+        );
+        let scope = super::signed_query_scope_for_app(app.as_ref(), &request);
+        assert_eq!(scope, super::SignedQueryScope::LocalReplicated);
+        let routes = super::torii_authorized_signed_query_routes(app.as_ref(), &request, &scope)
+            .expect("registered Exact12 status lookup must not require a global read root");
+        assert!(routes.is_empty(), "replicated status executes locally");
     }
 }
 #[cfg(feature = "app_api")]

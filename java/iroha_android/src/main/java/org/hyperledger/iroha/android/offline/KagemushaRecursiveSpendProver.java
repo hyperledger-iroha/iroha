@@ -65,6 +65,9 @@ public final class KagemushaRecursiveSpendProver {
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
   /** Mandatory sender-final peer-cash handoff/finality contract. */
   public static final String CASH_HANDOFF_CAPABILITY_V1 = "cash_handoff_v1";
+  /** Eligibility-gated handoff advertised separately from the legacy capability. */
+  public static final String CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1 =
+      "cash_handoff_eligibility_v1";
   public static final String V4_ARTIFACT_MANIFEST_SCHEMA =
       "kagemusha.offline.recursive_spend.artifact_manifest.v4";
   public static final String ARTIFACT_MANIFEST_SCHEMA = V4_ARTIFACT_MANIFEST_SCHEMA;
@@ -570,6 +573,11 @@ public final class KagemushaRecursiveSpendProver {
     return new TopUpFinalityRosterArtifact(archive);
   }
 
+  /** Decode exact compact-finality proof bytes without interpreting proof-controlled fields. */
+  public static TopUpFinalityProof decodeTopUpFinalityProof(final byte[] archive) {
+    return new TopUpFinalityProof(archive);
+  }
+
   /** Restores the exact canonical Torii request retained for an idempotent top-up retry. */
   public static TopUpRequest decodeTopUpRequest(final byte[] archive) {
     return new TopUpRequest(archive);
@@ -578,6 +586,40 @@ public final class KagemushaRecursiveSpendProver {
   /** Restores the exact canonical Torii request retained for an idempotent redemption retry. */
   public static RedeemSubmissionRequest decodeRedeemSubmissionRequest(final byte[] archive) {
     return new RedeemSubmissionRequest(archive);
+  }
+
+  /** Native-bound projection of one exact HTTP-202 operation reference. */
+  public static OperationReferenceProjection projectOperationReference(
+      final OperationReference reference,
+      final String expectedOperationId,
+      final OperationKind expectedKind,
+      final long expectedSubmittedAtMilliseconds) {
+    requireArtifactBridge();
+    final String kindText = expectedKind == OperationKind.TOP_UP ? "top_up" : "redeem";
+    final byte[][] fields = nativeProjectOperationReferenceV1(
+        Objects.requireNonNull(reference, "reference").noritoEncoded(),
+        Objects.requireNonNull(expectedOperationId, "expectedOperationId")
+            .getBytes(StandardCharsets.UTF_8),
+        kindText.getBytes(StandardCharsets.UTF_8),
+        expectedSubmittedAtMilliseconds);
+    requireFieldCount(fields, 6, "operation reference projection");
+    if (!"pending".equals(canonicalText(fields[0], "operationState"))) {
+      throw new IllegalStateException("native Kagemusha operation reference is not Pending");
+    }
+    if (!kindText.equals(canonicalText(fields[1], "operationKind"))) {
+      throw new IllegalStateException("native Kagemusha operation reference changed kind");
+    }
+    final long submittedAt = longInteger(fields[5], "submittedAtMilliseconds");
+    if (submittedAt != expectedSubmittedAtMilliseconds) {
+      throw new IllegalStateException("native Kagemusha operation reference changed submitted time");
+    }
+    return new OperationReferenceProjection(
+        OperationState.PENDING,
+        expectedKind,
+        requireDigest(fields[2], "operationId"),
+        requireDigest(fields[3], "transactionHash"),
+        canonicalText(fields[4], "statusUri"),
+        submittedAt);
   }
 
   public static OperationStatusProjection projectOperationStatus(final OperationStatus status) {
@@ -637,7 +679,7 @@ public final class KagemushaRecursiveSpendProver {
     requireArtifactBridge();
     final byte[][] fields =
         nativeProjectReadinessV4(Objects.requireNonNull(readiness, "readiness").noritoEncoded());
-    if (fields == null || fields.length < 17) {
+    if (fields == null || fields.length < 18) {
       throw new IllegalStateException(
           "native Kagemusha readiness projection returned invalid fields");
     }
@@ -647,8 +689,8 @@ public final class KagemushaRecursiveSpendProver {
             "native Kagemusha readiness projection returned a null field");
       }
     }
-    final int blockerCount = integer(fields[16], "blockerCount");
-    if (blockerCount < 0 || fields.length != 17 + blockerCount * 2) {
+    final int blockerCount = integer(fields[17], "blockerCount");
+    if (blockerCount < 0 || fields.length != 18 + blockerCount * 2) {
       throw new IllegalStateException(
           "native Kagemusha readiness projection returned invalid blockers");
     }
@@ -657,26 +699,27 @@ public final class KagemushaRecursiveSpendProver {
     for (int index = 0; index < blockerCount; index++) {
       blockers.add(
           new ReadinessBlocker(
-              canonicalText(fields[17 + index * 2], "blockerCode"),
-              canonicalText(fields[18 + index * 2], "blockerMessage")));
+              canonicalText(fields[18 + index * 2], "blockerCode"),
+              canonicalText(fields[19 + index * 2], "blockerMessage")));
     }
     return new ReadinessProjection(
         canonicalText(fields[0], "cashHandoffCapability"),
-        integer(fields[1], "requiredBridgeAbiVersion"),
-        integer(fields[2], "maximumHops"),
-        canonicalText(fields[3], "assetDefinitionId"),
-        fields[4].length == 0 ? null : integer(fields[4], "assetScale"),
-        longInteger(fields[5], "evaluatedBlockHeight"),
-        requireDigest(fields[6], "evaluatedBlockHash"),
-        bool(fields[7], "proofBackendAvailable"),
-        bool(fields[8], "recursiveLineageSupported"),
-        bool(fields[9], "ready"),
-        activeVerifier(fields[10]),
+        canonicalText(fields[1], "eligibilityCashHandoffCapability"),
+        integer(fields[2], "requiredBridgeAbiVersion"),
+        integer(fields[3], "maximumHops"),
+        canonicalText(fields[4], "assetDefinitionId"),
+        fields[5].length == 0 ? null : integer(fields[5], "assetScale"),
+        longInteger(fields[6], "evaluatedBlockHeight"),
+        requireDigest(fields[7], "evaluatedBlockHash"),
+        bool(fields[8], "proofBackendAvailable"),
+        bool(fields[9], "recursiveLineageSupported"),
+        bool(fields[10], "ready"),
         activeVerifier(fields[11]),
         activeVerifier(fields[12]),
         activeVerifier(fields[13]),
         activeVerifier(fields[14]),
-        authenticatedArtifactSet(fields[15]),
+        activeVerifier(fields[15]),
+        authenticatedArtifactSet(fields[16]),
         blockers);
   }
 
@@ -1295,6 +1338,31 @@ public final class KagemushaRecursiveSpendProver {
       SecretArchiveWiper.wipe(membershipArchive);
       SecretArchiveWiper.wipe(openingArchive);
     }
+  }
+
+  /**
+   * Verify the specialized compact top-up proof and expose only its native-authenticated block
+   * identity for agreement with the uniform finalized issuer outcome.
+   */
+  public static VerifiedTopUpFinalityV4 projectVerifiedTopUpFinalityV4(
+      final TopUpAnchorV4 topUpAnchor,
+      final TopUpFinalityProof topUpFinalityProof,
+      final TopUpFinalityRosterArtifact topUpFinalityRosterArtifact) {
+    requireArtifactBridge();
+    requireV4ProofBackend();
+    final byte[][] fields =
+        nativeProjectVerifiedTopUpFinalityV4(
+            Objects.requireNonNull(topUpAnchor, "topUpAnchor").noritoEncoded(),
+            Objects.requireNonNull(topUpFinalityProof, "topUpFinalityProof").noritoEncoded(),
+            Objects.requireNonNull(topUpFinalityRosterArtifact, "topUpFinalityRosterArtifact")
+                .noritoEncoded());
+    requireFieldCount(fields, 5, "verified V4 top-up finality projection");
+    return new VerifiedTopUpFinalityV4(
+        requireDigest(fields[0], "operationId"),
+        canonicalText(fields[1], "transactionHashHex"),
+        longInteger(fields[2], "height"),
+        canonicalText(fields[3], "blockHashHex"),
+        requireDigest(fields[4], "heightContextId"));
   }
 
   /** Build and validate the complete origin-finality inventory for one V4 bundle. */
@@ -2767,6 +2835,66 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
+  /** Exact block identity returned only after the native compact-finality verifier succeeds. */
+  public static final class VerifiedTopUpFinalityV4 {
+    private final byte[] operationId;
+    private final String transactionHashHex;
+    private final long height;
+    private final String blockHashHex;
+    private final byte[] heightContextId;
+
+    private VerifiedTopUpFinalityV4(
+        final byte[] operationId,
+        final String transactionHashHex,
+        final long height,
+        final String blockHashHex,
+        final byte[] heightContextId) {
+      if (operationId == null || operationId.length != 32 || allZero(operationId)) {
+        throw new IllegalArgumentException("operationId must contain exactly 32 nonzero bytes");
+      }
+      if (!isMarkedIrohaHashHex(transactionHashHex)) {
+        throw new IllegalArgumentException(
+            "transactionHashHex must be an exact lowercase marked 32-byte Iroha hash");
+      }
+      if (height <= 0) {
+        throw new IllegalArgumentException("height must be positive");
+      }
+      if (!isMarkedIrohaHashHex(blockHashHex)) {
+        throw new IllegalArgumentException(
+            "blockHashHex must be an exact lowercase marked 32-byte Iroha hash");
+      }
+      if (heightContextId == null
+          || heightContextId.length != 32
+          || (heightContextId[31] & 1) == 0) {
+        throw new IllegalArgumentException(
+            "heightContextId must contain one exact marked 32-byte Iroha hash");
+      }
+      this.operationId = operationId.clone();
+      this.transactionHashHex = transactionHashHex;
+      this.height = height;
+      this.blockHashHex = blockHashHex;
+      this.heightContextId = heightContextId.clone();
+    }
+
+    public byte[] operationId() { return operationId.clone(); }
+    public String transactionHashHex() { return transactionHashHex; }
+    public long height() { return height; }
+    public String blockHashHex() { return blockHashHex; }
+    public byte[] heightContextId() { return heightContextId.clone(); }
+
+    private static boolean allZero(final byte[] value) {
+      int aggregate = 0;
+      for (final byte current : value) aggregate |= current;
+      return aggregate == 0;
+    }
+
+    private static boolean isMarkedIrohaHashHex(final String value) {
+      return value != null
+          && value.matches("[0-9a-f]{64}")
+          && (Character.digit(value.charAt(63), 16) & 1) == 1;
+    }
+  }
+
   /** Complete bounded origin-finality inventory required to spend or verify one V4 bundle. */
   public static final class TopUpProvenanceV4 extends CanonicalArchive {
     private TopUpProvenanceV4(final byte[] archive) {
@@ -4012,6 +4140,7 @@ public final class KagemushaRecursiveSpendProver {
         Arrays.asList(
             "mandatory",
             "cash_handoff_capability",
+            "eligibility_cash_handoff_capability",
             "required_bridge_abi_version",
             "max_hops",
             "ready",
@@ -4020,6 +4149,7 @@ public final class KagemushaRecursiveSpendProver {
 
     private final boolean mandatory;
     private final String cashHandoffCapability;
+    private final String eligibilityCashHandoffCapability;
     private final int requiredBridgeAbiVersion;
     private final int maximumHops;
     private final boolean ready;
@@ -4029,6 +4159,7 @@ public final class KagemushaRecursiveSpendProver {
     private OfflineStatus(
         final boolean mandatory,
         final String cashHandoffCapability,
+        final String eligibilityCashHandoffCapability,
         final int requiredBridgeAbiVersion,
         final int maximumHops,
         final boolean ready,
@@ -4041,6 +4172,12 @@ public final class KagemushaRecursiveSpendProver {
       if (!CASH_HANDOFF_CAPABILITY_V1.equals(cashHandoffCapability)) {
         throw new IllegalArgumentException(
             "cashHandoffCapability must be the exact cash_handoff_v1 contract");
+      }
+      if (!CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1.equals(
+          eligibilityCashHandoffCapability)) {
+        throw new IllegalArgumentException(
+            "eligibilityCashHandoffCapability must be the exact "
+                + "cash_handoff_eligibility_v1 contract");
       }
       if (requiredBridgeAbiVersion != REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
         throw new IllegalArgumentException("requiredBridgeAbiVersion must be 22");
@@ -4063,6 +4200,7 @@ public final class KagemushaRecursiveSpendProver {
       }
       this.mandatory = mandatory;
       this.cashHandoffCapability = cashHandoffCapability;
+      this.eligibilityCashHandoffCapability = eligibilityCashHandoffCapability;
       this.requiredBridgeAbiVersion = requiredBridgeAbiVersion;
       this.maximumHops = maximumHops;
       this.ready = ready;
@@ -4080,11 +4218,14 @@ public final class KagemushaRecursiveSpendProver {
       }
       final Object mandatoryValue = root.get("mandatory");
       final Object capabilityValue = root.get("cash_handoff_capability");
+      final Object eligibilityCapabilityValue =
+          root.get("eligibility_cash_handoff_capability");
       final Object readyValue = root.get("ready");
       final Object assetsValue = root.get("assets");
       final Object blockersValue = root.get("blockers");
       if (!(mandatoryValue instanceof Boolean mandatory)
           || !(capabilityValue instanceof String capability)
+          || !(eligibilityCapabilityValue instanceof String eligibilityCapability)
           || !(readyValue instanceof Boolean ready)
           || !(assetsValue instanceof List<?> parsedAssets)
           || !(blockersValue instanceof List<?> parsedBlockers)) {
@@ -4098,6 +4239,7 @@ public final class KagemushaRecursiveSpendProver {
       return new OfflineStatus(
           mandatory,
           capability,
+          eligibilityCapability,
           JsonNumbers.asInt(
               root.get("required_bridge_abi_version"),
               "offline capability required_bridge_abi_version"),
@@ -4109,6 +4251,9 @@ public final class KagemushaRecursiveSpendProver {
 
     public boolean mandatory() { return mandatory; }
     public String cashHandoffCapability() { return cashHandoffCapability; }
+    public String eligibilityCashHandoffCapability() {
+      return eligibilityCashHandoffCapability;
+    }
     public int requiredBridgeAbiVersion() { return requiredBridgeAbiVersion; }
     public int maximumHops() { return maximumHops; }
     public boolean ready() { return ready; }
@@ -4293,6 +4438,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static final class ReadinessProjection {
     private final String cashHandoffCapability;
+    private final String eligibilityCashHandoffCapability;
     private final int requiredBridgeAbiVersion;
     private final int maximumHops;
     private final String assetDefinitionId;
@@ -4312,6 +4458,7 @@ public final class KagemushaRecursiveSpendProver {
 
     ReadinessProjection(
         final String cashHandoffCapability,
+        final String eligibilityCashHandoffCapability,
         final int requiredBridgeAbiVersion,
         final int maximumHops,
         final String assetDefinitionId,
@@ -4332,7 +4479,14 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalArgumentException(
             "cashHandoffCapability must be the exact cash_handoff_v1 contract");
       }
+      if (!CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1.equals(
+          eligibilityCashHandoffCapability)) {
+        throw new IllegalArgumentException(
+            "eligibilityCashHandoffCapability must be the exact "
+                + "cash_handoff_eligibility_v1 contract");
+      }
       this.cashHandoffCapability = cashHandoffCapability;
+      this.eligibilityCashHandoffCapability = eligibilityCashHandoffCapability;
       this.requiredBridgeAbiVersion = requiredBridgeAbiVersion;
       this.maximumHops = maximumHops;
       this.assetDefinitionId = assetDefinitionId;
@@ -4352,6 +4506,9 @@ public final class KagemushaRecursiveSpendProver {
     }
 
     public String cashHandoffCapability() { return cashHandoffCapability; }
+    public String eligibilityCashHandoffCapability() {
+      return eligibilityCashHandoffCapability;
+    }
     public int requiredBridgeAbiVersion() { return requiredBridgeAbiVersion; }
     public int maximumHops() { return maximumHops; }
     public String assetDefinitionId() { return assetDefinitionId; }
@@ -4399,6 +4556,8 @@ public final class KagemushaRecursiveSpendProver {
     }
     public boolean offlineReady() {
       return ready && CASH_HANDOFF_CAPABILITY_V1.equals(cashHandoffCapability)
+          && CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1.equals(
+              eligibilityCashHandoffCapability)
           && recursiveLineageSupported && bridgeCompatible()
           && chainArtifactSetReady() && allVerifiersActive() && assetScale != null
           && assetScale >= 0 && assetScale <= KagemushaScaledAmount.MAXIMUM_SCALE
@@ -4427,6 +4586,42 @@ public final class KagemushaRecursiveSpendProver {
   public enum OperationState { PENDING, APPLIED, REJECTED }
 
   public enum OperationKind { TOP_UP, REDEEM }
+
+  public static final class OperationReferenceProjection {
+    private final OperationState state;
+    private final OperationKind kind;
+    private final byte[] operationId;
+    private final byte[] transactionHash;
+    private final String statusUri;
+    private final long submittedAtMilliseconds;
+
+    private OperationReferenceProjection(
+        final OperationState state,
+        final OperationKind kind,
+        final byte[] operationId,
+        final byte[] transactionHash,
+        final String statusUri,
+        final long submittedAtMilliseconds) {
+      this.state = Objects.requireNonNull(state, "state");
+      this.kind = Objects.requireNonNull(kind, "kind");
+      this.operationId = requireDigest(operationId, "operationId");
+      this.transactionHash = requireDigest(transactionHash, "transactionHash");
+      this.statusUri = Objects.requireNonNull(statusUri, "statusUri");
+      this.submittedAtMilliseconds = submittedAtMilliseconds;
+      if (state != OperationState.PENDING
+          || !statusUri.equals("/v1/offline/operations/" + hex(this.operationId))
+          || submittedAtMilliseconds <= 0) {
+        throw new IllegalArgumentException("operation reference projection is not canonical");
+      }
+    }
+
+    public OperationState state() { return state; }
+    public OperationKind kind() { return kind; }
+    public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
+    public byte[] transactionHash() { return Arrays.copyOf(transactionHash, transactionHash.length); }
+    public String statusUri() { return statusUri; }
+    public long submittedAtMilliseconds() { return submittedAtMilliseconds; }
+  }
 
   public static final class OperationRejection {
     private final String code;
@@ -5042,6 +5237,8 @@ public final class KagemushaRecursiveSpendProver {
       byte[][] changeFields, byte[][] dummyFields);
   private static native byte[] nativeBuildInitRequestV4(
       byte[] anchor, byte[] proof, byte[] roster, byte[] opening, byte[] outputMembership);
+  private static native byte[][] nativeProjectVerifiedTopUpFinalityV4(
+      byte[] anchor, byte[] finalityProof, byte[] rosterArtifact);
   private static native byte[] nativeBuildTopUpProvenanceV4(
       byte[] bundle, byte[] roster, byte[][] anchors, byte[][] finalityProofs, long blockHeight);
   private static native byte[] nativeValidateTopUpProvenanceV4(
@@ -5087,6 +5284,9 @@ public final class KagemushaRecursiveSpendProver {
       byte[] operationId, byte[] spendKey, byte[] rho, byte[] diversifier, int leafIndex,
       byte[] flattenedSiblings, byte[] directions, byte[] root,
       byte[] shieldVerifierCommitment, byte[] artifactBinding);
+  private static native byte[][] nativeProjectOperationReferenceV1(
+      byte[] reference, byte[] expectedOperationId, byte[] expectedKind,
+      long expectedSubmittedAtMilliseconds);
   private static native byte[][] nativeProjectOperationStatusV4(byte[] status);
   private static native boolean nativeBranchClaimsConflictV2(byte[] left, byte[] right);
   private static native byte[][] nativePrepareRedemptionChangeV4(

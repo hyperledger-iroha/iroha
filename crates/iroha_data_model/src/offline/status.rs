@@ -203,8 +203,10 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
     Debug, Clone, PartialEq, Eq, IntoSchema, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 pub struct OfflineReadiness {
-    /// Exact peer-cash handoff/finality contract required by this chain build.
+    /// Exact unchanged ABI-21/V4 peer-cash handoff proof contract.
     pub cash_handoff_capability: String,
+    /// Exact credential-bearing one-use peer-payment envelope capability.
+    pub eligibility_cash_handoff_capability: String,
     /// Minimum native bridge ABI required by this chain build.
     pub required_bridge_abi_version: u32,
     /// Maximum peer-spend hop depth accepted by the protocol.
@@ -256,8 +258,15 @@ pub struct OfflineStatus {
     /// Legacy compatibility field. Offline capability is universal and does
     /// not impose a backend service-readiness gate.
     pub mandatory: bool,
-    /// Exact irreversible peer-cash handoff contract.
+    /// Exact unchanged ABI-21/V4 peer-cash handoff proof contract.
     pub cash_handoff_capability: String,
+    /// Exact credential-bearing one-use peer-payment envelope capability.
+    ///
+    /// This is deliberately distinct from `cash_handoff_capability`: the
+    /// underlying V4 Kagemusha proof remains ABI 21 while this capability
+    /// advertises the ABI-22 transport envelope that binds current device
+    /// eligibility and an operation-specific one-use signature.
+    pub eligibility_cash_handoff_capability: String,
     /// Exact native bridge ABI required for authenticated V4 artifacts.
     pub required_bridge_abi_version: u32,
     /// Maximum peer-spend hop depth accepted by the protocol.
@@ -281,6 +290,7 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         use norito::json::{Error, MapVisitor};
         let mut visitor = MapVisitor::new(parser)?;
         let mut cash_handoff_capability = None;
+        let mut eligibility_cash_handoff_capability = None;
         let mut required_bridge_abi_version = None;
         let mut max_hops = None;
         let mut asset_definition_id = None;
@@ -305,6 +315,12 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                         return Err(Error::duplicate_field(field));
                     }
                     cash_handoff_capability = Some(visitor.parse_value::<String>()?);
+                }
+                "eligibility_cash_handoff_capability" => {
+                    if eligibility_cash_handoff_capability.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    eligibility_cash_handoff_capability = Some(visitor.parse_value::<String>()?);
                 }
                 "required_bridge_abi_version" => {
                     if required_bridge_abi_version.is_some() {
@@ -417,6 +433,8 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         Ok(Self {
             cash_handoff_capability: cash_handoff_capability
                 .ok_or_else(|| Error::missing_field("cash_handoff_capability"))?,
+            eligibility_cash_handoff_capability: eligibility_cash_handoff_capability
+                .ok_or_else(|| Error::missing_field("eligibility_cash_handoff_capability"))?,
             required_bridge_abi_version: required_bridge_abi_version
                 .ok_or_else(|| Error::missing_field("required_bridge_abi_version"))?,
             max_hops: max_hops.ok_or_else(|| Error::missing_field("max_hops"))?,
@@ -468,6 +486,7 @@ mod tests {
     fn sample_readiness() -> OfflineReadiness {
         OfflineReadiness {
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
+            eligibility_cash_handoff_capability: "cash_handoff_eligibility_v1".to_owned(),
             required_bridge_abi_version: 22,
             max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
@@ -506,6 +525,7 @@ mod tests {
         let status = OfflineStatus {
             mandatory: false,
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
+            eligibility_cash_handoff_capability: "cash_handoff_eligibility_v1".to_owned(),
             required_bridge_abi_version: 22,
             max_hops: 8,
             ready: true,

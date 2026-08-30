@@ -219,6 +219,28 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     )
 }
 android:
+/// Authenticate and inspect one closed Exact12 Java/Android signed action.
+fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeInspectSignedExact12ActionV1();
+sdk:
+/// Authenticate and inspect one closed Exact12 Kotlin/JVM signed action.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeInspectSignedExact12ActionV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    signed_transaction: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    operation_index: jni::sys::jint,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_inspect_signed_exact12_action_v1(
+        &mut env,
+        signed_transaction,
+        network_id,
+        authority,
+        operation_index,
+    )
+}
+android:
 /// Return the canonical exact-12 privacy fixture bundle to the Java Android SDK.
 fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeExact12FixtureBundle();
 sdk:
@@ -656,6 +678,414 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         generated_at,
     )
 }
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeBridgeAbiVersion();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativePrepareExactRejectedTransactionQueryV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativePrepareExactRejectedTransactionQueryV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    transaction_hash_hex: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    nonce: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_transaction_details_prepare_v1(
+        &mut env,
+        network_id,
+        authority,
+        transaction_hash_hex,
+        creation_time_ms,
+        nonce,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeFinalizeExactRejectedTransactionQueryV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeFinalizeExactRejectedTransactionQueryV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_authenticated_transaction_details_finalize_v1(
+        &mut env,
+        preparation,
+        signature,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactCommittedRejectionV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactCommittedRejectionV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_transaction_details_project_rejection_v1(
+        &mut env,
+        preparation,
+        response,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactCommittedTransactionResultV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactCommittedTransactionResultV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_transaction_details_project_result_v1(
+        &mut env,
+        preparation,
+        response,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativePrepareExactTransactionQueryV2();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativePrepareExactTransactionQueryV2(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    query_authority: jni::objects::JByteArray<'_>,
+    expected_transaction_authority: jni::objects::JByteArray<'_>,
+    transaction_hash_hex: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    nonce: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_transaction_details_prepare_v2(
+        &mut env,
+        network_id,
+        query_authority,
+        expected_transaction_authority,
+        transaction_hash_hex,
+        creation_time_ms,
+        nonce,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeFinalizeExactTransactionQueryV2();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeFinalizeExactTransactionQueryV2(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_authenticated_transaction_details_finalize_v2(&mut env, preparation, signature)
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactCommittedRejectionV2();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactCommittedRejectionV2(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_transaction_details_project_rejection_v2(
+        &mut env,
+        preparation,
+        response,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactKagemushaCommittedRejectionV2();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactKagemushaCommittedRejectionV2(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+    expected_operation_id: jni::objects::JByteArray<'_>,
+    expected_kind: jni::objects::JByteArray<'_>,
+    expected_request: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_kagemusha_rejection_project_v2(
+        &mut env,
+        preparation,
+        response,
+        expected_operation_id,
+        expected_kind,
+        expected_request,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactCommittedTransactionResultV2();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactCommittedTransactionResultV2(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_transaction_details_project_result_v2(
+        &mut env,
+        preparation,
+        response,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeBindFinalityProofPageV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeBindFinalityProofPageV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    proof_archives: jni::objects::JObjectArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_finality_proof_page_bind_v1(&mut env, proof_archives)
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeVerifyFinalityPageV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeVerifyFinalityPageV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    finality_page_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_authenticated_finality_page_verify_v1(
+        &mut env,
+        network_id,
+        trusted_checkpoint_height,
+        trusted_checkpoint_context_id,
+        finality_page_archive,
+    )
+}
+android:
+#[allow(clippy::too_many_arguments)]
+fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectFinalizedKagemushaOutcomeV1();
+sdk:
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectFinalizedKagemushaOutcomeV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+    expected_operation_id: jni::objects::JByteArray<'_>,
+    expected_kind: jni::objects::JByteArray<'_>,
+    expected_request: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    finality_page_archive: jni::objects::JByteArray<'_>,
+    executed_block_wire: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_finalized_kagemusha_outcome_project_v1(
+        &mut env,
+        preparation,
+        response,
+        expected_operation_id,
+        expected_kind,
+        expected_request,
+        network_id,
+        trusted_checkpoint_height,
+        trusted_checkpoint_context_id,
+        finality_page_archive,
+        executed_block_wire,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactOfflineDeviceRegistrationResultV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedTransactionDetailsNativeBridge_nativeProjectExactOfflineDeviceRegistrationResultV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_authenticated_offline_device_registration_result_project_v1(
+        &mut env,
+        preparation,
+        response,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativeBridgeAbiVersion();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+android:
+#[allow(clippy::too_many_arguments)]
+fn Java_org_hyperledger_iroha_android_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativeProjectFinalizedPrivacyActionRejectionV1();
+sdk:
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativeProjectFinalizedPrivacyActionRejectionV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+    operation_index: jni::sys::jint,
+    action_index: jni::sys::jint,
+    requested_action_binding: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+    finality_page_archive: jni::objects::JByteArray<'_>,
+    executed_block_wire: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_finalized_privacy_action_rejection_project_v1(
+        &mut env,
+        preparation,
+        response,
+        operation_index,
+        action_index,
+        requested_action_binding,
+        network_id,
+        trusted_checkpoint_height,
+        trusted_checkpoint_context_id,
+        finality_page_archive,
+        executed_block_wire,
+    )
+}
+android:
+#[allow(clippy::too_many_arguments)]
+fn Java_org_hyperledger_iroha_android_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativePreparePrivacyActionReceiptQueryV1();
+sdk:
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativePreparePrivacyActionReceiptQueryV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    operation_index: jni::sys::jint,
+    transaction_hash_hex: jni::objects::JByteArray<'_>,
+    action_index: jni::sys::jint,
+    requested_action_binding: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    nonce: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_privacy_action_receipt_prepare_v1(
+        &mut env,
+        network_id,
+        authority,
+        operation_index,
+        transaction_hash_hex,
+        action_index,
+        requested_action_binding,
+        creation_time_ms,
+        nonce,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativeFinalizePrivacyActionReceiptQueryV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativeFinalizePrivacyActionReceiptQueryV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_authenticated_privacy_action_receipt_finalize_v1(
+        &mut env,
+        preparation,
+        signature,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativeProjectPrivacyActionReceiptV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedPrivacyActionReceiptNativeBridge_nativeProjectPrivacyActionReceiptV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_privacy_action_receipt_project_v1(
+        &mut env,
+        preparation,
+        response,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedPrivacyStateQueryNativeBridge_nativeBridgeAbiVersion();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedPrivacyStateQueryNativeBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+android:
+#[allow(clippy::too_many_arguments)]
+fn Java_org_hyperledger_iroha_android_client_AuthenticatedPrivacyStateQueryNativeBridge_nativePreparePrivacyStateQueryV1();
+sdk:
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedPrivacyStateQueryNativeBridge_nativePreparePrivacyStateQueryV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    query_id: jni::sys::jint,
+    protocol_index: jni::sys::jint,
+    request_binding: jni::objects::JByteArray<'_>,
+    creation_time_ms: jni::sys::jlong,
+    nonce: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_authenticated_privacy_state_query_prepare_v1(
+        &mut env,
+        network_id,
+        authority,
+        query_id,
+        protocol_index,
+        request_binding,
+        creation_time_ms,
+        nonce,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedPrivacyStateQueryNativeBridge_nativeFinalizePrivacyStateQueryV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedPrivacyStateQueryNativeBridge_nativeFinalizePrivacyStateQueryV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_authenticated_privacy_state_query_finalize_v1(
+        &mut env,
+        preparation,
+        signature,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_client_AuthenticatedPrivacyStateQueryNativeBridge_nativeProjectPrivacyStateQueryV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AuthenticatedPrivacyStateQueryNativeBridge_nativeProjectPrivacyStateQueryV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    preparation: jni::objects::JByteArray<'_>,
+    response: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_authenticated_privacy_state_query_project_v1(
+        &mut env,
+        preparation,
+        response,
+    )
+}
 }
 type JniByteArray = jni::sys::jbyteArray;
 type JniObjectArray = jni::sys::jobjectArray;
@@ -830,6 +1260,9 @@ kagemusha_sdk_android_forwarders! {
         anchor bytes, proof bytes, roster bytes, opening bytes,
         output_membership bytes
     } -> JniByteArray = java_native_kagemusha_build_init_request_v4;
+    nativeProjectVerifiedTopUpFinalityV4 {
+        anchor bytes, finality_proof bytes, roster_artifact bytes
+    } -> JniObjectArray = java_native_kagemusha_project_verified_topup_finality_v4;
     nativeBuildTopUpProvenanceV4 {
         bundle bytes, roster bytes, anchors objects, finality_proofs objects,
         block_height long
@@ -855,6 +1288,53 @@ kagemusha_sdk_android_forwarders! {
         block_height long
     } -> JniByteArray = java_native_kagemusha_build_redeem_request_v4;
     nativeProjectPeerPaymentV4 { payment bytes } -> JniObjectArray = java_native_kagemusha_project_peer_payment_v4;
+    nativeEncodeOfflineDevicePolicyProofRequestV1 {
+        trusted_checkpoint_height long, trusted_checkpoint_context_id bytes
+    } -> JniByteArray = java_native_offline_device_policy_proof_request_v1;
+    nativeVerifyOfflineDevicePolicyProofV1 {
+        proof_page bytes, expected_network_id bytes, trusted_checkpoint_height long,
+        trusted_checkpoint_context_id bytes, evaluation_time_ms long
+    } -> JniByteArray = java_native_offline_device_policy_proof_verify_v1;
+    nativeEncodeOfflineDeviceEligibilityRequestV1 {
+        registration_hash bytes, device_id bytes, attestation_key_id bytes,
+        requested_ttl_ms long
+    } -> JniByteArray = java_native_offline_device_eligibility_request_v1;
+    nativeVerifyOfflineDeviceEligibilityResponseV1 {
+        response bytes, expected_registration_hash bytes, expected_issuer bytes,
+        expected_network_id bytes, trusted_context_id bytes, evaluation_time_ms long
+    } -> JniByteArray = java_native_offline_device_eligibility_response_verify_v1;
+    nativeVerifyOfflineDeviceAttestationPolicyViewV1 {
+        policy_view bytes, expected_network_id bytes, trusted_context_id bytes,
+        evaluation_time_ms long
+    } -> JniByteArray = java_native_offline_device_attestation_policy_view_verify_v1;
+    nativeProjectOfflineDeviceAttestationPolicyViewClaimsV1 {
+        policy_view bytes, expected_network_id bytes, trusted_context_id bytes,
+        evaluation_time_ms long
+    } -> JniByteArray = java_native_offline_device_attestation_policy_view_claims_v1;
+    nativeVerifyOfflineDeviceEligibilityCredentialV1 {
+        credential bytes, expected_issuer bytes, policy_view bytes, expected_network_id bytes,
+        trusted_context_id bytes, evaluation_time_ms long
+    } -> JniByteArray = java_native_offline_device_eligibility_credential_verify_v1;
+    nativeVerifyOfflineDeviceEligibilityPeerCertificateV1 {
+        credential bytes, expected_issuer bytes, policy_view bytes, expected_network_id bytes,
+        trusted_context_id bytes, evaluation_time_ms long
+    } -> JniByteArray = java_native_offline_device_eligibility_peer_certificate_verify_v1;
+    nativePrepareEligibilityPaymentV1 {
+        payment bytes, credential bytes, request bytes
+    } -> JniByteArray = java_native_kagemusha_prepare_eligibility_payment_v1;
+    nativeEligibilityPaymentSigningBytesV1 {
+        payload bytes
+    } -> JniByteArray = java_native_kagemusha_eligibility_payment_signing_bytes_v1;
+    nativeFinalizeEligibilityPaymentV1 {
+        payload bytes, signature bytes
+    } -> JniByteArray = java_native_kagemusha_finalize_eligibility_payment_v1;
+    nativeValidateEligibilityPaymentStaticV1 {
+        envelope bytes
+    } -> JniByteArray = java_native_kagemusha_validate_eligibility_payment_static_v1;
+    nativeValidateEligibilityPaymentFirstDeliveryV1 {
+        envelope bytes, request bytes, expected_issuer bytes, policy_view bytes,
+        received_at_ms long
+    } -> JniByteArray = java_native_kagemusha_validate_eligibility_payment_first_delivery_v1;
     nativeProjectInitResultV4 { result bytes } -> JniObjectArray = java_native_kagemusha_project_init_result_v4;
     nativeProjectSplitResultV4 { result bytes } -> JniObjectArray = java_native_kagemusha_project_split_result_v4;
     nativeProjectVerifyResultV4 { result bytes } -> JniObjectArray = java_native_kagemusha_project_verify_result_v4;
@@ -871,6 +1351,16 @@ kagemusha_sdk_android_forwarders! {
         operation_id bytes, issued_at_ms long, expires_at_ms long, nonce bytes,
         payload_digest bytes, registration_hash bytes, hardware_assertion_platform bytes
     } -> JniObjectArray = java_native_kagemusha_prepare_authorization_v2;
+    #[allow(clippy::too_many_arguments)]
+    nativeFinalizeDrainOnlyRedemptionAuthorizationV1 {
+        authority bytes, chain_discriminant int, device_id bytes, asset_definition_id bytes,
+        operation_id bytes, issued_at_ms long, expires_at_ms long, nonce bytes,
+        payload_digest bytes, policy_view bytes, expected_network_id bytes,
+        trusted_context_id bytes
+    } -> JniByteArray = java_native_kagemusha_finalize_drain_only_redemption_authorization_v1;
+    nativeBuildDrainOnlyRedeemInstructionV4 {
+        request bytes, authority bytes, chain_discriminant int
+    } -> JniObjectArray = java_native_kagemusha_build_drain_only_redeem_instruction_v4;
     nativeFinalizeHardwareAuthorizationV2 {
         preparation bytes, authenticator_data bytes, signature_der bytes
     } -> JniObjectArray = java_native_kagemusha_finalize_hardware_authorization_v2;
@@ -884,6 +1374,10 @@ kagemusha_sdk_android_forwarders! {
         rho bytes, diversifier bytes, leaf_index int, flattened_siblings bytes,
         directions bytes, root bytes, shield_verifier_commitment bytes, artifact_binding bytes
     } -> JniObjectArray = java_native_kagemusha_prepare_top_up_v4;
+    nativeProjectOperationReferenceV1 {
+        reference bytes, expected_operation_id bytes, expected_kind bytes,
+        expected_submitted_at_ms long
+    } -> JniObjectArray = java_native_kagemusha_project_operation_reference_v1;
     nativeProjectOperationStatusV4 { status bytes } -> JniObjectArray = java_native_kagemusha_project_operation_status_v4;
     nativeBranchClaimsConflictV2 { left bytes, right bytes } -> JniBoolean = java_native_kagemusha_branch_claims_conflict_v2;
     #[allow(clippy::too_many_arguments)]
@@ -898,6 +1392,36 @@ kagemusha_sdk_android_forwarders! {
     } -> JniObjectArray = java_native_kagemusha_prepare_peer_split_change_v4;
     nativePrepareNoteOpeningV2 { spend_key bytes, rho bytes, diversifier bytes } -> JniByteArray = java_native_kagemusha_prepare_note_opening_v2;
     nativeProjectRecipientRequestV2 { request bytes } -> JniObjectArray = java_native_kagemusha_project_recipient_request_v2;
+}
+
+jni_sdk_android_pairs! {
+android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeValidateEligibilityPaymentFirstDeliveryFinalizedV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeValidateEligibilityPaymentFirstDeliveryFinalizedV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    envelope: jni::objects::JByteArray<'_>,
+    request: jni::objects::JByteArray<'_>,
+    expected_issuer: jni::objects::JByteArray<'_>,
+    policy_view: jni::objects::JByteArray<'_>,
+    expected_network_id: jni::objects::JByteArray<'_>,
+    trusted_context_id: jni::objects::JByteArray<'_>,
+    received_at_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_validate_eligibility_payment_first_delivery_finalized_v1(
+        &mut env,
+        JavaKagemushaFinalizedFirstDeliveryV1 {
+            envelope,
+            request,
+            expected_issuer,
+            policy_view,
+            expected_network_id,
+            trusted_context_id,
+            received_at_ms,
+        },
+    )
+}
 }
 
 pub(super) fn ensure_min_array_length(

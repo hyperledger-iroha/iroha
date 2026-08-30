@@ -162,10 +162,13 @@ final class ZkAssetMerklePathTests: XCTestCase {
             session: URLSession(configuration: config),
             localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
         )
-        let path = try await client.getMerklePathForCommitment(
-            asset: "usd#bank",
-            commitment: commitment,
+        let provider: any ZkAssetMerklePathProvider = AuthenticatedToriiZkAssetMerklePathProvider(
+            client: client,
             canonicalAuth: canonicalAuth
+        )
+        let path = try await provider.getMerklePathForCommitment(
+            asset: "usd#bank",
+            commitment: commitment
         )
         XCTAssertEqual(path.rootAtHeight, root)
         XCTAssertEqual(path.siblings, localPath.siblings)

@@ -832,6 +832,8 @@ define_ristretto255_encoding!(
 include!("privacy/protocol.rs");
 mod capability_manifest;
 pub use capability_manifest::*;
+mod action_operation;
+pub use action_operation::*;
 include!("privacy/credentials.rs");
 include!("privacy/statements.rs");
 include!("privacy/proofs.rs");

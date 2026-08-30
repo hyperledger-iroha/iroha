@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
+import org.hyperledger.iroha.android.offline.OfflineAndroidAttestedDevicePropertiesV2;
 
 /** Result of a successfully verified Android key attestation bundle. */
 public final class AttestationResult {
@@ -18,7 +20,15 @@ public final class AttestationResult {
   private final boolean softwareAuthorisationsPresent;
   private final boolean teeAuthorisationsPresent;
   private final boolean strongBoxAuthorisationsPresent;
+  private final OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties;
 
+  /**
+   * Compatibility constructor for callers using generic key-attestation verification.
+   *
+   * <p>Offline-device registration callers must use {@link
+   * AttestationVerifier#verifyOfflineDeviceRegistration(KeyAttestation, byte[], String, byte[])}
+   * so the authenticated V2 device properties cannot be omitted.
+   */
   public AttestationResult(
       final String alias,
       final List<X509Certificate> certificateChain,
@@ -29,6 +39,30 @@ public final class AttestationResult {
       final boolean softwareAuthorisationsPresent,
       final boolean teeAuthorisationsPresent,
       final boolean strongBoxAuthorisationsPresent) {
+    this(
+        alias,
+        certificateChain,
+        attestationSecurityLevel,
+        keymasterSecurityLevel,
+        attestationChallenge,
+        uniqueId,
+        softwareAuthorisationsPresent,
+        teeAuthorisationsPresent,
+        strongBoxAuthorisationsPresent,
+        null);
+  }
+
+  public AttestationResult(
+      final String alias,
+      final List<X509Certificate> certificateChain,
+      final SecurityLevel attestationSecurityLevel,
+      final SecurityLevel keymasterSecurityLevel,
+      final byte[] attestationChallenge,
+      final byte[] uniqueId,
+      final boolean softwareAuthorisationsPresent,
+      final boolean teeAuthorisationsPresent,
+      final boolean strongBoxAuthorisationsPresent,
+      final OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties) {
     this.alias = Objects.requireNonNull(alias, "alias");
     this.certificateChain =
         Collections.unmodifiableList(
@@ -47,6 +81,7 @@ public final class AttestationResult {
     this.softwareAuthorisationsPresent = softwareAuthorisationsPresent;
     this.teeAuthorisationsPresent = teeAuthorisationsPresent;
     this.strongBoxAuthorisationsPresent = strongBoxAuthorisationsPresent;
+    this.attestedDeviceProperties = attestedDeviceProperties;
   }
 
   /** Alias associated with the generated key. */
@@ -97,6 +132,17 @@ public final class AttestationResult {
   /** Returns {@code true} when StrongBox-enforced authorisations were present. */
   public boolean strongBoxAuthorisationsPresent() {
     return strongBoxAuthorisationsPresent;
+  }
+
+  /**
+   * Exact hardware-authenticated properties projected from this leaf KeyDescription, or {@code
+   * null} when the generic verifier was used.
+   *
+   * <p>This is non-null after {@link
+   * AttestationVerifier#verifyOfflineDeviceRegistration(KeyAttestation, byte[], String, byte[])}.
+   */
+  public OfflineAndroidAttestedDevicePropertiesV2 attestedDeviceProperties() {
+    return attestedDeviceProperties;
   }
 
   /** Convenience helper indicating StrongBox-backed attestation. */

@@ -102,7 +102,7 @@ fn v4_release_record_binds_promotion_build_provenance_to_manifest() {
 
 #[test]
 fn v4_internal_validation_receipt_rejects_tracked_cargo_lock_substitution() {
-    use kagemusha_internal_validation_receipt::tests::signed_receipt_for_v4_candidate_with_tracked_cargo_lock;
+    use kagemusha_internal_validation_receipt::internal_validation_receipt_test_support::signed_receipt_for_v4_candidate_with_tracked_cargo_lock;
 
     let finalized_manifest = manifest();
     let candidate = unsigned_candidate(&finalized_manifest);

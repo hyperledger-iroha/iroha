@@ -127,6 +127,14 @@ fn opening_role(ordinal: usize) -> (ZkAmsMkheRnsNativeFamilyV1, u8) {
 }
 
 fn composite_fixture(context: u16) -> CompositeFixtureV1 {
+    composite_fixture_with_axes(context, context, context)
+}
+
+fn composite_fixture_with_axes(
+    context: u16,
+    statement_context: u16,
+    operational_context: u16,
+) -> CompositeFixtureV1 {
     let profile = zk_ams_mkhe_rns_native_profile_v1().expect("canonical profile");
     let topology = zk_ams_mkhe_rns_native_topology_v1().expect("canonical topology");
     let release = zk_ams_mkhe_rns_native_release_candidate_digest_v1().expect("candidate");
@@ -134,8 +142,8 @@ fn composite_fixture(context: u16) -> CompositeFixtureV1 {
         profile.profile_digest,
         topology.topology_digest,
         release,
-        digest(b"statement", context, 0),
-        digest(b"operational-context", context, 0),
+        digest(b"statement", statement_context, 0),
+        digest(b"operational-context", operational_context, 0),
     )
     .expect("source layout");
     let source_receipt = TestSnapshot { layout, context }
@@ -275,26 +283,32 @@ fn composite_fixture(context: u16) -> CompositeFixtureV1 {
 }
 
 fn exact_authority(
-    fixture: &CompositeFixtureV1,
+    transport: &ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1,
 ) -> Result<ExactFixtureStageAuthorityV1, ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
-    ExactFixtureStageAuthorityV1::new(
-        &fixture.envelope,
+    ExactFixtureStageAuthorityV1::new(transport)
+}
+
+fn authenticated_transport(
+    fixture: CompositeFixtureV1,
+) -> ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1 {
+    let canonical = fixture
+        .envelope
+        .to_canonical_bytes_v1()
+        .expect("canonical fixture wire");
+    ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+        &canonical,
         fixture.layout,
         fixture.source_receipt,
-        &fixture.transcript,
+        fixture.transcript,
     )
+    .expect("verifier-authenticated fixture transport")
 }
 
 #[test]
 fn production_boundary_rejects_an_invalid_terminal_kernel() {
-    let fixture = composite_fixture(1);
+    let transport = authenticated_transport(composite_fixture(1));
     assert!(matches!(
-        verify_zk_ams_mkhe_rns_native_composite_v1(
-            fixture.envelope,
-            fixture.layout,
-            fixture.source_receipt,
-            fixture.transcript,
-        ),
+        verify_zk_ams_mkhe_rns_native_composite_v1(transport),
         Err(
             ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
                 ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
@@ -344,6 +358,160 @@ fn production_adapters_reject_invalid_subproofs_or_remain_explicitly_unavailable
 }
 
 #[test]
+fn canonical_transport_derives_nonzero_distinct_context_and_commitment_bindings() {
+    let fixture = composite_fixture(60);
+    let expected_bytes = fixture.envelope.total_wire_bytes();
+    let expected_proof = fixture.envelope.proof_digest();
+    let transport = authenticated_transport(fixture);
+    assert_eq!(transport.canonical_wire_bytes(), expected_bytes);
+    let derived = [
+        transport.canonical_wire_digest(),
+        transport.opening_commitment_root(),
+        transport.verifier_context_digest(),
+        transport.verifier_transport_digest(),
+    ];
+    assert!(!derived.contains(&[0; 32]));
+    assert!(!derived.contains(&expected_proof));
+    assert!(
+        !derived
+            .iter()
+            .enumerate()
+            .any(|(index, digest)| derived[index + 1..].contains(digest))
+    );
+}
+
+#[test]
+fn canonical_transport_rejects_wire_mutation_and_every_truncation_class() {
+    let fixture = composite_fixture(61);
+    let mut canonical = fixture
+        .envelope
+        .to_canonical_bytes_v1()
+        .expect("canonical fixture wire");
+    let last = canonical.len() - 1;
+    canonical[last] ^= 1;
+    assert!(matches!(
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
+            fixture.layout,
+            fixture.source_receipt,
+            fixture.transcript,
+        ),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidEnvelopeContext)
+    ));
+
+    for (index, truncation) in [
+        0_usize,
+        ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_HEADER_BYTES_V1 - 1,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let fixture = composite_fixture(u16::try_from(62 + index).expect("test context"));
+        let mut canonical = fixture
+            .envelope
+            .to_canonical_bytes_v1()
+            .expect("canonical fixture wire");
+        canonical.truncate(truncation);
+        assert!(matches!(
+            ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+                &canonical,
+                fixture.layout,
+                fixture.source_receipt,
+                fixture.transcript,
+            ),
+            Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidEnvelopeContext)
+        ));
+    }
+    let fixture = composite_fixture(64);
+    let mut canonical = fixture
+        .envelope
+        .to_canonical_bytes_v1()
+        .expect("canonical fixture wire");
+    canonical.truncate(canonical.len() - 1);
+    assert!(matches!(
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
+            fixture.layout,
+            fixture.source_receipt,
+            fixture.transcript,
+        ),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidEnvelopeContext)
+    ));
+}
+
+#[test]
+fn canonical_transport_rejects_replay_under_a_fresh_operational_context() {
+    let captured = composite_fixture_with_axes(66, 66, 66);
+    let fresh_context = composite_fixture_with_axes(66, 66, 67);
+    assert_eq!(
+        captured.layout.statement_digest(),
+        fresh_context.layout.statement_digest()
+    );
+    assert_ne!(
+        captured.layout.operational_context_digest(),
+        fresh_context.layout.operational_context_digest()
+    );
+    let canonical = captured
+        .envelope
+        .to_canonical_bytes_v1()
+        .expect("captured canonical wire");
+    assert!(matches!(
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
+            fresh_context.layout,
+            fresh_context.source_receipt,
+            fresh_context.transcript,
+        ),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidEnvelopeContext)
+    ));
+}
+
+#[test]
+fn canonical_transport_rejects_commitment_substitution_after_outer_digest_rebuild() {
+    let fixture = composite_fixture(65);
+    let mut terminal = fixture
+        .envelope
+        .section(ZkAmsMkheRnsNativeProofSectionKindV1::TerminalHyraxBpBridge)
+        .to_vec();
+    let first_source_commitment = TYPED_SECTION_COMMON_PREFIX_BYTES_V1 + 1 + 5 * 32 + 3;
+    terminal[first_source_commitment] ^= 1;
+    let envelope = ZkAmsMkheRnsNativeProofEnvelopeV1::new(
+        fixture.layout,
+        fixture.source_receipt,
+        terminal,
+        fixture
+            .envelope
+            .section(ZkAmsMkheRnsNativeProofSectionKindV1::RnsRelationQpcs)
+            .to_vec(),
+        fixture
+            .envelope
+            .section(ZkAmsMkheRnsNativeProofSectionKindV1::CrossFieldGlobalLookup)
+            .to_vec(),
+        fixture
+            .envelope
+            .section(ZkAmsMkheRnsNativeProofSectionKindV1::ZeroPadding)
+            .to_vec(),
+    )
+    .expect("outer transport rebuilt around substituted commitment");
+    let canonical = envelope
+        .to_canonical_bytes_v1()
+        .expect("canonical rebuilt wire");
+    assert!(matches!(
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
+            fixture.layout,
+            fixture.source_receipt,
+            fixture.transcript,
+        ),
+        Err(
+            ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
+                ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
+            )
+        )
+    ));
+}
+
+#[test]
 fn all_typed_sections_are_validated_before_first_unavailable_stage() {
     let fixture = composite_fixture(4);
     let mut malformed_rns = fixture
@@ -369,9 +537,12 @@ fn all_typed_sections_are_validated_before_first_unavailable_stage() {
             .to_vec(),
     )
     .expect("transport-valid malformed typed section");
+    let canonical = envelope
+        .to_canonical_bytes_v1()
+        .expect("canonical malformed wire");
     assert!(matches!(
-        verify_zk_ams_mkhe_rns_native_composite_v1(
-            envelope,
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
             fixture.layout,
             fixture.source_receipt,
             fixture.transcript,
@@ -424,9 +595,12 @@ fn inner_metadata_cannot_alias_a_source_or_outer_identity() {
             .to_vec(),
     )
     .expect("transport-valid cross-layer alias");
+    let canonical = envelope
+        .to_canonical_bytes_v1()
+        .expect("canonical aliased wire");
     assert!(matches!(
-        verify_zk_ams_mkhe_rns_native_composite_v1(
-            envelope,
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
             fixture.layout,
             fixture.source_receipt,
             fixture.transcript,
@@ -438,18 +612,20 @@ fn inner_metadata_cannot_alias_a_source_or_outer_identity() {
 #[test]
 fn exact_private_fixture_mints_candidate_only_after_all_stages() {
     let fixture = composite_fixture(3);
-    let authority = exact_authority(&fixture).expect("exact fixture authority");
     let expected_statement = fixture.layout.statement_digest();
     let expected_source = fixture.layout.source_binding_digest();
     let expected_roster = fixture.transcript.governed_roster_digest();
     let expected_ciphertext = fixture.transcript.public_ciphertext_digest();
     let expected_transcript = fixture.transcript.transcript_digest();
     let expected_proof = fixture.envelope.proof_digest();
+    let transport = authenticated_transport(fixture);
+    let expected_wire = transport.canonical_wire_digest();
+    let expected_opening_root = transport.opening_commitment_root();
+    let expected_context = transport.verifier_context_digest();
+    let expected_transport = transport.verifier_transport_digest();
+    let authority = exact_authority(&transport).expect("exact fixture authority");
     let receipt = verify_with_first_party_authority_v1(
-        fixture.envelope,
-        fixture.layout,
-        fixture.source_receipt,
-        fixture.transcript,
+        transport,
         FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
     )
     .expect("all exact fixture stages verify");
@@ -459,6 +635,10 @@ fn exact_private_fixture_mints_candidate_only_after_all_stages() {
     assert_eq!(receipt.public_ciphertext_digest(), expected_ciphertext);
     assert_eq!(receipt.transcript_digest(), expected_transcript);
     assert_eq!(receipt.proof_digest(), expected_proof);
+    assert_eq!(receipt.canonical_wire_digest(), expected_wire);
+    assert_eq!(receipt.opening_commitment_root(), expected_opening_root);
+    assert_eq!(receipt.verifier_context_digest(), expected_context);
+    assert_eq!(receipt.verifier_transport_digest(), expected_transport);
     assert_ne!(receipt.candidate_digest(), [0; 32]);
     assert!(
         !receipt
@@ -468,19 +648,140 @@ fn exact_private_fixture_mints_candidate_only_after_all_stages() {
 }
 
 #[test]
+fn exact_stage_chain_mints_one_integrity_bound_algebraic_receipt() {
+    let fixture = composite_fixture(4);
+    let expected_profile = fixture.envelope.profile_manifest_digest();
+    let expected_topology = fixture.envelope.topology_digest();
+    let expected_release = fixture.envelope.release_candidate_digest();
+    let expected_statement = fixture.layout.statement_digest();
+    let expected_operation = fixture.layout.operational_context_digest();
+    let expected_source = fixture.layout.source_binding_digest();
+    let expected_source_receipt = fixture.source_receipt.receipt_digest;
+    let expected_roster = fixture.transcript.governed_roster_digest();
+    let expected_ciphertext = fixture.transcript.public_ciphertext_digest();
+    let expected_transcript = fixture.transcript.transcript_digest();
+    let expected_proof = fixture.envelope.proof_digest();
+    let transport = authenticated_transport(fixture);
+    let expected_wire_bytes = transport.canonical_wire_bytes();
+    let expected_wire = transport.canonical_wire_digest();
+    let expected_opening_root = transport.opening_commitment_root();
+    let expected_context = transport.verifier_context_digest();
+    let expected_transport = transport.verifier_transport_digest();
+    let authority = exact_authority(&transport).expect("exact fixture authority");
+    let receipt = verify_algebraic_with_first_party_authority_v1(
+        transport,
+        FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
+    )
+    .expect("all exact fixture stages mint the receipt");
+
+    receipt.validate_v1().expect("algebraic receipt validates");
+    assert_eq!(receipt.profile_manifest_digest(), expected_profile);
+    assert_eq!(receipt.topology_digest(), expected_topology);
+    assert_eq!(receipt.release_candidate_digest(), expected_release);
+    assert_eq!(receipt.statement_digest(), expected_statement);
+    assert_eq!(receipt.operational_context_digest(), expected_operation);
+    assert_eq!(receipt.source_binding_digest(), expected_source);
+    assert_eq!(receipt.source_receipt_digest(), expected_source_receipt);
+    assert_eq!(receipt.governed_roster_digest(), expected_roster);
+    assert_eq!(receipt.public_ciphertext_digest(), expected_ciphertext);
+    assert_eq!(receipt.transcript_digest(), expected_transcript);
+    assert_eq!(receipt.proof_digest(), expected_proof);
+    assert_eq!(receipt.canonical_wire_bytes(), expected_wire_bytes);
+    assert_eq!(receipt.canonical_wire_digest(), expected_wire);
+    assert_eq!(receipt.opening_commitment_root(), expected_opening_root);
+    assert_eq!(receipt.verifier_context_digest(), expected_context);
+    assert_eq!(receipt.verifier_transport_digest(), expected_transport);
+    assert_ne!(receipt.composite_candidate_digest(), [0; 32]);
+    assert_ne!(receipt.receipt_digest(), [0; 32]);
+    assert_ne!(
+        receipt.receipt_digest(),
+        receipt.composite_candidate_digest()
+    );
+    assert!(
+        !receipt
+            .section_digests()
+            .contains(&receipt.receipt_digest())
+    );
+}
+
+#[test]
+fn mutated_or_digest_rebuilt_candidates_cannot_mint_or_validate_a_receipt() {
+    let transport = authenticated_transport(composite_fixture(5));
+    let authority = exact_authority(&transport).expect("exact fixture authority");
+    let mut candidate = verify_with_first_party_authority_v1(
+        transport,
+        FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
+    )
+    .expect("exact candidate");
+    candidate.statement_digest[0] ^= 1;
+    candidate.candidate_digest = candidate_receipt_digest_v1(&candidate);
+    assert!(matches!(
+        candidate.into_algebraic_receipt_v1(),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
+    ));
+
+    let transport = authenticated_transport(composite_fixture(6));
+    let authority = exact_authority(&transport).expect("exact fixture authority");
+    let mut receipt = verify_algebraic_with_first_party_authority_v1(
+        transport,
+        FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
+    )
+    .expect("exact algebraic receipt");
+    receipt.receipt_digest[0] ^= 1;
+    assert!(matches!(
+        receipt.validate_v1(),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
+    ));
+
+    let transport = authenticated_transport(composite_fixture(7));
+    let authority = exact_authority(&transport).expect("exact fixture authority");
+    let mut receipt = verify_algebraic_with_first_party_authority_v1(
+        transport,
+        FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
+    )
+    .expect("exact algebraic receipt");
+    receipt.composite.section_digests[0][0] ^= 1;
+    receipt.composite.candidate_digest = candidate_receipt_digest_v1(&receipt.composite);
+    receipt.receipt_digest = algebraic_receipt_digest_v1(&receipt.composite);
+    assert!(matches!(
+        receipt.validate_v1(),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
+    ));
+}
+
+#[test]
+fn rejection_at_any_stage_never_yields_an_algebraic_receipt() {
+    for (index, stage) in VERIFICATION_STAGE_ORDER_V1.into_iter().enumerate() {
+        let transport = authenticated_transport(composite_fixture(
+            u16::try_from(40 + index).expect("fixture context fits u16"),
+        ));
+        let authority = exact_authority(&transport)
+            .expect("exact authority")
+            .reject(stage);
+        assert!(matches!(
+            verify_algebraic_with_first_party_authority_v1(
+                transport,
+                FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
+            ),
+            Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
+                rejected,
+            )) if rejected == stage
+        ));
+    }
+}
+
+#[test]
 fn rejection_at_any_stage_never_yields_a_candidate() {
     for (index, stage) in VERIFICATION_STAGE_ORDER_V1.into_iter().enumerate() {
-        let fixture =
-            composite_fixture(u16::try_from(10 + index).expect("fixture context fits u16"));
-        let authority = exact_authority(&fixture)
+        let transport = authenticated_transport(composite_fixture(
+            u16::try_from(10 + index).expect("fixture context fits u16"),
+        ));
+        let authority = exact_authority(&transport)
             .expect("exact authority")
             .reject(stage);
         assert!(matches!(
             verify_with_first_party_authority_v1(
-                fixture.envelope,
-                fixture.layout,
-                fixture.source_receipt,
-                fixture.transcript,
+                transport,
                 FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
             ),
             Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageRejected(
@@ -494,28 +795,32 @@ fn rejection_at_any_stage_never_yields_a_candidate() {
 fn source_and_envelope_context_substitution_is_rejected_before_stages() {
     let first = composite_fixture(20);
     let second = composite_fixture(21);
-    let authority = exact_authority(&first).expect("authority");
+    let canonical = first
+        .envelope
+        .to_canonical_bytes_v1()
+        .expect("first canonical wire");
     assert!(matches!(
-        verify_with_first_party_authority_v1(
-            first.envelope,
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
             second.layout,
             second.source_receipt,
             first.transcript,
-            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidEnvelopeContext)
     ));
 
     let first = composite_fixture(22);
     let second = composite_fixture(23);
-    let authority = exact_authority(&first).expect("authority");
+    let canonical = first
+        .envelope
+        .to_canonical_bytes_v1()
+        .expect("first canonical wire");
     assert!(matches!(
-        verify_with_first_party_authority_v1(
-            first.envelope,
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
             second.layout,
             first.source_receipt,
             first.transcript,
-            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext)
     ));
@@ -546,9 +851,12 @@ fn rebuilt_envelope_cannot_substitute_a_cross_context_transcript_and_sections() 
             .to_vec(),
     )
     .expect("transport-valid rebuilt envelope");
+    let canonical = envelope
+        .to_canonical_bytes_v1()
+        .expect("rebuilt canonical wire");
     assert!(matches!(
-        verify_zk_ams_mkhe_rns_native_composite_v1(
-            envelope,
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
             context_a.layout,
             context_a.source_receipt,
             context_b.transcript,
@@ -561,20 +869,21 @@ fn rebuilt_envelope_cannot_substitute_a_cross_context_transcript_and_sections() 
 fn transcript_section_and_stage_order_splices_are_rejected() {
     let first = composite_fixture(30);
     let second = composite_fixture(31);
-    let authority = exact_authority(&first).expect("authority");
+    let canonical = first
+        .envelope
+        .to_canonical_bytes_v1()
+        .expect("first canonical wire");
     assert!(matches!(
-        verify_with_first_party_authority_v1(
-            first.envelope,
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
             first.layout,
             first.source_receipt,
             second.transcript,
-            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
     ));
 
     let baseline = composite_fixture(32);
-    let authority = exact_authority(&baseline).expect("authority");
     let foreign = composite_fixture(33);
     let spliced_envelope = ZkAmsMkheRnsNativeProofEnvelopeV1::new(
         baseline.layout,
@@ -597,13 +906,15 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
             .to_vec(),
     )
     .expect("transport-valid section splice");
+    let canonical = spliced_envelope
+        .to_canonical_bytes_v1()
+        .expect("spliced canonical wire");
     assert!(matches!(
-        verify_with_first_party_authority_v1(
-            spliced_envelope,
+        ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1::authenticate_canonical_exact_v1(
+            &canonical,
             baseline.layout,
             baseline.source_receipt,
             baseline.transcript,
-            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(
             ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
@@ -612,15 +923,12 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
         )
     ));
 
-    let fixture = composite_fixture(34);
-    let mut authority = exact_authority(&fixture).expect("authority");
+    let transport = authenticated_transport(composite_fixture(34));
+    let mut authority = exact_authority(&transport).expect("authority");
     authority.expectations.swap(0, 1);
     assert!(matches!(
         verify_with_first_party_authority_v1(
-            fixture.envelope,
-            fixture.layout,
-            fixture.source_receipt,
-            fixture.transcript,
+            transport,
             FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(
@@ -638,9 +946,113 @@ fn boundary_exposes_no_accept_all_or_release_authority_surface() {
     assert!(!source.contains("authorizes_release"));
     assert!(!source.contains("readiness = true"));
     assert!(!source.contains("release_ready = true"));
+    let transport = source
+        .find("pub struct ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1")
+        .expect("verifier transport declaration");
+    let transport_prefix = &source[transport.saturating_sub(560)..transport];
+    for forbidden_derive in [
+        "derive(Clone",
+        "derive(Copy",
+        "derive(Default",
+        "Encode",
+        "Decode",
+        "Serialize",
+        "Deserialize",
+        "Norito",
+    ] {
+        assert!(!transport_prefix.contains(forbidden_derive));
+    }
+    let transport_body = source[transport..]
+        .split("impl ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1")
+        .next()
+        .expect("transport body");
+    assert!(!transport_body.contains("pub envelope:"));
+    assert!(!transport_body.contains("pub transcript:"));
+    let transport_impl = source
+        .split("impl ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1")
+        .nth(1)
+        .expect("transport implementation")
+        .split("/// Move-only proof-verification candidate")
+        .next()
+        .expect("transport implementation boundary");
+    assert!(transport_impl.contains("pub fn authenticate_canonical_exact_v1("));
+    assert!(!transport_impl.contains("pub fn new("));
+    assert!(!transport_impl.contains("pub fn decode("));
+    assert!(!transport_impl.contains("pub fn to_canonical_bytes"));
+    for verifier_name in [
+        "pub fn verify_zk_ams_mkhe_rns_native_composite_v1(",
+        "pub fn verify_zk_ams_mkhe_rns_native_algebraic_v1(",
+    ] {
+        let signature = source
+            .split(verifier_name)
+            .nth(1)
+            .expect("public verifier")
+            .split(") -> Result")
+            .next()
+            .expect("public verifier signature");
+        assert!(
+            signature.contains("transport: ZkAmsMkheRnsNativeVerifierAuthenticatedTransportV1")
+        );
+        assert!(!signature.contains("ZkAmsMkheRnsNativeProofEnvelopeV1"));
+        assert!(!signature.contains("ZkAmsMkheRnsNativeSourceLayoutV1"));
+        assert!(!signature.contains("ZkAmsMkheRnsNativeSourceReceiptV1"));
+        assert!(!signature.contains("ZkAmsMkheRnsNativeChallengeSeedsV1"));
+    }
     let receipt = source
         .find("pub struct ZkAmsMkheRnsNativeCompositeCandidateReceiptV1")
         .expect("candidate receipt declaration");
     let prefix = &source[receipt.saturating_sub(180)..receipt];
     assert!(!prefix.contains("derive(Clone"));
+
+    let algebraic = source
+        .find("pub struct ZkAmsMkheRnsNativeAlgebraicReceiptV1")
+        .expect("algebraic receipt declaration");
+    let algebraic_prefix = &source[algebraic.saturating_sub(360)..algebraic];
+    for forbidden_derive in [
+        "derive(Clone",
+        "derive(Copy",
+        "derive(Default",
+        "Encode",
+        "Decode",
+        "Serialize",
+        "Deserialize",
+        "Norito",
+    ] {
+        assert!(!algebraic_prefix.contains(forbidden_derive));
+    }
+    let algebraic_body = source[algebraic..]
+        .split("impl ZkAmsMkheRnsNativeAlgebraicReceiptV1")
+        .next()
+        .expect("algebraic receipt body");
+    assert!(!algebraic_body.contains("pub composite:"));
+    assert!(!algebraic_body.contains("pub receipt_digest:"));
+    let algebraic_impl = source
+        .split("impl ZkAmsMkheRnsNativeAlgebraicReceiptV1")
+        .nth(1)
+        .expect("algebraic receipt implementation")
+        .split("/// Atomically verify one replacement composite proof.")
+        .next()
+        .expect("algebraic receipt implementation boundary");
+    assert!(!algebraic_impl.contains("pub fn new"));
+    assert!(!algebraic_impl.contains("pub fn from"));
+    assert!(!algebraic_impl.contains("pub fn decode"));
+    assert!(!algebraic_impl.contains("pub fn deserialize"));
+    assert!(!source.contains("pub fn into_algebraic_receipt_v1"));
+    assert!(!source.contains("pub fn from_verified_composite_v1"));
+    assert!(!source.contains("impl Default for ZkAmsMkheRnsNativeAlgebraicReceiptV1"));
+    assert!(!source.contains("impl Clone for ZkAmsMkheRnsNativeAlgebraicReceiptV1"));
+    assert!(!source.contains("impl Copy for ZkAmsMkheRnsNativeAlgebraicReceiptV1"));
+    assert!(!source.contains("impl Decode for ZkAmsMkheRnsNativeAlgebraicReceiptV1"));
+    assert!(!source.contains("impl Deserialize for ZkAmsMkheRnsNativeAlgebraicReceiptV1"));
+    let mint = source
+        .split("fn verify_algebraic_with_first_party_authority_v1")
+        .nth(1)
+        .expect("sealed algebraic mint")
+        .split("struct CandidateAxesV1")
+        .next()
+        .expect("sealed algebraic mint boundary");
+    assert!(mint.contains("verify_with_first_party_authority_v1("));
+    assert!(mint.contains(".into_algebraic_receipt_v1()"));
+    assert!(!mint.contains("bool"));
+    assert!(!mint.contains("receipt_digest:"));
 }

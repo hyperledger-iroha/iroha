@@ -10,8 +10,8 @@ TEST_VENV_OVERRIDE="${PRIVACY_PYTHON_SDK_TEST_VENV:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS_LOCKFILE="${ROOT_DIR}/python/iroha_python/requirements-ci.lock"
 CHECKOUT_NATIVE_DIR="${ROOT_DIR}/python/iroha_python/src"
-FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+FROZEN_CARGO_LOCK_SHA256="31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d"
+TRACKED_ROOT_CARGO_LOCK_SHA256="179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7"
 ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 WHEEL_PATH=""
 WHEEL_SEAL=""
@@ -1133,12 +1133,19 @@ export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
   tests/package_import_fallback_test.py \
   tests/privacy_native_registry_test.py \
   tests/privacy_native_integration_test.py \
+  tests/privacy_finalized_state_queries_test.py \
   tests/privacy_wallet_worker_controller_test.py \
+  tests/privacy_zk_x509_worker_controller_test.py \
   tests/privacy_zk_x509_transport_test.py \
   tests/proof_attachment_contract_test.py \
   tests/crypto_algorithms_test.py \
   "${ROOT_DIR}/scripts/tests/check_privacy_jvm_native_gate_test.py" \
-  "${ROOT_DIR}/scripts/tests/check_privacy_python_witness_boundary_test.py"
+  "${ROOT_DIR}/scripts/tests/check_privacy_python_witness_boundary_test.py" \
+  "${ROOT_DIR}/scripts/tests/package_privacy_wallet_worker_test.py" \
+  "${ROOT_DIR}/scripts/tests/package_zk_x509_prover_worker_test.py" \
+  "${ROOT_DIR}/scripts/tests/capture_zk_x509_native_candidate_test.py" \
+  "${ROOT_DIR}/scripts/tests/verify_ec2_instance_identity_test.py" \
+  "${ROOT_DIR}/scripts/tests/check_taira_privacy_native_host_test.py"
 assert_privacy_sdk_inputs_unchanged
 
 "${VENV_DIR}/bin/python" -I -S "${ABI22_CHECKER}" verify \

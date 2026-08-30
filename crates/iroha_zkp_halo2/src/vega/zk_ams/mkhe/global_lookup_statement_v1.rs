@@ -477,7 +477,7 @@ fn endpoint_gate_coordinate_v1(
     }
     Ok(EndpointGateCoordinateV1 {
         statement_ordinal: ordinal / 2,
-        role: if ordinal % 2 == 0 {
+        role: if ordinal.is_multiple_of(2) {
             EndpointGateRoleV1::StatementGate0
         } else {
             EndpointGateRoleV1::StatementGate1

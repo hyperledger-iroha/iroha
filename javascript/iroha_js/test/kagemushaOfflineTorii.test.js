@@ -7,6 +7,7 @@ import { ToriiClient } from "../src/toriiClient.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 import {
   KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
+  KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY,
   KAGEMUSHA_MANIFEST_VERSION,
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
@@ -30,6 +31,7 @@ function universalCapability(overrides = {}) {
   return {
     mandatory: false,
     cash_handoff_capability: "cash_handoff_v1",
+    eligibility_cash_handoff_capability: "cash_handoff_eligibility_v1",
     required_bridge_abi_version: 22,
     max_hops: 8,
     ready: true,
@@ -63,6 +65,10 @@ function operationReference(kind) {
 test("Kagemusha JavaScript surface is transport-only ABI-22/V4", () => {
   assert.equal(KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 22);
   assert.equal(KAGEMUSHA_CASH_HANDOFF_CAPABILITY, "cash_handoff_v1");
+  assert.equal(
+    KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY,
+    "cash_handoff_eligibility_v1",
+  );
   assert.equal(KAGEMUSHA_MANIFEST_VERSION, 4);
   assert.equal(KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES, 512 * 1024);
   assert.equal(KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES, 48 * 1024 * 1024);
@@ -88,6 +94,13 @@ test("Kagemusha JavaScript surface is transport-only ABI-22/V4", () => {
   assert.throws(
     () => normalizeOfflineStatus(universalCapability({ required_bridge_abi_version: 19 })),
     /required_bridge_abi_version must be 22/u,
+  );
+  assert.throws(
+    () =>
+      normalizeOfflineStatus(
+        universalCapability({ eligibility_cash_handoff_capability: "cash_handoff_v1" }),
+      ),
+    /eligibility_cash_handoff_capability must be cash_handoff_eligibility_v1/u,
   );
   assert.throws(
     () => normalizeKagemushaTopUpRequestV4({ ...requestV4(), version: 3 }),

@@ -2,10 +2,11 @@
 """Fail closed on retired developer-only executable surfaces.
 
 This stdlib-only guard authenticates the four deleted Rust preimages through
-Git objects, seals the reduced Iroha CLI target manifest, the wave-four Iroha
-Core manifest postimage, and the unchanged lockfile, and requires the retained
-production replacement markers.  Its mutation tests use in-memory snapshots,
-so they cannot modify the checkout they protect.
+Git objects, seals the reduced Iroha CLI target manifest, derives the Iroha
+Core manifest from the authenticated wave-four postimage plus a closed ledger
+of release-only executables, seals the unchanged lockfile, and requires the
+retained production replacement markers.  Its mutation tests use in-memory
+snapshots, so they cannot modify the checkout they protect.
 """
 
 from __future__ import annotations
@@ -154,14 +155,92 @@ path = "tests/kagemusha_artifact_v4_streaming.rs"
 """,
 )
 
+CORE_RELEASE_BIN_ANCHOR = """[[bin]]
+name = "privacy_exact12_action_driver"
+path = "src/bin/privacy_exact12_action_driver.rs"
+required-features = ["privacy-release-evidence"]
+
+"""
+
+# These three executables are bounded release-corridor tooling, not ambient
+# developer targets.  Keep the complete tables here so a path, feature, order,
+# or extra-field mutation cannot be hidden behind a whole-manifest re-pin.
+ADMITTED_CORE_RELEASE_BIN_TABLES = (
+    """[[bin]]
+name = "privacy_zk_ace_release_evidence"
+path = "src/bin/privacy_zk_ace_release_evidence.rs"
+required-features = ["privacy-release-evidence"]
+
+""",
+    """[[bin]]
+name = "vega_figure9_artifact_tool"
+path = "src/bin/vega_figure9_artifact_tool.rs"
+required-features = ["privacy-release-evidence"]
+
+""",
+    """[[bin]]
+name = "iroha_zk_x509_prover_worker"
+path = "src/bin/iroha_zk_x509_prover_worker.rs"
+required-features = ["privacy-release-evidence"]
+
+""",
+)
+
+EXPECTED_CORE_BIN_TABLES = (
+    ("fastpq_fixture_capture", "src/bin/fastpq_fixture_capture.rs", ("dev-tools",)),
+    (
+        "kagemusha_recursive_spend_v4_bundle",
+        "src/bin/kagemusha_recursive_spend_v4_bundle.rs",
+        ("dev-tools", "zk-halo2-ipa", "kagemusha-candidate-evidence-lab"),
+    ),
+    (
+        "kagemusha_recursive_spend_v4_memory_benchmark",
+        "src/bin/kagemusha_recursive_spend_v4_memory_benchmark.rs",
+        ("dev-tools", "zk-halo2-ipa", "kagemusha-generation-memory-lab"),
+    ),
+    ("pk2_bridge_finality_verify", "src/bin/pk2_bridge_finality_verify.rs", ("dev-tools",)),
+    (
+        "privacy_exact12_action_driver",
+        "src/bin/privacy_exact12_action_driver.rs",
+        ("privacy-release-evidence",),
+    ),
+    (
+        "privacy_zk_ace_release_evidence",
+        "src/bin/privacy_zk_ace_release_evidence.rs",
+        ("privacy-release-evidence",),
+    ),
+    (
+        "vega_figure9_artifact_tool",
+        "src/bin/vega_figure9_artifact_tool.rs",
+        ("privacy-release-evidence",),
+    ),
+    (
+        "iroha_zk_x509_prover_worker",
+        "src/bin/iroha_zk_x509_prover_worker.rs",
+        ("privacy-release-evidence",),
+    ),
+)
+
+CORE_RELEASE_FEATURE_ANCHOR = """privacy-release-evidence = [
+    "zk-stark",
+    "json",
+    "iroha_data_model/privacy-exact12-conformance",
+]"""
+CORE_RELEASE_FEATURE_POSTIMAGE = """privacy-release-evidence = [
+    "zk-stark",
+    "json",
+    "iroha_data_model/privacy-exact12-conformance",
+    "iroha_zkp_halo2/privacy-release-evidence",
+]"""
+
 OPENING_LOCK_BLOB = "bf7633694c3f2fdca07de4d99743a09bad2daa12"
 OPENING_LOCK_SHA256 = "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
 OPENING_LOCK_BYTES = 315_333
 OPENING_LOCK_LINES = 13_758
-LOCK_BLOB = "5d04cef722cb695dd636110be01ff8de52ae7b45"
-LOCK_SHA256 = "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
-LOCK_BYTES = 311_172
-LOCK_LINES = 13_613
+LOCK_BLOB = "dec1238701c58b8b5b906c26624865c685d5ac70"
+LOCK_SHA256 = "179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7"
+LOCK_BYTES = 311_212
+LOCK_LINES = 13_615
 
 RETIRED_TABLES = (
     """[[bin]]
@@ -411,6 +490,41 @@ def _expected_core_manifest(opening: bytes) -> bytes:
     return postimage
 
 
+def _expected_current_core_manifest(opening: bytes) -> bytes:
+    base = _expected_core_manifest(opening)
+    anchor = CORE_RELEASE_BIN_ANCHOR.encode("utf-8")
+    _require(
+        base.count(anchor) == 1,
+        "authenticated core release-bin anchor changed",
+    )
+    additions = "".join(ADMITTED_CORE_RELEASE_BIN_TABLES).encode("utf-8")
+    postimage = base.replace(anchor, anchor + additions, 1)
+    feature_anchor = CORE_RELEASE_FEATURE_ANCHOR.encode("utf-8")
+    feature_postimage = CORE_RELEASE_FEATURE_POSTIMAGE.encode("utf-8")
+    _require(
+        postimage.count(feature_anchor) == 1,
+        "authenticated core release-evidence feature anchor changed",
+    )
+    postimage = postimage.replace(feature_anchor, feature_postimage, 1)
+    _require(
+        len(postimage)
+        == CORE_MANIFEST_BYTES
+        + len(additions)
+        + len(feature_postimage)
+        - len(feature_anchor),
+        "derived current core manifest byte ledger changed",
+    )
+    _require(
+        postimage.count(b"\n")
+        == CORE_MANIFEST_LINES
+        + additions.count(b"\n")
+        + feature_postimage.count(b"\n")
+        - feature_anchor.count(b"\n"),
+        "derived current core manifest line ledger changed",
+    )
+    return postimage
+
+
 def _bin_tables(manifest: str) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
     rows = []
     for table in TABLE_RE.finditer(manifest):
@@ -477,22 +591,27 @@ def _validate(snapshot: Snapshot, opening_manifest: bytes) -> None:
 
     core_manifest = snapshot.files[CORE_MANIFEST]
     _require(core_manifest is not None, "iroha_core manifest is missing")
-    expected_core_manifest = _expected_core_manifest(_git_blob(OPENING_CORE_MANIFEST_BLOB))
+    expected_core_manifest = _expected_current_core_manifest(
+        _git_blob(OPENING_CORE_MANIFEST_BLOB)
+    )
     _require(
         core_manifest == expected_core_manifest,
-        "iroha_core manifest differs from authenticated wave-four postimage",
+        "iroha_core manifest differs from authenticated wave-four postimage plus admitted release bins",
     )
-    _require(len(core_manifest) == CORE_MANIFEST_BYTES, "iroha_core manifest byte count changed")
     _require(
-        core_manifest.count(b"\n") == CORE_MANIFEST_LINES,
+        len(core_manifest) == len(expected_core_manifest),
+        "iroha_core manifest byte count changed",
+    )
+    _require(
+        core_manifest.count(b"\n") == expected_core_manifest.count(b"\n"),
         "iroha_core manifest line count changed",
     )
     _require(
-        _sha256(core_manifest) == CORE_MANIFEST_SHA256,
+        _sha256(core_manifest) == _sha256(expected_core_manifest),
         "iroha_core manifest content changed",
     )
     _require(
-        _git_blob_id(core_manifest) == CORE_MANIFEST_BLOB,
+        _git_blob_id(core_manifest) == _git_blob_id(expected_core_manifest),
         "iroha_core manifest Git blob changed",
     )
     core_text = core_manifest.decode("utf-8")
@@ -501,6 +620,10 @@ def _validate(snapshot: Snapshot, opening_manifest: bytes) -> None:
         "iroha_core autoexample discovery contract changed",
     )
     _require("bench_dag" not in core_text, "retired bench_dag target resurrected in manifest")
+    _require(
+        _bin_tables(core_text) == EXPECTED_CORE_BIN_TABLES,
+        "iroha_core bin target ledger changed",
+    )
 
     lock = snapshot.files[LOCKFILE]
     _require(lock is not None, "Cargo.lock is missing")
@@ -599,6 +722,57 @@ class DeveloperExecutableRetirementSourceTest(unittest.TestCase):
                 WAVE_FOUR_CONSOLIDATED_TEST_TABLES[0].encode("utf-8") + anchor,
                 1,
             ),
+        )
+        with self.assertRaisesRegex(GuardError, "iroha_core manifest"):
+            _validate(mutated, self.opening_manifest)
+
+    def test_mutation_core_release_bin_feature_fails(self) -> None:
+        manifest = self.snapshot.files[CORE_MANIFEST]
+        assert manifest is not None
+        mutated = _mutate(
+            self.snapshot,
+            CORE_MANIFEST,
+            manifest.replace(
+                b'name = "privacy_zk_ace_release_evidence"\n'
+                b'path = "src/bin/privacy_zk_ace_release_evidence.rs"\n'
+                b'required-features = ["privacy-release-evidence"]',
+                b'name = "privacy_zk_ace_release_evidence"\n'
+                b'path = "src/bin/privacy_zk_ace_release_evidence.rs"\n'
+                b'required-features = ["dev-tools"]',
+                1,
+            ),
+        )
+        with self.assertRaisesRegex(GuardError, "iroha_core manifest"):
+            _validate(mutated, self.opening_manifest)
+
+    def test_mutation_core_release_evidence_forwarding_feature_fails(self) -> None:
+        manifest = self.snapshot.files[CORE_MANIFEST]
+        assert manifest is not None
+        mutated = _mutate(
+            self.snapshot,
+            CORE_MANIFEST,
+            manifest.replace(
+                b'    "iroha_zkp_halo2/privacy-release-evidence",\n',
+                b'    "iroha_zkp_halo2/default",\n',
+                1,
+            ),
+        )
+        with self.assertRaisesRegex(GuardError, "iroha_core manifest"):
+            _validate(mutated, self.opening_manifest)
+
+    def test_mutation_extra_core_release_bin_fails(self) -> None:
+        manifest = self.snapshot.files[CORE_MANIFEST]
+        assert manifest is not None
+        extra = b'''[[bin]]
+name = "unreviewed_release_tool"
+path = "src/bin/unreviewed_release_tool.rs"
+required-features = ["privacy-release-evidence"]
+
+'''
+        mutated = _mutate(
+            self.snapshot,
+            CORE_MANIFEST,
+            manifest.replace(b"[lints]\n", extra + b"[lints]\n", 1),
         )
         with self.assertRaisesRegex(GuardError, "iroha_core manifest"):
             _validate(mutated, self.opening_manifest)

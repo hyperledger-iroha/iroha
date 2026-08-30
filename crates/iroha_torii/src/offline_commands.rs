@@ -2,7 +2,7 @@ use crate::{AppState, Error, SharedAppState, app_auth, routing};
 use axum::{http::HeaderMap, response::Response as AxResponse};
 use iroha_config::parameters::actual;
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
@@ -11,7 +11,10 @@ use iroha_data_model::{
         InstructionBox,
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
     },
-    offline::KagemushaRecursiveSpendTopUpAnchorV4,
+    offline::{
+        KagemushaRecursiveSpendTopUpAnchorV4, OfflineDeviceEligibilityCredentialErrorV1,
+        OfflineDeviceEligibilityCredentialPayloadV1, OfflineDeviceEligibilityCredentialV1,
+    },
     state_path::StatePath,
     transaction::{
         SignedTransaction, TransactionBuilder, TransactionEntrypoint,
@@ -73,6 +76,26 @@ impl OfflineCommandRuntime {
             operation_registry_max_entries: admission.max_entries,
             operation_registry_max_bytes: admission.max_accounted_bytes,
         }
+    }
+    /// Public half of the configured command issuer used to pin eligibility credentials.
+    pub(crate) fn eligibility_issuer_public_key(&self) -> &PublicKey {
+        self.key_pair.public_key()
+    }
+    /// Sign already-finalized eligibility claims with the configured issuer key.
+    ///
+    /// The data-model signer repeats every claim-shape and issuer-signature
+    /// check. This method deliberately cannot shape policy, finality, network,
+    /// or TTL claims from node-local state.
+    pub(crate) fn sign_eligibility_credential_v1(
+        &self,
+        payload: OfflineDeviceEligibilityCredentialPayloadV1,
+    ) -> Result<OfflineDeviceEligibilityCredentialV1, OfflineDeviceEligibilityCredentialErrorV1>
+    {
+        OfflineDeviceEligibilityCredentialV1::sign_v1(
+            payload,
+            self.eligibility_issuer_public_key().clone(),
+            self.key_pair.private_key(),
+        )
     }
     fn quote_and_sign_transaction(
         &self,
@@ -2054,6 +2077,69 @@ mod tests {
         let readiness_error =
             require_issuer(&app).expect_err("fresh world has no command-authority account");
         assert_offline_readiness_code(readiness_error, "offline_command_authority_not_ready");
+    }
+
+    #[test]
+    fn configured_issuer_signs_only_well_shaped_eligibility_claims() {
+        use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+
+        let issuer = submission_test_issuer();
+        let assertion_key =
+            p256::SecretKey::from_slice(&[0x31; 32]).expect("fixed eligibility assertion key");
+        let assertion_public_key = assertion_key
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        let device_public_key =
+            iroha_data_model::offline::KagemushaDevicePublicKeyV2::from_sec1_bytes(
+                &assertion_public_key,
+            )
+            .expect("canonical eligibility device key");
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"offline-eligibility-issuer-network",
+            )));
+        let payload = OfflineDeviceEligibilityCredentialPayloadV1 {
+            version: iroha_data_model::offline::OFFLINE_DEVICE_ELIGIBILITY_CREDENTIAL_VERSION_V1,
+            network_id,
+            account_id: issuer.authority.clone(),
+            device_id: "eligibility-device".to_owned(),
+            attestation_key_id: "eligibility-attestation-key".to_owned(),
+            device_public_key,
+            assertion_public_key,
+            registration_hash: [0x71; 32],
+            eligibility: iroha_data_model::offline::OfflineDeviceEligibilityOutcomeV1::Eligible,
+            policy_epoch: 9,
+            policy_hash: [0x72; 32],
+            policy_finality: iroha_data_model::offline::OfflineDevicePolicyFinalityBindingV1 {
+                version:
+                    iroha_data_model::offline::OFFLINE_DEVICE_POLICY_FINALITY_BINDING_VERSION_V1,
+                network_id,
+                finalized_block_height: 19,
+                finalized_block_hash: Hash::new(b"offline eligibility finalized block"),
+                finalized_block_timestamp_ms: 1_000,
+                finality_evidence_hash: Hash::new(b"offline eligibility finality evidence"),
+            },
+            policy_freshness_deadline_ms: 20_000,
+            issued_at_ms: 1_001,
+            expires_at_ms: 19_000,
+        };
+        let credential = issuer
+            .sign_eligibility_credential_v1(payload.clone())
+            .expect("configured issuer signs valid finalized claims");
+        assert_eq!(credential.payload, payload);
+        assert_eq!(
+            credential.issuer_public_key,
+            issuer.eligibility_issuer_public_key().clone()
+        );
+
+        let mut invalid = payload;
+        invalid.registration_hash = [0; 32];
+        assert!(matches!(
+            issuer.sign_eligibility_credential_v1(invalid),
+            Err(OfflineDeviceEligibilityCredentialErrorV1::InvalidClaims)
+        ));
     }
 
     fn submission_test_request(operation_seed: u8) -> OfflineTopUpRequest {

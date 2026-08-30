@@ -166,6 +166,11 @@ name = "privacy_exact12_fixtures"
 path = "src/bin/privacy_exact12_fixtures.rs"
 required-features = ["dev-tools", "privacy-exact12-conformance"]
 
+[[bin]]
+name = "kagemusha_eligibility_payment_fixture"
+path = "src/bin/kagemusha_eligibility_payment_fixture.rs"
+required-features = ["dev-tools", "test-fixtures"]
+
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]

@@ -967,6 +967,15 @@ define_singular_source_admission! {
     94 => FindDomainEndorsements: ProvenBounded,
     95 => FindDomainEndorsementPolicy: ProvenBounded,
     96 => FindDomainCommittee: ProvenBounded,
+    97 => FindPrivacyZkAceReplayNullifierV1: ProvenBounded,
+    98 => FindPrivacyProofManagedPoolStateV1: ProvenBounded,
+    99 => FindPrivacyOrchardPoolStateV1: ProvenBounded,
+    100 => FindPrivacyOrchardNullifierV1: ProvenBounded,
+    101 => FindPrivacyAnonymousPgcPoolStateV1: ProvenBounded,
+    102 => FindPrivacyZkAmsAdmissionV1: ProvenBounded,
+    103 => FindPrivacyZkAmsProvisionV1: ProvenBounded,
+    104 => FindPrivacyZkX509CertificateNullifierV1: ProvenBounded,
+    105 => FindPrivacyActionExecutionReceiptV1: ProvenBounded,
 }
 /// Measure a singular source before a metered server lane can clone or decode it.
 ///
@@ -1421,6 +1430,48 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge_fixed(48, &mut remaining)?;
             }
         }
+        SingularQueryBox::FindPrivacyZkAceReplayNullifierV1(_) => {
+            require_active_adapter(
+                singular_output_lane_active,
+                "FindPrivacyZkAceReplayNullifierV1",
+            )?;
+        }
+        SingularQueryBox::FindPrivacyProofManagedPoolStateV1(_) => {
+            require_active_adapter(
+                singular_output_lane_active,
+                "FindPrivacyProofManagedPoolStateV1",
+            )?;
+        }
+        SingularQueryBox::FindPrivacyOrchardPoolStateV1(_) => {
+            require_active_adapter(singular_output_lane_active, "FindPrivacyOrchardPoolStateV1")?;
+        }
+        SingularQueryBox::FindPrivacyOrchardNullifierV1(_) => {
+            require_active_adapter(singular_output_lane_active, "FindPrivacyOrchardNullifierV1")?;
+        }
+        SingularQueryBox::FindPrivacyAnonymousPgcPoolStateV1(_) => {
+            require_active_adapter(
+                singular_output_lane_active,
+                "FindPrivacyAnonymousPgcPoolStateV1",
+            )?;
+        }
+        SingularQueryBox::FindPrivacyZkAmsAdmissionV1(_) => {
+            require_active_adapter(singular_output_lane_active, "FindPrivacyZkAmsAdmissionV1")?;
+        }
+        SingularQueryBox::FindPrivacyZkAmsProvisionV1(_) => {
+            require_active_adapter(singular_output_lane_active, "FindPrivacyZkAmsProvisionV1")?;
+        }
+        SingularQueryBox::FindPrivacyZkX509CertificateNullifierV1(_) => {
+            require_active_adapter(
+                singular_output_lane_active,
+                "FindPrivacyZkX509CertificateNullifierV1",
+            )?;
+        }
+        SingularQueryBox::FindPrivacyActionExecutionReceiptV1(_) => {
+            require_active_adapter(
+                singular_output_lane_active,
+                "FindPrivacyActionExecutionReceiptV1",
+            )?;
+        }
     }
     limit.checked_sub(remaining).ok_or(Error::GasBudgetExceeded)
 }
@@ -1524,8 +1575,8 @@ mod tests {
         QueryRequest::Start(query)
     }
     #[test]
-    fn singular_source_admission_audit_covers_all_96_variants() {
-        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 96);
+    fn singular_source_admission_audit_covers_all_105_variants() {
+        assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 105);
         for (index, (number, name, class)) in SINGULAR_SOURCE_ADMISSION_AUDIT.iter().enumerate() {
             assert_eq!(usize::from(*number), index + 1);
             assert!(!name.is_empty());

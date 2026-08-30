@@ -1,9 +1,10 @@
 //! Canonical owner-only execution bundle for the isolated privacy wallet worker.
 //!
 //! The outer framing is deliberately binary.  In particular, the transaction
-//! signer seed is never materialized as a JSON string.  Protocol-specific
-//! witness bytes are decoded only after an authenticated execute request has
-//! passed every public binding and transaction-plan check.
+//! signer seed is never materialized as a JSON string. Protocol-specific
+//! witness bytes are fully decoded inside native Rust before an import lease is
+//! advertised, then decoded again only inside the single-use execute callback.
+//! Neither decoded request nor raw owner-bundle bytes cross into Python or IPC.
 use crate::privacy_native_actions::{
     AnonymousPgcPaymentActionRequestV1, BootleLanternPresentationActionRequestV1,
     FcmpMembershipPaymentActionRequestV1, FcmpWalletOutputRequestV1, IvmPrivateNoteActionRequestV1,
@@ -13,27 +14,48 @@ use crate::privacy_native_actions::{
     VeRangeActionRequestV1, VegaCredentialPresentationActionRequestV1,
     ZkAceAuthorizationActionRequestV1, ZkAmsActionRequestV1, ZkAmsAdmissionCredentialRequestV1,
     ZkAmsBatchAdmissionActionRequestV1, ZkAmsProvisionAccountActionRequestV1,
-    parse_canonical_public_balance_scope_v1, privacy_native_action_capability_for_protocol_v1,
+    parse_canonical_public_balance_scope_v1,
+    privacy_native_action_capability_for_protocol_and_schema_v1,
 };
 use core::fmt;
 use iroha_core::privacy_engines::{
-    bootle_lantern::{relation::BootleLanternPresentationWitnessV1, ring::ApplicationPolynomialV1},
+    anonymous_pgc::{
+        TwistedElGamalCiphertextV1, TwistedElGamalPublicKeyV1,
+        payment::{PGC_PAYMENT_ANONYMITY_SET_SIZES_V1, preflight_anonymous_pgc_wallet_payment_v1},
+    },
+    bootle_lantern::{
+        relation::{BootleLanternPresentationWitnessV1, preflight_presentation_wallet_bundle_v1},
+        ring::ApplicationPolynomialV1,
+    },
     fcmp_plus_plus::{
-        FcmpInputRerandomizationV1, FcmpOutputTupleV1, FcmpProverInputV1, FcmpTreeRootV1,
-        FcmpWalletNoteV1,
+        FcmpInputRerandomizationV1, FcmpOutputCommitmentOpeningV1, FcmpOutputTupleV1,
+        FcmpProverInputV1, FcmpTreeRootV1, FcmpWalletNoteV1, derive_fcmp_recipient_id_v1,
+        preflight_fcmp_plus_plus_wallet_request_v1,
     },
     ivm_private_note::{
         IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, PrivateInstructionV1,
-        PrivateNotePlaintextV1, PrivateProgramV1,
+        PrivateNotePlaintextV1, PrivateProgramV1, derive_ivm_private_recipient_id_v1,
+        preflight_ivm_private_note_wallet_request_v1,
     },
     jindo::JindoPrivacyActionWitnessV1,
     orchard::{OrchardChangeProverInputV1, OrchardSpendProverInputV1},
     p256::{DeviceSigningKeyV1, SecretScalarV1},
-    pq_masp::{PqMaspInputWitnessV1, PqMaspNotePlaintextV1, PqMaspOutputWitnessV1},
-    vega::{VegaPrivacyActionPublicInputV1, VegaPrivacyActionWitnessMaterialV1},
-    verange::VeRangeBitLengthV1,
+    pq_masp::{
+        PqMaspInputWitnessV1, PqMaspNotePlaintextV1, PqMaspOutputWitnessV1,
+        derive_pq_masp_authorization_key_digest_from_secret_v1, derive_pq_masp_recipient_id_v1,
+        preflight_pq_masp_wallet_request_v1,
+    },
+    vega::{
+        VegaPrivacyActionPublicInputV1, VegaPrivacyActionWitnessMaterialV1,
+        preflight_vega_privacy_action_material_v1,
+    },
+    verange::{VeRangeBitLengthV1, commit as verange_commit_v1},
     zk_ace::ZkAcePrivacyWitnessV1,
-    zk_ams::{ZkAmsPrivacyActionGovernanceV1, ZkAmsSeedSecretV1},
+    zk_ams::{
+        ZK_AMS_RING_SIZES_V1, ZkAmsPrivacyActionGovernanceV1, ZkAmsSeedSecretV1,
+        preflight_zk_ams_action_governance_v1, preflight_zk_ams_admission_credential_v1,
+        preflight_zk_ams_seed_key_ring_v1, zk_ams_seed_public_key_v1,
+    },
 };
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
 use iroha_data_model::{
@@ -41,7 +63,7 @@ use iroha_data_model::{
     prelude::AccountId,
     privacy::{
         BootleLanternIssuerPolicyV1, PrivacyAuthorizationKeyDigestV1, PrivacyChallengeV1,
-        PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyP256PointV1,
+        PrivacyCommitmentV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyP256PointV1,
         PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
         PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyProtocolIdV1,
         PrivacyRecipientIdV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
@@ -51,6 +73,7 @@ use iroha_data_model::{
     },
 };
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeSet;
 use zeroize::{Zeroize, Zeroizing};
 use zk_ace_prover::ZkAcePrivacyTransferV1;
 const MAGIC: &[u8; 4] = b"IPWB";
@@ -125,6 +148,7 @@ struct BundleParts<'a> {
     wallet_id: &'a str,
     authority: &'a str,
     protocol_id: PrivacyProtocolIdV1,
+    operation_schema: &'a str,
     public_action: &'a [u8],
     signer_seed: &'a [u8; 32],
     protocol_witness: &'a [u8],
@@ -262,6 +286,9 @@ fn parse_parts(bytes: &[u8]) -> Result<BundleParts<'_>, PrivacyWalletBundleError
     let protocol_label = cursor.text(MAX_PROTOCOL_BYTES, "protocol-id")?;
     let protocol_id = PrivacyProtocolIdV1::from_canonical_label(protocol_label)
         .ok_or_else(|| PrivacyWalletBundleErrorV1::at("protocol-id"))?;
+    if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+        return Err(PrivacyWalletBundleErrorV1::at("unsupported-protocol"));
+    }
     let operation_schema = cursor.text(MAX_OPERATION_SCHEMA_BYTES, "operation-schema")?;
     let public_action = cursor.bytes_u32(MAX_PUBLIC_ACTION_BYTES, "public-action")?;
     validate_canonical_json_object(public_action, MAX_PUBLIC_ACTION_BYTES, "public-action")?;
@@ -275,15 +302,13 @@ fn parse_parts(bytes: &[u8]) -> Result<BundleParts<'_>, PrivacyWalletBundleError
     let remaining = bytes.len().saturating_sub(cursor.offset);
     let protocol_witness = cursor.bytes_u32(remaining.saturating_sub(4), "protocol-witness")?;
     cursor.finish()?;
-    let capability = privacy_native_action_capability_for_protocol_v1(protocol_id)
-        .ok_or_else(|| PrivacyWalletBundleErrorV1::at("unsupported-protocol"))?;
-    if capability.operation_schema != operation_schema {
-        return Err(PrivacyWalletBundleErrorV1::at("operation-schema"));
-    }
+    privacy_native_action_capability_for_protocol_and_schema_v1(protocol_id, operation_schema)
+        .ok_or_else(|| PrivacyWalletBundleErrorV1::at("operation-schema"))?;
     Ok(BundleParts {
         wallet_id,
         authority,
         protocol_id,
+        operation_schema,
         public_action,
         signer_seed,
         protocol_witness,
@@ -310,9 +335,12 @@ fn derive_manifest(
             authority,
             public_key,
             protocol_id: parts.protocol_id,
-            operation_schema: privacy_native_action_capability_for_protocol_v1(parts.protocol_id)
-                .expect("validated capability")
-                .operation_schema,
+            operation_schema: privacy_native_action_capability_for_protocol_and_schema_v1(
+                parts.protocol_id,
+                parts.operation_schema,
+            )
+            .expect("validated exact capability")
+            .operation_schema,
         },
         private_key,
     ))
@@ -325,6 +353,127 @@ pub fn privacy_wallet_bundle_public_action_digest_v1(bytes: &[u8]) -> [u8; 32] {
     digest.update(bytes);
     digest.finalize().into()
 }
+
+fn append_text_v1(
+    output: &mut Vec<u8>,
+    value: &str,
+    maximum: usize,
+    stage: &'static str,
+) -> Result<(), PrivacyWalletBundleErrorV1> {
+    if value.is_empty() || value.len() > maximum {
+        return Err(PrivacyWalletBundleErrorV1::at(stage));
+    }
+    validate_text(value, stage)?;
+    let length = u16::try_from(value.len()).map_err(|_| PrivacyWalletBundleErrorV1::at(stage))?;
+    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn append_bytes_u32_v1(
+    output: &mut Vec<u8>,
+    value: &[u8],
+    maximum: usize,
+    stage: &'static str,
+) -> Result<(), PrivacyWalletBundleErrorV1> {
+    if value.is_empty() || value.len() > maximum {
+        return Err(PrivacyWalletBundleErrorV1::at(stage));
+    }
+    let length = u32::try_from(value.len()).map_err(|_| PrivacyWalletBundleErrorV1::at(stage))?;
+    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(value);
+    Ok(())
+}
+
+/// Build one canonical owner-only execution bundle without exposing secret
+/// material to Python, JavaScript, or a renderer.
+///
+/// The returned allocation zeroizes on drop.  The encoder validates the
+/// authority/signing-key relationship and fully decodes the selected native
+/// operation before allowing callers to persist the bundle.
+pub fn encode_privacy_wallet_execution_bundle_v1(
+    wallet_id: &str,
+    authority: &str,
+    protocol_label: &str,
+    operation_schema: &str,
+    public_action: &[u8],
+    signer_seed: &[u8; 32],
+    protocol_witness: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, PrivacyWalletBundleErrorV1> {
+    validate_wallet_id(wallet_id)?;
+    validate_text(authority, "authority")?;
+    validate_text(protocol_label, "protocol-id")?;
+    validate_text(operation_schema, "operation-schema")?;
+    validate_canonical_json_object(public_action, MAX_PUBLIC_ACTION_BYTES, "public-action")?;
+    if signer_seed.iter().all(|byte| *byte == 0) {
+        return Err(PrivacyWalletBundleErrorV1::at("signer-seed"));
+    }
+    let protocol_id = PrivacyProtocolIdV1::from_canonical_label(protocol_label)
+        .ok_or_else(|| PrivacyWalletBundleErrorV1::at("protocol-id"))?;
+    if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+        return Err(PrivacyWalletBundleErrorV1::at("unsupported-protocol"));
+    }
+    privacy_native_action_capability_for_protocol_and_schema_v1(protocol_id, operation_schema)
+        .ok_or_else(|| PrivacyWalletBundleErrorV1::at("operation-schema"))?;
+
+    let capacity = MAGIC
+        .len()
+        .checked_add(1)
+        .and_then(|value| value.checked_add(2 + wallet_id.len()))
+        .and_then(|value| value.checked_add(2 + authority.len()))
+        .and_then(|value| value.checked_add(2 + protocol_label.len()))
+        .and_then(|value| value.checked_add(2 + operation_schema.len()))
+        .and_then(|value| value.checked_add(4 + public_action.len()))
+        .and_then(|value| value.checked_add(signer_seed.len()))
+        .and_then(|value| value.checked_add(4 + protocol_witness.len()))
+        .ok_or_else(|| PrivacyWalletBundleErrorV1::at("bundle-size"))?;
+    if capacity > PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1 {
+        return Err(PrivacyWalletBundleErrorV1::at("bundle-size"));
+    }
+
+    let mut output = Zeroizing::new(Vec::with_capacity(capacity));
+    output.extend_from_slice(MAGIC);
+    output.push(SCHEMA_VERSION);
+    append_text_v1(&mut output, wallet_id, MAX_WALLET_ID_BYTES, "wallet-id")?;
+    append_text_v1(&mut output, authority, MAX_AUTHORITY_BYTES, "authority")?;
+    append_text_v1(
+        &mut output,
+        protocol_label,
+        MAX_PROTOCOL_BYTES,
+        "protocol-id",
+    )?;
+    append_text_v1(
+        &mut output,
+        operation_schema,
+        MAX_OPERATION_SCHEMA_BYTES,
+        "operation-schema",
+    )?;
+    append_bytes_u32_v1(
+        &mut output,
+        public_action,
+        MAX_PUBLIC_ACTION_BYTES,
+        "public-action",
+    )?;
+    output.extend_from_slice(signer_seed);
+    append_bytes_u32_v1(
+        &mut output,
+        protocol_witness,
+        PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1,
+        "protocol-witness",
+    )?;
+    debug_assert_eq!(output.len(), capacity);
+
+    {
+        let decoded = decode_privacy_wallet_execution_bundle_v1(&mut output, public_action)?;
+        if decoded.manifest.protocol_id != protocol_id
+            || decoded.manifest.operation_schema != operation_schema
+        {
+            return Err(PrivacyWalletBundleErrorV1::at("typed-operation-schema"));
+        }
+    }
+    Ok(output)
+}
+
 /// Inspect public identity without releasing any bundle byte.
 pub fn inspect_privacy_wallet_execution_bundle_v1(
     bytes: &[u8],
@@ -335,6 +484,32 @@ pub fn inspect_privacy_wallet_execution_bundle_v1(
     Ok(InspectedPrivacyWalletExecutionBundleV1 {
         manifest,
         public_action_digest: privacy_wallet_bundle_public_action_digest_v1(parts.public_action),
+    })
+}
+/// Fully validate one owner bundle before advertising an import lease.
+///
+/// Unlike public outer inspection, this also decodes the protocol-specific
+/// witness into its exact typed native request.  The temporary request and
+/// signing key never leave the native worker, while callers retain only the
+/// public manifest and public-action digest.
+pub(crate) fn prevalidate_privacy_wallet_execution_bundle_v1(
+    bytes: &mut [u8],
+) -> Result<InspectedPrivacyWalletExecutionBundleV1, PrivacyWalletBundleErrorV1> {
+    let public_action = {
+        let parts = parse_parts(bytes)?;
+        parts.public_action.to_vec()
+    };
+    let public_action_digest = privacy_wallet_bundle_public_action_digest_v1(&public_action);
+    let DecodedPrivacyWalletExecutionBundleV1 {
+        manifest,
+        request,
+        signer_private_key,
+    } = decode_privacy_wallet_execution_bundle_v1(bytes, &public_action)?;
+    drop(request);
+    drop(signer_private_key);
+    Ok(InspectedPrivacyWalletExecutionBundleV1 {
+        manifest,
+        public_action_digest,
     })
 }
 /// Decode the exact typed request only inside a single-use vault callback.
@@ -352,6 +527,11 @@ pub(crate) fn decode_privacy_wallet_execution_bundle_v1(
         parts.public_action,
         parts.protocol_witness,
     )?;
+    if request.protocol_id() != manifest.protocol_id
+        || request.operation_schema() != manifest.operation_schema
+    {
+        return Err(PrivacyWalletBundleErrorV1::at("typed-operation-schema"));
+    }
     Ok(DecodedPrivacyWalletExecutionBundleV1 {
         manifest,
         request,
@@ -632,6 +812,15 @@ fn secret_object(bytes: &[u8]) -> Result<SecretJsonObject, PrivacyWalletBundleEr
     )
     .map(SecretJsonObject)
 }
+fn validate_zk_ace_identity_opening_v1(
+    expected: &PrivacyCommitmentV1,
+    witness: &ZkAcePrivacyWitnessV1,
+) -> Result<(), PrivacyWalletBundleErrorV1> {
+    if &witness.identity_commitment_v1() != expected {
+        return Err(PrivacyWalletBundleErrorV1::at("zk-ace-identity-opening"));
+    }
+    Ok(())
+}
 fn decode_zk_ace_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -712,6 +901,7 @@ fn decode_zk_ace_request_v1(
     )?;
     let witness = ZkAcePrivacyWitnessV1::try_new(identity_root, identity_blinding, replay_secret)
         .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ace-witness"))?;
+    validate_zk_ace_identity_opening_v1(&transfer.policy().identity_commitment, &witness)?;
     Ok(PrivacyNativeActionRequestV1::ZkAce(
         ZkAceAuthorizationActionRequestV1 { transfer, witness },
     ))
@@ -752,7 +942,7 @@ fn decode_verange_request_v1(
         "verange-witness",
     )?;
     let value_strings = take_array(&mut secret.0, "values_decimal", 1, 8, "verange-values")?;
-    let mut values = Vec::with_capacity(value_strings.len());
+    let mut values = Zeroizing::new(Vec::with_capacity(value_strings.len()));
     for value in value_strings {
         let norito::json::Value::String(value) = value else {
             return Err(PrivacyWalletBundleErrorV1::at("verange-values"));
@@ -782,6 +972,17 @@ fn decode_verange_request_v1(
             SecretScalarV1::from_bytes(bytes)
                 .map_err(|_| PrivacyWalletBundleErrorV1::at("verange-blindings"))?,
         );
+    }
+    let mut commitments = Vec::with_capacity(values.len());
+    for (&value, blinding) in values.iter().zip(&blindings) {
+        let commitment = verange_commit_v1(bit_length, value, blinding)
+            .map_err(|_| PrivacyWalletBundleErrorV1::at("verange-commitment"))?;
+        if commitments.contains(&commitment) {
+            return Err(PrivacyWalletBundleErrorV1::at(
+                "verange-duplicate-commitment",
+            ));
+        }
+        commitments.push(commitment);
     }
     Ok(PrivacyNativeActionRequestV1::VeRange(
         VeRangeActionRequestV1 {
@@ -899,6 +1100,14 @@ fn decode_zk_ams_request_v1(
                 "account_registry_root_epoch",
                 "zk-ams-account-registry-epoch",
             )?;
+            if account_registry_root.is_zero()
+                || account_registry_root_epoch == 0
+                || account_registry_root_epoch.checked_add(1).is_none()
+            {
+                return Err(PrivacyWalletBundleErrorV1::at("zk-ams-account-registry"));
+            }
+            preflight_zk_ams_action_governance_v1(&governance)
+                .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ams-governance"))?;
             let mut secret = secret_object(protocol_witness)?;
             exact_fields(&secret.0, &["credentials"], "zk-ams-witness")?;
             let credentials = take_array(&mut secret.0, "credentials", 1, 8, "zk-ams-credentials")?
@@ -936,6 +1145,24 @@ fn decode_zk_ams_request_v1(
                     })
                 })
                 .collect::<Result<Vec<_>, PrivacyWalletBundleErrorV1>>()?;
+            let mut credential_digests = BTreeSet::new();
+            let mut seed_public_keys = BTreeSet::new();
+            for request in &credentials {
+                preflight_zk_ams_admission_credential_v1(
+                    &governance,
+                    &request.credential,
+                    &request.issuer_signature,
+                    &request.seed_secret,
+                )
+                .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ams-credential-preflight"))?;
+                if !credential_digests.insert(request.credential.digest())
+                    || !seed_public_keys.insert(request.credential.seed_public_key)
+                {
+                    return Err(PrivacyWalletBundleErrorV1::at(
+                        "zk-ams-duplicate-credential",
+                    ));
+                }
+            }
             Ok(PrivacyNativeActionRequestV1::ZkAms(
                 ZkAmsActionRequestV1::BatchAdmission(ZkAmsBatchAdmissionActionRequestV1 {
                     governance,
@@ -966,6 +1193,11 @@ fn decode_zk_ams_request_v1(
                 "account_registry_root_epoch",
                 "zk-ams-account-registry-epoch",
             )?;
+            if account_registry_root.is_zero() || account_registry_root_epoch == 0 {
+                return Err(PrivacyWalletBundleErrorV1::at("zk-ams-account-registry"));
+            }
+            preflight_zk_ams_action_governance_v1(&governance)
+                .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ams-governance"))?;
             let account_id = account_id(
                 take_text(
                     &mut public,
@@ -991,6 +1223,11 @@ fn decode_zk_ams_request_v1(
                 previous = Some(bytes);
                 admitted_seed_key_ring.push(PrivacyZkAmsSeedPublicKeyV1::new(bytes));
             }
+            if !ZK_AMS_RING_SIZES_V1.contains(&admitted_seed_key_ring.len()) {
+                return Err(PrivacyWalletBundleErrorV1::at("zk-ams-seed-key-ring"));
+            }
+            preflight_zk_ams_seed_key_ring_v1(&admitted_seed_key_ring)
+                .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ams-seed-key-ring"))?;
             let mut secret = secret_object(protocol_witness)?;
             exact_fields(&secret.0, &["seed_secret_hex"], "zk-ams-witness")?;
             let seed_secret = ZkAmsSeedSecretV1::from_bytes(take_hex(
@@ -1000,6 +1237,14 @@ fn decode_zk_ams_request_v1(
                 false,
             )?)
             .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ams-seed-secret"))?;
+            let seed_public_key =
+                PrivacyZkAmsSeedPublicKeyV1::new(zk_ams_seed_public_key_v1(&seed_secret));
+            if admitted_seed_key_ring
+                .binary_search(&seed_public_key)
+                .is_err()
+            {
+                return Err(PrivacyWalletBundleErrorV1::at("zk-ams-seed-membership"));
+            }
             Ok(PrivacyNativeActionRequestV1::ZkAms(
                 ZkAmsActionRequestV1::ProvisionAccount(ZkAmsProvisionAccountActionRequestV1 {
                     governance,
@@ -1124,6 +1369,13 @@ fn decode_vega_request_v1(
     let device_signing_key = DeviceSigningKeyV1::from_bytes((&*device_key).into())
         .map_err(|_| PrivacyWalletBundleErrorV1::at("vega-device-signing-key"))?;
     device_key.zeroize();
+    preflight_vega_privacy_action_material_v1(
+        input,
+        &witness_material,
+        &device_signing_key,
+        trusted_block_timestamp_ms,
+    )
+    .map_err(|_| PrivacyWalletBundleErrorV1::at("vega-material-preflight"))?;
     Ok(PrivacyNativeActionRequestV1::Vega(
         VegaCredentialPresentationActionRequestV1 {
             input,
@@ -1249,6 +1501,8 @@ fn decode_bootle_lantern_request_v1(
         )?,
         attributes,
     };
+    preflight_presentation_wallet_bundle_v1(&policy, &disclosure_indices, &witness)
+        .map_err(|_| PrivacyWalletBundleErrorV1::at("bootle-material-preflight"))?;
     Ok(PrivacyNativeActionRequestV1::BootleLantern(
         BootleLanternPresentationActionRequestV1 {
             policy,
@@ -1295,6 +1549,9 @@ fn decode_anonymous_pgc_request_v1(
         false,
     )?);
     let current_epoch = take_u64(&mut public, "current_epoch", "anonymous-pgc-epoch")?;
+    if pool_id.is_zero() || current_epoch == 0 || current_epoch.checked_add(1).is_none() {
+        return Err(PrivacyWalletBundleErrorV1::at("anonymous-pgc-state"));
+    }
     let total_supply = take_u32(&mut public, "total_supply", "anonymous-pgc-supply")?;
     if total_supply == 0 {
         return Err(PrivacyWalletBundleErrorV1::at("anonymous-pgc-supply"));
@@ -1317,7 +1574,7 @@ fn decode_anonymous_pgc_request_v1(
         "anonymous-pgc-accounts",
     )?)
     .map_err(|_| PrivacyWalletBundleErrorV1::at("anonymous-pgc-accounts"))?;
-    if current_accounts.is_empty() || current_accounts.len() > 64 {
+    if !PGC_PAYMENT_ANONYMITY_SET_SIZES_V1.contains(&current_accounts.len()) {
         return Err(PrivacyWalletBundleErrorV1::at("anonymous-pgc-accounts"));
     }
     let mut secret = secret_object(protocol_witness)?;
@@ -1338,17 +1595,15 @@ fn decode_anonymous_pgc_request_v1(
         current_accounts.len(),
         "anonymous-pgc-transfer-values",
     )?;
-    let transfer_values = transfer_values_json
-        .into_iter()
-        .map(|value| {
-            let norito::json::Value::String(value) = value else {
-                return Err(PrivacyWalletBundleErrorV1::at(
-                    "anonymous-pgc-transfer-values",
-                ));
-            };
-            parse_decimal_i64(value, "anonymous-pgc-transfer-values")
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut transfer_values = Zeroizing::new(Vec::with_capacity(transfer_values_json.len()));
+    for value in transfer_values_json {
+        let norito::json::Value::String(value) = value else {
+            return Err(PrivacyWalletBundleErrorV1::at(
+                "anonymous-pgc-transfer-values",
+            ));
+        };
+        transfer_values.push(parse_decimal_i64(value, "anonymous-pgc-transfer-values")?);
+    }
     let transfer_randomness = decode_fixed_hex_values(
         take_array(
             &mut secret.0,
@@ -1382,6 +1637,32 @@ fn decode_anonymous_pgc_request_v1(
         false,
     )?)
     .map_err(|_| PrivacyWalletBundleErrorV1::at("anonymous-pgc-sender-secret"))?;
+    let public_keys = current_accounts
+        .iter()
+        .map(|account| {
+            TwistedElGamalPublicKeyV1::from_sec1_bytes(account.public_key.as_bytes())
+                .map_err(|_| PrivacyWalletBundleErrorV1::at("anonymous-pgc-account-key"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let current_balances = current_accounts
+        .iter()
+        .map(|account| {
+            TwistedElGamalCiphertextV1::from_sec1_bytes(
+                account.encrypted_balance.left.as_bytes(),
+                account.encrypted_balance.right.as_bytes(),
+            )
+            .map_err(|_| PrivacyWalletBundleErrorV1::at("anonymous-pgc-account-balance"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    preflight_anonymous_pgc_wallet_payment_v1(
+        &public_keys,
+        &current_balances,
+        &transfer_values,
+        &transfer_randomness,
+        sender_index,
+        &sender_secret,
+    )
+    .map_err(|_| PrivacyWalletBundleErrorV1::at("anonymous-pgc-material-preflight"))?;
     Ok(PrivacyNativeActionRequestV1::AnonymousPgc(
         AnonymousPgcPaymentActionRequestV1 {
             asset_definition_id,
@@ -1437,6 +1718,9 @@ fn decode_orchard_request_v1(
     let anchor = PrivacyRootV1::new(anchor_bytes);
     let anchor_epoch = take_u64(&mut public, "anchor_epoch", "orchard-anchor-epoch")?;
     let expiry_height = take_u64(&mut public, "expiry_height", "orchard-expiry-height")?;
+    if pool_id.is_zero() || anchor.is_zero() || anchor_epoch == 0 || expiry_height == 0 {
+        return Err(PrivacyWalletBundleErrorV1::at("orchard-state"));
+    }
     let minimum_action_count = take_u8(
         &mut public,
         "minimum_action_count",
@@ -1557,6 +1841,18 @@ fn decode_orchard_request_v1(
             .map_err(|_| PrivacyWalletBundleErrorV1::at("orchard-change"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if spends.len() + changes.len() > 2 {
+        return Err(PrivacyWalletBundleErrorV1::at("orchard-action-count"));
+    }
+    let mut nullifiers = BTreeSet::new();
+    if spends
+        .iter()
+        .any(|spend| !nullifiers.insert(spend.nullifier_v1()))
+    {
+        return Err(PrivacyWalletBundleErrorV1::at(
+            "orchard-duplicate-nullifier",
+        ));
+    }
     Ok(PrivacyNativeActionRequestV1::Orchard(
         OrchardNoteActionRequestV1 {
             asset_definition_id,
@@ -1609,6 +1905,9 @@ fn decode_fcmp_request_v1(
     )
     .map_err(|_| PrivacyWalletBundleErrorV1::at("fcmp-root"))?;
     let root_epoch = take_u64(&mut public, "root_epoch", "fcmp-root-epoch")?;
+    if pool_id.is_zero() || root_epoch == 0 {
+        return Err(PrivacyWalletBundleErrorV1::at("fcmp-state"));
+    }
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(&secret.0, &["inputs", "outputs"], "fcmp-witness")?;
     let inputs = take_array(&mut secret.0, "inputs", 1, 2, "fcmp-inputs")?
@@ -1755,6 +2054,19 @@ fn decode_fcmp_request_v1(
             })
         })
         .collect::<Result<Vec<_>, PrivacyWalletBundleErrorV1>>()?;
+    let mut output_openings = Vec::<FcmpOutputCommitmentOpeningV1>::with_capacity(outputs.len());
+    for output in &outputs {
+        let _ = derive_fcmp_recipient_id_v1(output.recipient_public_key)
+            .map_err(|_| PrivacyWalletBundleErrorV1::at("fcmp-output-recipient"))?;
+        output_openings.push(
+            output
+                .note
+                .commitment_opening()
+                .map_err(|_| PrivacyWalletBundleErrorV1::at("fcmp-output-opening"))?,
+        );
+    }
+    preflight_fcmp_plus_plus_wallet_request_v1(&inputs, &output_openings, output_set_root)
+        .map_err(|_| PrivacyWalletBundleErrorV1::at("fcmp-material-preflight"))?;
     Ok(PrivacyNativeActionRequestV1::FcmpPlusPlus(
         FcmpMembershipPaymentActionRequestV1 {
             asset_definition_id,
@@ -1825,6 +2137,9 @@ fn decode_ivm_request_v1(
         false,
     )?);
     let root_epoch = take_u64(&mut public, "root_epoch", "ivm-root-epoch")?;
+    if pool_id.is_zero() || state_root.is_zero() || root_epoch == 0 {
+        return Err(PrivacyWalletBundleErrorV1::at("ivm-state"));
+    }
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
         &secret.0,
@@ -1919,6 +2234,22 @@ fn decode_ivm_request_v1(
             })
         })
         .collect::<Result<Vec<_>, PrivacyWalletBundleErrorV1>>()?;
+    for output in &outputs {
+        let _ = derive_ivm_private_recipient_id_v1(output.recipient_public_key)
+            .map_err(|_| PrivacyWalletBundleErrorV1::at("ivm-output-recipient"))?;
+    }
+    let output_witnesses = outputs
+        .iter()
+        .map(|output| &output.witness)
+        .collect::<Vec<_>>();
+    preflight_ivm_private_note_wallet_request_v1(
+        pool_id,
+        state_root,
+        &program,
+        &inputs,
+        &output_witnesses,
+    )
+    .map_err(|_| PrivacyWalletBundleErrorV1::at("ivm-material-preflight"))?;
     Ok(PrivacyNativeActionRequestV1::IvmPrivateNote(
         IvmPrivateNoteActionRequestV1 {
             asset_definition_id,
@@ -2002,6 +2333,9 @@ fn decode_pq_masp_request_v1(
         false,
     )?);
     let anchor_epoch = take_u64(&mut public, "anchor_epoch", "pq-masp-anchor-epoch")?;
+    if pool_id.is_zero() || anchor.is_zero() || anchor_epoch == 0 {
+        return Err(PrivacyWalletBundleErrorV1::at("pq-masp-state"));
+    }
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
         &secret.0,
@@ -2080,6 +2414,31 @@ fn decode_pq_masp_request_v1(
         4_032,
         "pq-masp-authorization-secret",
     )?;
+    let authorization_key_digest =
+        derive_pq_masp_authorization_key_digest_from_secret_v1(&authorization_secret_key)
+            .map_err(|_| PrivacyWalletBundleErrorV1::at("pq-masp-authorization-secret"))?;
+    for output in &outputs {
+        let recipient = derive_pq_masp_recipient_id_v1(&output.recipient_public_key)
+            .map_err(|_| PrivacyWalletBundleErrorV1::at("pq-masp-output-recipient"))?;
+        if recipient != output.witness.note().recipient_key_digest() {
+            return Err(PrivacyWalletBundleErrorV1::at(
+                "pq-masp-output-recipient-binding",
+            ));
+        }
+    }
+    let output_witnesses = outputs
+        .iter()
+        .map(|output| &output.witness)
+        .collect::<Vec<_>>();
+    preflight_pq_masp_wallet_request_v1(
+        &asset_definition_id,
+        pool_id,
+        anchor,
+        authorization_key_digest,
+        &inputs,
+        &output_witnesses,
+    )
+    .map_err(|_| PrivacyWalletBundleErrorV1::at("pq-masp-material-preflight"))?;
     Ok(PrivacyNativeActionRequestV1::PqMasp(
         PqMaspNoteActionRequestV1 {
             asset_definition_id,
@@ -2195,6 +2554,12 @@ mod tests {
     const WITNESS: &str = concat!(
         "{\"polynomials_hex\":[[\"",
         "0000000000000000000000000000000000000000000000000000000000000000",
+        "\"],[\"",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+        "\"],[\"",
+        "0000000000000000000000000000000000000000000000000000000000000002",
+        "\"],[\"",
+        "0000000000000000000000000000000000000000000000000000000000000003",
         "\"]]}"
     );
     fn text(output: &mut Vec<u8>, value: &str) {
@@ -2249,6 +2614,75 @@ mod tests {
             WITNESS.as_bytes(),
         )
     }
+    fn rejected_bundle_stage(
+        result: Result<Zeroizing<Vec<u8>>, PrivacyWalletBundleErrorV1>,
+    ) -> &'static str {
+        match result {
+            Err(error) => error.stage(),
+            Ok(mut secret) => {
+                secret.zeroize();
+                panic!("invalid bundle material was unexpectedly accepted")
+            }
+        }
+    }
+    #[test]
+    fn native_encoder_matches_the_canonical_bundle_and_validates_the_witness() {
+        let seed = [7; 32];
+        let authority = authority_for_seed(seed);
+        let encoded = encode_privacy_wallet_execution_bundle_v1(
+            WALLET_ID,
+            &authority,
+            PROTOCOL,
+            OPERATION_SCHEMA,
+            PUBLIC_ACTION.as_bytes(),
+            &seed,
+            WITNESS.as_bytes(),
+        )
+        .expect("encode canonical bundle");
+        assert_eq!(encoded.as_slice(), canonical_bundle());
+
+        assert_eq!(
+            rejected_bundle_stage(encode_privacy_wallet_execution_bundle_v1(
+                WALLET_ID,
+                &authority,
+                PROTOCOL,
+                OPERATION_SCHEMA,
+                PUBLIC_ACTION.as_bytes(),
+                &seed,
+                br#"{"polynomials_hex":[]}"#,
+            )),
+            "jindo-polynomials"
+        );
+    }
+    #[test]
+    fn native_encoder_rejects_key_authority_and_canonical_action_drift() {
+        let seed = [7; 32];
+        let different_authority = authority_for_seed([8; 32]);
+        assert_eq!(
+            rejected_bundle_stage(encode_privacy_wallet_execution_bundle_v1(
+                WALLET_ID,
+                &different_authority,
+                PROTOCOL,
+                OPERATION_SCHEMA,
+                PUBLIC_ACTION.as_bytes(),
+                &seed,
+                WITNESS.as_bytes(),
+            )),
+            "authority-key-mismatch"
+        );
+        assert_eq!(
+            rejected_bundle_stage(encode_privacy_wallet_execution_bundle_v1(
+                WALLET_ID,
+                &authority_for_seed(seed),
+                PROTOCOL,
+                OPERATION_SCHEMA,
+                b"{ \"evaluation_point_hex\": \"00\" }",
+                &seed,
+                WITNESS.as_bytes(),
+            )),
+            "public-action"
+        );
+    }
     #[test]
     fn canonical_bundle_inspects_and_decodes_exact_jindo_request() {
         let mut bundle = canonical_bundle();
@@ -2281,6 +2715,42 @@ mod tests {
         assert_eq!(
             decoded.request.protocol_id(),
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+        );
+        assert_eq!(decoded.request.operation_schema(), OPERATION_SCHEMA);
+    }
+    #[test]
+    fn import_prevalidation_rejects_a_malformed_typed_witness() {
+        let mut malformed = bundle_with(
+            [7; 32],
+            &authority_for_seed([7; 32]),
+            PROTOCOL,
+            OPERATION_SCHEMA,
+            PUBLIC_ACTION.as_bytes(),
+            br#"{"unexpected":true}"#,
+        );
+        assert!(prevalidate_privacy_wallet_execution_bundle_v1(&mut malformed).is_err());
+
+        let mut canonical = canonical_bundle();
+        let inspected = prevalidate_privacy_wallet_execution_bundle_v1(&mut canonical)
+            .expect("prevalidate canonical typed bundle");
+        assert_eq!(inspected.manifest.wallet_id, WALLET_ID);
+        assert_eq!(
+            inspected.public_action_digest,
+            privacy_wallet_bundle_public_action_digest_v1(PUBLIC_ACTION.as_bytes())
+        );
+    }
+    #[test]
+    fn zk_ace_prevalidation_rejects_a_well_formed_wrong_identity_opening() {
+        let witness = ZkAcePrivacyWitnessV1::try_new([0x11; 32], [0x12; 32], [0x13; 32])
+            .expect("valid ZK-ACE witness");
+        let expected = witness.identity_commitment_v1();
+        validate_zk_ace_identity_opening_v1(&expected, &witness)
+            .expect("matching identity opening");
+        assert_eq!(
+            validate_zk_ace_identity_opening_v1(&PrivacyCommitmentV1::new([0x99; 32]), &witness,)
+                .expect_err("wrong identity opening")
+                .stage(),
+            "zk-ace-identity-opening"
         );
     }
     #[test]

@@ -8,10 +8,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 FROZEN_LOCK_SHA256 = (
-    "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+    "31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d"
 )
 TRACKED_ROOT_LOCK_SHA256 = (
-    "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+    "179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7"
 )
 
 
@@ -158,10 +158,10 @@ def test_javascript_lane_builds_and_executes_real_napi_abi22() -> None:
     assert 'node-version: "20"' in job
     assert 'python-version: "3.12"' in job
     assert '"1.93.1-x86_64-unknown-linux-gnu"' in job
-    assert "actions/download-artifact@" in job
-    assert FROZEN_LOCK_SHA256 in job
-    assert TRACKED_ROOT_LOCK_SHA256 in job
-    assert "not yet requalified" in job
+    assert "ci/privacy_sdk_cargo_lockfile.sh provision-ci" in job
+    assert job.count("ci/privacy_sdk_cargo_lockfile.sh verify-ci") == 2
+    assert "actions/download-artifact@" not in job
+    assert "not yet requalified" not in job
     assert "install -m 600" not in job
     assert "cargo fetch --locked" in job
     assert "run: ci/check_privacy_js_sdk.sh" in job
@@ -175,7 +175,9 @@ def test_javascript_lane_builds_and_executes_real_napi_abi22() -> None:
     assert '--sdk node' in gate
     assert 'test/privacyNative.integration.test.js' in gate
     assert 'export IROHA_JS_NATIVE_DIR=' in gate
-    assert 'export CARGO_NET_OFFLINE=true' in gate
+    assert 'export CARGO_NET_OFFLINE=true' not in gate
+    assert 'privacy_sdk_assert_ci_cargo_lock_state "${ROOT_DIR}"' in gate
+    assert "external-lock requalification" not in gate
 
     integration = read(
         "javascript/iroha_js/test/privacyNative.integration.test.js"
@@ -222,19 +224,24 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi22() ->
     assert "timeout-minutes: 120" in job
     assert "dtolnay/rust-toolchain" not in job
     assert '"1.93.1-aarch64-apple-darwin"' in job
-    assert "RUSTUP_TOOLCHAIN=1.93.1-aarch64-apple-darwin" in job
+    assert "RUSTUP_TOOLCHAIN=" not in job
+    assert "IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR" in job
+    assert "Install and seal exact Apple Rust targets" in job
+    assert "scripts/run_mobile_hermetic_command.py seal-apple-targets" in job
     assert "python3 -I -S" not in job
-    assert "actions/download-artifact@" in job
+    assert "ci/privacy_sdk_cargo_lockfile.sh provision-ci" in job
+    assert job.count("ci/privacy_sdk_cargo_lockfile.sh verify-ci") == 2
+    assert "actions/download-artifact@" not in job
     assert FROZEN_LOCK_SHA256 in job
     assert TRACKED_ROOT_LOCK_SHA256 in job
-    assert "not yet requalified" in job
+    assert "not yet requalified" not in job
     assert "install -m 600" not in job
     assert "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" in job
     assert "NORITO_BRIDGE_OUT_DIR=" in job
     assert "NORITO_BRIDGE_BUILD_DIR=" in job
     assert "cargo fetch --locked" in job
     assert "chmod -R a-w" in job
-    assert "scripts/build_norito_xcframework.sh" in job
+    assert "scripts/build_norito_xcframework.sh --privacy-production-enabled" in job
     assert "run: ci/check_privacy_swift_sdk.sh" in job
     assert "Revalidate frozen Swift inputs and ABI22 artifacts" in job
     assert job.count("scripts/check_mobile_sdk_artifacts.sh --apple-only") == 1

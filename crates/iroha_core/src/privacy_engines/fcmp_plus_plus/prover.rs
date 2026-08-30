@@ -2509,6 +2509,24 @@ fn preflight_fcmp_plus_plus_v1(
         public_inputs,
     })
 }
+/// Run the complete deterministic FCMP++ wallet preflight without sampling
+/// proof entropy or retaining derived public inputs.
+///
+/// This is the import-admission counterpart of [`prove_fcmp_plus_plus_v1`]. It
+/// checks every input opening, membership path, duplicate/key-image rule, and
+/// the aggregate commitment balance while the caller still owns the secret
+/// bundle. No witness byte is returned.
+///
+/// # Errors
+///
+/// Returns the same deterministic input failure as the prover preflight.
+pub fn preflight_fcmp_plus_plus_wallet_request_v1(
+    inputs: &[FcmpProverInputV1],
+    new_output_openings: &[FcmpOutputCommitmentOpeningV1],
+    root: FcmpTreeRootV1,
+) -> Result<(), FcmpNativeErrorV1> {
+    preflight_fcmp_plus_plus_v1(inputs, new_output_openings, root).map(drop)
+}
 /// Prove a complete first-release FCMP++ statement in native Rust.
 ///
 /// Each input supplies its statement-visible rerandomization witness; all zero-knowledge proof

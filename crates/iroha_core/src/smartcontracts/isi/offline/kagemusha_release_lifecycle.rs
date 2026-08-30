@@ -120,6 +120,14 @@ struct LoadedLifecycle {
     state: KagemushaV4ReleaseLifecycleStateV1,
 }
 
+/// Consensus-authenticated enabled lifecycle material used by read-only status projections.
+pub(super) struct EnabledLifecycleSnapshotV1 {
+    /// Exact decoded lifecycle state stored under the manifest-addressed key.
+    pub(super) state: KagemushaV4ReleaseLifecycleStateV1,
+    /// Raw SHA-256 of the exact canonical lifecycle bytes persisted by consensus.
+    pub(super) lifecycle_state_sha256: [u8; 32],
+}
+
 /// An already validated lifecycle record ready to join the activation write set.
 pub(super) struct StagedLifecyclePlan {
     key: StatePath,
@@ -255,14 +263,30 @@ pub(super) fn issuance_enabled(
     world: &impl WorldReadOnly,
     binding: &KagemushaRecursiveSpendArtifactBindingV4,
 ) -> Result<bool, String> {
+    enabled_lifecycle_snapshot(world, binding).map(|snapshot| snapshot.is_some())
+}
+
+/// Return the exact enabled lifecycle after revalidating every live consensus binding.
+///
+/// This is the sole source for Torii's public-issuance projection. A merely present or
+/// locally configured release is never enough: the lifecycle must be in its committed enabled
+/// phase and its release record, governed device policy, and both active verifier records must
+/// still match the persisted lifecycle identities.
+pub(super) fn enabled_lifecycle_snapshot(
+    world: &impl WorldReadOnly,
+    binding: &KagemushaRecursiveSpendArtifactBindingV4,
+) -> Result<Option<EnabledLifecycleSnapshotV1>, String> {
     let Some(loaded) = load_lifecycle(world, binding)? else {
-        return Ok(false);
+        return Ok(None);
     };
     if !loaded.state.issuance_enabled() {
-        return Ok(false);
+        return Ok(None);
     }
     require_bound_consensus_artifacts(world, &loaded.state, true)?;
-    Ok(true)
+    Ok(Some(EnabledLifecycleSnapshotV1 {
+        lifecycle_state_sha256: iroha_crypto::sha256(&loaded.bytes),
+        state: loaded.state,
+    }))
 }
 
 /// Load the exact governed policy retained for redemption of one release's notes.
@@ -397,19 +421,10 @@ pub(super) fn require_staged(
     promotion_binding: &KagemushaV4PromotionBindingV1,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    let cached = state_transaction
-        .kagemusha_release_catalog
-        .get(&promotion_binding.manifest_sha256)
-        .cloned()
-        .ok_or_else(|| invalid("Kagemusha V4 manifest is absent from the authenticated catalog"))?;
-    let binding = KagemushaRecursiveSpendArtifactBindingV4 {
-        version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-        generation: cached.release_record().manifest.generation.clone(),
-        manifest_sha256: promotion_binding.manifest_sha256,
-    };
-    let loaded = load_lifecycle(&state_transaction.world, &binding)
-        .map_err(invalid)?
-        .ok_or_else(|| invalid("Kagemusha V4 release lifecycle is absent"))?;
+    let loaded =
+        load_lifecycle_by_manifest(&state_transaction.world, &promotion_binding.manifest_sha256)
+            .map_err(invalid)?
+            .ok_or_else(|| invalid("Kagemusha V4 release lifecycle is absent"))?;
     if loaded.state.promotion_binding != *promotion_binding
         || !matches!(
             loaded.state.phase,
@@ -1052,7 +1067,7 @@ impl Execute for DeactivateKagemushaRecursiveIssuanceV4 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         kura::Kura,

@@ -1002,6 +1002,18 @@ mod tests {
             catalog_get(|| async { StatusCode::NO_CONTENT }),
         );
         builder.route(
+            &offline::DEVICE_ATTESTATION_POLICY,
+            catalog_get(|| async { StatusCode::NO_CONTENT }),
+        );
+        builder.route(
+            &offline::DEVICE_ATTESTATION_POLICY_PROOF,
+            catalog_post(|| async { StatusCode::NO_CONTENT }),
+        );
+        builder.route(
+            &offline::DEVICE_ELIGIBILITY,
+            catalog_post(|| async { StatusCode::NO_CONTENT }),
+        );
+        builder.route(
             &offline::RECIPIENT_LINEAGE,
             catalog_post(|| async { StatusCode::NO_CONTENT }),
         );

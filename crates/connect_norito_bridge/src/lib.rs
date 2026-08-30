@@ -9,8 +9,8 @@ use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
 use iroha_crypto::{
-    Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
-    PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
+    Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, HashOf, KeyGenOption, KeyPair,
+    PrivateKey, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
     kex::KeyExchangeScheme,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
@@ -63,6 +63,13 @@ use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::{
     connect as proto, connect_sdk,
+    offline_api::{
+        OFFLINE_DEVICE_ELIGIBILITY_MAX_RESPONSE_BYTES,
+        OFFLINE_DEVICE_ELIGIBILITY_REQUEST_MAX_BYTES, OFFLINE_DEVICE_ELIGIBILITY_VERSION_V1,
+        OFFLINE_DEVICE_POLICY_PROOF_MAX_RESPONSE_BYTES, OFFLINE_DEVICE_POLICY_PROOF_VERSION_V1,
+        OfflineDeviceEligibilityRequestV1, OfflineDeviceEligibilityResponseV1,
+        OfflineDevicePolicyProofRequestV1, OfflineDevicePolicyProofV1,
+    },
     validation_fee_api::{
         VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
         ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
@@ -109,6 +116,54 @@ use std::{
 use zeroize::{Zeroize, Zeroizing};
 mod account_onboarding;
 pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
+mod authenticated_transaction_details;
+use authenticated_transaction_details::{
+    AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1, AUTHENTICATED_FINALITY_PAGE_MAX_PROOFS_V1,
+    AUTHENTICATED_FINALITY_PROOF_MAX_BYTES_V1,
+    AUTHENTICATED_OFFLINE_DEVICE_REGISTRATION_RESULT_MAX_BYTES_V1,
+    AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1,
+    AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1,
+    AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1,
+    AUTHENTICATED_TRANSACTION_DETAILS_SIGNATURE_MAX_BYTES_V1,
+    AuthenticatedFinalizedKagemushaTerminalStateV1, OfflineDeviceRegistrationTerminalStateV1,
+    authenticated_finality_mobile_height_v1, authenticated_finality_page_verify_v1,
+    authenticated_finality_proof_page_bind_v1,
+    authenticated_finalized_kagemusha_outcome_project_v1,
+    authenticated_finalized_privacy_action_rejection_project_v1,
+    authenticated_kagemusha_rejection_project_v2,
+    authenticated_offline_device_registration_result_project_v1,
+    authenticated_transaction_details_finalize_v1, authenticated_transaction_details_finalize_v2,
+    authenticated_transaction_details_prepare_v1, authenticated_transaction_details_prepare_v2,
+    authenticated_transaction_details_project_rejection_v1,
+    authenticated_transaction_details_project_rejection_v2,
+    authenticated_transaction_details_project_result_v1,
+    authenticated_transaction_details_project_result_v2,
+};
+mod operation_reference_projection;
+use operation_reference_projection::project_kagemusha_operation_reference_v1;
+mod authenticated_privacy_action_receipt;
+use authenticated_privacy_action_receipt::{
+    AUTHENTICATED_ACTION_RECEIPT_BINDING_BYTES_V1,
+    AUTHENTICATED_ACTION_RECEIPT_PREPARATION_MAX_BYTES_V1,
+    AUTHENTICATED_ACTION_RECEIPT_RESPONSE_MAX_BYTES_V1,
+    AUTHENTICATED_ACTION_RECEIPT_SIGNATURE_MAX_BYTES_V1,
+    authenticated_privacy_action_receipt_finalize_v1,
+    authenticated_privacy_action_receipt_prepare_v1,
+    authenticated_privacy_action_receipt_project_result_v1,
+};
+mod authenticated_privacy_state_query;
+use authenticated_privacy_state_query::{
+    AUTHENTICATED_PRIVACY_STATE_QUERY_BINDING_MAX_BYTES_V1,
+    AUTHENTICATED_PRIVACY_STATE_QUERY_PREPARATION_MAX_BYTES_V1,
+    AUTHENTICATED_PRIVACY_STATE_QUERY_RESPONSE_MAX_BYTES_V1,
+    AUTHENTICATED_PRIVACY_STATE_QUERY_SIGNATURE_MAX_BYTES_V1,
+    authenticated_privacy_state_query_finalize_v1, authenticated_privacy_state_query_prepare_v1,
+    authenticated_privacy_state_query_project_result_v1,
+};
+mod privacy_exact12_action;
+use privacy_exact12_action::{
+    PRIVACY_EXACT12_SIGNED_ACTION_MAX_BYTES_V1, inspect_signed_privacy_exact12_action_v1,
+};
 mod connect_approval_ffi;
 #[cfg(test)]
 use connect_approval_ffi::{
@@ -271,6 +326,10 @@ const ERR_ACCOUNT_ONBOARDING_BODY: c_int = -408;
 const ERR_ALIAS_INSTRUCTION: c_int = -409;
 const ERR_CONNECT_IDENTITY: c_int = -410;
 const ERR_CONNECT_APPROVAL: c_int = -411;
+const ERR_AUTHENTICATED_TRANSACTION_DETAILS: c_int = -412;
+const ERR_PRIVACY_EXACT12_ACTION: c_int = -413;
+const ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT: c_int = -414;
+const ERR_AUTHENTICATED_PRIVACY_STATE_QUERY: c_int = -415;
 const ERR_DETACHED_TRANSACTION_SCAFFOLD: c_int = -501;
 const ERR_DETACHED_TRANSACTION_SIGNATURE: c_int = -502;
 const ERR_CANONICAL_JSON: c_int = -503;
@@ -736,6 +795,11 @@ impl_kagemusha_canonical_decode_schema!(
     iroha_data_model::offline::KagemushaReceiverAcknowledgementV2,
     iroha_data_model::offline::KagemushaReceiverAcknowledgementVerifyResultV2,
     iroha_data_model::offline::KagemushaRequestAuthorizationV2,
+    iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopePayloadV1,
+    iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1,
+    iroha_data_model::offline::KagemushaDeviceSignatureV2,
+    iroha_data_model::offline::OfflineDeviceEligibilityCredentialV1,
+    PublicKey,
     iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
     iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2,
     iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
@@ -755,11 +819,16 @@ impl_kagemusha_canonical_decode_profile!(
     iroha_data_model::offline::KagemushaRecursiveSpendReleasePolicyV1,
     iroha_data_model::offline::KagemushaRecursiveSpendTopUpFinalityEvidenceV4,
     iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
+    iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+    iroha_data_model::bridge::BridgeFinalityProof,
     iroha_data_model::offline::KagemushaTopUpFinalityProofV2,
     iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
     iroha_torii_shared::offline_api::OfflineOperationStatus,
+    iroha_torii_shared::offline_api::OfflineOperationReference,
     iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2,
     iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage,
+    iroha_torii_shared::offline_api::OfflineDevicePolicyProofV1,
+    iroha_torii_shared::offline_api::OfflineDeviceEligibilityResponseV1,
 );
 impl_kagemusha_canonical_decode_schema!(
     iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4;
@@ -1569,13 +1638,21 @@ fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
 const PRIVACY_COMPILED_PROFILE_CATALOG_WORKER_STACK_BYTES_V1: usize = 8 * 1024 * 1024;
-const PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1: usize =
+const PRIVACY_CATALOG_OR_FIXTURE_OUTPUT_MAX_BYTES_V1: usize =
     if PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
         > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
     {
         PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
     } else {
         PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
+    };
+const PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1: usize =
+    if PRIVACY_CATALOG_OR_FIXTURE_OUTPUT_MAX_BYTES_V1 > AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1 {
+        PRIVACY_CATALOG_OR_FIXTURE_OUTPUT_MAX_BYTES_V1
+    } else {
+        // Finality-page archives are the largest ABI-22 privacy outputs. They remain bounded to
+        // 64 MiB and use the same zeroizing ownership header as every smaller privacy result.
+        AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1
     };
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -1825,6 +1902,2016 @@ pub unsafe extern "C" fn iroha_privacy_validate_exact12_fixture_bundle_v1(
     let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
     validate_privacy_exact12_fixture_bundle_v1(archive).code()
 }
+/// Authenticate and project one closed Exact12 signed action.
+///
+/// Success returns exactly 128 bytes: transaction hash, transaction-intent digest,
+/// statement digest, and proof-envelope hash, each in canonical 32-byte order.  This performs
+/// structural/signature/authority/intent validation only and deliberately does not treat a local
+/// proof check as ledger acceptance. The output must be released with
+/// [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_inspect_signed_exact12_action_v1(
+    signed_transaction_ptr: *const c_uchar,
+    signed_transaction_len: c_ulong,
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
+    authority_ptr: *const c_uchar,
+    authority_len: c_ulong,
+    operation_index: c_int,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if out_ptr.is_null()
+        || out_len.is_null()
+        || signed_transaction_ptr.is_null()
+        || network_id_ptr.is_null()
+        || authority_ptr.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(signed_transaction_len), Ok(network_id_len), Ok(authority_len)) = (
+        usize::try_from(signed_transaction_len),
+        usize::try_from(network_id_len),
+        usize::try_from(authority_len),
+    ) else {
+        return ERR_PRIVACY_EXACT12_ACTION;
+    };
+    if signed_transaction_len == 0
+        || signed_transaction_len > PRIVACY_EXACT12_SIGNED_ACTION_MAX_BYTES_V1
+        || network_id_len != Hash::LENGTH
+        || authority_len == 0
+        || authority_len > AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1
+    {
+        return ERR_PRIVACY_EXACT12_ACTION;
+    }
+    let signed_transaction =
+        unsafe { slice::from_raw_parts(signed_transaction_ptr, signed_transaction_len) };
+    let network_id = unsafe { slice::from_raw_parts(network_id_ptr, network_id_len) };
+    let authority_bytes = unsafe { slice::from_raw_parts(authority_ptr, authority_len) };
+    let Ok(authority) = str::from_utf8(authority_bytes) else {
+        return ERR_PRIVACY_EXACT12_ACTION;
+    };
+    let Ok(projection) = inspect_signed_privacy_exact12_action_v1(
+        signed_transaction,
+        network_id,
+        authority,
+        operation_index,
+    ) else {
+        return ERR_PRIVACY_EXACT12_ACTION;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &projection.to_fixed_bytes()) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+/// Build one fresh, exact-hash authenticated committed-transaction query.
+///
+/// Success returns a private native preparation archive and the exact 32-byte signing digest.
+/// The caller must sign only that digest with the single-key authority identified by
+/// `authority_ptr`, then pass the signature and unchanged preparation to
+/// [`iroha_privacy_authenticated_transaction_details_finalize_v1`]. Both output buffers must be
+/// released with [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call. All
+/// output pointer/length pairs must be valid writable pointers and may not alias one another.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_transaction_details_prepare_v1(
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
+    authority_ptr: *const c_uchar,
+    authority_len: c_ulong,
+    transaction_hash_hex_ptr: *const c_uchar,
+    transaction_hash_hex_len: c_ulong,
+    creation_time_ms: u64,
+    nonce_ptr: *const c_uchar,
+    nonce_len: c_ulong,
+    out_preparation_ptr: *mut *mut c_uchar,
+    out_preparation_len: *mut c_ulong,
+    out_signing_digest_ptr: *mut *mut c_uchar,
+    out_signing_digest_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_preparation_ptr, out_preparation_len);
+    clear_privacy_output(out_signing_digest_ptr, out_signing_digest_len);
+    if network_id_ptr.is_null()
+        || authority_ptr.is_null()
+        || transaction_hash_hex_ptr.is_null()
+        || nonce_ptr.is_null()
+        || out_preparation_ptr.is_null()
+        || out_preparation_len.is_null()
+        || out_signing_digest_ptr.is_null()
+        || out_signing_digest_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(network_id_len), Ok(authority_len), Ok(transaction_hash_hex_len), Ok(nonce_len)) = (
+        usize::try_from(network_id_len),
+        usize::try_from(authority_len),
+        usize::try_from(transaction_hash_hex_len),
+        usize::try_from(nonce_len),
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if network_id_len != Hash::LENGTH
+        || authority_len == 0
+        || authority_len > AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1
+        || transaction_hash_hex_len != Hash::LENGTH * 2
+        || nonce_len != Hash::LENGTH
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let network_id = unsafe { slice::from_raw_parts(network_id_ptr, network_id_len) };
+    let authority_bytes = unsafe { slice::from_raw_parts(authority_ptr, authority_len) };
+    let transaction_hash_bytes =
+        unsafe { slice::from_raw_parts(transaction_hash_hex_ptr, transaction_hash_hex_len) };
+    let nonce_bytes = unsafe { slice::from_raw_parts(nonce_ptr, nonce_len) };
+    let (Ok(authority), Ok(transaction_hash_hex), Ok(nonce)) = (
+        str::from_utf8(authority_bytes),
+        str::from_utf8(transaction_hash_bytes),
+        <[u8; Hash::LENGTH]>::try_from(nonce_bytes),
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    let Ok((preparation, signing_digest)) = authenticated_transaction_details_prepare_v1(
+        network_id,
+        authority,
+        transaction_hash_hex,
+        creation_time_ms,
+        nonce,
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if let Err(code) =
+        unsafe { write_privacy_bytes(out_preparation_ptr, out_preparation_len, &preparation) }
+    {
+        return code;
+    }
+    if let Err(code) = unsafe {
+        write_privacy_bytes(
+            out_signing_digest_ptr,
+            out_signing_digest_len,
+            &signing_digest,
+        )
+    } {
+        let allocated = unsafe { *out_preparation_ptr };
+        iroha_privacy_free_buffer(allocated);
+        clear_privacy_output(out_preparation_ptr, out_preparation_len);
+        return code;
+    }
+    0
+}
+/// Build one authority-split exact-hash committed-transaction query.
+///
+/// The query authority signs the native digest while `expected_transaction_authority_ptr` pins
+/// the distinct issuer authority which must have signed the returned external transaction.
+/// Both outputs use [`iroha_privacy_free_buffer`] ownership.
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call. All
+/// output pointer/length pairs must be valid writable pointers and may not alias one another.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_transaction_details_prepare_v2(
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
+    query_authority_ptr: *const c_uchar,
+    query_authority_len: c_ulong,
+    expected_transaction_authority_ptr: *const c_uchar,
+    expected_transaction_authority_len: c_ulong,
+    transaction_hash_hex_ptr: *const c_uchar,
+    transaction_hash_hex_len: c_ulong,
+    creation_time_ms: u64,
+    nonce_ptr: *const c_uchar,
+    nonce_len: c_ulong,
+    out_preparation_ptr: *mut *mut c_uchar,
+    out_preparation_len: *mut c_ulong,
+    out_signing_digest_ptr: *mut *mut c_uchar,
+    out_signing_digest_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_preparation_ptr, out_preparation_len);
+    clear_privacy_output(out_signing_digest_ptr, out_signing_digest_len);
+    if network_id_ptr.is_null()
+        || query_authority_ptr.is_null()
+        || expected_transaction_authority_ptr.is_null()
+        || transaction_hash_hex_ptr.is_null()
+        || nonce_ptr.is_null()
+        || out_preparation_ptr.is_null()
+        || out_preparation_len.is_null()
+        || out_signing_digest_ptr.is_null()
+        || out_signing_digest_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (
+        Ok(network_id_len),
+        Ok(query_authority_len),
+        Ok(expected_transaction_authority_len),
+        Ok(transaction_hash_hex_len),
+        Ok(nonce_len),
+    ) = (
+        usize::try_from(network_id_len),
+        usize::try_from(query_authority_len),
+        usize::try_from(expected_transaction_authority_len),
+        usize::try_from(transaction_hash_hex_len),
+        usize::try_from(nonce_len),
+    )
+    else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if network_id_len != Hash::LENGTH
+        || query_authority_len == 0
+        || query_authority_len > AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1
+        || expected_transaction_authority_len == 0
+        || expected_transaction_authority_len
+            > AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1
+        || transaction_hash_hex_len != Hash::LENGTH * 2
+        || nonce_len != Hash::LENGTH
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let network_id = unsafe { slice::from_raw_parts(network_id_ptr, network_id_len) };
+    let query_authority_bytes =
+        unsafe { slice::from_raw_parts(query_authority_ptr, query_authority_len) };
+    let expected_transaction_authority_bytes = unsafe {
+        slice::from_raw_parts(
+            expected_transaction_authority_ptr,
+            expected_transaction_authority_len,
+        )
+    };
+    let transaction_hash_bytes =
+        unsafe { slice::from_raw_parts(transaction_hash_hex_ptr, transaction_hash_hex_len) };
+    let nonce_bytes = unsafe { slice::from_raw_parts(nonce_ptr, nonce_len) };
+    let (
+        Ok(query_authority),
+        Ok(expected_transaction_authority),
+        Ok(transaction_hash_hex),
+        Ok(nonce),
+    ) = (
+        str::from_utf8(query_authority_bytes),
+        str::from_utf8(expected_transaction_authority_bytes),
+        str::from_utf8(transaction_hash_bytes),
+        <[u8; Hash::LENGTH]>::try_from(nonce_bytes),
+    )
+    else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    let Ok((preparation, signing_digest)) = authenticated_transaction_details_prepare_v2(
+        network_id,
+        query_authority,
+        expected_transaction_authority,
+        transaction_hash_hex,
+        creation_time_ms,
+        nonce,
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if let Err(code) =
+        unsafe { write_privacy_bytes(out_preparation_ptr, out_preparation_len, &preparation) }
+    {
+        return code;
+    }
+    if let Err(code) = unsafe {
+        write_privacy_bytes(
+            out_signing_digest_ptr,
+            out_signing_digest_len,
+            &signing_digest,
+        )
+    } {
+        let allocated = unsafe { *out_preparation_ptr };
+        iroha_privacy_free_buffer(allocated);
+        clear_privacy_output(out_preparation_ptr, out_preparation_len);
+        return code;
+    }
+    0
+}
+/// Finalize one native preparation with its detached authority signature.
+///
+/// Success returns canonical versioned `SignedQuery` bytes for
+/// `/v1/pipeline/transactions/details`. The output must be released with
+/// [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_transaction_details_finalize_v1(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    signature_ptr: *const c_uchar,
+    signature_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null()
+        || signature_ptr.is_null()
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(preparation_len), Ok(signature_len)) = (
+        usize::try_from(preparation_len),
+        usize::try_from(signature_len),
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1
+        || signature_len == 0
+        || signature_len > AUTHENTICATED_TRANSACTION_DETAILS_SIGNATURE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let signature = unsafe { slice::from_raw_parts(signature_ptr, signature_len) };
+    let Ok(body) = authenticated_transaction_details_finalize_v1(preparation, signature) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &body) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+/// Finalize one authority-split V2 preparation with the detached query-authority signature.
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_transaction_details_finalize_v2(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    signature_ptr: *const c_uchar,
+    signature_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null()
+        || signature_ptr.is_null()
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(preparation_len), Ok(signature_len)) = (
+        usize::try_from(preparation_len),
+        usize::try_from(signature_len),
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1
+        || signature_len == 0
+        || signature_len > AUTHENTICATED_TRANSACTION_DETAILS_SIGNATURE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let signature = unsafe { slice::from_raw_parts(signature_ptr, signature_len) };
+    let Ok(body) = authenticated_transaction_details_finalize_v2(preparation, signature) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &body) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+fn authenticated_transaction_details_result_json_v1(
+    preparation: &[u8],
+    response: &[u8],
+) -> Result<Vec<u8>, c_int> {
+    let projection = authenticated_transaction_details_project_result_v1(preparation, response)
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    if !projection.result_ok {
+        authenticated_transaction_details_project_rejection_v1(preparation, response)
+            .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    }
+    let value = JsonValue::Object(JsonMap::from_iter([
+        ("version".into(), JsonValue::from(1_u64)),
+        (
+            "transaction_hash_hex".into(),
+            JsonValue::from(projection.transaction_hash_hex),
+        ),
+        (
+            "transaction_authority".into(),
+            JsonValue::from(projection.transaction_authority),
+        ),
+        (
+            "block_hash_hex".into(),
+            JsonValue::from(projection.block_hash_hex),
+        ),
+        (
+            "result_hash_hex".into(),
+            JsonValue::from(projection.result_hash_hex),
+        ),
+        ("result_ok".into(), JsonValue::from(projection.result_ok)),
+        (
+            "rejection_message".into(),
+            projection
+                .rejection_message
+                .map_or(JsonValue::Null, JsonValue::from),
+        ),
+        (
+            "committed_block_height".into(),
+            JsonValue::from(projection.committed_block_height.to_string()),
+        ),
+    ]));
+    let json = norito::json::to_vec(&value).map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    if json.is_empty() || json.len() > 8 * 1024 {
+        return Err(ERR_AUTHENTICATED_TRANSACTION_DETAILS);
+    }
+    Ok(json)
+}
+fn authenticated_transaction_details_result_json_v2(
+    preparation: &[u8],
+    response: &[u8],
+) -> Result<Vec<u8>, c_int> {
+    let projection = authenticated_transaction_details_project_result_v2(preparation, response)
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    if !projection.result_ok {
+        authenticated_transaction_details_project_rejection_v2(preparation, response)
+            .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    }
+    let value = JsonValue::Object(JsonMap::from_iter([
+        ("version".into(), JsonValue::from(2_u64)),
+        (
+            "transaction_hash_hex".into(),
+            JsonValue::from(projection.transaction_hash_hex),
+        ),
+        (
+            "query_authority".into(),
+            JsonValue::from(projection.query_authority),
+        ),
+        (
+            "transaction_authority".into(),
+            JsonValue::from(projection.transaction_authority),
+        ),
+        (
+            "block_hash_hex".into(),
+            JsonValue::from(projection.block_hash_hex),
+        ),
+        (
+            "result_hash_hex".into(),
+            JsonValue::from(projection.result_hash_hex),
+        ),
+        ("result_ok".into(), JsonValue::from(projection.result_ok)),
+        (
+            "rejection_message".into(),
+            projection
+                .rejection_message
+                .map_or(JsonValue::Null, JsonValue::from),
+        ),
+        (
+            "committed_block_height".into(),
+            JsonValue::from(projection.committed_block_height.to_string()),
+        ),
+        (
+            "transaction_details_hash_hex".into(),
+            JsonValue::from(Hash::new(response).to_string()),
+        ),
+    ]));
+    let json = norito::json::to_vec(&value).map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    if json.is_empty() || json.len() > 64 * 1024 {
+        return Err(ERR_AUTHENTICATED_TRANSACTION_DETAILS);
+    }
+    Ok(json)
+}
+
+fn decode_authenticated_finality_checkpoint_v1(
+    checkpoint: &[u8],
+) -> Result<(u64, [u8; Hash::LENGTH]), c_int> {
+    if checkpoint.len()
+        != authenticated_transaction_details::AUTHENTICATED_FINALITY_CHECKPOINT_BYTES_V1
+    {
+        return Err(ERR_AUTHENTICATED_TRANSACTION_DETAILS);
+    }
+    let height = u64::from_be_bytes(
+        checkpoint[..8]
+            .try_into()
+            .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?,
+    );
+    authenticated_finality_mobile_height_v1(height)
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let context_id = checkpoint[8..]
+        .try_into()
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    Ok((height, context_id))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticated_finalized_kagemusha_outcome_json_v1(
+    preparation: &[u8],
+    response: &[u8],
+    expected_operation_id: [u8; 32],
+    expected_kind: &str,
+    expected_request: &[u8],
+    network_id: &[u8],
+    trusted_checkpoint: &[u8],
+    finality_page: &[u8],
+    executed_block_wire: &[u8],
+) -> Result<Vec<u8>, c_int> {
+    let (trusted_height, trusted_context_id) =
+        decode_authenticated_finality_checkpoint_v1(trusted_checkpoint)?;
+    let projection = authenticated_finalized_kagemusha_outcome_project_v1(
+        preparation,
+        response,
+        expected_operation_id,
+        expected_kind,
+        expected_request,
+        network_id,
+        trusted_height,
+        &trusted_context_id,
+        finality_page,
+        executed_block_wire,
+    )
+    .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let terminal_state = match projection.terminal_state {
+        AuthenticatedFinalizedKagemushaTerminalStateV1::Applied => "applied",
+        AuthenticatedFinalizedKagemushaTerminalStateV1::Rejected => "rejected",
+    };
+    let finalized_checkpoint = projection
+        .finalized_checkpoint
+        .encode()
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let value = JsonValue::Object(JsonMap::from_iter([
+        ("version".into(), JsonValue::from(1_u64)),
+        ("terminal_state".into(), JsonValue::from(terminal_state)),
+        (
+            "operation_id_hex".into(),
+            JsonValue::from(hex::encode(projection.operation_id)),
+        ),
+        (
+            "operation_kind".into(),
+            JsonValue::from(projection.operation_kind),
+        ),
+        (
+            "transaction_hash_hex".into(),
+            JsonValue::from(projection.transaction_hash_hex),
+        ),
+        (
+            "query_authority".into(),
+            JsonValue::from(projection.query_authority),
+        ),
+        (
+            "transaction_authority".into(),
+            JsonValue::from(projection.transaction_authority),
+        ),
+        (
+            "block_hash_hex".into(),
+            JsonValue::from(projection.block_hash_hex),
+        ),
+        (
+            "result_hash_hex".into(),
+            JsonValue::from(projection.result_hash_hex),
+        ),
+        (
+            "committed_block_height".into(),
+            JsonValue::from(projection.committed_block_height.to_string()),
+        ),
+        (
+            "finalized_checkpoint_hex".into(),
+            JsonValue::from(hex::encode(finalized_checkpoint)),
+        ),
+        (
+            "executed_block_wire_hash_hex".into(),
+            JsonValue::from(projection.executed_block_wire_hash_hex),
+        ),
+        (
+            "rejection_code".into(),
+            projection
+                .rejection_code
+                .map_or(JsonValue::Null, JsonValue::from),
+        ),
+        (
+            "rejection_message".into(),
+            projection
+                .rejection_message
+                .map_or(JsonValue::Null, JsonValue::from),
+        ),
+        (
+            "evidence_id_hex".into(),
+            JsonValue::from(projection.evidence_id_hex),
+        ),
+        (
+            "transaction_details_hash_hex".into(),
+            JsonValue::from(projection.transaction_details_hash_hex),
+        ),
+        (
+            "finality_page_hash_hex".into(),
+            JsonValue::from(projection.finality_page_hash_hex),
+        ),
+    ]));
+    let json = norito::json::to_vec(&value).map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    if json.is_empty() || json.len() > 64 * 1024 {
+        return Err(ERR_AUTHENTICATED_TRANSACTION_DETAILS);
+    }
+    Ok(json)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticated_finalized_privacy_action_rejection_json_v1(
+    preparation: &[u8],
+    response: &[u8],
+    operation_index: i32,
+    action_index: u32,
+    requested_action_binding: &[u8],
+    network_id: &[u8],
+    trusted_checkpoint: &[u8],
+    finality_page: &[u8],
+    executed_block_wire: &[u8],
+) -> Result<Vec<u8>, c_int> {
+    let (trusted_height, trusted_context_id) =
+        decode_authenticated_finality_checkpoint_v1(trusted_checkpoint)?;
+    let projection = authenticated_finalized_privacy_action_rejection_project_v1(
+        preparation,
+        response,
+        operation_index,
+        action_index,
+        requested_action_binding,
+        network_id,
+        trusted_height,
+        &trusted_context_id,
+        finality_page,
+        executed_block_wire,
+    )
+    .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let finalized_checkpoint = projection
+        .finalized_checkpoint
+        .encode()
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let value = JsonValue::Object(JsonMap::from_iter([
+        ("version".into(), JsonValue::from(1_u64)),
+        (
+            "network_id_hex".into(),
+            JsonValue::from(projection.network_id_hex),
+        ),
+        (
+            "protocol_id".into(),
+            JsonValue::from(projection.protocol_id.canonical_label()),
+        ),
+        (
+            "operation_schema".into(),
+            JsonValue::from(projection.operation_schema.canonical_label()),
+        ),
+        (
+            "ledger_effect_kind".into(),
+            JsonValue::from(projection.ledger_effect_kind.canonical_label()),
+        ),
+        (
+            "transaction_hash_hex".into(),
+            JsonValue::from(projection.transaction_hash_hex),
+        ),
+        (
+            "action_index".into(),
+            JsonValue::from(u64::from(projection.action_index)),
+        ),
+        (
+            "transaction_intent_digest_hex".into(),
+            JsonValue::from(projection.transaction_intent_digest_hex),
+        ),
+        (
+            "statement_digest_hex".into(),
+            JsonValue::from(projection.statement_digest_hex),
+        ),
+        (
+            "proof_envelope_hash_hex".into(),
+            JsonValue::from(projection.proof_envelope_hash_hex),
+        ),
+        (
+            "query_authority".into(),
+            JsonValue::from(projection.query_authority),
+        ),
+        (
+            "transaction_authority".into(),
+            JsonValue::from(projection.transaction_authority),
+        ),
+        (
+            "block_hash_hex".into(),
+            JsonValue::from(projection.block_hash_hex),
+        ),
+        (
+            "result_hash_hex".into(),
+            JsonValue::from(projection.result_hash_hex),
+        ),
+        (
+            "rejection_code".into(),
+            JsonValue::from(projection.rejection_code.canonical_label()),
+        ),
+        (
+            "rejection_message".into(),
+            JsonValue::from(projection.rejection_message),
+        ),
+        (
+            "committed_block_height".into(),
+            JsonValue::from(projection.committed_block_height.to_string()),
+        ),
+        (
+            "finalized_checkpoint_hex".into(),
+            JsonValue::from(hex::encode(finalized_checkpoint)),
+        ),
+        (
+            "executed_block_wire_hash_hex".into(),
+            JsonValue::from(projection.executed_block_wire_hash_hex),
+        ),
+        (
+            "evidence_id_hex".into(),
+            JsonValue::from(projection.evidence_id_hex),
+        ),
+        (
+            "transaction_details_hash_hex".into(),
+            JsonValue::from(projection.transaction_details_hash_hex),
+        ),
+        (
+            "finality_page_hash_hex".into(),
+            JsonValue::from(projection.finality_page_hash_hex),
+        ),
+    ]));
+    let json = norito::json::to_vec(&value).map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    if json.is_empty() || json.len() > 64 * 1024 {
+        return Err(ERR_AUTHENTICATED_TRANSACTION_DETAILS);
+    }
+    Ok(json)
+}
+
+fn authenticated_kagemusha_topup_finality_json_v4(
+    anchor_archive: &[u8],
+    proof_archive: &[u8],
+    roster_archive: &[u8],
+) -> Result<Vec<u8>, c_int> {
+    let anchor = decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
+    >(anchor_archive)
+    .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let proof = decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaTopUpFinalityProofV2,
+    >(proof_archive)
+    .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let roster = decode_canonical_kagemusha_archive::<
+        iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
+    >(roster_archive)
+    .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    anchor
+        .validate_public_binding()
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let installed = require_kagemusha_recursive_spend_artifact_binding_v4(&anchor.artifact_binding)
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    installed
+        .verify_topup_roster_binding(&roster)
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let verified = iroha_core::zk::kagemusha_finality::verify_kagemusha_topup_finality_v4(
+        &proof,
+        &roster,
+        &anchor,
+        installed.manifest(),
+        installed.manifest_sha256(),
+    )
+    .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    if verified.height() != anchor.finalized_height
+        || verified.anchor().topup_operation_id != anchor.topup_operation_id
+    {
+        return Err(ERR_AUTHENTICATED_TRANSACTION_DETAILS);
+    }
+    let height = authenticated_finality_mobile_height_v1(verified.height())
+        .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let value = JsonValue::Object(JsonMap::from_iter([
+        ("version".into(), JsonValue::from(4_u64)),
+        (
+            "operation_id_hex".into(),
+            JsonValue::from(hex::encode(anchor.topup_operation_id)),
+        ),
+        (
+            "transaction_hash_hex".into(),
+            JsonValue::from(hex::encode(anchor.finalized_tx_hash)),
+        ),
+        (
+            "committed_block_height".into(),
+            JsonValue::from(height.to_string()),
+        ),
+        (
+            "block_hash_hex".into(),
+            JsonValue::from(verified.block_hash().to_string()),
+        ),
+        (
+            "height_context_id_hex".into(),
+            JsonValue::from(hex::encode(verified.context_id().0.as_ref())),
+        ),
+    ]));
+    let json = norito::json::to_vec(&value).map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    if json.is_empty() || json.len() > 8 * 1024 {
+        return Err(ERR_AUTHENTICATED_TRANSACTION_DETAILS);
+    }
+    Ok(json)
+}
+fn authenticated_offline_device_registration_result_json_v1(
+    preparation: &[u8],
+    response: &[u8],
+) -> Result<Vec<u8>, c_int> {
+    use iroha_data_model::offline::{
+        OfflineDeviceEligibilityOutcomeV1 as Outcome, OfflineDeviceEligibilityReasonV1 as Reason,
+    };
+
+    let projection =
+        authenticated_offline_device_registration_result_project_v1(preparation, response)
+            .map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    let terminal_state = match projection.terminal_state {
+        OfflineDeviceRegistrationTerminalStateV1::Applied => "applied",
+        OfflineDeviceRegistrationTerminalStateV1::EligibilityRejected => "eligibility_rejected",
+        OfflineDeviceRegistrationTerminalStateV1::OtherRejected => "other_rejected",
+    };
+    let (outcome, reason, matched_rule_ids) = projection.eligibility_decision.map_or(
+        (
+            JsonValue::Null,
+            JsonValue::Null,
+            JsonValue::Array(Vec::new()),
+        ),
+        |decision| {
+            let outcome = match decision.outcome {
+                Outcome::Eligible => "eligible",
+                Outcome::DrainOnly => "drain_only",
+                Outcome::CryptographicallyRejected => "cryptographically_rejected",
+            };
+            let reason = match decision.reason {
+                Reason::PolicySatisfied => "policy_satisfied",
+                Reason::CryptographicAttestationRejected => "cryptographic_attestation_rejected",
+                Reason::PolicyNotFresh => "policy_not_fresh",
+                Reason::IncompleteAttestedProperties => "incomplete_attested_properties",
+                Reason::UnsupportedPreAndroid12Tee => "unsupported_pre_android_12_tee",
+                Reason::VulnerableFirmware => "vulnerable_firmware",
+                Reason::PermanentlyBlockedDevice => "permanently_blocked_device",
+            };
+            (
+                JsonValue::from(outcome),
+                JsonValue::from(reason),
+                JsonValue::Array(
+                    decision
+                        .matched_rule_ids
+                        .into_iter()
+                        .map(JsonValue::from)
+                        .collect(),
+                ),
+            )
+        },
+    );
+    let value = JsonValue::Object(JsonMap::from_iter([
+        ("version".into(), JsonValue::from(1_u64)),
+        (
+            "transaction_hash_hex".into(),
+            JsonValue::from(projection.transaction_hash_hex),
+        ),
+        (
+            "transaction_authority".into(),
+            JsonValue::from(projection.transaction_authority),
+        ),
+        (
+            "block_hash_hex".into(),
+            JsonValue::from(projection.block_hash_hex),
+        ),
+        (
+            "result_hash_hex".into(),
+            JsonValue::from(projection.result_hash_hex),
+        ),
+        (
+            "committed_block_height".into(),
+            JsonValue::from(projection.committed_block_height.to_string()),
+        ),
+        ("terminal_state".into(), JsonValue::from(terminal_state)),
+        ("eligibility_outcome".into(), outcome),
+        ("eligibility_reason".into(), reason),
+        ("matched_rule_ids".into(), matched_rule_ids),
+        (
+            "rejection_code".into(),
+            projection
+                .rejection_code
+                .map_or(JsonValue::Null, JsonValue::from),
+        ),
+        (
+            "rejection_message".into(),
+            projection
+                .rejection_message
+                .map_or(JsonValue::Null, JsonValue::from),
+        ),
+    ]));
+    let json = norito::json::to_vec(&value).map_err(|_| ERR_AUTHENTICATED_TRANSACTION_DETAILS)?;
+    if json.is_empty() || json.len() > AUTHENTICATED_OFFLINE_DEVICE_REGISTRATION_RESULT_MAX_BYTES_V1
+    {
+        return Err(ERR_AUTHENTICATED_TRANSACTION_DETAILS);
+    }
+    Ok(json)
+}
+/// Verify and project the exact committed transaction result bound to a native preparation.
+///
+/// Success returns canonical compact JSON with `version: 1`, the committed block height as a
+/// decimal string, transaction/block/result hashes, authority, result flag, and the committed
+/// rejection message when rejected. The output must be released with
+/// [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_transaction_details_project_result_v1(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    response_ptr: *const c_uchar,
+    response_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null() || response_ptr.is_null() || out_ptr.is_null() || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(preparation_len), Ok(response_len)) = (
+        usize::try_from(preparation_len),
+        usize::try_from(response_len),
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1
+        || response_len == 0
+        || response_len > AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let response = unsafe { slice::from_raw_parts(response_ptr, response_len) };
+    let Ok(json) = authenticated_transaction_details_result_json_v1(preparation, response) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &json) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+/// Structurally authenticate an authority-split V2 transaction-details carrier.
+///
+/// The returned JSON fields are routing hints only. Neither success nor rejection becomes an
+/// independently verifiable terminal until
+/// [`iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1`] succeeds.
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_transaction_details_project_result_v2(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    response_ptr: *const c_uchar,
+    response_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null() || response_ptr.is_null() || out_ptr.is_null() || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(preparation_len), Ok(response_len)) = (
+        usize::try_from(preparation_len),
+        usize::try_from(response_len),
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1
+        || response_len == 0
+        || response_len > AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let response = unsafe { slice::from_raw_parts(response_ptr, response_len) };
+    let Ok(json) = authenticated_transaction_details_result_json_v2(preparation, response) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &json) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+/// Bind 1..64 exact Torii finality-proof bodies into one canonical content-addressed page.
+///
+/// `proofs_ptr` is the exact concatenation of the proof bodies; `proof_lengths_ptr` contains one
+/// native `unsigned long` length per proof. Success returns the canonical page archive and its
+/// lowercase marked Iroha hash as two privacy-owned buffers.
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call. All
+/// output pointer/length pairs must be valid writable pointers and may not alias one another.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_finality_proof_page_bind_v1(
+    proofs_ptr: *const c_uchar,
+    proofs_len: c_ulong,
+    proof_lengths_ptr: *const c_ulong,
+    proof_count: c_ulong,
+    out_page_ptr: *mut *mut c_uchar,
+    out_page_len: *mut c_ulong,
+    out_hash_hex_ptr: *mut *mut c_uchar,
+    out_hash_hex_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_page_ptr, out_page_len);
+    clear_privacy_output(out_hash_hex_ptr, out_hash_hex_len);
+    if proofs_ptr.is_null()
+        || proof_lengths_ptr.is_null()
+        || out_page_ptr.is_null()
+        || out_page_len.is_null()
+        || out_hash_hex_ptr.is_null()
+        || out_hash_hex_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(proofs_len), Ok(proof_count)) =
+        (usize::try_from(proofs_len), usize::try_from(proof_count))
+    else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if proofs_len == 0
+        || proofs_len > AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1
+        || proof_count == 0
+        || proof_count > AUTHENTICATED_FINALITY_PAGE_MAX_PROOFS_V1
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let proofs = unsafe { slice::from_raw_parts(proofs_ptr, proofs_len) };
+    let raw_lengths = unsafe { slice::from_raw_parts(proof_lengths_ptr, proof_count) };
+    let mut offset = 0_usize;
+    let mut proof_archives = Vec::with_capacity(proof_count);
+    for raw_length in raw_lengths {
+        let Ok(length) = usize::try_from(*raw_length) else {
+            return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+        };
+        if length == 0 || length > AUTHENTICATED_FINALITY_PROOF_MAX_BYTES_V1 {
+            return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+        }
+        let Some(end) = offset.checked_add(length).filter(|end| *end <= proofs_len) else {
+            return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+        };
+        proof_archives.push(proofs[offset..end].to_vec());
+        offset = end;
+    }
+    if offset != proofs_len {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let Ok(page) = authenticated_finality_proof_page_bind_v1(&proof_archives) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if let Err(code) = unsafe { write_privacy_bytes(out_page_ptr, out_page_len, &page.archive) } {
+        return code;
+    }
+    if let Err(code) =
+        unsafe { write_privacy_bytes(out_hash_hex_ptr, out_hash_hex_len, page.hash_hex.as_bytes()) }
+    {
+        let allocated = unsafe { *out_page_ptr };
+        iroha_privacy_free_buffer(allocated);
+        clear_privacy_output(out_page_ptr, out_page_len);
+        return code;
+    }
+    0
+}
+
+/// Verify one canonical bounded finality page from an exact 40-byte caller checkpoint.
+///
+/// Success returns the exact advanced 40-byte checkpoint; the caller owns its durable persistence
+/// before fetching the next overlapping page.
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_finality_page_verify_v1(
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
+    trusted_checkpoint_ptr: *const c_uchar,
+    trusted_checkpoint_len: c_ulong,
+    page_ptr: *const c_uchar,
+    page_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if network_id_ptr.is_null()
+        || trusted_checkpoint_ptr.is_null()
+        || page_ptr.is_null()
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(network_id_len), Ok(trusted_checkpoint_len), Ok(page_len)) = (
+        usize::try_from(network_id_len),
+        usize::try_from(trusted_checkpoint_len),
+        usize::try_from(page_len),
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if network_id_len != Hash::LENGTH
+        || trusted_checkpoint_len
+            != authenticated_transaction_details::AUTHENTICATED_FINALITY_CHECKPOINT_BYTES_V1
+        || page_len == 0
+        || page_len > AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let network_id = unsafe { slice::from_raw_parts(network_id_ptr, network_id_len) };
+    let trusted_checkpoint =
+        unsafe { slice::from_raw_parts(trusted_checkpoint_ptr, trusted_checkpoint_len) };
+    let page = unsafe { slice::from_raw_parts(page_ptr, page_len) };
+    let Ok((trusted_height, trusted_context_id)) =
+        decode_authenticated_finality_checkpoint_v1(trusted_checkpoint)
+    else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    let Ok(advanced) = authenticated_finality_page_verify_v1(
+        network_id,
+        trusted_height,
+        &trusted_context_id,
+        page,
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    let Ok(encoded) = advanced.encode() else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &encoded) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+/// Verify and project one exact applied or rejected Kagemusha issuer transaction against finality.
+///
+/// This is the sole ABI-22 iOS terminal authority: it rechecks the signed V2 query preparation,
+/// exact issuer request/operation/kind/NetworkId, terminal finality page, executed block wire,
+/// entry/result inclusion, and merge-sidecar absence before emitting bounded canonical JSON.
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_finalized_kagemusha_outcome_project_v1(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    response_ptr: *const c_uchar,
+    response_len: c_ulong,
+    expected_operation_id_ptr: *const c_uchar,
+    expected_operation_id_len: c_ulong,
+    expected_kind_ptr: *const c_uchar,
+    expected_kind_len: c_ulong,
+    expected_request_ptr: *const c_uchar,
+    expected_request_len: c_ulong,
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
+    trusted_checkpoint_ptr: *const c_uchar,
+    trusted_checkpoint_len: c_ulong,
+    finality_page_ptr: *const c_uchar,
+    finality_page_len: c_ulong,
+    executed_block_wire_ptr: *const c_uchar,
+    executed_block_wire_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null()
+        || response_ptr.is_null()
+        || expected_operation_id_ptr.is_null()
+        || expected_kind_ptr.is_null()
+        || expected_request_ptr.is_null()
+        || network_id_ptr.is_null()
+        || trusted_checkpoint_ptr.is_null()
+        || finality_page_ptr.is_null()
+        || executed_block_wire_ptr.is_null()
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (
+        Ok(preparation_len),
+        Ok(response_len),
+        Ok(expected_operation_id_len),
+        Ok(expected_kind_len),
+        Ok(expected_request_len),
+        Ok(network_id_len),
+        Ok(trusted_checkpoint_len),
+        Ok(finality_page_len),
+        Ok(executed_block_wire_len),
+    ) = (
+        usize::try_from(preparation_len),
+        usize::try_from(response_len),
+        usize::try_from(expected_operation_id_len),
+        usize::try_from(expected_kind_len),
+        usize::try_from(expected_request_len),
+        usize::try_from(network_id_len),
+        usize::try_from(trusted_checkpoint_len),
+        usize::try_from(finality_page_len),
+        usize::try_from(executed_block_wire_len),
+    )
+    else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1
+        || response_len == 0
+        || response_len > AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1
+        || expected_operation_id_len != Hash::LENGTH
+        || expected_kind_len == 0
+        || expected_kind_len > 16
+        || expected_request_len == 0
+        || network_id_len != Hash::LENGTH
+        || trusted_checkpoint_len
+            != authenticated_transaction_details::AUTHENTICATED_FINALITY_CHECKPOINT_BYTES_V1
+        || finality_page_len == 0
+        || finality_page_len > AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1
+        || executed_block_wire_len == 0
+        || executed_block_wire_len > 32 * 1024 * 1024
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let expected_kind_bytes =
+        unsafe { slice::from_raw_parts(expected_kind_ptr, expected_kind_len) };
+    let Ok(expected_kind) = str::from_utf8(expected_kind_bytes) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    let request_max = match expected_kind {
+        "top_up" => iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4,
+        "redeem" => {
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        }
+        _ => return ERR_AUTHENTICATED_TRANSACTION_DETAILS,
+    };
+    if expected_request_len > request_max {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let response = unsafe { slice::from_raw_parts(response_ptr, response_len) };
+    let expected_operation_id =
+        unsafe { slice::from_raw_parts(expected_operation_id_ptr, expected_operation_id_len) };
+    let Ok(expected_operation_id) = <[u8; Hash::LENGTH]>::try_from(expected_operation_id) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    let expected_request =
+        unsafe { slice::from_raw_parts(expected_request_ptr, expected_request_len) };
+    let network_id = unsafe { slice::from_raw_parts(network_id_ptr, network_id_len) };
+    let trusted_checkpoint =
+        unsafe { slice::from_raw_parts(trusted_checkpoint_ptr, trusted_checkpoint_len) };
+    let finality_page = unsafe { slice::from_raw_parts(finality_page_ptr, finality_page_len) };
+    let executed_block_wire =
+        unsafe { slice::from_raw_parts(executed_block_wire_ptr, executed_block_wire_len) };
+    let Ok(json) = authenticated_finalized_kagemusha_outcome_json_v1(
+        preparation,
+        response,
+        expected_operation_id,
+        expected_kind,
+        expected_request,
+        network_id,
+        trusted_checkpoint,
+        finality_page,
+        executed_block_wire,
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &json) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+/// Verify and project one exact rejected Exact12 transaction against independent finality.
+///
+/// The V2 preparation binds the signed query authority separately from the expected transaction
+/// authority. Native code then re-inspects the exact signed privacy instruction, verifies the
+/// entry/result inclusion in the canonical executed block, and advances a bounded Sumeragi-v2 QC
+/// chain from the caller-owned checkpoint to exactly that block before returning canonical JSON.
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_finalized_action_rejection_project_v1(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    response_ptr: *const c_uchar,
+    response_len: c_ulong,
+    operation_index: c_int,
+    action_index: u32,
+    requested_action_binding_ptr: *const c_uchar,
+    requested_action_binding_len: c_ulong,
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
+    trusted_checkpoint_ptr: *const c_uchar,
+    trusted_checkpoint_len: c_ulong,
+    finality_page_ptr: *const c_uchar,
+    finality_page_len: c_ulong,
+    executed_block_wire_ptr: *const c_uchar,
+    executed_block_wire_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null()
+        || response_ptr.is_null()
+        || requested_action_binding_ptr.is_null()
+        || network_id_ptr.is_null()
+        || trusted_checkpoint_ptr.is_null()
+        || finality_page_ptr.is_null()
+        || executed_block_wire_ptr.is_null()
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (
+        Ok(preparation_len),
+        Ok(response_len),
+        Ok(requested_action_binding_len),
+        Ok(network_id_len),
+        Ok(trusted_checkpoint_len),
+        Ok(finality_page_len),
+        Ok(executed_block_wire_len),
+    ) = (
+        usize::try_from(preparation_len),
+        usize::try_from(response_len),
+        usize::try_from(requested_action_binding_len),
+        usize::try_from(network_id_len),
+        usize::try_from(trusted_checkpoint_len),
+        usize::try_from(finality_page_len),
+        usize::try_from(executed_block_wire_len),
+    )
+    else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1
+        || response_len == 0
+        || response_len > AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1
+        || requested_action_binding_len != AUTHENTICATED_ACTION_RECEIPT_BINDING_BYTES_V1
+        || network_id_len != Hash::LENGTH
+        || trusted_checkpoint_len
+            != authenticated_transaction_details::AUTHENTICATED_FINALITY_CHECKPOINT_BYTES_V1
+        || finality_page_len == 0
+        || finality_page_len > AUTHENTICATED_FINALITY_PAGE_MAX_BYTES_V1
+        || executed_block_wire_len == 0
+        || executed_block_wire_len > 32 * 1024 * 1024
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let response = unsafe { slice::from_raw_parts(response_ptr, response_len) };
+    let requested_action_binding = unsafe {
+        slice::from_raw_parts(requested_action_binding_ptr, requested_action_binding_len)
+    };
+    let network_id = unsafe { slice::from_raw_parts(network_id_ptr, network_id_len) };
+    let trusted_checkpoint =
+        unsafe { slice::from_raw_parts(trusted_checkpoint_ptr, trusted_checkpoint_len) };
+    let finality_page = unsafe { slice::from_raw_parts(finality_page_ptr, finality_page_len) };
+    let executed_block_wire =
+        unsafe { slice::from_raw_parts(executed_block_wire_ptr, executed_block_wire_len) };
+    let Ok(json) = authenticated_finalized_privacy_action_rejection_json_v1(
+        preparation,
+        response,
+        operation_index,
+        action_index,
+        requested_action_binding,
+        network_id,
+        trusted_checkpoint,
+        finality_page,
+        executed_block_wire,
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &json) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+/// Verify and project the exact successful block identity authenticated by the specialized V4
+/// top-up proof selected by the installed immutable release.
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_kagemusha_topup_finality_project_v4(
+    anchor_ptr: *const c_uchar,
+    anchor_len: c_ulong,
+    proof_ptr: *const c_uchar,
+    proof_len: c_ulong,
+    roster_ptr: *const c_uchar,
+    roster_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if anchor_ptr.is_null()
+        || proof_ptr.is_null()
+        || roster_ptr.is_null()
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(anchor_len), Ok(proof_len), Ok(roster_len)) = (
+        usize::try_from(anchor_len),
+        usize::try_from(proof_len),
+        usize::try_from(roster_len),
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if anchor_len == 0
+        || u64::try_from(anchor_len).map_or(true, |length| {
+            length > iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2
+        })
+        || proof_len == 0
+        || u64::try_from(proof_len).map_or(true, |length| {
+            length > iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2
+        })
+        || roster_len == 0
+        || u64::try_from(roster_len).map_or(true, |length| {
+            length
+                > iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+        })
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let anchor = unsafe { slice::from_raw_parts(anchor_ptr, anchor_len) };
+    let proof = unsafe { slice::from_raw_parts(proof_ptr, proof_len) };
+    let roster = unsafe { slice::from_raw_parts(roster_ptr, roster_len) };
+    let Ok(json) = authenticated_kagemusha_topup_finality_json_v4(anchor, proof, roster) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &json) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+/// Verify and project one exact committed offline-device registration result.
+///
+/// The output is canonical compact JSON and distinguishes applied, typed
+/// eligibility rejection, and unrelated rejection terminals. It is additive to
+/// the generic transaction-details V1 projection and must be released with
+/// [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_offline_device_registration_result_project_v1(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    response_ptr: *const c_uchar,
+    response_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null() || response_ptr.is_null() || out_ptr.is_null() || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(preparation_len), Ok(response_len)) = (
+        usize::try_from(preparation_len),
+        usize::try_from(response_len),
+    ) else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_TRANSACTION_DETAILS_PREPARATION_MAX_BYTES_V1
+        || response_len == 0
+        || response_len > AUTHENTICATED_TRANSACTION_DETAILS_RESPONSE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let response = unsafe { slice::from_raw_parts(response_ptr, response_len) };
+    let Ok(json) = authenticated_offline_device_registration_result_json_v1(preparation, response)
+    else {
+        return ERR_AUTHENTICATED_TRANSACTION_DETAILS;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &json) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+/// Build one fresh authority-bound ID105 query for an Exact12 execution receipt.
+///
+/// The opaque preparation binds the query to the requested operation, transaction, action index,
+/// and the three signed-action inspection digests. Success returns that preparation and exactly
+/// 32 signing-digest bytes. Both buffers must be released with
+/// [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call. All
+/// output pointer/length pairs must be valid writable pointers and may not alias one another.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_action_receipt_prepare_v1(
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
+    authority_ptr: *const c_uchar,
+    authority_len: c_ulong,
+    operation_index: c_int,
+    transaction_hash_hex_ptr: *const c_uchar,
+    transaction_hash_hex_len: c_ulong,
+    action_index: u32,
+    requested_action_binding_ptr: *const c_uchar,
+    requested_action_binding_len: c_ulong,
+    creation_time_ms: u64,
+    nonce_ptr: *const c_uchar,
+    nonce_len: c_ulong,
+    out_preparation_ptr: *mut *mut c_uchar,
+    out_preparation_len: *mut c_ulong,
+    out_signing_digest_ptr: *mut *mut c_uchar,
+    out_signing_digest_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_preparation_ptr, out_preparation_len);
+    clear_privacy_output(out_signing_digest_ptr, out_signing_digest_len);
+    if network_id_ptr.is_null()
+        || authority_ptr.is_null()
+        || transaction_hash_hex_ptr.is_null()
+        || requested_action_binding_ptr.is_null()
+        || nonce_ptr.is_null()
+        || out_preparation_ptr.is_null()
+        || out_preparation_len.is_null()
+        || out_signing_digest_ptr.is_null()
+        || out_signing_digest_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (
+        Ok(network_id_len),
+        Ok(authority_len),
+        Ok(transaction_hash_hex_len),
+        Ok(requested_action_binding_len),
+        Ok(nonce_len),
+    ) = (
+        usize::try_from(network_id_len),
+        usize::try_from(authority_len),
+        usize::try_from(transaction_hash_hex_len),
+        usize::try_from(requested_action_binding_len),
+        usize::try_from(nonce_len),
+    )
+    else {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    };
+    if network_id_len != Hash::LENGTH
+        || authority_len == 0
+        || authority_len > AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1
+        || transaction_hash_hex_len != Hash::LENGTH * 2
+        || requested_action_binding_len != AUTHENTICATED_ACTION_RECEIPT_BINDING_BYTES_V1
+        || nonce_len != Hash::LENGTH
+    {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    }
+    let network_id = unsafe { slice::from_raw_parts(network_id_ptr, network_id_len) };
+    let authority_bytes = unsafe { slice::from_raw_parts(authority_ptr, authority_len) };
+    let transaction_hash_bytes =
+        unsafe { slice::from_raw_parts(transaction_hash_hex_ptr, transaction_hash_hex_len) };
+    let requested_action_binding = unsafe {
+        slice::from_raw_parts(requested_action_binding_ptr, requested_action_binding_len)
+    };
+    let nonce_bytes = unsafe { slice::from_raw_parts(nonce_ptr, nonce_len) };
+    let (Ok(authority), Ok(transaction_hash_hex), Ok(nonce)) = (
+        str::from_utf8(authority_bytes),
+        str::from_utf8(transaction_hash_bytes),
+        <[u8; Hash::LENGTH]>::try_from(nonce_bytes),
+    ) else {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    };
+    let Ok((preparation, signing_digest)) = authenticated_privacy_action_receipt_prepare_v1(
+        network_id,
+        authority,
+        operation_index,
+        transaction_hash_hex,
+        action_index,
+        requested_action_binding,
+        creation_time_ms,
+        nonce,
+    ) else {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    };
+    if let Err(code) =
+        unsafe { write_privacy_bytes(out_preparation_ptr, out_preparation_len, &preparation) }
+    {
+        return code;
+    }
+    if let Err(code) = unsafe {
+        write_privacy_bytes(
+            out_signing_digest_ptr,
+            out_signing_digest_len,
+            &signing_digest,
+        )
+    } {
+        let allocated = unsafe { *out_preparation_ptr };
+        iroha_privacy_free_buffer(allocated);
+        clear_privacy_output(out_preparation_ptr, out_preparation_len);
+        return code;
+    }
+    0
+}
+
+/// Finalize an ID105 native preparation with its detached authority signature.
+///
+/// Success returns canonical versioned `SignedQuery` bytes for `/v1/query`. The output must be
+/// released with [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_action_receipt_finalize_v1(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    signature_ptr: *const c_uchar,
+    signature_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null()
+        || signature_ptr.is_null()
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(preparation_len), Ok(signature_len)) = (
+        usize::try_from(preparation_len),
+        usize::try_from(signature_len),
+    ) else {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_ACTION_RECEIPT_PREPARATION_MAX_BYTES_V1
+        || signature_len == 0
+        || signature_len > AUTHENTICATED_ACTION_RECEIPT_SIGNATURE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let signature = unsafe { slice::from_raw_parts(signature_ptr, signature_len) };
+    let Ok(body) = authenticated_privacy_action_receipt_finalize_v1(preparation, signature) else {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &body) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+fn authenticated_privacy_action_receipt_result_json_v1(
+    preparation: &[u8],
+    response: &[u8],
+) -> Result<Vec<u8>, c_int> {
+    let projection = authenticated_privacy_action_receipt_project_result_v1(preparation, response)
+        .map_err(|_| ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT)?;
+    let value = JsonValue::Object(JsonMap::from_iter([
+        (
+            "version".into(),
+            JsonValue::from(u64::from(projection.version)),
+        ),
+        (
+            "network_id".into(),
+            JsonValue::from(projection.network_id_hex),
+        ),
+        (
+            "protocol_id".into(),
+            JsonValue::from(projection.protocol_id),
+        ),
+        (
+            "operation_schema".into(),
+            JsonValue::from(projection.operation_schema),
+        ),
+        (
+            "ledger_effect_kind".into(),
+            JsonValue::from(projection.ledger_effect_kind),
+        ),
+        (
+            "transaction_hash".into(),
+            JsonValue::from(projection.transaction_hash_hex),
+        ),
+        (
+            "action_index".into(),
+            JsonValue::from(u64::from(projection.action_index)),
+        ),
+        (
+            "transaction_intent_digest".into(),
+            JsonValue::from(projection.transaction_intent_digest_hex),
+        ),
+        (
+            "statement_digest".into(),
+            JsonValue::from(projection.statement_digest_hex),
+        ),
+        (
+            "proof_envelope_hash".into(),
+            JsonValue::from(projection.proof_envelope_hash_hex),
+        ),
+        (
+            "capability_manifest_digest".into(),
+            JsonValue::from(projection.capability_manifest_digest_hex),
+        ),
+        (
+            "capability_committed_height".into(),
+            JsonValue::from(projection.capability_committed_height.to_string()),
+        ),
+        (
+            "admitted_at_height".into(),
+            JsonValue::from(projection.admitted_at_height.to_string()),
+        ),
+        (
+            "finalized_height".into(),
+            JsonValue::from(projection.finalized_height.to_string()),
+        ),
+        (
+            "finalized_block_hash".into(),
+            JsonValue::from(projection.finalized_block_hash_hex),
+        ),
+    ]));
+    let json =
+        norito::json::to_vec(&value).map_err(|_| ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT)?;
+    if json.is_empty() || json.len() > 32 * 1024 {
+        return Err(ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT);
+    }
+    Ok(json)
+}
+
+/// Verify and project the exact finalized ID105 response bound to a native preparation.
+///
+/// Success returns canonical compact JSON with all receipt bindings and decimal-string heights.
+/// The output must be released with [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_action_receipt_project_result_v1(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    response_ptr: *const c_uchar,
+    response_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null() || response_ptr.is_null() || out_ptr.is_null() || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(preparation_len), Ok(response_len)) = (
+        usize::try_from(preparation_len),
+        usize::try_from(response_len),
+    ) else {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_ACTION_RECEIPT_PREPARATION_MAX_BYTES_V1
+        || response_len == 0
+        || response_len > AUTHENTICATED_ACTION_RECEIPT_RESPONSE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let response = unsafe { slice::from_raw_parts(response_ptr, response_len) };
+    let Ok(json) = authenticated_privacy_action_receipt_result_json_v1(preparation, response)
+    else {
+        return ERR_AUTHENTICATED_PRIVACY_ACTION_RECEIPT;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &json) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+/// Build one fresh authority-bound signed-query preparation for privacy query IDs 97 through 104.
+///
+/// `query_id` is the actual ordinary-memory ID. `protocol_index` is zero except for ID 98, where
+/// 0, 1, and 2 select FCMP++, private IVM, and PQ-MASP respectively. `request_binding` is the
+/// exact concatenation of the query's non-zero 32-byte selector fields in constructor order.
+/// Success returns an opaque preparation plus exactly 32 signing-digest bytes; both buffers must
+/// be released with [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call. All
+/// output pointer/length pairs must be valid writable pointers and may not alias one another.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_state_query_prepare_v1(
+    network_id_ptr: *const c_uchar,
+    network_id_len: c_ulong,
+    authority_ptr: *const c_uchar,
+    authority_len: c_ulong,
+    query_id: u32,
+    protocol_index: u32,
+    request_binding_ptr: *const c_uchar,
+    request_binding_len: c_ulong,
+    creation_time_ms: u64,
+    nonce_ptr: *const c_uchar,
+    nonce_len: c_ulong,
+    out_preparation_ptr: *mut *mut c_uchar,
+    out_preparation_len: *mut c_ulong,
+    out_signing_digest_ptr: *mut *mut c_uchar,
+    out_signing_digest_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_preparation_ptr, out_preparation_len);
+    clear_privacy_output(out_signing_digest_ptr, out_signing_digest_len);
+    if network_id_ptr.is_null()
+        || authority_ptr.is_null()
+        || request_binding_ptr.is_null()
+        || nonce_ptr.is_null()
+        || out_preparation_ptr.is_null()
+        || out_preparation_len.is_null()
+        || out_signing_digest_ptr.is_null()
+        || out_signing_digest_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(network_id_len), Ok(authority_len), Ok(request_binding_len), Ok(nonce_len)) = (
+        usize::try_from(network_id_len),
+        usize::try_from(authority_len),
+        usize::try_from(request_binding_len),
+        usize::try_from(nonce_len),
+    ) else {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    };
+    if network_id_len != Hash::LENGTH
+        || authority_len == 0
+        || authority_len > AUTHENTICATED_TRANSACTION_DETAILS_AUTHORITY_MAX_BYTES_V1
+        || request_binding_len == 0
+        || request_binding_len > AUTHENTICATED_PRIVACY_STATE_QUERY_BINDING_MAX_BYTES_V1
+        || nonce_len != Hash::LENGTH
+    {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    }
+    let network_id = unsafe { slice::from_raw_parts(network_id_ptr, network_id_len) };
+    let authority_bytes = unsafe { slice::from_raw_parts(authority_ptr, authority_len) };
+    let request_binding =
+        unsafe { slice::from_raw_parts(request_binding_ptr, request_binding_len) };
+    let nonce_bytes = unsafe { slice::from_raw_parts(nonce_ptr, nonce_len) };
+    let (Ok(authority), Ok(nonce)) = (
+        str::from_utf8(authority_bytes),
+        <[u8; Hash::LENGTH]>::try_from(nonce_bytes),
+    ) else {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    };
+    let Ok((preparation, signing_digest)) = authenticated_privacy_state_query_prepare_v1(
+        network_id,
+        authority,
+        query_id,
+        protocol_index,
+        request_binding,
+        creation_time_ms,
+        nonce,
+    ) else {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    };
+    if let Err(code) =
+        unsafe { write_privacy_bytes(out_preparation_ptr, out_preparation_len, &preparation) }
+    {
+        return code;
+    }
+    if let Err(code) = unsafe {
+        write_privacy_bytes(
+            out_signing_digest_ptr,
+            out_signing_digest_len,
+            &signing_digest,
+        )
+    } {
+        let allocated = unsafe { *out_preparation_ptr };
+        iroha_privacy_free_buffer(allocated);
+        clear_privacy_output(out_preparation_ptr, out_preparation_len);
+        return code;
+    }
+    0
+}
+
+/// Verify a detached authority signature and emit the prepared ID97-104 `SignedQuery`.
+///
+/// Success returns canonical versioned query bytes for `POST /v1/query`. The output must be
+/// released with [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_state_query_finalize_v1(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    signature_ptr: *const c_uchar,
+    signature_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null()
+        || signature_ptr.is_null()
+        || out_ptr.is_null()
+        || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(preparation_len), Ok(signature_len)) = (
+        usize::try_from(preparation_len),
+        usize::try_from(signature_len),
+    ) else {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_PRIVACY_STATE_QUERY_PREPARATION_MAX_BYTES_V1
+        || signature_len == 0
+        || signature_len > AUTHENTICATED_PRIVACY_STATE_QUERY_SIGNATURE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let signature = unsafe { slice::from_raw_parts(signature_ptr, signature_len) };
+    let Ok(body) = authenticated_privacy_state_query_finalize_v1(preparation, signature) else {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &body) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
+/// Validate and project one exact finalized typed response for the prepared ID97-104 query.
+///
+/// Success returns canonical compact JSON for the query's native public view. All structured
+/// numeric leaves are canonical decimal strings; historical fixed-byte arrays remain byte arrays,
+/// while `NetworkId` and finalized block hashes retain their canonical checksummed hash literals.
+/// The output must be released with [`iroha_privacy_free_buffer`].
+///
+/// # Safety
+///
+/// Every non-null input pointer must reference its declared readable length for this call, and
+/// `out_ptr`/`out_len` must be valid writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_authenticated_state_query_project_result_v1(
+    preparation_ptr: *const c_uchar,
+    preparation_len: c_ulong,
+    response_ptr: *const c_uchar,
+    response_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    clear_privacy_output(out_ptr, out_len);
+    if preparation_ptr.is_null() || response_ptr.is_null() || out_ptr.is_null() || out_len.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    let (Ok(preparation_len), Ok(response_len)) = (
+        usize::try_from(preparation_len),
+        usize::try_from(response_len),
+    ) else {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    };
+    if preparation_len == 0
+        || preparation_len > AUTHENTICATED_PRIVACY_STATE_QUERY_PREPARATION_MAX_BYTES_V1
+        || response_len == 0
+        || response_len > AUTHENTICATED_PRIVACY_STATE_QUERY_RESPONSE_MAX_BYTES_V1
+    {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    }
+    let preparation = unsafe { slice::from_raw_parts(preparation_ptr, preparation_len) };
+    let response = unsafe { slice::from_raw_parts(response_ptr, response_len) };
+    let Ok(json) = authenticated_privacy_state_query_project_result_v1(preparation, response)
+    else {
+        return ERR_AUTHENTICATED_PRIVACY_STATE_QUERY;
+    };
+    match unsafe { write_privacy_bytes(out_ptr, out_len, &json) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
+}
+
 fn parse_multisig_spec_bytes(ptr: *const c_char, len: c_ulong) -> BridgeResult<MultisigSpec> {
     if ptr.is_null() || len == 0 {
         return Err(BridgeError::MultisigSpec);
@@ -10321,6 +12408,1347 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_payment_v
     })();
     bridge_result_to_code(result)
 }
+
+fn validate_kagemusha_eligibility_envelope_inner_payment_v1(
+    envelope: &iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1,
+) -> BridgeResult<()> {
+    let payment = decode_canonical_kagemusha_recursive_archive::<
+        iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
+    >(&envelope.payload.payment_v4_norito)?;
+    payment
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)
+}
+
+fn offline_device_trusted_context_id_v1(
+    bytes: [u8; Hash::LENGTH],
+) -> BridgeResult<iroha_data_model::block::consensus_v2::HeightContextId> {
+    if !validation_fee_is_canonical_iroha_hash(&bytes) {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(iroha_data_model::block::consensus_v2::HeightContextId(
+        HashOf::from_untyped_unchecked(Hash::prehashed(bytes)),
+    ))
+}
+
+const OFFLINE_DEVICE_POLICY_VERIFIED_PAGE_MAGIC_V1: [u8; 8] = *b"IDPPV1\0\0";
+const OFFLINE_DEVICE_POLICY_VERIFIED_PAGE_FIXED_BYTES_V1: usize = 56;
+const OFFLINE_DEVICE_POLICY_VERIFIED_PAGE_MAX_BYTES_V1: usize =
+    OFFLINE_DEVICE_POLICY_VERIFIED_PAGE_FIXED_BYTES_V1
+        + iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1;
+
+fn offline_device_policy_proof_request_create_v1(
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id: [u8; Hash::LENGTH],
+) -> BridgeResult<Vec<u8>> {
+    if trusted_checkpoint_height == 0
+        || !validation_fee_is_canonical_iroha_hash(&trusted_checkpoint_context_id)
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    norito::to_bytes(&OfflineDevicePolicyProofRequestV1 {
+        version: OFFLINE_DEVICE_POLICY_PROOF_VERSION_V1,
+        trusted_checkpoint_height,
+    })
+    .map_err(|_| BridgeError::KagemushaProve)
+}
+
+fn offline_device_policy_proof_verify_v1(
+    proof_archive: &[u8],
+    expected_network_id: NetworkId,
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id: [u8; Hash::LENGTH],
+    evaluation_time_ms: u64,
+) -> BridgeResult<Vec<u8>> {
+    if proof_archive.is_empty()
+        || proof_archive.len() > OFFLINE_DEVICE_POLICY_PROOF_MAX_RESPONSE_BYTES
+        || trusted_checkpoint_height == 0
+        || evaluation_time_ms == 0
+        || !validation_fee_is_canonical_iroha_hash(expected_network_id.as_bytes())
+        || !validation_fee_is_canonical_iroha_hash(&trusted_checkpoint_context_id)
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let proof = decode_canonical_kagemusha_archive::<OfflineDevicePolicyProofV1>(proof_archive)?;
+    let evaluated_context_id = proof
+        .verify_against(
+            expected_network_id,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+            evaluation_time_ms,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let terminal_policy_view = proof
+        .policy_view
+        .as_ref()
+        .map(norito::to_bytes)
+        .transpose()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let policy_bytes = terminal_policy_view.as_deref().unwrap_or_default();
+    if proof.more_available != terminal_policy_view.is_none()
+        || policy_bytes.len()
+            > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let policy_len = u32::try_from(policy_bytes.len()).map_err(|_| BridgeError::KagemushaProve)?;
+    let result_len = OFFLINE_DEVICE_POLICY_VERIFIED_PAGE_FIXED_BYTES_V1
+        .checked_add(policy_bytes.len())
+        .filter(|len| *len <= OFFLINE_DEVICE_POLICY_VERIFIED_PAGE_MAX_BYTES_V1)
+        .ok_or(BridgeError::KagemushaProve)?;
+    let mut result = Vec::with_capacity(result_len);
+    result.extend_from_slice(&OFFLINE_DEVICE_POLICY_VERIFIED_PAGE_MAGIC_V1);
+    result.extend_from_slice(&proof.evaluated_block_height.to_be_bytes());
+    result.extend_from_slice(evaluated_context_id.0.as_ref());
+    result.push(u8::from(proof.more_available));
+    result.extend_from_slice(&[0; 3]);
+    result.extend_from_slice(&policy_len.to_be_bytes());
+    result.extend_from_slice(policy_bytes);
+    if result.len() != result_len {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(result)
+}
+
+/// Encode the canonical request for one bounded device-policy finality page.
+///
+/// The context id is validated for symmetry with verification but remains
+/// caller-owned and therefore is not serialized into the frozen V1 request.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_device_policy_proof_request_v1(
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id_ptr: *const c_uchar,
+    trusted_checkpoint_context_id_len: c_ulong,
+    out_request_ptr: *mut *mut c_uchar,
+    out_request_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_request_ptr, out_request_len);
+    let result = (|| {
+        clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
+        let trusted_checkpoint_context_id = unsafe {
+            read_fixed_array::<{ Hash::LENGTH }>(
+                trusted_checkpoint_context_id_ptr,
+                trusted_checkpoint_context_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let request = offline_device_policy_proof_request_create_v1(
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )?;
+        unsafe { write_bytes_bridge(out_request_ptr, out_request_len, &request) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Verify one canonical device-policy proof page from caller-owned trust.
+///
+/// The result has one canonical ABI-22 projection: `IDPPV1\\0\\0`, evaluated
+/// height (u64 big-endian), evaluated marked context id (32 bytes), a one-byte
+/// `more_available` flag, three zero bytes, terminal-policy length (u32
+/// big-endian), and the canonical terminal policy archive when present.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_device_policy_proof_verify_v1(
+    proof_norito_ptr: *const c_uchar,
+    proof_norito_len: c_ulong,
+    expected_network_id_ptr: *const c_uchar,
+    expected_network_id_len: c_ulong,
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id_ptr: *const c_uchar,
+    trusted_checkpoint_context_id_len: c_ulong,
+    evaluation_time_ms: u64,
+    out_verified_page_ptr: *mut *mut c_uchar,
+    out_verified_page_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_verified_page_ptr, out_verified_page_len);
+    let result = (|| {
+        clear_bridge_output_or_null(out_verified_page_ptr, out_verified_page_len)?;
+        let proof = unsafe {
+            read_kagemusha_archive_bytes_bounded(
+                proof_norito_ptr,
+                proof_norito_len,
+                OFFLINE_DEVICE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+            )
+        }?;
+        let network_bytes = unsafe {
+            read_fixed_array::<{ Hash::LENGTH }>(
+                expected_network_id_ptr,
+                expected_network_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        let trusted_checkpoint_context_id = unsafe {
+            read_fixed_array::<{ Hash::LENGTH }>(
+                trusted_checkpoint_context_id_ptr,
+                trusted_checkpoint_context_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let verified = offline_device_policy_proof_verify_v1(
+            &proof,
+            expected_network_id,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+            evaluation_time_ms,
+        )?;
+        unsafe { write_bytes_bridge(out_verified_page_ptr, out_verified_page_len, &verified) }
+    })();
+    bridge_result_to_code(result)
+}
+
+const OFFLINE_DEVICE_ELIGIBILITY_RESPONSE_PROJECTION_MAGIC_V1: [u8; 8] = *b"IDERSP1\0";
+const OFFLINE_DEVICE_ELIGIBILITY_RESPONSE_PROJECTION_FIXED_BYTES_V1: usize = 296;
+const OFFLINE_DEVICE_ELIGIBILITY_RESPONSE_PROJECTION_MAX_BYTES_V1: usize =
+    OFFLINE_DEVICE_ELIGIBILITY_MAX_RESPONSE_BYTES + 64 * 1024;
+
+fn offline_device_eligibility_request_create_v1(
+    registration_hash: [u8; Hash::LENGTH],
+    device_id: &str,
+    attestation_key_id: &str,
+    requested_ttl_ms: u64,
+) -> BridgeResult<Vec<u8>> {
+    if registration_hash == [0; Hash::LENGTH]
+        || device_id.is_empty()
+        || device_id.len()
+            > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1
+        || device_id.trim() != device_id
+        || device_id.chars().any(char::is_control)
+        || attestation_key_id.is_empty()
+        || attestation_key_id.len()
+            > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1
+        || attestation_key_id.trim() != attestation_key_id
+        || attestation_key_id.chars().any(char::is_control)
+        || requested_ttl_ms == 0
+        || requested_ttl_ms
+            > iroha_data_model::offline::OFFLINE_DEVICE_ELIGIBILITY_CREDENTIAL_MAX_TTL_MS_V1
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let archive = norito::to_bytes(&OfflineDeviceEligibilityRequestV1 {
+        version: OFFLINE_DEVICE_ELIGIBILITY_VERSION_V1,
+        registration_hash,
+        device_id: device_id.to_owned(),
+        attestation_key_id: attestation_key_id.to_owned(),
+        requested_ttl_ms,
+    })
+    .map_err(|_| BridgeError::KagemushaProve)?;
+    if archive.is_empty() || archive.len() > OFFLINE_DEVICE_ELIGIBILITY_REQUEST_MAX_BYTES {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(archive)
+}
+
+fn offline_device_eligibility_decision_codes_v1(
+    decision: &iroha_data_model::offline::OfflineDeviceEligibilityDecisionV1,
+) -> BridgeResult<(u8, u8)> {
+    use iroha_data_model::offline::{
+        OfflineDeviceEligibilityOutcomeV1 as Outcome, OfflineDeviceEligibilityReasonV1 as Reason,
+    };
+    let outcome = match decision.outcome {
+        Outcome::Eligible => 0,
+        Outcome::DrainOnly => 1,
+        Outcome::CryptographicallyRejected => 2,
+    };
+    let reason = match decision.reason {
+        Reason::PolicySatisfied => 0,
+        Reason::CryptographicAttestationRejected => 1,
+        Reason::PolicyNotFresh => 2,
+        Reason::IncompleteAttestedProperties => 3,
+        Reason::UnsupportedPreAndroid12Tee => 4,
+        Reason::VulnerableFirmware => 5,
+        Reason::PermanentlyBlockedDevice => 6,
+    };
+    let rules = &decision.matched_rule_ids;
+    if rules.len()
+        > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_VULNERABILITY_RULES_V2
+        || rules.windows(2).any(|pair| pair[0] >= pair[1])
+        || rules.iter().any(|rule| {
+            rule.is_empty()
+            || rule.len()
+                > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_RULE_ID_BYTES_V2
+            || !rule.is_ascii()
+            || rule.trim() != rule
+            || rule.chars().any(char::is_control)
+        })
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let valid_shape = matches!(
+        (decision.outcome, decision.reason, rules.is_empty()),
+        (Outcome::Eligible, Reason::PolicySatisfied, true)
+            | (
+                Outcome::CryptographicallyRejected,
+                Reason::CryptographicAttestationRejected,
+                true
+            )
+            | (
+                Outcome::DrainOnly,
+                Reason::PolicyNotFresh
+                    | Reason::IncompleteAttestedProperties
+                    | Reason::UnsupportedPreAndroid12Tee,
+                true
+            )
+            | (
+                Outcome::DrainOnly,
+                Reason::VulnerableFirmware | Reason::PermanentlyBlockedDevice,
+                false
+            )
+    );
+    if !valid_shape {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok((outcome, reason))
+}
+
+fn offline_device_eligibility_response_verify_v1(
+    response_archive: &[u8],
+    expected_registration_hash: [u8; Hash::LENGTH],
+    expected_issuer: PublicKey,
+    expected_network_id: NetworkId,
+    trusted_context_id: [u8; Hash::LENGTH],
+    evaluation_time_ms: u64,
+) -> BridgeResult<Vec<u8>> {
+    if response_archive.is_empty()
+        || response_archive.len() > OFFLINE_DEVICE_ELIGIBILITY_MAX_RESPONSE_BYTES
+        || expected_registration_hash == [0; Hash::LENGTH]
+        || evaluation_time_ms == 0
+        || !validation_fee_is_canonical_iroha_hash(expected_network_id.as_bytes())
+        || !validation_fee_is_canonical_iroha_hash(&trusted_context_id)
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let response =
+        decode_canonical_kagemusha_archive::<OfflineDeviceEligibilityResponseV1>(response_archive)?;
+    response
+        .validate_v1(evaluation_time_ms)
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    if response.registration_hash != expected_registration_hash
+        || response.issuer_public_key != expected_issuer
+        || response.policy_view.finality.network_id != expected_network_id
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    verify_offline_device_policy_view_finality_v1(
+        &response.policy_view,
+        &expected_network_id,
+        offline_device_trusted_context_id_v1(trusted_context_id)?,
+        evaluation_time_ms,
+        true,
+    )?;
+    let (outcome, reason) = offline_device_eligibility_decision_codes_v1(&response.decision)?;
+    let issuer_archive =
+        norito::to_bytes(&response.issuer_public_key).map_err(|_| BridgeError::KagemushaProve)?;
+    let credential_archive = response
+        .credential
+        .as_ref()
+        .map(norito::to_bytes)
+        .transpose()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let policy_archive =
+        norito::to_bytes(&response.policy_view).map_err(|_| BridgeError::KagemushaProve)?;
+    if issuer_archive.is_empty()
+        || issuer_archive.len() > 4 * 1024
+        || credential_archive.as_ref().is_some_and(|archive| {
+            archive.is_empty()
+                || archive.len()
+                    > iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1
+        })
+        || policy_archive.is_empty()
+        || policy_archive.len()
+            > iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let credential_present = u8::from(credential_archive.is_some());
+    if (outcome == 0) != (credential_present == 1) {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let admission_transaction_hash = hex::decode(&response.admission_transaction_hash)
+        .ok()
+        .and_then(|bytes| <[u8; Hash::LENGTH]>::try_from(bytes).ok())
+        .filter(validation_fee_is_canonical_iroha_hash)
+        .ok_or(BridgeError::KagemushaProve)?;
+
+    let credential_claims = response.credential.as_ref().map(|credential| {
+        let payload = &credential.payload;
+        (
+            payload.issued_at_ms,
+            payload.expires_at_ms,
+            payload.account_id.to_string().into_bytes(),
+            payload.device_id.as_bytes().to_vec(),
+            payload.attestation_key_id.as_bytes().to_vec(),
+            payload.device_public_key.as_sec1_bytes().to_vec(),
+            payload.assertion_public_key.clone(),
+        )
+    });
+    let (
+        credential_issued_at_ms,
+        credential_expires_at_ms,
+        account_id_bytes,
+        device_id_bytes,
+        attestation_key_id_bytes,
+        device_public_key_bytes,
+        assertion_public_key_bytes,
+    ) = credential_claims.unwrap_or_else(|| {
+        (
+            0,
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    });
+    let claim_sections = [
+        account_id_bytes.as_slice(),
+        device_id_bytes.as_slice(),
+        attestation_key_id_bytes.as_slice(),
+        device_public_key_bytes.as_slice(),
+        assertion_public_key_bytes.as_slice(),
+    ];
+    if credential_present == 1
+        && (credential_issued_at_ms == 0
+            || credential_expires_at_ms <= credential_issued_at_ms
+            || account_id_bytes.is_empty()
+            || device_id_bytes.is_empty()
+            || attestation_key_id_bytes.is_empty()
+            || device_public_key_bytes.len()
+                != iroha_data_model::offline::KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2
+            || assertion_public_key_bytes.len()
+                != iroha_data_model::offline::KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2)
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let claim_lengths = claim_sections
+        .iter()
+        .map(|bytes| u16::try_from(bytes.len()).map_err(|_| BridgeError::KagemushaProve))
+        .collect::<BridgeResult<Vec<_>>>()?;
+    let claims_len_usize = claim_sections.iter().try_fold(0_usize, |total, bytes| {
+        total
+            .checked_add(bytes.len())
+            .ok_or(BridgeError::KagemushaProve)
+    })?;
+    let claims_len = u32::try_from(claims_len_usize).map_err(|_| BridgeError::KagemushaProve)?;
+
+    let matched_count = u16::try_from(response.decision.matched_rule_ids.len())
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let mut matched_rules = Vec::new();
+    for rule in &response.decision.matched_rule_ids {
+        let length = u16::try_from(rule.len()).map_err(|_| BridgeError::KagemushaProve)?;
+        matched_rules.extend_from_slice(&length.to_be_bytes());
+        matched_rules.extend_from_slice(rule.as_bytes());
+    }
+    let matched_len =
+        u32::try_from(matched_rules.len()).map_err(|_| BridgeError::KagemushaProve)?;
+    let issuer_len =
+        u32::try_from(issuer_archive.len()).map_err(|_| BridgeError::KagemushaProve)?;
+    let credential_bytes = credential_archive.as_deref().unwrap_or_default();
+    let credential_len =
+        u32::try_from(credential_bytes.len()).map_err(|_| BridgeError::KagemushaProve)?;
+    let policy_len =
+        u32::try_from(policy_archive.len()).map_err(|_| BridgeError::KagemushaProve)?;
+    let result_len = [
+        matched_rules.len(),
+        issuer_archive.len(),
+        credential_bytes.len(),
+        policy_archive.len(),
+        claims_len_usize,
+    ]
+    .into_iter()
+    .try_fold(
+        OFFLINE_DEVICE_ELIGIBILITY_RESPONSE_PROJECTION_FIXED_BYTES_V1,
+        |total, length| total.checked_add(length),
+    )
+    .filter(|length| *length <= OFFLINE_DEVICE_ELIGIBILITY_RESPONSE_PROJECTION_MAX_BYTES_V1)
+    .ok_or(BridgeError::KagemushaProve)?;
+    let mut result = Vec::with_capacity(result_len);
+    result.extend_from_slice(&OFFLINE_DEVICE_ELIGIBILITY_RESPONSE_PROJECTION_MAGIC_V1);
+    result.push(outcome);
+    result.push(reason);
+    result.push(credential_present);
+    result.push(0);
+    result.extend_from_slice(&response.admission_height.to_be_bytes());
+    result.extend_from_slice(&response.registration_hash);
+    result.extend_from_slice(&response.admission_policy_hash);
+    result.extend_from_slice(&admission_transaction_hash);
+    result.extend_from_slice(&matched_count.to_be_bytes());
+    result.extend_from_slice(&[0; 2]);
+    result.extend_from_slice(&matched_len.to_be_bytes());
+    result.extend_from_slice(&issuer_len.to_be_bytes());
+    result.extend_from_slice(&credential_len.to_be_bytes());
+    result.extend_from_slice(&policy_len.to_be_bytes());
+    result.extend_from_slice(&response.policy_view.policy_epoch.to_be_bytes());
+    result.extend_from_slice(&response.policy_view.policy_hash);
+    result.extend_from_slice(&response.policy_view.freshness_deadline_ms.to_be_bytes());
+    result.extend_from_slice(
+        &response
+            .policy_view
+            .finality
+            .finalized_block_height
+            .to_be_bytes(),
+    );
+    result.extend_from_slice(response.policy_view.finality.finalized_block_hash.as_ref());
+    result.extend_from_slice(
+        &response
+            .policy_view
+            .finality
+            .finalized_block_timestamp_ms
+            .to_be_bytes(),
+    );
+    result.extend_from_slice(
+        response
+            .policy_view
+            .finality
+            .finality_evidence_hash
+            .as_ref(),
+    );
+    result.extend_from_slice(&credential_issued_at_ms.to_be_bytes());
+    result.extend_from_slice(&credential_expires_at_ms.to_be_bytes());
+    for length in claim_lengths {
+        result.extend_from_slice(&length.to_be_bytes());
+    }
+    result.extend_from_slice(&[0; 2]);
+    result.extend_from_slice(&claims_len.to_be_bytes());
+    result.extend_from_slice(&matched_rules);
+    result.extend_from_slice(&issuer_archive);
+    result.extend_from_slice(credential_bytes);
+    result.extend_from_slice(&policy_archive);
+    for bytes in claim_sections {
+        result.extend_from_slice(bytes);
+    }
+    if result.len() != result_len {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(result)
+}
+
+/// Encode the exact authenticated `POST /v1/offline/device-eligibility` body.
+///
+/// The caller account is deliberately absent: Torii's canonical request
+/// signature supplies the sole authoritative account identity.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_device_eligibility_request_v1(
+    registration_hash_ptr: *const c_uchar,
+    registration_hash_len: c_ulong,
+    device_id_ptr: *const c_uchar,
+    device_id_len: c_ulong,
+    attestation_key_id_ptr: *const c_uchar,
+    attestation_key_id_len: c_ulong,
+    requested_ttl_ms: u64,
+    out_request_ptr: *mut *mut c_uchar,
+    out_request_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_request_ptr, out_request_len);
+    let result = (|| {
+        clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
+        let registration_hash = unsafe {
+            read_fixed_array::<{ Hash::LENGTH }>(
+                registration_hash_ptr,
+                registration_hash_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let device_id = unsafe { read_string_bridge(device_id_ptr.cast(), device_id_len) }
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let attestation_key_id =
+            unsafe { read_string_bridge(attestation_key_id_ptr.cast(), attestation_key_id_len) }
+                .map_err(|_| BridgeError::KagemushaProve)?;
+        let request = offline_device_eligibility_request_create_v1(
+            registration_hash,
+            &device_id,
+            &attestation_key_id,
+            requested_ttl_ms,
+        )?;
+        unsafe { write_bytes_bridge(out_request_ptr, out_request_len, &request) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Decode and authenticate one bounded device-eligibility response.
+///
+/// The output is an ABI-22 `IDERSP1` projection containing a typed decision,
+/// exact issuer, optional verified credential, finalized policy, and admission
+/// provenance. No native secret or witness material is projected.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_device_eligibility_response_verify_v1(
+    response_norito_ptr: *const c_uchar,
+    response_norito_len: c_ulong,
+    expected_registration_hash_ptr: *const c_uchar,
+    expected_registration_hash_len: c_ulong,
+    expected_issuer_norito_ptr: *const c_uchar,
+    expected_issuer_norito_len: c_ulong,
+    expected_network_id_ptr: *const c_uchar,
+    expected_network_id_len: c_ulong,
+    trusted_context_id_ptr: *const c_uchar,
+    trusted_context_id_len: c_ulong,
+    evaluation_time_ms: u64,
+    out_verified_response_ptr: *mut *mut c_uchar,
+    out_verified_response_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_verified_response_ptr, out_verified_response_len);
+    let result = (|| {
+        clear_bridge_output_or_null(out_verified_response_ptr, out_verified_response_len)?;
+        let response = unsafe {
+            read_kagemusha_archive_bytes_bounded(
+                response_norito_ptr,
+                response_norito_len,
+                OFFLINE_DEVICE_ELIGIBILITY_MAX_RESPONSE_BYTES,
+            )
+        }?;
+        let expected_registration_hash = unsafe {
+            read_fixed_array::<{ Hash::LENGTH }>(
+                expected_registration_hash_ptr,
+                expected_registration_hash_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let expected_issuer_bytes = unsafe {
+            read_kagemusha_archive_bytes_bounded(
+                expected_issuer_norito_ptr,
+                expected_issuer_norito_len,
+                4 * 1024,
+            )
+        }?;
+        let expected_issuer =
+            decode_canonical_kagemusha_archive::<PublicKey>(&expected_issuer_bytes)?;
+        let network_bytes = unsafe {
+            read_fixed_array::<{ Hash::LENGTH }>(
+                expected_network_id_ptr,
+                expected_network_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        let trusted_context_id = unsafe {
+            read_fixed_array::<{ Hash::LENGTH }>(
+                trusted_context_id_ptr,
+                trusted_context_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let verified = offline_device_eligibility_response_verify_v1(
+            &response,
+            expected_registration_hash,
+            expected_issuer,
+            expected_network_id,
+            trusted_context_id,
+            evaluation_time_ms,
+        )?;
+        unsafe {
+            write_bytes_bridge(
+                out_verified_response_ptr,
+                out_verified_response_len,
+                &verified,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+fn verify_offline_device_policy_view_finality_v1(
+    policy_view: &iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+    expected_network_id: &NetworkId,
+    trusted_context_id: iroha_data_model::block::consensus_v2::HeightContextId,
+    evaluation_time_ms: u64,
+    allow_stale_binding: bool,
+) -> BridgeResult<()> {
+    if evaluation_time_ms == 0 || &policy_view.finality.network_id != expected_network_id {
+        return Err(BridgeError::KagemushaProve);
+    }
+    if allow_stale_binding {
+        policy_view
+            .validated_policy_binding_v1(evaluation_time_ms)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+    } else {
+        policy_view
+            .validated_policy_v1(evaluation_time_ms)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+    }
+    let proof = decode_canonical_kagemusha_archive::<iroha_data_model::bridge::BridgeFinalityProof>(
+        &policy_view.finality_evidence_bytes,
+    )?;
+    let proof_timestamp_ms = u64::try_from(proof.block_header.creation_time().as_millis())
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    if proof.finality_artifact.height != policy_view.finality.finalized_block_height
+        || proof.block_header.height().get() != policy_view.finality.finalized_block_height
+        || Hash::from(proof.finality_artifact.block_hash)
+            != policy_view.finality.finalized_block_hash
+        || Hash::from(proof.block_header.hash()) != policy_view.finality.finalized_block_hash
+        || proof_timestamp_ms != policy_view.finality.finalized_block_timestamp_ms
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let mut verifier = iroha_data_model::bridge::BridgeFinalityVerifier::with_context(
+        *expected_network_id,
+        trusted_context_id,
+    );
+    verifier
+        .verify(&proof)
+        .map_err(|_| BridgeError::KagemushaProve)
+}
+
+const OFFLINE_DEVICE_POLICY_VIEW_CLAIMS_MAGIC_V1: [u8; 8] = *b"IDPVCL1\0";
+const OFFLINE_DEVICE_POLICY_VIEW_CLAIMS_BYTES_V1: usize = 136;
+
+/// Verify one finalized policy view and project only its public, typed policy
+/// and finality binding.  The projection deliberately excludes the policy and
+/// BridgeFinalityProof archives so mobile callers cannot accidentally treat an
+/// unverified response field as a trust anchor.
+fn offline_device_policy_view_claims_v1(
+    policy_view: &iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+    expected_network_id: &NetworkId,
+    trusted_context_id: iroha_data_model::block::consensus_v2::HeightContextId,
+    evaluation_time_ms: u64,
+) -> BridgeResult<Vec<u8>> {
+    verify_offline_device_policy_view_finality_v1(
+        policy_view,
+        expected_network_id,
+        trusted_context_id,
+        evaluation_time_ms,
+        false,
+    )?;
+    let mut projection = Vec::with_capacity(OFFLINE_DEVICE_POLICY_VIEW_CLAIMS_BYTES_V1);
+    projection.extend_from_slice(&OFFLINE_DEVICE_POLICY_VIEW_CLAIMS_MAGIC_V1);
+    projection.extend_from_slice(&policy_view.policy_epoch.to_be_bytes());
+    projection.extend_from_slice(&policy_view.policy_hash);
+    projection.extend_from_slice(&policy_view.freshness_deadline_ms.to_be_bytes());
+    projection.extend_from_slice(&policy_view.finality.finalized_block_height.to_be_bytes());
+    projection.extend_from_slice(policy_view.finality.finalized_block_hash.as_ref());
+    projection.extend_from_slice(
+        &policy_view
+            .finality
+            .finalized_block_timestamp_ms
+            .to_be_bytes(),
+    );
+    projection.extend_from_slice(policy_view.finality.finality_evidence_hash.as_ref());
+    if projection.len() != OFFLINE_DEVICE_POLICY_VIEW_CLAIMS_BYTES_V1 {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(projection)
+}
+
+/// Canonically decode and verify one finalized governed device-attestation
+/// policy view against an exact network and caller-pinned Sumeragi-v2 context.
+///
+/// The context id is a trust anchor, not a value learned from the response.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_device_attestation_policy_view_verify_v1(
+    policy_view_norito_ptr: *const c_uchar,
+    policy_view_norito_len: c_ulong,
+    expected_network_id_ptr: *const c_uchar,
+    expected_network_id_len: c_ulong,
+    trusted_context_id_ptr: *const c_uchar,
+    trusted_context_id_len: c_ulong,
+    evaluation_time_ms: u64,
+    out_policy_view_ptr: *mut *mut c_uchar,
+    out_policy_view_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_policy_view_ptr, out_policy_view_len)?;
+        let policy_bytes = read_kagemusha_bytes!(
+            policy_view_norito_ptr,
+            policy_view_norito_len,
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+        )?;
+        let policy_view = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(&policy_bytes)?;
+        let network_bytes = unsafe {
+            read_fixed_array::<32>(
+                expected_network_id_ptr,
+                expected_network_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        let context_bytes = unsafe {
+            read_fixed_array::<32>(
+                trusted_context_id_ptr,
+                trusted_context_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let trusted_context_id = offline_device_trusted_context_id_v1(context_bytes)?;
+        verify_offline_device_policy_view_finality_v1(
+            &policy_view,
+            &expected_network_id,
+            trusted_context_id,
+            evaluation_time_ms,
+            false,
+        )?;
+        write_kagemusha_archive!(
+            &policy_view,
+            out_policy_view_ptr,
+            out_policy_view_len,
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+        )
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Verify a finalized device-attestation policy view and return the fixed
+/// `IDPVCL1` ABI-22 public-claims projection.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_device_attestation_policy_view_claims_v1(
+    policy_view_norito_ptr: *const c_uchar,
+    policy_view_norito_len: c_ulong,
+    expected_network_id_ptr: *const c_uchar,
+    expected_network_id_len: c_ulong,
+    trusted_context_id_ptr: *const c_uchar,
+    trusted_context_id_len: c_ulong,
+    evaluation_time_ms: u64,
+    out_claims_ptr: *mut *mut c_uchar,
+    out_claims_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_claims_ptr, out_claims_len)?;
+        let policy_bytes = read_kagemusha_bytes!(
+            policy_view_norito_ptr,
+            policy_view_norito_len,
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+        )?;
+        let policy_view = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(&policy_bytes)?;
+        let network_bytes = unsafe {
+            read_fixed_array::<32>(
+                expected_network_id_ptr,
+                expected_network_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        let context_bytes = unsafe {
+            read_fixed_array::<32>(
+                trusted_context_id_ptr,
+                trusted_context_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let projection = offline_device_policy_view_claims_v1(
+            &policy_view,
+            &expected_network_id,
+            offline_device_trusted_context_id_v1(context_bytes)?,
+            evaluation_time_ms,
+        )?;
+        unsafe { write_bytes_bridge(out_claims_ptr, out_claims_len, &projection) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Verify an issuer credential together with the exact finalized policy and
+/// its cryptographic BridgeFinalityProof. The returned archive is byte-exact.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_device_eligibility_credential_verify_v1(
+    credential_norito_ptr: *const c_uchar,
+    credential_norito_len: c_ulong,
+    expected_issuer_norito_ptr: *const c_uchar,
+    expected_issuer_norito_len: c_ulong,
+    policy_view_norito_ptr: *const c_uchar,
+    policy_view_norito_len: c_ulong,
+    expected_network_id_ptr: *const c_uchar,
+    expected_network_id_len: c_ulong,
+    trusted_context_id_ptr: *const c_uchar,
+    trusted_context_id_len: c_ulong,
+    evaluation_time_ms: u64,
+    out_credential_ptr: *mut *mut c_uchar,
+    out_credential_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_credential_ptr, out_credential_len)?;
+        let credential_bytes = read_kagemusha_bytes!(
+            credential_norito_ptr,
+            credential_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1
+        )?;
+        let credential = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::OfflineDeviceEligibilityCredentialV1,
+        >(&credential_bytes)?;
+        let issuer_bytes = read_kagemusha_bytes!(
+            expected_issuer_norito_ptr,
+            expected_issuer_norito_len,
+            4 * 1024
+        )?;
+        let expected_issuer = decode_canonical_kagemusha_archive::<PublicKey>(&issuer_bytes)?;
+        let policy_bytes = read_kagemusha_bytes!(
+            policy_view_norito_ptr,
+            policy_view_norito_len,
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+        )?;
+        let policy_view = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(&policy_bytes)?;
+        let network_bytes = unsafe {
+            read_fixed_array::<32>(
+                expected_network_id_ptr,
+                expected_network_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        let context_bytes = unsafe {
+            read_fixed_array::<32>(
+                trusted_context_id_ptr,
+                trusted_context_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        verify_offline_device_policy_view_finality_v1(
+            &policy_view,
+            &expected_network_id,
+            offline_device_trusted_context_id_v1(context_bytes)?,
+            evaluation_time_ms,
+            false,
+        )?;
+        credential
+            .verify_against_policy_view_v1(&expected_issuer, &policy_view, evaluation_time_ms)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        write_kagemusha_archive!(
+            &credential,
+            out_credential_ptr,
+            out_credential_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1
+        )
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Verify an eligibility credential as an IPN1 peer certificate and return
+/// the exact registered P-256 device-authority public key.  The credential is
+/// accepted only against the caller-pinned issuer, finalized policy view,
+/// NetworkId, finality context, and evaluation time; opaque or self-asserted
+/// public-key bytes never cross this boundary as an authenticated identity.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_device_eligibility_peer_certificate_verify_v1(
+    credential_norito_ptr: *const c_uchar,
+    credential_norito_len: c_ulong,
+    expected_issuer_norito_ptr: *const c_uchar,
+    expected_issuer_norito_len: c_ulong,
+    policy_view_norito_ptr: *const c_uchar,
+    policy_view_norito_len: c_ulong,
+    expected_network_id_ptr: *const c_uchar,
+    expected_network_id_len: c_ulong,
+    trusted_context_id_ptr: *const c_uchar,
+    trusted_context_id_len: c_ulong,
+    evaluation_time_ms: u64,
+    out_device_public_key_ptr: *mut *mut c_uchar,
+    out_device_public_key_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_device_public_key_ptr, out_device_public_key_len)?;
+        let credential_bytes = read_kagemusha_bytes!(
+            credential_norito_ptr,
+            credential_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1
+        )?;
+        let credential = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::OfflineDeviceEligibilityCredentialV1,
+        >(&credential_bytes)?;
+        let issuer_bytes = read_kagemusha_bytes!(
+            expected_issuer_norito_ptr,
+            expected_issuer_norito_len,
+            4 * 1024
+        )?;
+        let expected_issuer = decode_canonical_kagemusha_archive::<PublicKey>(&issuer_bytes)?;
+        let policy_bytes = read_kagemusha_bytes!(
+            policy_view_norito_ptr,
+            policy_view_norito_len,
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+        )?;
+        let policy_view = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(&policy_bytes)?;
+        let network_bytes = unsafe {
+            read_fixed_array::<32>(
+                expected_network_id_ptr,
+                expected_network_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        let context_bytes = unsafe {
+            read_fixed_array::<32>(
+                trusted_context_id_ptr,
+                trusted_context_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        verify_offline_device_policy_view_finality_v1(
+            &policy_view,
+            &expected_network_id,
+            offline_device_trusted_context_id_v1(context_bytes)?,
+            evaluation_time_ms,
+            false,
+        )?;
+        credential
+            .verify_against_policy_view_v1(&expected_issuer, &policy_view, evaluation_time_ms)
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(
+                out_device_public_key_ptr,
+                out_device_public_key_len,
+                credential.payload.device_public_key.as_sec1_bytes(),
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Wrap an unchanged canonical ABI-21/V4 payment in the unsigned ABI-22
+/// eligibility payload. The signed recipient request and issuer credential are
+/// canonical typed archives; no proof bytes are re-encoded or relabelled.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_eligibility_payment_prepare_v1(
+    payment_norito_ptr: *const c_uchar,
+    payment_norito_len: c_ulong,
+    credential_norito_ptr: *const c_uchar,
+    credential_norito_len: c_ulong,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_payload_ptr: *mut *mut c_uchar,
+    out_payload_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_payload_ptr, out_payload_len)?;
+        let payment_bytes = read_kagemusha_bytes!(
+            payment_norito_ptr,
+            payment_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        )?;
+        let payment = decode_canonical_kagemusha_recursive_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
+        >(&payment_bytes)?;
+        payment
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let credential_bytes = read_kagemusha_bytes!(
+            credential_norito_ptr,
+            credential_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_CREDENTIAL_MAX_ARCHIVE_BYTES_V1
+        )?;
+        let credential = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::OfflineDeviceEligibilityCredentialV1,
+        >(&credential_bytes)?;
+        let request_bytes = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
+        let request = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+        >(&request_bytes)?;
+        let payload =
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopePayloadV1::prepare_v1(
+                payment_bytes,
+                credential,
+                &request,
+            )
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        write_kagemusha_archive!(
+            &payload,
+            out_payload_ptr,
+            out_payload_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1
+        )
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Return the exact operation-bound bytes that the current credential's
+/// wallet device key must sign once. Platform assertion keys remain separate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_eligibility_payment_signing_bytes_v1(
+    payload_norito_ptr: *const c_uchar,
+    payload_norito_len: c_ulong,
+    out_signing_bytes_ptr: *mut *mut c_uchar,
+    out_signing_bytes_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_signing_bytes_ptr, out_signing_bytes_len)?;
+        let payload_bytes = read_kagemusha_bytes!(
+            payload_norito_ptr,
+            payload_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1
+        )?;
+        let payload = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopePayloadV1,
+        >(&payload_bytes)?;
+        let payment = decode_canonical_kagemusha_recursive_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
+        >(&payload.payment_v4_norito)?;
+        payment
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let signing_bytes = payload
+            .signing_bytes_v1()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(
+                out_signing_bytes_ptr,
+                out_signing_bytes_len,
+                &signing_bytes,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Finalize the envelope with one canonical raw-low-S P-256 device signature.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_eligibility_payment_finalize_v1(
+    payload_norito_ptr: *const c_uchar,
+    payload_norito_len: c_ulong,
+    signature_ptr: *const c_uchar,
+    signature_len: c_ulong,
+    out_envelope_ptr: *mut *mut c_uchar,
+    out_envelope_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_envelope_ptr, out_envelope_len)?;
+        let payload_bytes = read_kagemusha_bytes!(
+            payload_norito_ptr,
+            payload_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1
+        )?;
+        let payload = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopePayloadV1,
+        >(&payload_bytes)?;
+        let payment = decode_canonical_kagemusha_recursive_archive::<
+            iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
+        >(&payload.payment_v4_norito)?;
+        payment
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let signature_bytes = read_kagemusha_bytes!(
+            signature_ptr,
+            signature_len,
+            iroha_data_model::offline::KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2
+        )?;
+        if signature_bytes.len() != iroha_data_model::offline::KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2 {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let signature =
+            iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(&signature_bytes)
+                .map_err(|_| BridgeError::KagemushaProve)?;
+        let envelope =
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1::finalize_v1(
+                payload, signature,
+            )
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        write_kagemusha_archive!(
+            &envelope,
+            out_envelope_ptr,
+            out_envelope_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1
+        )
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Policy-independent validation for exact retransmission and already-consumed
+/// payload recovery. This is deliberately insufficient for first delivery.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_eligibility_payment_validate_static_v1(
+    envelope_norito_ptr: *const c_uchar,
+    envelope_norito_len: c_ulong,
+    out_envelope_ptr: *mut *mut c_uchar,
+    out_envelope_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_envelope_ptr, out_envelope_len)?;
+        let envelope_bytes = read_kagemusha_bytes!(
+            envelope_norito_ptr,
+            envelope_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1
+        )?;
+        let envelope = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1,
+        >(&envelope_bytes)?;
+        validate_kagemusha_eligibility_envelope_inner_payment_v1(&envelope)?;
+        envelope
+            .validate_static_binding_v1()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        write_kagemusha_archive!(
+            &envelope,
+            out_envelope_ptr,
+            out_envelope_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1
+        )
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Admission gate for a first delivery. Returns the exact unchanged V4 payment
+/// only after checking the <=15-minute request and current finalized policy.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_eligibility_payment_validate_first_delivery_v1(
+    envelope_norito_ptr: *const c_uchar,
+    envelope_norito_len: c_ulong,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    expected_issuer_norito_ptr: *const c_uchar,
+    expected_issuer_norito_len: c_ulong,
+    policy_view_norito_ptr: *const c_uchar,
+    policy_view_norito_len: c_ulong,
+    received_at_ms: u64,
+    out_payment_ptr: *mut *mut c_uchar,
+    out_payment_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_payment_ptr, out_payment_len)?;
+        let envelope_bytes = read_kagemusha_bytes!(
+            envelope_norito_ptr,
+            envelope_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1
+        )?;
+        let envelope = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1,
+        >(&envelope_bytes)?;
+        validate_kagemusha_eligibility_envelope_inner_payment_v1(&envelope)?;
+        let request_bytes = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
+        let request = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+        >(&request_bytes)?;
+        let issuer_bytes = read_kagemusha_bytes!(
+            expected_issuer_norito_ptr,
+            expected_issuer_norito_len,
+            4 * 1024
+        )?;
+        let expected_issuer = decode_canonical_kagemusha_archive::<PublicKey>(&issuer_bytes)?;
+        let policy_bytes = read_kagemusha_bytes!(
+            policy_view_norito_ptr,
+            policy_view_norito_len,
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+        )?;
+        let policy_view = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(&policy_bytes)?;
+        envelope
+            .validate_for_first_delivery_v1(
+                &request,
+                &expected_issuer,
+                &policy_view,
+                received_at_ms,
+            )
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(
+                out_payment_ptr,
+                out_payment_len,
+                &envelope.payload.payment_v4_norito,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Admission gate for first delivery with cryptographically anchored policy
+/// finality. Unlike the legacy typed-binding entrypoint, this function also
+/// verifies the embedded BridgeFinalityProof against caller-owned trust.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_eligibility_payment_validate_first_delivery_finalized_v1(
+    envelope_norito_ptr: *const c_uchar,
+    envelope_norito_len: c_ulong,
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    expected_issuer_norito_ptr: *const c_uchar,
+    expected_issuer_norito_len: c_ulong,
+    policy_view_norito_ptr: *const c_uchar,
+    policy_view_norito_len: c_ulong,
+    expected_network_id_ptr: *const c_uchar,
+    expected_network_id_len: c_ulong,
+    trusted_context_id_ptr: *const c_uchar,
+    trusted_context_id_len: c_ulong,
+    received_at_ms: u64,
+    out_payment_ptr: *mut *mut c_uchar,
+    out_payment_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_payment_ptr, out_payment_len)?;
+        let envelope_bytes = read_kagemusha_bytes!(
+            envelope_norito_ptr,
+            envelope_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_ELIGIBILITY_PAYMENT_ENVELOPE_MAX_ARCHIVE_BYTES_V1
+        )?;
+        let envelope = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaEligibilityPaymentEnvelopeV1,
+        >(&envelope_bytes)?;
+        validate_kagemusha_eligibility_envelope_inner_payment_v1(&envelope)?;
+        let request_bytes = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
+        let request = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+        >(&request_bytes)?;
+        let issuer_bytes = read_kagemusha_bytes!(
+            expected_issuer_norito_ptr,
+            expected_issuer_norito_len,
+            4 * 1024
+        )?;
+        let expected_issuer = decode_canonical_kagemusha_archive::<PublicKey>(&issuer_bytes)?;
+        let policy_bytes = read_kagemusha_bytes!(
+            policy_view_norito_ptr,
+            policy_view_norito_len,
+            iroha_data_model::offline::OFFLINE_DEVICE_ATTESTATION_POLICY_VIEW_MAX_BYTES_V1
+        )?;
+        let policy_view = decode_canonical_kagemusha_archive::<
+            iroha_data_model::offline::OfflineDeviceAttestationPolicyViewV1,
+        >(&policy_bytes)?;
+        let network_bytes = unsafe {
+            read_fixed_array::<32>(
+                expected_network_id_ptr,
+                expected_network_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        let expected_network_id =
+            network_id_from_raw_bytes(&network_bytes).map_err(|_| BridgeError::KagemushaProve)?;
+        let context_bytes = unsafe {
+            read_fixed_array::<32>(
+                trusted_context_id_ptr,
+                trusted_context_id_len,
+                BridgeError::KagemushaProve,
+            )
+        }?;
+        verify_offline_device_policy_view_finality_v1(
+            &policy_view,
+            &expected_network_id,
+            offline_device_trusted_context_id_v1(context_bytes)?,
+            received_at_ms,
+            false,
+        )?;
+        envelope
+            .validate_for_first_delivery_v1(
+                &request,
+                &expected_issuer,
+                &policy_view,
+                received_at_ms,
+            )
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(
+                out_payment_ptr,
+                out_payment_len,
+                &envelope.payload.payment_v4_norito,
+            )
+        }
+    })();
+    bridge_result_to_code(result)
+}
 /// Decode and validate an opaque ABI-21 bundle, returning its wallet-safe typed summary.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary_v4(
@@ -14710,6 +18138,125 @@ mod kagemusha_bridge_tests {
         }
         proofs
     }
+    fn offline_device_policy_intermediate_page_v1()
+    -> (NetworkId, [u8; Hash::LENGTH], OfflineDevicePolicyProofV1) {
+        let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"offline device policy proof bridge network",
+        )));
+        let proofs = receiver_offer_finality_chain(
+            &network_id,
+            2,
+            1_900_000_000_000,
+            Hash::new(b"offline device policy proof ordinary writes"),
+        );
+        let trusted_context = *proofs[0].finality_artifact.context_id().0.as_ref();
+        let evaluated = proofs.last().expect("two policy finality proofs");
+        let evaluated_context_id = evaluated.finality_artifact.context_id();
+        let evaluated_block_height = evaluated.finality_artifact.height;
+        let evaluated_block_hash = hex::encode(evaluated.finality_artifact.block_hash.as_ref());
+        let page = OfflineDevicePolicyProofV1 {
+            version: OFFLINE_DEVICE_POLICY_PROOF_VERSION_V1,
+            policy_view: None,
+            finality_chain: proofs,
+            evaluated_context_id,
+            evaluated_block_height,
+            evaluated_block_hash,
+            observed_ledger_tip_height: evaluated_block_height + 1,
+            more_available: true,
+        };
+        (network_id, trusted_context, page)
+    }
+    #[test]
+    fn offline_device_policy_proof_request_and_verified_projection_are_canonical() {
+        let (network_id, trusted_context, page) = offline_device_policy_intermediate_page_v1();
+        let request = offline_device_policy_proof_request_create_v1(1, trusted_context)
+            .expect("encode policy proof request");
+        let decoded: OfflineDevicePolicyProofRequestV1 =
+            decode_from_bytes(&request).expect("decode policy proof request");
+        assert_eq!(decoded.version, OFFLINE_DEVICE_POLICY_PROOF_VERSION_V1);
+        assert_eq!(decoded.trusted_checkpoint_height, 1);
+        assert!(offline_device_policy_proof_request_create_v1(0, trusted_context).is_err());
+        assert!(offline_device_policy_proof_request_create_v1(1, [0; Hash::LENGTH]).is_err());
+
+        let archive = norito::to_bytes(&page).expect("encode policy proof page");
+        let verified = offline_device_policy_proof_verify_v1(
+            &archive,
+            network_id,
+            1,
+            trusted_context,
+            1_900_000_001_000,
+        )
+        .expect("verify intermediate policy page");
+        assert_eq!(
+            &verified[..8],
+            OFFLINE_DEVICE_POLICY_VERIFIED_PAGE_MAGIC_V1.as_slice()
+        );
+        assert_eq!(u64::from_be_bytes(verified[8..16].try_into().unwrap()), 2);
+        assert_eq!(&verified[16..48], page.evaluated_context_id.0.as_ref());
+        assert_eq!(verified[48], 1);
+        assert_eq!(&verified[49..52], &[0; 3]);
+        assert_eq!(u32::from_be_bytes(verified[52..56].try_into().unwrap()), 0);
+        assert_eq!(
+            verified.len(),
+            OFFLINE_DEVICE_POLICY_VERIFIED_PAGE_FIXED_BYTES_V1
+        );
+    }
+    #[test]
+    fn offline_device_policy_proof_bridge_rejects_mutations() {
+        let (network_id, trusted_context, page) = offline_device_policy_intermediate_page_v1();
+        let archive = norito::to_bytes(&page).expect("encode policy proof page");
+
+        let mut trailing = archive.clone();
+        trailing.push(0);
+        assert!(
+            offline_device_policy_proof_verify_v1(
+                &trailing,
+                network_id,
+                1,
+                trusted_context,
+                1_900_000_001_000,
+            )
+            .is_err()
+        );
+        let mut wrong_context = trusted_context;
+        wrong_context[0] ^= 0x40;
+        assert!(
+            offline_device_policy_proof_verify_v1(
+                &archive,
+                network_id,
+                1,
+                wrong_context,
+                1_900_000_001_000,
+            )
+            .is_err()
+        );
+        let mut wrong_shape = page.clone();
+        wrong_shape.more_available = false;
+        let wrong_shape = norito::to_bytes(&wrong_shape).expect("encode mutated policy page");
+        assert!(
+            offline_device_policy_proof_verify_v1(
+                &wrong_shape,
+                network_id,
+                1,
+                trusted_context,
+                1_900_000_001_000,
+            )
+            .is_err()
+        );
+        let mut wrong_hash = page;
+        wrong_hash.evaluated_block_hash.replace_range(0..2, "00");
+        let wrong_hash = norito::to_bytes(&wrong_hash).expect("encode mutated policy hash");
+        assert!(
+            offline_device_policy_proof_verify_v1(
+                &wrong_hash,
+                network_id,
+                1,
+                trusted_context,
+                1_900_000_001_000,
+            )
+            .is_err()
+        );
+    }
     fn receiver_offer_sparse_root(
         proof: &iroha_data_model::offline::KagemushaActiveReceiverWitnessProofV1,
     ) -> Hash {
@@ -14934,7 +18481,7 @@ mod kagemusha_bridge_tests {
         assert_eq!(one.lineage.selector.network_id, one.request.network_id);
         assert_eq!(one.lineage.selector.asset, one.request.asset);
         let one_bytes = norito::to_bytes(&one).expect("encode one-proof offer");
-        assert_eq!(one_bytes.len(), 12_425);
+        assert_eq!(one_bytes.len(), 12_423);
         assert_eq!(
             one_bytes,
             decode_hex_fixture(include_str!(
@@ -15029,7 +18576,7 @@ mod kagemusha_bridge_tests {
         assert!(one_bytes.len() <= OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES);
         assert_eq!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES,
-            12_509
+            12_507
         );
         assert!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES
@@ -15687,6 +19234,15 @@ mod kagemusha_bridge_tests {
         let compact_production: String = production.split_whitespace().collect();
         assert!(compact_production.contains(
             "nativeFinalizeHardwareAuthorizationV2{preparationbytes,authenticator_databytes,signature_derbytes}->JniObjectArray=java_native_kagemusha_finalize_hardware_authorization_v2;"
+        ));
+        assert!(compact_production.contains(
+            "nativeFinalizeDrainOnlyRedemptionAuthorizationV1{authoritybytes,chain_discriminantint,device_idbytes,asset_definition_idbytes,operation_idbytes,issued_at_mslong,expires_at_mslong,noncebytes,payload_digestbytes,policy_viewbytes,expected_network_idbytes,trusted_context_idbytes}->JniByteArray=java_native_kagemusha_finalize_drain_only_redemption_authorization_v1;"
+        ));
+        assert!(compact_production.contains(
+            "nativeBuildDrainOnlyRedeemInstructionV4{requestbytes,authoritybytes,chain_discriminantint}->JniObjectArray=java_native_kagemusha_build_drain_only_redeem_instruction_v4;"
+        ));
+        assert!(compact_production.contains(
+            "nativeProjectOperationReferenceV1{referencebytes,expected_operation_idbytes,expected_kindbytes,expected_submitted_at_mslong}->JniObjectArray=java_native_kagemusha_project_operation_reference_v1;"
         ));
         assert!(compact_production.contains(
             "nativeFinalizeIosAppAttestAuthorizationV2{preparationbytes,assertion_objectbytes}->JniObjectArray=java_native_kagemusha_finalize_ios_app_attest_authorization_v2;"
@@ -17948,6 +21504,9 @@ mod kagemusha_bridge_tests {
         let readiness = OfflineReadiness {
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
+            eligibility_cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1
+                    .to_owned(),
             required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: fixture.manifest.asset.to_string(),
@@ -17992,6 +21551,14 @@ mod kagemusha_bridge_tests {
             projected.first().map(Vec::as_slice),
             Some(iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.as_bytes()),
             "mobile readiness must carry the authenticated cash-handoff capability instead of synthesizing it in an SDK",
+        );
+        assert_eq!(
+            projected.get(1).map(Vec::as_slice),
+            Some(
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_ELIGIBILITY_CAPABILITY_V1
+                    .as_bytes(),
+            ),
+            "mobile readiness must carry the separately advertised eligibility handoff capability",
         );
         readiness
     }
@@ -19226,62 +22793,67 @@ mod kagemusha_bridge_tests {
         let release_prefix = format!("catalog/{digest}");
         let release_path = |file_name: &str| format!("{release_prefix}/{file_name}");
         let mut expected = Vec::with_capacity(17);
-        let mut write_bytes = |relative: String, bytes: &[u8]| {
-            output
-                .write_private_file(&relative, bytes)
-                .unwrap_or_else(|error| panic!("write Taira release file `{relative}`: {error}"));
-            expected.push(ProductionDsAcceptanceExpectedFileV1::from_bytes(
-                &relative, bytes,
-            ));
-        };
-        write_bytes(
-            "release-policy-v1.norito".to_owned(),
-            &norito::to_bytes(&fixture.policy).expect("encode Taira release policy"),
-        );
-        write_bytes(release_path("manifest.norito"), &manifest_bytes);
-        let mut manifest_json =
-            norito::json::to_string_pretty(&fixture.manifest).expect("render Taira manifest JSON");
-        assert!(
-            manifest_json.contains("\"asset\""),
-            "Taira release JSON must expose the canonical `asset` field"
-        );
-        assert!(
-            !manifest_json.contains("\"asset_definition_id\""),
-            "Taira release JSON must not rename `asset` for deployment tooling"
-        );
-        manifest_json.push('\n');
-        write_bytes(release_path("manifest.json"), manifest_json.as_bytes());
-        write_bytes(
-            release_path("manifest.norito.sha256"),
-            format!("{digest}\n").as_bytes(),
-        );
-        write_bytes(
-            release_path(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
-            ),
-            &norito::to_bytes(&fixture.attestation).expect("encode Taira release attestation"),
-        );
-        write_bytes(
-            release_path(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
-            ),
-            &fixture.benchmark_evidence,
-        );
-        write_bytes(
-            release_path(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
-            ),
-            &fixture.cryptographic_review,
-        );
-        write_bytes(
-            release_path("promotion-record-v4.norito"),
-            &norito::to_bytes(&fixture.promotion_record)
-                .expect("encode Taira release promotion record"),
-        );
-        write_bytes(
-            release_path(&fixture.manifest.topup_finality_roster_artifact.file_name),
-            &norito::to_bytes(&fixture.topup_roster).expect("encode Taira top-up finality roster"),
-        );
+        {
+            let mut write_bytes = |relative: String, bytes: &[u8]| {
+                output
+                    .write_private_file(&relative, bytes)
+                    .unwrap_or_else(|error| {
+                        panic!("write Taira release file `{relative}`: {error}")
+                    });
+                expected.push(ProductionDsAcceptanceExpectedFileV1::from_bytes(
+                    &relative, bytes,
+                ));
+            };
+            write_bytes(
+                "release-policy-v1.norito".to_owned(),
+                &norito::to_bytes(&fixture.policy).expect("encode Taira release policy"),
+            );
+            write_bytes(release_path("manifest.norito"), &manifest_bytes);
+            let mut manifest_json = norito::json::to_string_pretty(&fixture.manifest)
+                .expect("render Taira manifest JSON");
+            assert!(
+                manifest_json.contains("\"asset\""),
+                "Taira release JSON must expose the canonical `asset` field"
+            );
+            assert!(
+                !manifest_json.contains("\"asset_definition_id\""),
+                "Taira release JSON must not rename `asset` for deployment tooling"
+            );
+            manifest_json.push('\n');
+            write_bytes(release_path("manifest.json"), manifest_json.as_bytes());
+            write_bytes(
+                release_path("manifest.norito.sha256"),
+                format!("{digest}\n").as_bytes(),
+            );
+            write_bytes(
+                release_path(
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
+                ),
+                &norito::to_bytes(&fixture.attestation).expect("encode Taira release attestation"),
+            );
+            write_bytes(
+                release_path(
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+                ),
+                &fixture.benchmark_evidence,
+            );
+            write_bytes(
+                release_path(
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+                ),
+                &fixture.cryptographic_review,
+            );
+            write_bytes(
+                release_path("promotion-record-v4.norito"),
+                &norito::to_bytes(&fixture.promotion_record)
+                    .expect("encode Taira release promotion record"),
+            );
+            write_bytes(
+                release_path(&fixture.manifest.topup_finality_roster_artifact.file_name),
+                &norito::to_bytes(&fixture.topup_roster)
+                    .expect("encode Taira top-up finality roster"),
+            );
+        }
         let descriptors = fixture
             .manifest
             .profiles
@@ -19289,7 +22861,6 @@ mod kagemusha_bridge_tests {
             .flat_map(|profile| profile.artifacts.iter())
             .collect::<Vec<_>>();
         assert_eq!(descriptors.len(), fixture.framed_artifacts.len());
-        drop(write_bytes);
         for (descriptor, framed) in descriptors.iter().zip(&fixture.framed_artifacts) {
             let relative = release_path(&descriptor.file_name);
             let mut destination = output
@@ -28240,6 +31811,44 @@ mod tests {
         assert_eq!(native_signer_jni_contract_revision(), 5);
     }
     #[test]
+    fn finalized_kagemusha_c_abi_clears_outputs_and_rejects_count_and_u63_overflow() {
+        let proof = [1_u8];
+        let lengths = [1 as c_ulong; AUTHENTICATED_FINALITY_PAGE_MAX_PROOFS_V1 + 1];
+        let mut page_ptr = ptr::dangling_mut::<c_uchar>();
+        let mut page_len = c_ulong::MAX;
+        let mut hash_ptr = ptr::dangling_mut::<c_uchar>();
+        let mut hash_len = c_ulong::MAX;
+        assert_eq!(
+            unsafe {
+                iroha_privacy_authenticated_finality_proof_page_bind_v1(
+                    proof.as_ptr(),
+                    1,
+                    lengths.as_ptr(),
+                    c_ulong::try_from(lengths.len()).expect("proof count fits c_ulong"),
+                    &mut page_ptr,
+                    &mut page_len,
+                    &mut hash_ptr,
+                    &mut hash_len,
+                )
+            },
+            ERR_AUTHENTICATED_TRANSACTION_DETAILS,
+        );
+        assert!(page_ptr.is_null());
+        assert_eq!(page_len, 0);
+        assert!(hash_ptr.is_null());
+        assert_eq!(hash_len, 0);
+
+        let mut checkpoint =
+            [0_u8; authenticated_transaction_details::AUTHENTICATED_FINALITY_CHECKPOINT_BYTES_V1];
+        checkpoint[..8].copy_from_slice(
+            &(authenticated_transaction_details::AUTHENTICATED_FINALITY_MOBILE_MAX_HEIGHT_V1 + 1)
+                .to_be_bytes(),
+        );
+        checkpoint
+            [authenticated_transaction_details::AUTHENTICATED_FINALITY_CHECKPOINT_BYTES_V1 - 1] = 1;
+        assert!(decode_authenticated_finality_checkpoint_v1(&checkpoint).is_err());
+    }
+    #[test]
     fn c_and_jni_transaction_network_ids_require_exact_canonical_encodings() {
         const NETWORK_ID: &str =
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
@@ -28500,6 +32109,7 @@ mod tests {
             "java_native_kagemusha_create_recipient_lineage_query_v2",
             "java_native_kagemusha_build_redeem_request_v4",
             "java_native_kagemusha_prepare_authorization_v2",
+            "java_native_kagemusha_finalize_drain_only_redemption_authorization_v1",
             "java_native_kagemusha_prepare_top_up_v4",
         ] {
             let marker = format!("\npub(super) fn {symbol}(");

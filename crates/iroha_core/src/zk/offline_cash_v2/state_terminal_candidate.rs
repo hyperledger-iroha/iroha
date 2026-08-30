@@ -383,7 +383,7 @@ mod sealed {
 }
 
 /// Marker implemented only by uninhabited terminal adapters in this module.
-pub(super) trait SealedStateTerminalAdapterV2: sealed::Sealed {}
+trait SealedStateTerminalAdapterV2: sealed::Sealed {}
 
 /// Uninhabited move-only production terminal adapter.
 pub(super) enum StateTerminalProductionAdapterV2 {}

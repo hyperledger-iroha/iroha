@@ -1490,6 +1490,15 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         &self.linked
     }
 
+    /// Lend the exact linked source/terminal owner only for a later
+    /// purpose-bound verifier replay. The authenticated inventory and its
+    /// lineage remain inseparable from this owner.
+    pub(super) fn linked_mut(
+        &mut self,
+    ) -> &mut RnsNativeSourceTerminalCrossFieldPrerequisiteV1<'source, S> {
+        &mut self.linked
+    }
+
     pub(super) const fn continuation(&self) -> &'proof [u8] {
         self.continuation
     }

@@ -110,7 +110,7 @@ fn exact_group_commitment_and_corrected_io_accounting_are_frozen() {
     assert_eq!(SOURCE_OPENING_LIFECYCLE_IO_BYTES_V1, 530_827_776);
     assert_eq!(SOURCE_OPENING_NEW_SCALAR_MIRROR_FILE_BYTES_V1, 0);
     assert_eq!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1, 1_067_776);
-    assert!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1 < 2_700_000);
+    const { assert!(WEIGHTED_COLUMN_NAMED_HEAP_BYTES_V1 < 2_700_000) };
 }
 #[test]
 fn source_and_inverse_packing_coordinates_are_exact_bijections() {

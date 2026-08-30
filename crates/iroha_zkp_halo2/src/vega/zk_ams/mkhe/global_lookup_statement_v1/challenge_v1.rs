@@ -698,57 +698,33 @@ fn fixed_table_inverse_mle_v1(
     }
     Ok(evaluation)
 }
+#[rustfmt::skip]
+#[derive(Clone, Copy)]
+struct LookupRelationEvaluationV1<'a> { z: Scalar, inverse: Scalar, inverse_product: Scalar, multiplicity: Scalar, residual: Scalar, alpha: Scalar, rho: &'a [Scalar; LOOKUP_DIMENSIONS_V1], point: &'a [Scalar; LOOKUP_DIMENSIONS_V1], lambda: Scalar, mu: Scalar }
+#[rustfmt::skip]
+#[derive(Clone, Copy)]
+struct LookupGateEvaluationV1<'a> { relation: LookupRelationEvaluationV1<'a>, candidate: Scalar, masked_accumulator: Scalar, public_claim: Scalar }
 fn lookup_relation_residual_v1(
-    z: Scalar,
-    inverse: Scalar,
-    inverse_product: Scalar,
-    multiplicity: Scalar,
-    residual: Scalar,
-    alpha: Scalar,
-    rho: &[Scalar; LOOKUP_DIMENSIONS_V1],
-    point: &[Scalar; LOOKUP_DIMENSIONS_V1],
-    lambda: Scalar,
-    mu: Scalar,
+    evaluation: LookupRelationEvaluationV1<'_>,
 ) -> Result<Scalar, GlobalLookupErrorV1> {
-    let chi = multilinear_equality_v1(rho, point);
-    let active = active_selector_v1(point)?;
-    let coordinate_zero = coordinate_zero_selector_v1(point);
-    let table_inverse = fixed_table_inverse_mle_v1(z, point)?;
-    let rhs = alpha * chi * (inverse_product - active)
-        + lambda * (inverse - coordinate_zero * multiplicity * table_inverse)
-        + mu * (coordinate_zero * multiplicity - active);
-    Ok(residual - rhs)
+    let chi = multilinear_equality_v1(evaluation.rho, evaluation.point);
+    let active = active_selector_v1(evaluation.point)?;
+    let coordinate_zero = coordinate_zero_selector_v1(evaluation.point);
+    let table_inverse = fixed_table_inverse_mle_v1(evaluation.z, evaluation.point)?;
+    let rhs = evaluation.alpha * chi * (evaluation.inverse_product - active)
+        + evaluation.lambda
+            * (evaluation.inverse - coordinate_zero * evaluation.multiplicity * table_inverse)
+        + evaluation.mu * (coordinate_zero * evaluation.multiplicity - active);
+    Ok(evaluation.residual - rhs)
 }
 fn lookup_gate_residuals_v1(
-    z: Scalar,
-    candidate: Scalar,
-    inverse: Scalar,
-    inverse_product: Scalar,
-    multiplicity: Scalar,
-    residual: Scalar,
-    alpha: Scalar,
-    rho: &[Scalar; LOOKUP_DIMENSIONS_V1],
-    point: &[Scalar; LOOKUP_DIMENSIONS_V1],
-    lambda: Scalar,
-    mu: Scalar,
-    masked_accumulator: Scalar,
-    public_claim: Scalar,
+    evaluation: LookupGateEvaluationV1<'_>,
 ) -> Result<[Scalar; 3], GlobalLookupErrorV1> {
+    let relation = evaluation.relation;
     Ok([
-        (z - candidate) * inverse - inverse_product,
-        lookup_relation_residual_v1(
-            z,
-            inverse,
-            inverse_product,
-            multiplicity,
-            residual,
-            alpha,
-            rho,
-            point,
-            lambda,
-            mu,
-        )?,
-        residual + masked_accumulator - public_claim,
+        (relation.z - evaluation.candidate) * relation.inverse - relation.inverse_product,
+        lookup_relation_residual_v1(relation)?,
+        relation.residual + evaluation.masked_accumulator - evaluation.public_claim,
     ])
 }
 fn mask_constraint_residuals_v1(

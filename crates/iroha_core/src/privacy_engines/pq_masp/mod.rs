@@ -25,6 +25,7 @@ pub use relation::{
     PqMaspNotePlaintextV1, PqMaspOutputWitnessV1, PqMaspRelationErrorV1, PqMaspWitnessV1,
     derive_pq_masp_note_commitment_v1, derive_pq_masp_note_encryption_keys_digest_v1,
     derive_pq_masp_nullifier_key_digest_v1, derive_pq_masp_nullifier_v1,
+    preflight_pq_masp_wallet_request_v1,
 };
 pub use wire::{
     ML_DSA_65_PUBLIC_KEY_BYTES_V1, ML_DSA_65_SIGNATURE_BYTES_V1, ML_KEM_768_CIPHERTEXT_BYTES_V1,

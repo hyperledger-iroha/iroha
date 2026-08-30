@@ -17,7 +17,7 @@ import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 
 private const val DEFAULT_REGISTRATION_TRANSACTION_TTL_MS = 100_000L
 
-/** Canonical one-instruction transaction for the ABI-21 device-attestation path. */
+/** Canonical one-instruction ABI-22 transaction for registration format V2. */
 class RegisterOfflineDeviceAttestation(
     val networkId: NetworkId,
     val authority: String,

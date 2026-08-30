@@ -11,11 +11,16 @@ use iroha_data_model::{
     privacy::{
         OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1, PrivacyConsensusLimitsV1,
         PrivacyJindoFieldElementV1, PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1,
-        PrivacyOrchardPoolBootstrapV1, PrivacyPoolIdV1, PrivacyPqMaspPoolBootstrapV1,
+        PrivacyOrchardNullifierProvenanceV1, PrivacyOrchardPoolBootstrapV1,
+        PrivacyOrchardPoolStateViewV1, PrivacyPoolIdV1, PrivacyPqMaspPoolBootstrapV1,
         PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
         PrivacyProofV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
         PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
+    },
+    query::privacy::prelude::{
+        FindPrivacyOrchardNullifierV1, FindPrivacyOrchardPoolStateV1,
+        FindPrivacyProofManagedPoolStateV1,
     },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
@@ -33,7 +38,11 @@ use crate::privacy_engines::{
         JindoPrivacyActionTransactionContextV1, JindoPrivacyActionWitnessV1,
         build_signed_privacy_action_with_rng_v1,
     },
-    orchard::{OrchardBundleDraftV1, OrchardChangeProverInputV1, Scope},
+    orchard::{
+        OrchardBundleDraftV1, OrchardChangeProverInputV1, OrchardPreparedBundleV1,
+        OrchardProvedBundleV1, Scope, append_orchard_commitments_v1,
+        orchard_singleton_output_witness_v1, recover_orchard_spend_prover_input_v1,
+    },
     vega::{
         VegaPrivacyActionTransactionContextV1, VegaPrivacyActionWitnessMaterialV1,
         build_signed_vega_privacy_action_with_rng_v1,
@@ -80,6 +89,145 @@ pub struct PrivacyReleaseOrchardNetworkActionV1 {
     /// Exact statement carried by `transaction`.
     pub statement: OrchardHalo2ActionsStatementV1,
 }
+/// Ordered funding and real-spend Orchard transitions for semantic network qualification.
+///
+/// The first transaction shields 23 public units into the governed reserve and
+/// creates a wallet note. The second consumes that exact note, returns six units as a
+/// shielded wallet-owned change output, and bridges 17 public units to a
+/// distinct receiver authority. Post-NU6.3 Orchard deliberately forbids a
+/// shielded cross-address receiver output, so the receiver leg uses the genuine
+/// governed public reserve bridge rather than relabeling sender change.
+#[derive(Clone, Debug)]
+pub struct PrivacyReleaseOrchardNetworkActionsV1 {
+    /// Must commit first and reach terminal applied state.
+    pub funding_transaction: SignedTransaction,
+    /// Must commit only after the funding transaction is finalized.
+    pub spend_transaction: SignedTransaction,
+    /// Immutable bootstrap required by both transitions.
+    pub bootstrap: PrivacyOrchardPoolBootstrapV1,
+    /// Exact statement carried by `funding_transaction`.
+    pub funding_statement: OrchardHalo2ActionsStatementV1,
+    /// Exact statement carried by `spend_transaction`.
+    pub spend_statement: OrchardHalo2ActionsStatementV1,
+    /// Exact real-note nullifier that the spend must consume.
+    pub spent_note_nullifier: [u8; 32],
+    /// Public account that receives the 17-unit reserve-bridge output.
+    pub receiver_account: AccountId,
+    /// Exact funded note value.
+    pub funded_value: u64,
+    /// Exact public receiver value.
+    pub receiver_value: u64,
+    /// Exact shielded sender-change value.
+    pub change_value: u64,
+    /// Exact root after the funding commitment and two spend commitments.
+    pub expected_final_root: [u8; 32],
+    /// Typed finalized pool-state query expected to report epoch three/tree size three.
+    pub state_query: FindPrivacyOrchardPoolStateV1,
+    /// Typed finalized replay-marker query for the consumed real-note nullifier.
+    pub nullifier_query: FindPrivacyOrchardNullifierV1,
+}
+impl PrivacyReleaseOrchardNetworkActionsV1 {
+    /// Validate the two typed finalized query results against this exact
+    /// funding/spend artifact pair.
+    ///
+    /// This binds the durable epoch-three, three-commitment pool head and the
+    /// consumed real-note nullifier to the same bootstrap, spend statement,
+    /// admission action, finalized height, and finalized block. Public asset
+    /// balance queries remain a controller responsibility; the signed spend
+    /// transaction itself fixes their expected receiver and 17-unit delta.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed query views or any artifact, pool-head, nullifier,
+    /// admission, or finality binding that differs from this exact fixture.
+    pub fn validate_finalized_post_state_v1(
+        &self,
+        pool_state: &PrivacyOrchardPoolStateViewV1,
+        nullifier: &PrivacyOrchardNullifierProvenanceV1,
+    ) -> Result<(), &'static str> {
+        pool_state.validate()?;
+        nullifier.validate()?;
+        let bootstrap_digest = self
+            .bootstrap
+            .digest()
+            .map_err(|_| "Orchard semantic bootstrap digest encoding failed")?;
+        let spend_statement_digest =
+            PrivacyStatementV1::OrchardHalo2ActionsV1(self.spend_statement.clone())
+                .digest()
+                .map_err(|_| "Orchard semantic spend statement digest encoding failed")?;
+        let expected_tree_size = u64::try_from(
+            self.funding_statement
+                .actions
+                .len()
+                .checked_add(self.spend_statement.actions.len())
+                .ok_or("Orchard semantic action count overflow")?,
+        )
+        .map_err(|_| "Orchard semantic action count does not fit u64")?;
+        let latest = pool_state
+            .latest_transition
+            .ok_or("Orchard semantic post-state has no latest transition")?;
+        let spend_nullifier_count = self
+            .spend_statement
+            .actions
+            .iter()
+            .filter(|action| action.nullifier == self.spent_note_nullifier)
+            .count();
+
+        if self.funded_value.checked_sub(self.receiver_value) != Some(self.change_value)
+            || self.funding_transaction.authority() == self.spend_transaction.authority()
+            || self.spend_transaction.authority() != &self.receiver_account
+            || self.funding_statement.context.network_id != self.spend_statement.context.network_id
+            || self.funding_statement.pool_id != self.bootstrap.pool_id
+            || self.spend_statement.pool_id != self.bootstrap.pool_id
+            || self.funding_statement.asset_definition_id != self.bootstrap.asset_definition_id
+            || self.spend_statement.asset_definition_id != self.bootstrap.asset_definition_id
+            || self.funding_statement.anchor_epoch != 1
+            || self.spend_statement.anchor_epoch != 2
+            || self.funding_statement.value_balance.direction
+                != PrivacyValueBalanceDirectionV1::IntoPool
+            || self.funding_statement.value_balance.amount != u128::from(self.funded_value)
+            || self.spend_statement.value_balance.direction
+                != PrivacyValueBalanceDirectionV1::OutOfPool
+            || self.spend_statement.value_balance.amount != u128::from(self.receiver_value)
+            || self.funding_statement.actions.len() != 1
+            || self.spend_statement.actions.len() != 2
+            || spend_nullifier_count != 1
+        {
+            return Err("Orchard semantic artifact pair violates its fixed value or action shape");
+        }
+        if pool_state.network_id != self.spend_statement.context.network_id
+            || pool_state.pool_id != self.bootstrap.pool_id
+            || pool_state.asset_definition_id != self.bootstrap.asset_definition_id
+            || pool_state.public_balance_scope != self.bootstrap.public_balance_scope
+            || pool_state.reserve_account != self.bootstrap.reserve_account
+            || pool_state.bootstrap_digest != bootstrap_digest
+            || pool_state.current_epoch != 3
+            || pool_state.current_root.as_bytes() != &self.expected_final_root
+            || pool_state.tree_size != expected_tree_size
+            || latest.successor_epoch != 3
+            || latest.parent_epoch != self.spend_statement.anchor_epoch
+            || latest.parent_root != self.spend_statement.anchor
+            || latest.statement_digest != spend_statement_digest
+        {
+            return Err("Orchard finalized pool state does not match the semantic artifact pair");
+        }
+        if nullifier.network_id != pool_state.network_id
+            || nullifier.pool_id != self.bootstrap.pool_id
+            || nullifier.nullifier != self.spent_note_nullifier
+            || nullifier.bootstrap_digest != bootstrap_digest
+            || nullifier.statement_digest != spend_statement_digest
+            || nullifier.admitted_at_height != latest.admitted_at_height
+            || nullifier.action_index != latest.action_index
+            || nullifier.finalized_height != pool_state.finalized_height
+            || nullifier.finalized_block_hash != pool_state.finalized_block_hash
+        {
+            return Err(
+                "Orchard finalized nullifier provenance does not match the semantic transition",
+            );
+        }
+        Ok(())
+    }
+}
 /// One canonical verification-only revised-Jindo action.
 #[derive(Debug)]
 pub struct PrivacyReleaseJindoNetworkActionV1 {
@@ -121,6 +269,8 @@ pub struct PrivacyReleasePqMaspNetworkActionsV1 {
     pub replay_statement: PqMaspStarkStatementV1,
     /// Exact fresh replay statement used after peer restart.
     pub post_restart_replay_statement: PqMaspStarkStatementV1,
+    /// Typed finalized pool-state query used to bind the canonical transition.
+    pub state_query: FindPrivacyProofManagedPoolStateV1,
 }
 fn network_seed_v1(master: [u8; 32], purpose: &[u8], index: u8) -> [u8; 32] {
     let mut hash = Sha256::new();
@@ -207,8 +357,12 @@ fn orchard_statement_v1(
     draft: &OrchardBundleDraftV1,
     asset_definition_id: AssetDefinitionId,
     pool_id: PrivacyPoolIdV1,
+    anchor_epoch: u64,
     expiry_height: u64,
 ) -> Result<OrchardHalo2ActionsStatementV1, PrivacyReleaseEvidenceErrorClassV1> {
+    if anchor_epoch == 0 {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
+    }
     let value_balance = match draft.value_balance.cmp(&0) {
         core::cmp::Ordering::Equal => PrivacyValueBalanceV1::balanced(),
         core::cmp::Ordering::Less => PrivacyValueBalanceV1 {
@@ -226,7 +380,7 @@ fn orchard_statement_v1(
         public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         pool_id,
         anchor: iroha_data_model::privacy::PrivacyRootV1::new(draft.anchor),
-        anchor_epoch: 1,
+        anchor_epoch,
         actions: draft
             .actions
             .iter()
@@ -378,6 +532,113 @@ pub fn build_privacy_release_vega_network_action_v1(
 /// two-phase prover and consuming authorization API.
 ///
 /// This helper exists only in the non-default release-evidence feature.
+fn finalize_orchard_network_transaction_v1(
+    transaction_context: &PrivacyReleaseTransactionContextV1,
+    pool_id: PrivacyPoolIdV1,
+    asset_definition_id: AssetDefinitionId,
+    anchor_epoch: u64,
+    expiry_height: u64,
+    prepared: OrchardPreparedBundleV1,
+    private_key: &PrivateKey,
+) -> Result<
+    (
+        SignedTransaction,
+        OrchardHalo2ActionsStatementV1,
+        OrchardProvedBundleV1,
+    ),
+    PrivacyReleaseEvidenceErrorClassV1,
+> {
+    let profile = compiled_privacy_profile_v1(
+        iroha_data_model::privacy::PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let mut statement = orchard_statement_v1(
+        statement_context_v1(transaction_context, profile),
+        prepared.public_draft(),
+        asset_definition_id,
+        pool_id,
+        anchor_epoch,
+        expiry_height,
+    )?;
+    let draft_envelope = PrivacyProofEnvelopeV1 {
+        protocol_id: profile.protocol_id,
+        proof_system_id: profile.proof_system_id,
+        engine_id: profile.engine_id,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+        statement_digest: PrivacyStatementDigestV1::new([0; 32]),
+        statement: PrivacyStatementV1::OrchardHalo2ActionsV1(statement.clone()),
+        proof: PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(Vec::new())),
+    };
+    let intent = transaction_payload_v1(transaction_context, draft_envelope)?
+        .privacy_transaction_intent_digest_v1()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    if intent.is_zero() {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    statement.context.transaction_intent_digest = intent;
+    let limits = PrivacyConsensusLimitsV1::taira_default();
+    let consensus_binding = PrivacyNativeConsensusBindingV1::new(
+        &statement.context,
+        transaction_context.genesis_hash,
+        &limits,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let proved = authorize_orchard_bundle_v1(prepared, consensus_binding, &limits)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    if proved.public.anchor != *statement.anchor.as_bytes()
+        || proved.public.actions.len() != statement.actions.len()
+        || proved
+            .public
+            .actions
+            .iter()
+            .zip(&statement.actions)
+            .any(|(native, typed)| {
+                native.nullifier != typed.nullifier
+                    || native.randomized_key != typed.randomized_key
+                    || native.note_commitment != typed.note_commitment
+                    || native.ephemeral_key != typed.ephemeral_key
+                    || native.encrypted_note.as_slice() != typed.encrypted_note.as_slice()
+                    || native.outgoing_ciphertext.as_slice() != typed.outgoing_ciphertext.as_slice()
+                    || native.value_commitment != typed.value_commitment
+            })
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let typed_statement = PrivacyStatementV1::OrchardHalo2ActionsV1(statement.clone());
+    let envelope = PrivacyProofEnvelopeV1 {
+        protocol_id: profile.protocol_id,
+        proof_system_id: profile.proof_system_id,
+        engine_id: profile.engine_id,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+        statement_digest: typed_statement
+            .digest()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
+        statement: typed_statement,
+        proof: PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(
+            proved.authorization.clone(),
+        )),
+    };
+    let payload = transaction_payload_v1(transaction_context, envelope)?;
+    if payload
+        .validate_privacy_transaction_intent_binding_v1()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+        != intent
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let transaction = signed_payload_v1(payload, intent, private_key)?;
+    Ok((transaction, statement, proved))
+}
+
+/// Build the deterministic single-transaction Orchard release fixture.
 pub fn build_privacy_release_orchard_network_action_v1(
     transaction_context: PrivacyReleaseTransactionContextV1,
     pool_id: PrivacyPoolIdV1,
@@ -414,6 +675,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
         prepared.public_draft(),
         asset_definition_id.clone(),
         pool_id,
+        1,
         expiry_height,
     )?;
     let draft_envelope = PrivacyProofEnvelopeV1 {
@@ -490,6 +752,209 @@ pub fn build_privacy_release_orchard_network_action_v1(
         transaction,
         bootstrap,
         statement,
+    })
+}
+
+/// Build the ordered Orchard funding and real-note-spend semantic fixture.
+///
+/// `funding_context.authority` supplies 23 public units to the governed reserve
+/// and receives one wallet-owned Orchard note. After that transaction is
+/// finalized, `spend_context.authority` submits the successor action, receives
+/// 17 public units from the reserve, and leaves six units in a wallet-owned
+/// internal change note. The real funded-note nullifier is returned together
+/// with typed finalized queries for both the pool transition and replay marker.
+/// The bounded canary must use a freshly bootstrapped dedicated pool and admit
+/// no intervening Orchard transition between these ordered submissions; the
+/// typed post-state validator rejects any head other than epoch three.
+///
+/// A shielded cross-address recipient output is intentionally not offered by
+/// this API: the pinned Post-NU6.3 profile uses
+/// `Flags::CROSS_ADDRESS_DISABLED`, and its two-action cap is fully occupied by
+/// the real spend plus wallet-owned change. Callers that require a shielded
+/// recipient must fail closed until a separately governed profile supports it.
+///
+/// # Errors
+///
+/// Rejects mismatched network/authority contexts, invalid pool/bootstrap
+/// fields, proof or authorization failure, intent/signature mismatch, output
+/// recovery failure, or any fixed value/action/nullifier invariant violation.
+pub fn build_privacy_release_orchard_network_actions_v1(
+    funding_context: PrivacyReleaseTransactionContextV1,
+    spend_context: PrivacyReleaseTransactionContextV1,
+    pool_id: PrivacyPoolIdV1,
+    asset_definition_id: AssetDefinitionId,
+    reserve_account: AccountId,
+    expiry_height: u64,
+    fixture_seed: [u8; 32],
+    funding_private_key: &PrivateKey,
+    spend_private_key: &PrivateKey,
+) -> Result<PrivacyReleaseOrchardNetworkActionsV1, PrivacyReleaseEvidenceErrorClassV1> {
+    if funding_context.network_id != spend_context.network_id
+        || funding_context.genesis_hash != spend_context.genesis_hash
+        || funding_context.authority == spend_context.authority
+        || funding_context.authority == reserve_account
+        || spend_context.authority == reserve_account
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
+    }
+
+    const FUNDED_VALUE: u64 = 23;
+    const RECEIVER_VALUE: u64 = 17;
+    const CHANGE_VALUE: u64 = 6;
+    if RECEIVER_VALUE.checked_add(CHANGE_VALUE) != Some(FUNDED_VALUE) {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+
+    let wallet_seed = fixture_seed[0].max(1);
+    let funding_output = OrchardChangeProverInputV1::new(
+        orchard_spending_key_v1(wallet_seed),
+        Scope::External,
+        u32::from(wallet_seed),
+        FUNDED_VALUE,
+        [wallet_seed; 512],
+    );
+    let mut funding_rng = EvidenceRng09::new(network_seed_v1(
+        fixture_seed,
+        b"orchard-semantic-funding-prepare",
+        0,
+    ));
+    let funding_prepared = prepare_orchard_bundle_v1_with_rng(
+        orchard_empty_root_v1(),
+        Vec::new(),
+        vec![funding_output],
+        1,
+        &mut funding_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let (funding_transaction, funding_statement, funding_bundle) =
+        finalize_orchard_network_transaction_v1(
+            &funding_context,
+            pool_id,
+            asset_definition_id.clone(),
+            1,
+            expiry_height,
+            funding_prepared,
+            funding_private_key,
+        )?;
+    if funding_bundle.public.anchor != orchard_empty_root_v1()
+        || funding_bundle.public.value_balance
+            != -i64::try_from(FUNDED_VALUE).expect("fixed Orchard value fits i64")
+        || funding_bundle.public.actions.len() != 1
+        || funding_statement.value_balance.direction != PrivacyValueBalanceDirectionV1::IntoPool
+        || funding_statement.value_balance.amount != u128::from(FUNDED_VALUE)
+        || funding_statement.anchor_epoch != 1
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+
+    let funded_commitment = funding_bundle.public.actions[0].note_commitment;
+    let funded_frontier =
+        append_orchard_commitments_v1(0, None, &[], orchard_empty_root_v1(), &[funded_commitment])
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let (funded_anchor, funded_authentication_path) =
+        orchard_singleton_output_witness_v1(funded_commitment)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    if funded_frontier.root != funded_anchor || funded_frontier.tree_size != 1 {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let limits = PrivacyConsensusLimitsV1::taira_default();
+    let funded_spend = recover_orchard_spend_prover_input_v1(
+        &funding_bundle,
+        &limits,
+        orchard_spending_key_v1(wallet_seed),
+        0,
+        0,
+        funded_authentication_path,
+        funded_anchor,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let spent_note_nullifier = funded_spend.nullifier_v1();
+    let change = OrchardChangeProverInputV1::new(
+        orchard_spending_key_v1(wallet_seed),
+        Scope::Internal,
+        u32::from(wallet_seed) + 1,
+        CHANGE_VALUE,
+        [wallet_seed.wrapping_add(1); 512],
+    );
+    let mut spend_rng = EvidenceRng09::new(network_seed_v1(
+        fixture_seed,
+        b"orchard-semantic-spend-prepare",
+        0,
+    ));
+    let spend_prepared = prepare_orchard_bundle_v1_with_rng(
+        funded_anchor,
+        vec![funded_spend],
+        vec![change],
+        2,
+        &mut spend_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let (spend_transaction, spend_statement, spend_bundle) =
+        finalize_orchard_network_transaction_v1(
+            &spend_context,
+            pool_id,
+            asset_definition_id.clone(),
+            2,
+            expiry_height,
+            spend_prepared,
+            spend_private_key,
+        )?;
+    let spent_nullifier_count = spend_bundle
+        .public
+        .actions
+        .iter()
+        .filter(|action| action.nullifier == spent_note_nullifier)
+        .count();
+    if spend_bundle.public.anchor != funded_anchor
+        || spend_bundle.public.value_balance
+            != i64::try_from(RECEIVER_VALUE).expect("fixed Orchard value fits i64")
+        || spend_bundle.public.actions.len() != 2
+        || spent_nullifier_count != 1
+        || spend_statement.value_balance.direction != PrivacyValueBalanceDirectionV1::OutOfPool
+        || spend_statement.value_balance.amount != u128::from(RECEIVER_VALUE)
+        || spend_statement.anchor_epoch != 2
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let spend_commitments = spend_bundle
+        .public
+        .actions
+        .iter()
+        .map(|action| action.note_commitment)
+        .collect::<Vec<_>>();
+    let final_frontier = append_orchard_commitments_v1(
+        funded_frontier.tree_size,
+        funded_frontier.leaf,
+        &funded_frontier.ommers,
+        funded_frontier.root,
+        &spend_commitments,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    if final_frontier.tree_size != 3 || final_frontier.root == funded_frontier.root {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+
+    let bootstrap = PrivacyOrchardPoolBootstrapV1::new(
+        pool_id,
+        asset_definition_id,
+        iroha_data_model::asset::AssetBalanceScope::Global,
+        reserve_account,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    Ok(PrivacyReleaseOrchardNetworkActionsV1 {
+        funding_transaction,
+        spend_transaction,
+        bootstrap,
+        funding_statement,
+        spend_statement,
+        spent_note_nullifier,
+        receiver_account: spend_context.authority,
+        funded_value: FUNDED_VALUE,
+        receiver_value: RECEIVER_VALUE,
+        change_value: CHANGE_VALUE,
+        expected_final_root: final_frontier.root,
+        state_query: FindPrivacyOrchardPoolStateV1::new(pool_id),
+        nullifier_query: FindPrivacyOrchardNullifierV1::new(pool_id, spent_note_nullifier),
     })
 }
 fn build_pq_masp_transaction_v1(
@@ -699,5 +1164,9 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
         canonical_statement,
         replay_statement,
         post_restart_replay_statement,
+        state_query: FindPrivacyProofManagedPoolStateV1::new(
+            iroha_data_model::privacy::PrivacyProtocolIdV1::PqMaspStarkV0,
+            fixture.statement.pool_id,
+        ),
     })
 }

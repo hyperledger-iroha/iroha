@@ -52,15 +52,47 @@ def test_python_ids_match_the_rust_first_release_labels() -> None:
         assert f'"{protocol_id}"' in source
 
 
-def test_python_native_action_registry_covers_all_exact_twelve_protocols() -> None:
+def test_python_native_action_registry_covers_twelve_protocols_and_thirteen_actions() -> None:
     source = (ROOT / "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs").read_text(
         encoding="utf-8"
     )
     assert (
-        "PRIVACY_NATIVE_ACTION_CAPABILITIES_V1: [PrivacyNativeActionCapabilityV1; 12]"
+        "PRIVACY_NATIVE_ACTION_CAPABILITIES_V1: [PrivacyNativeActionCapabilityV1; 13]"
     ) in source
     for protocol_id in PRIVACY_PROTOCOL_IDS_V1:
         assert f'"{protocol_id}"' in source
     assert 'operation_schema: "zk_x509_identity_presentation_v1"' in source
+    assert 'operation_schema: "zk_ams_batch_admission_action_v1"' in source
+    assert 'operation_schema: "zk_ams_provision_account_action_v1"' in source
     assert "PrivacyNativeActionRequestV1::ZkX509" in source
     assert "ZK-X509 is intentionally absent" not in source
+
+
+def test_python_exact12_receipt_bridge_is_sealed_to_typed_query_105() -> None:
+    receipt_source = (
+        ROOT
+        / "python/iroha_python/iroha_python_rs/src/privacy_action_receipt.rs"
+    ).read_text(encoding="utf-8")
+    bridge_source = (
+        ROOT / "python/iroha_python/iroha_python_rs/src/lib.rs"
+    ).read_text(encoding="utf-8")
+    client_source = (
+        ROOT / "python/iroha_python/src/iroha_python/client.py"
+    ).read_text(encoding="utf-8")
+
+    for marker in (
+        "FindPrivacyActionExecutionReceiptV1::new(",
+        "sign_query_request_with_signer(",
+        "PrivacyActionExecutionReceiptViewV1(",
+        "receipt.validate()",
+        "receipt.network_id != *network_id.as_inner()",
+        "receipt.transaction_hash != *expected_transaction_hash.as_ref()",
+        "receipt.proof_envelope_hash != expected_envelope",
+    ):
+        assert marker in receipt_source
+    assert "mod privacy_action_receipt;" in bridge_source
+    assert "privacy_action_receipt::build_query_with_signer" in bridge_source
+    assert "privacy_action_receipt::inspect_response" in bridge_source
+    assert '"/v1/query"' in client_source
+    assert "canonical_auth.signer" in client_source
+    assert "get_privacy_action_execution_receipt_v1" in client_source

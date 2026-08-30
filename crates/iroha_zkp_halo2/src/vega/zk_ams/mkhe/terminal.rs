@@ -23,6 +23,7 @@ use super::{
         ZkAmsPhase23SparseMapV1, validate_materialized_accumulators_v1, validate_sparse_map_v1,
         zk_ams_phase23_release_relation_v1,
     },
+    rns_native_receipt_consumers::ZkAmsMkheRnsNativeTerminalMaterializationUseV1,
 };
 use crate::vega::{
     VegaPointWireV1, VegaScalarWireV1,
@@ -758,9 +759,14 @@ pub fn prove_zk_ams_phase3_terminal_v1(
     context: ZkAmsPhase3TerminalContextV1,
     governed_batch: &ZkAmsPhase3GovernedBatchV1,
     fold_history: &ZkAmsPhase3FoldHistoryV1,
+    rns_link_use: ZkAmsMkheRnsNativeTerminalMaterializationUseV1,
     materialized: ZkAmsPhase23MaterializedAccumulatorsV1,
 ) -> Result<ZkAmsPhase3TerminalProverOutputV1, ZkAmsMkheErrorV1> {
     super::require_release_ready_v1()?;
+    // Consume the exact RNS-Link materialization capability before any
+    // terminal witness is opened or proof work begins. The private inner
+    // helper remains available only to this module's reference tests.
+    rns_link_use.consume_for_terminal_materialization_v1(context, &materialized)?;
     prove_terminal_inner(
         proof_context,
         context,
@@ -944,7 +950,7 @@ pub(super) fn validate_terminal_context(
     }
     Ok(())
 }
-fn terminal_composition_context_frame(
+pub(super) fn terminal_composition_context_frame(
     proof_context: &super::super::ZkAmsProofContextV1<'_>,
     context: ZkAmsPhase3TerminalContextV1,
     governed_batch: &ZkAmsPhase3GovernedBatchV1,
@@ -2270,17 +2276,26 @@ mod tests {
         );
         assert!(!implementation.release_kat_complete);
         assert_eq!(implementation.release_kat_digest, [0; 32]);
-        // Public release entrypoints cannot bypass the common readiness gate.
-        assert_eq!(
-            prove_zk_ams_phase3_terminal_v1(
-                &fixture.proof_context,
-                fixture.context,
-                &fixture.governed,
-                &fixture.history,
-                fixture.materialized.clone(),
-            ),
-            Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
-        );
+        // The public prover requires an unforgeable move-only RNS receipt use.
+        // Source-order coverage below proves that the common readiness gate
+        // remains first; no test-only constructor is exposed to bypass the
+        // receipt boundary merely to exercise the unavailable result.
+        let source = include_str!("terminal.rs");
+        let public_prover = source
+            .split("pub fn prove_zk_ams_phase3_terminal_v1")
+            .nth(1)
+            .and_then(|tail| tail.split("pub fn verify_zk_ams_phase3_terminal_v1").next())
+            .expect("public terminal prover source");
+        let readiness = public_prover
+            .find("super::require_release_ready_v1()?")
+            .expect("readiness gate");
+        let receipt_use = public_prover
+            .find("rns_link_use.consume_for_terminal_materialization_v1")
+            .expect("receipt consumption");
+        let proof = public_prover
+            .find("prove_terminal_inner(")
+            .expect("terminal proof call");
+        assert!(readiness < receipt_use && receipt_use < proof);
         assert_eq!(
             verify_zk_ams_phase3_terminal_v1(
                 &fixture.proof_context,

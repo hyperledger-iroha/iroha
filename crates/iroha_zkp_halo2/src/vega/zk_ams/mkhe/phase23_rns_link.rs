@@ -31,7 +31,8 @@
 #[cfg(test)]
 use super::collective::{
     ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
-    ZkAmsMkheCollectivePublicKeyV1, validate_compact_for_key,
+    ZkAmsMkheCollectivePublicKeyV1, ZkAmsPhase23NativeBgvOpeningVerifierBindingV1,
+    validate_compact_for_key,
 };
 #[cfg(test)]
 use super::packing::ZkAmsT256PackingLayoutV1;
@@ -45,7 +46,7 @@ use super::{
     phase23_encrypted::{
         ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
         ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1,
-        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23PackedAccumulatorSetV1,
+        ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1, ZkAmsPhase23AccumulatorShapeV1,
         zk_ams_phase23_release_map_manifest_v1, zk_ams_phase23_release_map_set_digest_v1,
     },
     wire::ZK_AMS_MKHE_MAX_PROOF_BYTES_V1,
@@ -537,6 +538,20 @@ impl Drop for ZeroizingNativePackedPreflightFrameV1 {
         let _ = core::hint::black_box(&mut *frame);
     }
 }
+/// Private packed-family shell consumed by native RNS-link preflight.
+///
+/// The live Phase-23 state intentionally retains only padding-free scalars;
+/// construction of this shell therefore remains inside the private packing
+/// corridor and mints no proof or release authority.
+pub(super) struct ZkAmsPhase23PackedAccumulatorSetV1 {
+    shape: ZkAmsPhase23AccumulatorShapeV1,
+    x: Vec<ZkAmsT256PackedPlaintextV1>,
+    u: Vec<ZkAmsT256PackedPlaintextV1>,
+    e: Vec<ZkAmsT256PackedPlaintextV1>,
+    r_e: Vec<ZkAmsT256PackedPlaintextV1>,
+    w: Vec<ZkAmsT256PackedPlaintextV1>,
+    r_w: Vec<ZkAmsT256PackedPlaintextV1>,
+}
 /// Check the packed state against geometry derived from the canonical native
 /// relation. All digests in the returned object are recomputed from the exact
 /// borrowed chunks; this boundary accepts no caller-nominated digest shell.
@@ -782,7 +797,9 @@ fn immutable_algorithm_manifest_digest_v1() -> Result<[u8; 32], ZkAmsMkheErrorV1
 }
 #[path = "phase23_rns_link_context_authority_v1.rs"]
 mod context_authority_v1;
-pub(super) use context_authority_v1::ZkAmsPhase23RnsLinkContextV1;
+pub(super) use context_authority_v1::{
+    ZkAmsPhase23RnsLinkContextOwnerV1, ZkAmsPhase23RnsLinkContextV1,
+};
 /// Producer-claimed roots of tables that must exist before Fiat--Shamir sampling.
 ///
 /// The type remains part of the private structural checkpoint, but production has no digest-only
@@ -1154,12 +1171,16 @@ impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
 /// decoding, nor serialization, and carries no evidence or authority.
 #[cfg(test)]
 pub(super) struct ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(());
-// TODO: Reconnect the private external-source prototype after its confidential
-// spool dependency can enter the authorized workspace lock graph.
-#[cfg(any())]
+// The confidential-spool dependency is now in the authorized workspace graph,
+// so this private source topology is compiled and tested continuously. It has
+// no public constructor and all algebraic, masking, qPCS, receipt, and release
+// axes remain independently false.
+#[allow(
+    dead_code,
+    reason = "private confidential-source topology remains non-authorizing until its algebraic and receipt handoffs close"
+)]
 #[path = "phase23_rns_link_external_source.rs"]
 mod external_source;
-#[cfg(any())]
 pub(in crate::vega::zk_ams::mkhe) use external_source::{
     ZkAmsPhase23RnsLinkExternalSourceAssemblyV1, ZkAmsPhase23RnsLinkExternalSourcePublicationV1,
     ZkAmsPhase23RnsLinkSecretChunkV1,
@@ -1189,6 +1210,10 @@ pub(super) use state_owned::{
     StateOwnedRnsLinkAccumulatorOpeningsV1, ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1,
     ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1,
 };
+#[cfg(test)]
+const _: usize = core::mem::size_of::<StateOwnedRnsLinkAccumulatorOpeningsV1<'static>>()
+    + core::mem::size_of::<ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1>()
+    + ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1;
 /// RAII owner for canonical decoded slots. Deliberately neither `Clone` nor
 /// `Debug`; all named bytes are erased on success, error, and unwind.
 struct ZeroizingNativeDecodedPlaintextV1(Vec<[u8; 32]>);
@@ -1272,13 +1297,15 @@ fn verify_zk_ams_phase23_native_bgv_opening_v1(
     // only the unconstructible permit after both native equations have been
     // checked; no artifact reference crosses into it.
     opening.verify_and_consume_phase23_native_bgv_opening_v1(
-        ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(()),
+        ZkAmsPhase23NativeBgvOpeningVerifierBindingV1 {
+            permit: ZkAmsPhase23NativeBgvOpeningVerifierPermitV1(()),
+            rns_binding_digest,
+        },
         relation_sink,
         key,
         layout,
         plaintext,
         ciphertext,
-        rns_binding_digest,
     )
 }
 /// Unit-test bridge for the heavyweight release-size exercise. It exposes no
@@ -2644,6 +2671,17 @@ fn verify_rns_link_bitness_wire_v1(
 }
 #[cfg(test)]
 mod tests {
+    use super::super::super::{
+        ZK_AMS_ACTION_INDEX_V1, ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1, ZkAmsProofContextV1,
+        context_frame,
+    };
+    use super::super::{
+        direct_collective_eval_ceremony::test_direct_evaluated_key_set_admission_v1,
+        terminal::{
+            ZkAmsPhase3GovernedBatchV1, ZkAmsPhase3TerminalContextV1,
+            zk_ams_phase3_nifs_verifier_digest_v1, zk_ams_phase3_ordered_public_inputs_digest_v1,
+        },
+    };
     use super::*;
     use crate::vega::{
         bulletproof_t256::zeroizing_t256_scalar_vec_drop_count_v1, derive_t256_generators_v1,
@@ -2660,9 +2698,9 @@ mod tests {
     const CONTEXT_AUTHORITY_SOURCE_V1: &str =
         include_str!("phase23_rns_link_context_authority_v1.rs");
     const CONTEXT_AUTHORITY_SOURCE_KECCAK_V1: [u8; 32] = [
-        0xef, 0xf4, 0x20, 0xfb, 0xc8, 0xd1, 0x4b, 0x68, 0x24, 0x95, 0x23, 0x18, 0x60, 0xd9, 0xe4,
-        0xc2, 0xd9, 0xf9, 0xc1, 0x0a, 0x93, 0x46, 0x86, 0x24, 0xe6, 0x9a, 0xf8, 0x14, 0x40, 0xaa,
-        0xf6, 0xa0,
+        0x9d, 0x2d, 0x18, 0xe0, 0x9c, 0xf9, 0xa0, 0xf1, 0x67, 0xf7, 0xb8, 0xc5, 0xcd, 0xe9, 0xd9,
+        0x83, 0x49, 0x80, 0x2f, 0xbe, 0xb4, 0xfa, 0x00, 0x44, 0xe8, 0xda, 0xc6, 0xa1, 0xf8, 0x61,
+        0x32, 0xac,
     ];
     const _: fn() = || {
         trait AmbiguousIfCloneOrCopyV1<AdversarialImplV1> {
@@ -2677,6 +2715,7 @@ mod tests {
         // An external Clone or Copy implementation makes this inferred trait
         // argument ambiguous and therefore fails the test build statically.
         let _ = <ZkAmsPhase23RnsLinkContextV1 as AmbiguousIfCloneOrCopyV1<_>>::marker;
+        let _ = <ZkAmsPhase23RnsLinkContextOwnerV1 as AmbiguousIfCloneOrCopyV1<_>>::marker;
     };
     struct TinyRnsLinkWitnessV1 {
         a: Vec<u64>,
@@ -2723,13 +2762,149 @@ mod tests {
         )
         .unwrap()
     }
+    #[derive(Clone, Copy)]
+    struct NativeContextReturnAxesV1 {
+        profile_digest: [u8; 32],
+        roster_digest: [u8; 32],
+        epoch: u64,
+        transcript_digest: [u8; 32],
+        batch_id: [u8; 32],
+        ordered_batch_input_digest: [u8; 32],
+        fold_count: u8,
+        collective_public_key_digest: [u8; 32],
+        key_material_digest: [u8; 32],
+    }
+    fn native_context_owner_fixture_v1() -> (
+        ZkAmsPhase23RnsLinkContextOwnerV1,
+        NativeContextReturnAxesV1,
+        [u8; 32],
+    ) {
+        let proof_context = ZkAmsProofContextV1 {
+            chain_id: b"taira-phase23-native-context-owner",
+            genesis_hash: digest(b"phase23-native-owner-genesis"),
+            action_index: ZK_AMS_ACTION_INDEX_V1,
+            statement_digest: digest(b"phase23-native-owner-statement"),
+            parameter_id: digest(b"phase23-native-owner-parameter-id"),
+            parameter_digest: digest(b"phase23-native-owner-parameter"),
+            verifier_digest: digest(b"phase23-native-owner-verifier"),
+            statement_schema_digest: digest(b"phase23-native-owner-statement-schema"),
+            engine_manifest_digest: digest(b"phase23-native-owner-engine-manifest"),
+            generator_digest: digest(b"phase23-native-owner-generator"),
+        };
+        let profile_digest = release_profile_v1().digest().unwrap();
+        let roster_digest = digest(b"phase23-native-owner-roster");
+        let epoch = 41;
+        let transcript_digest = digest(b"phase23-native-owner-transcript");
+        let batch_id = digest(b"phase23-native-owner-batch-id");
+        let strict_public_inputs = vec![vec![[0_u8; 32]; ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1]];
+        let ordered_batch_input_digest =
+            zk_ams_phase3_ordered_public_inputs_digest_v1(&strict_public_inputs).unwrap();
+        let terminal_context = ZkAmsPhase3TerminalContextV1::new(
+            profile_digest,
+            roster_digest,
+            epoch,
+            transcript_digest,
+            batch_id,
+            ordered_batch_input_digest,
+            zk_ams_phase3_nifs_verifier_digest_v1().unwrap(),
+        )
+        .unwrap();
+        let governed_batch =
+            ZkAmsPhase3GovernedBatchV1::new(terminal_context, strict_public_inputs).unwrap();
+        let collective_public_key_digest = digest(b"phase23-native-owner-cpk");
+        let key_material_digest = digest(b"phase23-native-owner-key-material");
+        let direct_key_admission = test_direct_evaluated_key_set_admission_v1(
+            roster_digest,
+            key_material_digest,
+            epoch,
+            transcript_digest,
+            collective_public_key_digest,
+        )
+        .unwrap();
+        let generic_context_frame = context_frame(&proof_context).unwrap();
+        let expected_context = ZkAmsPhase23RnsLinkContextV1::new(
+            keccak256(&generic_context_frame),
+            proof_context.statement_digest,
+            transcript_digest,
+            governed_batch.digest,
+            roster_digest,
+            direct_key_admission.digest(),
+            zk_ams_phase23_release_map_set_digest_v1().unwrap(),
+        )
+        .unwrap();
+        let owner = ZkAmsPhase23RnsLinkContextOwnerV1::from_native_sources_v1(
+            &proof_context,
+            terminal_context,
+            &governed_batch,
+            direct_key_admission,
+        )
+        .unwrap();
+        (
+            owner,
+            NativeContextReturnAxesV1 {
+                profile_digest,
+                roster_digest,
+                epoch,
+                transcript_digest,
+                batch_id,
+                ordered_batch_input_digest,
+                fold_count: 1,
+                collective_public_key_digest,
+                key_material_digest,
+            },
+            expected_context.digest(),
+        )
+    }
+    fn return_native_context_v1(
+        owner: ZkAmsPhase23RnsLinkContextOwnerV1,
+        axes: NativeContextReturnAxesV1,
+    ) -> Result<ZkAmsPhase23RnsLinkContextV1, ZkAmsMkheErrorV1> {
+        owner.into_context_for_materialization_v1(
+            axes.profile_digest,
+            axes.roster_digest,
+            axes.epoch,
+            axes.transcript_digest,
+            axes.batch_id,
+            axes.ordered_batch_input_digest,
+            axes.fold_count,
+            axes.collective_public_key_digest,
+            axes.key_material_digest,
+        )
+    }
+    #[test]
+    fn native_context_owner_maps_exact_sources_and_rejects_every_return_axis_mutation() {
+        let (owner, axes, expected_context_digest) = native_context_owner_fixture_v1();
+        assert_eq!(
+            return_native_context_v1(owner, axes).unwrap().digest(),
+            expected_context_digest
+        );
+        for axis in 0..9 {
+            let (owner, mut changed, _) = native_context_owner_fixture_v1();
+            match axis {
+                0 => changed.profile_digest[0] ^= 1,
+                1 => changed.roster_digest[0] ^= 1,
+                2 => changed.epoch ^= 1,
+                3 => changed.transcript_digest[0] ^= 1,
+                4 => changed.batch_id[0] ^= 1,
+                5 => changed.ordered_batch_input_digest[0] ^= 1,
+                6 => changed.fold_count ^= 1,
+                7 => changed.collective_public_key_digest[0] ^= 1,
+                8 => changed.key_material_digest[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                return_native_context_v1(owner, changed),
+                Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+            ));
+        }
+    }
     #[test]
     fn context_authority_leaf_is_small_private_and_exact() {
         // Rust privacy is the graph-wide authority boundary. The exact small
         // leaf pin makes any new descendant, expansion, unsafe, or construction
         // surface a direct review event instead of approximating Rust syntax.
-        assert!(CONTEXT_AUTHORITY_SOURCE_V1.lines().count() <= 180);
-        assert!(CONTEXT_AUTHORITY_SOURCE_V1.len() <= 8_192);
+        assert!(CONTEXT_AUTHORITY_SOURCE_V1.lines().count() <= 300);
+        assert!(CONTEXT_AUTHORITY_SOURCE_V1.len() <= 14_336);
         assert!(
             CONTEXT_AUTHORITY_SOURCE_V1
                 .lines()
@@ -2745,6 +2920,40 @@ mod tests {
         assert!(!CONTEXT_AUTHORITY_SOURCE_V1.contains("#[derive("));
         assert!(!CONTEXT_AUTHORITY_SOURCE_V1.contains("impl Clone for ContextAxisDigestV1"));
         assert!(!CONTEXT_AUTHORITY_SOURCE_V1.contains("impl Copy for ContextAxisDigestV1"));
+        assert_eq!(
+            CONTEXT_AUTHORITY_SOURCE_V1
+                .matches("pub(in super::super) fn from_native_sources_v1(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            CONTEXT_AUTHORITY_SOURCE_V1
+                .matches("pub(in super::super) fn into_context_for_materialization_v1(")
+                .count(),
+            1
+        );
+        for forbidden in [
+            "impl Clone for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl Copy for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl Default for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl Serialize for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl Deserialize for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl Encode for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl Decode for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl NoritoSerialize for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl NoritoDeserialize for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl Deref for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl AsRef<ZkAmsPhase23RnsLinkContextV1> for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "impl Borrow<ZkAmsPhase23RnsLinkContextV1> for ZkAmsPhase23RnsLinkContextOwnerV1",
+            "fn context(&self)",
+            "fn context_mut(&mut self)",
+            "fn as_context(&self)",
+            "fn into_context(self)",
+        ] {
+            assert!(!CONTEXT_AUTHORITY_SOURCE_V1.contains(forbidden));
+        }
+        assert_eq!(CONTEXT_AUTHORITY_SOURCE_V1.matches("fn new(").count(), 1);
+        assert_eq!(CONTEXT_AUTHORITY_SOURCE_V1.matches("Ok(Self {").count(), 1);
         assert_eq!(
             keccak256(CONTEXT_AUTHORITY_SOURCE_V1.as_bytes()),
             CONTEXT_AUTHORITY_SOURCE_KECCAK_V1

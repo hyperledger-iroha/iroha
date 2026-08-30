@@ -24,7 +24,7 @@ use crate::vega::{VEGA_T256_SCALAR_MODULUS_BE_V1, sponge::Keccak256};
 use core::convert::Infallible;
 #[cfg(test)]
 use core::sync::atomic::{AtomicUsize, Ordering};
-use iroha_confidential_spool::{
+use iroha_crypto::confidential_spool::{
     ConfidentialSpoolChunkV1, ConfidentialSpoolLayoutV1, ConfidentialSpoolSnapshotV1,
     ConfidentialSpoolWriterV1,
 };
@@ -639,18 +639,15 @@ fn radix_coefficient_witness_v2(
         extract_radix_digits_v2(&RADIX_CENTERING_THRESHOLD_BE_V2, &mut threshold_low);
     let mut prior_borrow = RadixSecretCopyV2::new(0_u16);
     let mut invalid = RadixSecretCopyV2::new(u16::from(u8::from(*threshold_top.as_ref_v2() != 0)));
-    for limb in 0..RADIX_LOW_LIMBS_V2 {
-        let right = RadixSecretCopyV2::new(threshold_low[limb] + *prior_borrow.as_ref_v2());
-        let borrow = RadixSecretCopyV2::new(u16::from(u8::from(
-            witness.d_low[limb] < *right.as_ref_v2(),
-        )));
+    for (limb, (&threshold, &digit)) in threshold_low.iter().zip(&witness.d_low).enumerate() {
+        let right = RadixSecretCopyV2::new(threshold + *prior_borrow.as_ref_v2());
+        let borrow = RadixSecretCopyV2::new(u16::from(u8::from(digit < *right.as_ref_v2())));
         let delta = RadixSecretCopyV2::new(
-            witness.d_low[limb] + RADIX_BASE_V2 * *borrow.as_ref_v2() - *right.as_ref_v2(),
+            digit + RADIX_BASE_V2 * *borrow.as_ref_v2() - *right.as_ref_v2(),
         );
         invalid.or_assign_v2(u16::from(u8::from(*delta.as_ref_v2() >= RADIX_BASE_V2)));
         invalid.or_assign_v2(u16::from(u8::from(
-            witness.d_low[limb] + RADIX_BASE_V2 * *borrow.as_ref_v2()
-                != *right.as_ref_v2() + *delta.as_ref_v2(),
+            digit + RADIX_BASE_V2 * *borrow.as_ref_v2() != *right.as_ref_v2() + *delta.as_ref_v2(),
         )));
         witness.beta[limb] = *borrow.as_ref_v2() as u8;
         prior_borrow.replace_v2(*borrow.as_ref_v2());
@@ -1173,7 +1170,9 @@ fn require_nonzero_radix_digest_v2(digest: [u8; 32]) -> Result<[u8; 32], ZkAmsMk
         .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)
 }
 
-fn map_spool_error_v2(_: iroha_confidential_spool::ConfidentialSpoolErrorV1) -> ZkAmsMkheErrorV1 {
+fn map_spool_error_v2(
+    _: iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1,
+) -> ZkAmsMkheErrorV1 {
     ZkAmsMkheErrorV1::InvalidPhase23Fold
 }
 

@@ -63,8 +63,12 @@ public sealed class TransactionBuilder
     /// </summary>
     internal static void RequireExact12CapabilityAdmission(
         PrivacyExact12CapabilityTupleAdmissionV1 admission,
-        PrivacyProtocolIdV1 protocol) =>
-        PrivacyExact12CapabilityAdmissionV1.RequireForConstruction(admission, protocol);
+        PrivacyProtocolIdV1 protocol,
+        PrivacyOperationSchemaV1 operationSchema) =>
+        PrivacyExact12CapabilityAdmissionV1.RequireForConstruction(
+            admission,
+            protocol,
+            operationSchema);
 
     public TransactionBuilder AddInstruction(TransactionInstruction instruction)
     {

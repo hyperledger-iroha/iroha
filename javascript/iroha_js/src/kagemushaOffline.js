@@ -9,6 +9,8 @@ export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 22;
 export const KAGEMUSHA_MANIFEST_VERSION = 4;
 export const KAGEMUSHA_MAX_HOPS = 8;
 export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1";
+export const KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY =
+  "cash_handoff_eligibility_v1";
 export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 512 * 1024;
 export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES = 48 * 1024 * 1024;
 
@@ -19,6 +21,7 @@ const EXACT_JSON_MEDIA_TYPE =
 const OFFLINE_STATUS_FIELDS = Object.freeze([
   "mandatory",
   "cash_handoff_capability",
+  "eligibility_cash_handoff_capability",
   "required_bridge_abi_version",
   "max_hops",
   "ready",
@@ -108,6 +111,16 @@ export function normalizeOfflineStatus(payload) {
     );
   }
   if (
+    exactString(
+      item.eligibility_cash_handoff_capability,
+      `${context}.eligibility_cash_handoff_capability`,
+    ) !== KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY
+  ) {
+    throw new TypeError(
+      `${context}.eligibility_cash_handoff_capability must be ${KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY}`,
+    );
+  }
+  if (
     safeUnsigned(item.required_bridge_abi_version, `${context}.required_bridge_abi_version`, {
       positive: true,
       maximum: 0xffff_ffff,
@@ -135,6 +148,8 @@ export function normalizeOfflineStatus(payload) {
   return Object.freeze({
     mandatory: false,
     cash_handoff_capability: KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
+    eligibility_cash_handoff_capability:
+      KAGEMUSHA_ELIGIBILITY_CASH_HANDOFF_CAPABILITY,
     required_bridge_abi_version: KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
     max_hops: KAGEMUSHA_MAX_HOPS,
     ready: true,

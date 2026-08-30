@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="kagemusha_managed_device_admin_label" translatable="false">Kagemusha managed-device key service</string>
+    <string name="kagemusha_managed_device_admin_description" translatable="false">Allows an explicitly provisioned device or profile owner to create StrongBox device-property attestations on Android 9 through 11.</string>
+</resources>

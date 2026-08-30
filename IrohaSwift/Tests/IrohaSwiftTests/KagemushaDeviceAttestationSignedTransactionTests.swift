@@ -227,6 +227,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
             androidSigningCertificateSha256: Data(
                 SHA256.hash(data: Data("signed-transaction-test-certificate".utf8))
             ),
+            androidAttestedDeviceProperties: try Self.androidProperties(),
             publicKey: deviceKey,
             assertionScheme: KagemushaDeviceAttestation.androidKeyMintAssertionScheme,
             assertionKeyAlgorithm:
@@ -237,6 +238,26 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
             recentBlockHeight: 77,
             recentBlockHash: IrohaHash.hash(Data("signed-transaction-test-block".utf8)),
             expiresAtMs: 2_000_000_000_000
+        )
+    }
+
+    private static func androidProperties() throws
+        -> OfflineAndroidAttestedDevicePropertiesV2 {
+        try OfflineAndroidAttestedDevicePropertiesV2(
+            attestationVersion: 300,
+            keymintVersion: 300,
+            securityLevel: .strongBox,
+            brand: "google",
+            device: "husky",
+            product: "husky",
+            manufacturer: "Google",
+            model: "Pixel 8 Pro",
+            osVersion: 140_000,
+            osPatchLevel: 202_608,
+            vendorPatchLevel: 20_260_805,
+            bootPatchLevel: 20_260_801,
+            verifiedBootKey: Data(repeating: 0x42, count: 32),
+            verifiedBootHash: Data(repeating: 0x24, count: 32)
         )
     }
 

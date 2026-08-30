@@ -1368,6 +1368,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             keyId: resolvedKeyID,
             deviceId: deviceID,
             accountId: accountID,
+            androidAttestedDeviceProperties: nil,
             publicKey: deviceAuthorityKey,
             assertionScheme: KagemushaDeviceAttestation.iosAppAttestAssertionScheme,
             assertionKeyAlgorithm:

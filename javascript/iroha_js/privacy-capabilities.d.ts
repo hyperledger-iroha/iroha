@@ -218,7 +218,8 @@ export type PrivacyOperationSchemaV1 =
   | "zk_ace_authorization_action_v1"
   | "anonymous_pgc_payment_action_v1"
   | "verange_range_proof_v1"
-  | "zk_ams_admission_and_provisioning_v1"
+  | "zk_ams_batch_admission_action_v1"
+  | "zk_ams_provision_account_action_v1"
   | "vega_credential_presentation_v1"
   | "zk_x509_identity_presentation_v1"
   | "jindo_polynomial_evaluation_v1"
@@ -254,9 +255,15 @@ export type PrivacyCapabilityLimitationV1 = Readonly<{
   detail: null;
 }>;
 export interface PrivacyExact12CapabilityRowV1 extends PrivacyCapabilityRowV1 {
-  readonly operation_schema: Readonly<{
-    operation_schema: PrivacyOperationSchemaV1;
-    value: null;
+  readonly operation_schemas: Readonly<{
+    primary: Readonly<{
+      operation_schema: PrivacyOperationSchemaV1;
+      value: null;
+    }>;
+    secondary: Readonly<{
+      operation_schema: PrivacyOperationSchemaV1;
+      value: null;
+    }> | null;
   }>;
   readonly execution_mode: Readonly<{
     execution_mode: PrivacyExecutionModeV1;
@@ -283,7 +290,7 @@ export interface PrivacyExact12CapabilityAdmissionV1 {
   readonly manifest_digest: PrivacyFixed32BytesV1;
   readonly committed_height: PrivacyU64V1;
   readonly protocol_id: PrivacyProtocolIdV1;
-  readonly operation_schema: PrivacyOperationSchemaV1;
+  readonly operation_schemas: readonly PrivacyOperationSchemaV1[];
   readonly execution_mode: PrivacyExecutionModeV1;
   readonly privacy_feature_mask: number;
   readonly readiness: "available" | "available-experimental";

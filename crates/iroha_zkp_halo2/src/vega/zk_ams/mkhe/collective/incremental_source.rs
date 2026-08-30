@@ -1043,6 +1043,326 @@ fn add_scaled_error_and_message_in_place_v1(
     Ok(())
 }
 // END PRIVATE INCREMENTAL COLLECTIVE ENCRYPTION PREREQUISITE V1
+const STREAMING_NATIVE_BGV_OPENING_EQUATION_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.streaming-native-bgv-opening-equations";
+const STREAMING_NATIVE_BGV_OPENING_RECEIPT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.streaming-native-bgv-opening-receipt";
+const STREAMING_NATIVE_BGV_OPENING_EQUATION_COUNT_V1: usize =
+    COLLECTIVE_RNS_COMPONENT_COUNT_V1 * STREAMING_COLLECTIVE_RNS_LIMBS_V1;
+const _: () = assert!(STREAMING_NATIVE_BGV_OPENING_EQUATION_COUNT_V1 == 76);
+
+/// Public axes of one native BGV equation whose exact result was published and read back.
+struct StreamingNativeBgvPublishedEquationAxesV1<'a> {
+    component: CollectiveRnsComponentV1,
+    limb: usize,
+    modulus: u64,
+    source_kind: ZkAmsMkheDirectObjectKindV1,
+    source_pointer: ZkAmsMkheDirectObjectPointerV1,
+    source_prepass: &'a ZkAmsMkheDirectObjectReadReceiptV1,
+    source_second_pass: &'a ZkAmsMkheDirectObjectReadReceiptV1,
+    output_kind: ZkAmsMkheDirectObjectKindV1,
+    output_publication: &'a ZkAmsMkheDirectObjectPublicationReceiptV1,
+}
+
+fn streaming_native_bgv_opening_equation_hash_v1(
+    profile_digest: [u8; 32],
+    key_digest: [u8; 32],
+    key_authority_digest: [u8; 32],
+    topology: CollectiveEncryptionInputTopologyV1,
+    sample_index: u64,
+    transcript_digest: [u8; 32],
+    equation_count: usize,
+) -> Result<Keccak256, ZkAmsMkheErrorV1> {
+    if [
+        profile_digest,
+        key_digest,
+        key_authority_digest,
+        topology.layout_digest,
+        transcript_digest,
+    ]
+    .contains(&[0; 32])
+        || topology.plaintext_used_slots == 0
+        || equation_count == 0
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    let mut hash = Keccak256::new();
+    hash.update(STREAMING_NATIVE_BGV_OPENING_EQUATION_DOMAIN_V1);
+    hash.update(&[MKHE_VERSION_V1]);
+    hash.update(&profile_digest);
+    hash.update(&key_digest);
+    hash.update(&key_authority_digest);
+    hash.update(&topology.layout_digest);
+    hash.update(&topology.plaintext_chunk_index.to_be_bytes());
+    hash.update(&topology.plaintext_used_slots.to_be_bytes());
+    hash.update(&sample_index.to_be_bytes());
+    hash.update(&transcript_digest);
+    hash.update(
+        &u16::try_from(equation_count)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            .to_be_bytes(),
+    );
+    Ok(hash)
+}
+
+fn absorb_streaming_native_bgv_published_equation_v1(
+    hash: &mut Keccak256,
+    axes: StreamingNativeBgvPublishedEquationAxesV1<'_>,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    let (expected_source_kind, expected_output_kind) = match axes.component {
+        CollectiveRnsComponentV1::First => (
+            ZkAmsMkheDirectObjectKindV1::CollectivePublicB,
+            ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC0,
+        ),
+        CollectiveRnsComponentV1::Second => (
+            ZkAmsMkheDirectObjectKindV1::CollectivePublicA,
+            ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC1,
+        ),
+    };
+    if axes.source_kind != expected_source_kind
+        || axes.output_kind != expected_output_kind
+        || axes.source_pointer.kind() != expected_source_kind
+        || axes.source_prepass.snapshot().pointer() != axes.source_pointer
+        || axes.source_second_pass.snapshot().pointer() != axes.source_pointer
+        || axes.source_prepass.receipt_digest() == [0; 32]
+        || axes.source_prepass.receipt_digest() != axes.source_second_pass.receipt_digest()
+        || axes.output_publication.pointer().kind() != expected_output_kind
+        || axes.output_publication.receipt_digest() == [0; 32]
+        || axes
+            .output_publication
+            .post_publish_read_receipt()
+            .snapshot()
+            .pointer()
+            != axes.output_publication.pointer()
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    hash.update(&[u8::try_from(axes.component.ordinal())
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?]);
+    hash.update(
+        &u16::try_from(axes.limb)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            .to_be_bytes(),
+    );
+    hash.update(&axes.modulus.to_be_bytes());
+    hash.update(&[axes.source_kind as u8]);
+    hash.update(&axes.source_pointer.pointer_digest());
+    hash.update(&axes.source_prepass.receipt_digest());
+    hash.update(&axes.source_second_pass.receipt_digest());
+    hash.update(&[axes.output_kind as u8]);
+    hash.update(&axes.output_publication.pointer().pointer_digest());
+    hash.update(&axes.output_publication.receipt_digest());
+    hash.update(
+        &axes
+            .output_publication
+            .post_publish_read_receipt()
+            .receipt_digest(),
+    );
+    Ok(())
+}
+
+/// Poison-compatible transcript of all native equations whose exact outputs reached immutable
+/// storage. This is deliberately neither cloneable nor serializable.
+struct StreamingNativeBgvOpeningEquationAuditV1 {
+    hash: Keccak256,
+    limb_count: usize,
+    next_component: usize,
+    next_limb: usize,
+    equation_count: usize,
+    profile_digest: [u8; 32],
+    key_digest: [u8; 32],
+    key_authority_digest: [u8; 32],
+    topology: CollectiveEncryptionInputTopologyV1,
+    sample_index: u64,
+    transcript_digest: [u8; 32],
+}
+
+impl StreamingNativeBgvOpeningEquationAuditV1 {
+    fn new_v1(
+        profile_digest: [u8; 32],
+        key_digest: [u8; 32],
+        key_authority_digest: [u8; 32],
+        topology: CollectiveEncryptionInputTopologyV1,
+        sample_index: u64,
+        transcript_digest: [u8; 32],
+        limb_count: usize,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        let equation_count = COLLECTIVE_RNS_COMPONENT_COUNT_V1
+            .checked_mul(limb_count)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        Ok(Self {
+            hash: streaming_native_bgv_opening_equation_hash_v1(
+                profile_digest,
+                key_digest,
+                key_authority_digest,
+                topology,
+                sample_index,
+                transcript_digest,
+                equation_count,
+            )?,
+            limb_count,
+            next_component: 0,
+            next_limb: 0,
+            equation_count: 0,
+            profile_digest,
+            key_digest,
+            key_authority_digest,
+            topology,
+            sample_index,
+            transcript_digest,
+        })
+    }
+
+    fn absorb_published_equation_v1(
+        &mut self,
+        axes: StreamingNativeBgvPublishedEquationAxesV1<'_>,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        if self.next_component != axes.component.ordinal()
+            || self.next_limb != axes.limb
+            || self.next_limb >= self.limb_count
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        absorb_streaming_native_bgv_published_equation_v1(&mut self.hash, axes)?;
+        self.equation_count = self
+            .equation_count
+            .checked_add(1)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        self.next_limb = self
+            .next_limb
+            .checked_add(1)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if self.next_limb == self.limb_count {
+            self.next_component = self
+                .next_component
+                .checked_add(1)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+            self.next_limb = 0;
+        }
+        Ok(())
+    }
+
+    fn finish_v1(
+        self,
+        ciphertext_digest: [u8; 32],
+    ) -> Result<VerifiedStreamingNativeBgvEquationSetV1, ZkAmsMkheErrorV1> {
+        let expected_equation_count = COLLECTIVE_RNS_COMPONENT_COUNT_V1
+            .checked_mul(self.limb_count)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if self.next_component != COLLECTIVE_RNS_COMPONENT_COUNT_V1
+            || self.next_limb != 0
+            || self.equation_count != expected_equation_count
+            || ciphertext_digest == [0; 32]
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        let equation_transcript_digest = self.hash.finalize();
+        if equation_transcript_digest == [0; 32] {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        Ok(VerifiedStreamingNativeBgvEquationSetV1 {
+            _seal: StreamingNativeBgvEquationSetSealV1,
+            profile_digest: self.profile_digest,
+            key_digest: self.key_digest,
+            key_authority_digest: self.key_authority_digest,
+            topology: self.topology,
+            sample_index: self.sample_index,
+            transcript_digest: self.transcript_digest,
+            ciphertext_digest,
+            equation_count: u16::try_from(self.equation_count)
+                .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+            equation_transcript_digest,
+        })
+    }
+}
+
+struct StreamingNativeBgvEquationSetSealV1;
+struct VerifiedStreamingNativeBgvEquationSetV1 {
+    _seal: StreamingNativeBgvEquationSetSealV1,
+    profile_digest: [u8; 32],
+    key_digest: [u8; 32],
+    key_authority_digest: [u8; 32],
+    topology: CollectiveEncryptionInputTopologyV1,
+    sample_index: u64,
+    transcript_digest: [u8; 32],
+    ciphertext_digest: [u8; 32],
+    equation_count: u16,
+    equation_transcript_digest: [u8; 32],
+}
+
+struct StreamingNativeBgvOpeningReceiptSealV1;
+/// Move-only receipt for both exact native BGV equations in all 38 release limbs.
+///
+/// The receipt is minted only after the streaming kernel has computed each equation, published the
+/// exact result, authenticated a complete immutable readback, and sealed the complete ciphertext
+/// manifest. It contains no secret witness material and has no codec or public constructor.
+#[must_use = "the native BGV opening receipt must be validated and consumed or retained"]
+pub(in crate::vega::zk_ams::mkhe) struct VerifiedStreamingNativeBgvOpeningReceiptV1 {
+    _seal: StreamingNativeBgvOpeningReceiptSealV1,
+    profile_digest: [u8; 32],
+    key_digest: [u8; 32],
+    key_authority_digest: [u8; 32],
+    topology: CollectiveEncryptionInputTopologyV1,
+    sample_index: u64,
+    transcript_digest: [u8; 32],
+    ciphertext_digest: [u8; 32],
+    manifest_digest: [u8; 32],
+    equation_count: u16,
+    equation_transcript_digest: [u8; 32],
+    receipt_digest: [u8; 32],
+}
+
+struct VerifiedStreamingCollectiveEncryptionProductV1 {
+    manifest: ZkAmsMkheStreamingCollectiveCiphertextV1,
+    native_bgv_opening_receipt: VerifiedStreamingNativeBgvOpeningReceiptV1,
+}
+
+impl VerifiedStreamingCollectiveEncryptionProductV1 {
+    /// Consume the native-equation receipt only after revalidating it against
+    /// the exact release manifest. There is deliberately no unchecked
+    /// manifest-only projection from this product.
+    fn into_verified_manifest_v1(
+        self,
+    ) -> Result<ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheErrorV1> {
+        let Self {
+            manifest,
+            native_bgv_opening_receipt,
+        } = self;
+        native_bgv_opening_receipt.validate_for_manifest_v1(&manifest)?;
+        Ok(manifest)
+    }
+
+    #[cfg(test)]
+    fn into_verified_manifest_with_profile_v1(
+        self,
+        profile: &BgvProfile,
+    ) -> Result<ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheErrorV1> {
+        let Self {
+            manifest,
+            native_bgv_opening_receipt,
+        } = self;
+        native_bgv_opening_receipt.validate_for_manifest_with_profile_v1(&manifest, profile)?;
+        Ok(manifest)
+    }
+
+    fn into_verified_parts_v1(
+        self,
+    ) -> Result<
+        (
+            ZkAmsMkheStreamingCollectiveCiphertextV1,
+            VerifiedStreamingNativeBgvOpeningReceiptV1,
+        ),
+        ZkAmsMkheErrorV1,
+    > {
+        let Self {
+            manifest,
+            native_bgv_opening_receipt,
+        } = self;
+        native_bgv_opening_receipt.validate_for_manifest_v1(&manifest)?;
+        Ok((manifest, native_bgv_opening_receipt))
+    }
+}
+
 #[derive(Clone, Copy)]
 struct PurposeForkedCollectiveKeyAdmissionAxesV1 {
     profile_digest: [u8; 32],
@@ -2220,6 +2540,7 @@ struct StreamingCollectiveEncryptionKernelV1<'plaintext> {
     error_one: ZeroizingCollectiveEncryptionWitnessV1,
     workspace: ZeroizingCollectiveEncryptionWorkspaceV1,
     ciphertext_digest: ComponentMajorCollectiveCiphertextDigestV1,
+    native_bgv_opening_equations: StreamingNativeBgvOpeningEquationAuditV1,
     poisoned: bool,
 }
 struct ActiveStreamingCollectiveEncryptionV1<'plaintext> {
@@ -2231,12 +2552,14 @@ struct CompletedStreamingCollectiveEncryptionV1 {
     sample_index: u64,
     transcript_digest: [u8; 32],
     ciphertext_digest: [u8; 32],
+    native_bgv_equation_set: VerifiedStreamingNativeBgvEquationSetV1,
     records: StreamingCollectiveEncryptionRecordOwnersV1,
 }
 impl SourceAuthenticatedStreamingCollectiveEncryptionV1 {
     fn activate_v1<'plaintext, R>(
         self,
         binding: &ZkAmsMkheStreamingCollectiveKeyBindingV1,
+        key_authority_digest: [u8; 32],
         canonical_plaintext: &'plaintext [[u8; 32]],
         topology: CollectiveEncryptionInputTopologyV1,
         sample_index: u64,
@@ -2257,7 +2580,8 @@ impl SourceAuthenticatedStreamingCollectiveEncryptionV1 {
         } = self.0;
         binding.validate_for_profile_v1(&profile)?;
         validate_incremental_canonical_plaintext_v1(&profile, canonical_plaintext)?;
-        if topology.layout_digest == [0; 32]
+        if key_authority_digest == [0; 32]
+            || topology.layout_digest == [0; 32]
             || topology.plaintext_used_slots == 0
             || usize::try_from(topology.plaintext_used_slots)
                 .map_or(true, |used_slots| used_slots > profile.ring_degree)
@@ -2313,6 +2637,15 @@ impl SourceAuthenticatedStreamingCollectiveEncryptionV1 {
                     .take()
                     .ok_or(ZkAmsMkheErrorV1::InvalidCiphertext)?,
             )?;
+        let native_bgv_opening_equations = StreamingNativeBgvOpeningEquationAuditV1::new_v1(
+            profile_digest,
+            binding.key_digest,
+            key_authority_digest,
+            topology,
+            sample_index,
+            transcript_digest,
+            profile.moduli.len(),
+        )?;
         sample_nonzero_ternary_into_v1(&profile, random, &mut ephemeral)?;
         sample_bounded_error_into_v1(&profile, random, &mut error_zero)?;
         sample_bounded_error_into_v1(&profile, random, &mut error_one)?;
@@ -2328,6 +2661,7 @@ impl SourceAuthenticatedStreamingCollectiveEncryptionV1 {
                 error_one,
                 workspace,
                 ciphertext_digest,
+                native_bgv_opening_equations,
                 poisoned: false,
             },
             records,
@@ -2472,6 +2806,18 @@ impl StreamingCollectiveEncryptionKernelV1<'_> {
             output_receipt.pointer(),
             &self.profile,
         )?;
+        self.native_bgv_opening_equations
+            .absorb_published_equation_v1(StreamingNativeBgvPublishedEquationAxesV1 {
+                component,
+                limb,
+                modulus,
+                source_kind,
+                source_pointer,
+                source_prepass: prepass_receipt,
+                source_second_pass: &second_pass_receipt,
+                output_kind,
+                output_publication: &output_receipt,
+            })?;
         self.poisoned = false;
         Ok((second_pass_receipt, output_receipt))
     }
@@ -2578,11 +2924,16 @@ impl ActiveStreamingCollectiveEncryptionV1<'_> {
         let sample_index = self.kernel.sample_index;
         let transcript_digest = self.kernel.transcript_digest;
         let ciphertext_digest = self.kernel.ciphertext_digest.finish()?;
+        let native_bgv_equation_set = self
+            .kernel
+            .native_bgv_opening_equations
+            .finish_v1(ciphertext_digest)?;
         Ok(CompletedStreamingCollectiveEncryptionV1 {
             topology,
             sample_index,
             transcript_digest,
             ciphertext_digest,
+            native_bgv_equation_set,
             records: self.records,
         })
     }
@@ -2880,6 +3231,247 @@ pub struct ZkAmsMkheStreamingCollectiveCiphertextV1 {
     linear_publication_receipts: Vec<ZkAmsMkheDirectObjectPublicationReceiptV1>,
     manifest_digest: [u8; 32],
 }
+
+fn streaming_native_bgv_equation_transcript_from_manifest_v1(
+    manifest: &ZkAmsMkheStreamingCollectiveCiphertextV1,
+    profile: &BgvProfile,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let limb_count = profile.moduli.len();
+    let equation_count = COLLECTIVE_RNS_COMPONENT_COUNT_V1
+        .checked_mul(limb_count)
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut hash = streaming_native_bgv_opening_equation_hash_v1(
+        manifest.profile_digest,
+        manifest.key_digest,
+        manifest.key_authority_digest,
+        manifest.topology,
+        manifest.sample_index,
+        manifest.transcript_digest,
+        equation_count,
+    )?;
+    for component in [
+        CollectiveRnsComponentV1::First,
+        CollectiveRnsComponentV1::Second,
+    ] {
+        let (source_kind, source_pointers, source_prepasses, source_second_passes) = match component
+        {
+            CollectiveRnsComponentV1::First => (
+                ZkAmsMkheDirectObjectKindV1::CollectivePublicB,
+                manifest.public_b_limb_pointers.as_slice(),
+                manifest.public_b_prepass_receipts.as_slice(),
+                manifest.public_b_second_pass_receipts.as_slice(),
+            ),
+            CollectiveRnsComponentV1::Second => (
+                ZkAmsMkheDirectObjectKindV1::CollectivePublicA,
+                manifest.public_a_limb_pointers.as_slice(),
+                manifest.public_a_prepass_receipts.as_slice(),
+                manifest.public_a_second_pass_receipts.as_slice(),
+            ),
+        };
+        let (output_kind, output_publications) = match component {
+            CollectiveRnsComponentV1::First => (
+                ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC0,
+                manifest.constant_publication_receipts.as_slice(),
+            ),
+            CollectiveRnsComponentV1::Second => (
+                ZkAmsMkheDirectObjectKindV1::CollectiveCiphertextC1,
+                manifest.linear_publication_receipts.as_slice(),
+            ),
+        };
+        if source_pointers.len() != limb_count
+            || source_prepasses.len() != limb_count
+            || source_second_passes.len() != limb_count
+            || output_publications.len() != limb_count
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        for limb in 0..limb_count {
+            absorb_streaming_native_bgv_published_equation_v1(
+                &mut hash,
+                StreamingNativeBgvPublishedEquationAxesV1 {
+                    component,
+                    limb,
+                    modulus: profile.moduli[limb],
+                    source_kind,
+                    source_pointer: source_pointers[limb],
+                    source_prepass: &source_prepasses[limb],
+                    source_second_pass: &source_second_passes[limb],
+                    output_kind,
+                    output_publication: &output_publications[limb],
+                },
+            )?;
+        }
+    }
+    let digest = hash.finalize();
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    Ok(digest)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn streaming_native_bgv_opening_receipt_digest_v1(
+    profile_digest: [u8; 32],
+    key_digest: [u8; 32],
+    key_authority_digest: [u8; 32],
+    topology: CollectiveEncryptionInputTopologyV1,
+    sample_index: u64,
+    transcript_digest: [u8; 32],
+    ciphertext_digest: [u8; 32],
+    manifest_digest: [u8; 32],
+    equation_count: u16,
+    equation_transcript_digest: [u8; 32],
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    if [
+        profile_digest,
+        key_digest,
+        key_authority_digest,
+        topology.layout_digest,
+        transcript_digest,
+        ciphertext_digest,
+        manifest_digest,
+        equation_transcript_digest,
+    ]
+    .contains(&[0; 32])
+        || topology.plaintext_used_slots == 0
+        || equation_count == 0
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    let mut hash = Keccak256::new();
+    hash.update(STREAMING_NATIVE_BGV_OPENING_RECEIPT_DOMAIN_V1);
+    hash.update(&[MKHE_VERSION_V1]);
+    hash.update(&profile_digest);
+    hash.update(&key_digest);
+    hash.update(&key_authority_digest);
+    hash.update(&topology.layout_digest);
+    hash.update(&topology.plaintext_chunk_index.to_be_bytes());
+    hash.update(&topology.plaintext_used_slots.to_be_bytes());
+    hash.update(&sample_index.to_be_bytes());
+    hash.update(&transcript_digest);
+    hash.update(&ciphertext_digest);
+    hash.update(&manifest_digest);
+    hash.update(&equation_count.to_be_bytes());
+    hash.update(&equation_transcript_digest);
+    let digest = hash.finalize();
+    if digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+    }
+    Ok(digest)
+}
+
+impl VerifiedStreamingNativeBgvOpeningReceiptV1 {
+    fn from_verified_equation_set_v1(
+        manifest: &ZkAmsMkheStreamingCollectiveCiphertextV1,
+        equation_set: VerifiedStreamingNativeBgvEquationSetV1,
+        profile: &BgvProfile,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        manifest.validate_for_profile_v1(profile)?;
+        let expected_equation_count = COLLECTIVE_RNS_COMPONENT_COUNT_V1
+            .checked_mul(profile.moduli.len())
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if equation_set.profile_digest != manifest.profile_digest
+            || equation_set.key_digest != manifest.key_digest
+            || equation_set.key_authority_digest != manifest.key_authority_digest
+            || equation_set.topology != manifest.topology
+            || equation_set.sample_index != manifest.sample_index
+            || equation_set.transcript_digest != manifest.transcript_digest
+            || equation_set.ciphertext_digest != manifest.ciphertext_digest
+            || usize::from(equation_set.equation_count) != expected_equation_count
+            || equation_set.equation_transcript_digest
+                != streaming_native_bgv_equation_transcript_from_manifest_v1(manifest, profile)?
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        let receipt_digest = streaming_native_bgv_opening_receipt_digest_v1(
+            equation_set.profile_digest,
+            equation_set.key_digest,
+            equation_set.key_authority_digest,
+            equation_set.topology,
+            equation_set.sample_index,
+            equation_set.transcript_digest,
+            equation_set.ciphertext_digest,
+            manifest.manifest_digest,
+            equation_set.equation_count,
+            equation_set.equation_transcript_digest,
+        )?;
+        let receipt = Self {
+            _seal: StreamingNativeBgvOpeningReceiptSealV1,
+            profile_digest: equation_set.profile_digest,
+            key_digest: equation_set.key_digest,
+            key_authority_digest: equation_set.key_authority_digest,
+            topology: equation_set.topology,
+            sample_index: equation_set.sample_index,
+            transcript_digest: equation_set.transcript_digest,
+            ciphertext_digest: equation_set.ciphertext_digest,
+            manifest_digest: manifest.manifest_digest,
+            equation_count: equation_set.equation_count,
+            equation_transcript_digest: equation_set.equation_transcript_digest,
+            receipt_digest,
+        };
+        receipt.validate_for_manifest_with_profile_v1(manifest, profile)?;
+        Ok(receipt)
+    }
+
+    /// Revalidate every public equation/publication axis against the exact completed manifest.
+    pub(in crate::vega::zk_ams::mkhe) fn validate_for_manifest_v1(
+        &self,
+        manifest: &ZkAmsMkheStreamingCollectiveCiphertextV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let profile = release_profile_v1();
+        if profile.moduli.len() != STREAMING_COLLECTIVE_RNS_LIMBS_V1
+            || usize::from(self.equation_count) != STREAMING_NATIVE_BGV_OPENING_EQUATION_COUNT_V1
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        self.validate_for_manifest_with_profile_v1(manifest, &profile)
+    }
+
+    fn validate_for_manifest_with_profile_v1(
+        &self,
+        manifest: &ZkAmsMkheStreamingCollectiveCiphertextV1,
+        profile: &BgvProfile,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        manifest.validate_for_profile_v1(profile)?;
+        let expected_equation_count = COLLECTIVE_RNS_COMPONENT_COUNT_V1
+            .checked_mul(profile.moduli.len())
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        if self.profile_digest != manifest.profile_digest
+            || self.key_digest != manifest.key_digest
+            || self.key_authority_digest != manifest.key_authority_digest
+            || self.topology != manifest.topology
+            || self.sample_index != manifest.sample_index
+            || self.transcript_digest != manifest.transcript_digest
+            || self.ciphertext_digest != manifest.ciphertext_digest
+            || self.manifest_digest != manifest.manifest_digest
+            || usize::from(self.equation_count) != expected_equation_count
+            || self.equation_transcript_digest
+                != streaming_native_bgv_equation_transcript_from_manifest_v1(manifest, profile)?
+            || self.receipt_digest
+                != streaming_native_bgv_opening_receipt_digest_v1(
+                    self.profile_digest,
+                    self.key_digest,
+                    self.key_authority_digest,
+                    self.topology,
+                    self.sample_index,
+                    self.transcript_digest,
+                    self.ciphertext_digest,
+                    self.manifest_digest,
+                    self.equation_count,
+                    self.equation_transcript_digest,
+                )?
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+        }
+        Ok(())
+    }
+
+    /// Domain-separated digest of the sealed equation set and completed manifest.
+    pub(in crate::vega::zk_ams::mkhe) const fn receipt_digest_v1(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+}
+
 struct StreamingCollectiveCiphertextBindingSealV1;
 /// Sealed borrowed view used by bounded decryption and evaluated-key runtimes.
 /// It has no public constructor and cannot outlive the validated manifest.
@@ -3093,7 +3685,15 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
         binding: &ZkAmsMkheStreamingCollectiveKeyBindingV1,
         key_authority_digest: [u8; 32],
         profile: &BgvProfile,
-    ) -> Result<Self, ZkAmsMkheErrorV1> {
+    ) -> Result<VerifiedStreamingCollectiveEncryptionProductV1, ZkAmsMkheErrorV1> {
+        let CompletedStreamingCollectiveEncryptionV1 {
+            topology,
+            sample_index,
+            transcript_digest,
+            ciphertext_digest,
+            native_bgv_equation_set,
+            records,
+        } = completed;
         let StreamingCollectiveEncryptionRecordOwnersV1 {
             public_a_limb_pointers,
             public_b_limb_pointers,
@@ -3106,7 +3706,7 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
             constant_publication_receipts,
             linear_publication_receipts,
             scratch: _,
-        } = completed.records;
+        } = records;
         let mut manifest = Self {
             version: MKHE_VERSION_V1,
             profile_digest: binding.profile_digest,
@@ -3118,11 +3718,11 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
             key_digest: binding.key_digest,
             key_binding_digest: binding.binding_digest,
             key_authority_digest,
-            topology: completed.topology,
-            sample_index: completed.sample_index,
+            topology,
+            sample_index,
             level: 0,
-            transcript_digest: completed.transcript_digest,
-            ciphertext_digest: completed.ciphertext_digest,
+            transcript_digest,
+            ciphertext_digest,
             public_a_limb_pointers,
             public_b_limb_pointers,
             constant_limb_pointers,
@@ -3138,7 +3738,16 @@ impl ZkAmsMkheStreamingCollectiveCiphertextV1 {
         manifest.manifest_digest =
             streaming_collective_ciphertext_manifest_digest_v1(&manifest, profile)?;
         manifest.validate_with_profile_digest_v1(profile, binding.profile_digest)?;
-        Ok(manifest)
+        let native_bgv_opening_receipt =
+            VerifiedStreamingNativeBgvOpeningReceiptV1::from_verified_equation_set_v1(
+                &manifest,
+                native_bgv_equation_set,
+                profile,
+            )?;
+        Ok(VerifiedStreamingCollectiveEncryptionProductV1 {
+            manifest,
+            native_bgv_opening_receipt,
+        })
     }
     fn validate_for_profile_v1(&self, profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1> {
         let profile_digest = profile.digest()?;
@@ -3500,7 +4109,7 @@ fn encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_
     key_provider: &mut K,
     ciphertext_publisher: &mut P,
     prepare_before_entropy: Prepare,
-) -> Result<ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheErrorV1>
+) -> Result<VerifiedStreamingCollectiveEncryptionProductV1, ZkAmsMkheErrorV1>
 where
     R: MaskedRelaxedRandomSourceV1,
     K: ZkAmsMkheDirectObjectReadAtProviderV1 + ?Sized,
@@ -3551,6 +4160,7 @@ where
         let authenticated = prepared.authenticate_key_source_v1(key_provider)?;
         let mut active = authenticated.activate_v1(
             &authority.binding,
+            authority.authority_digest,
             &plaintext.coefficients,
             topology,
             sample_index,
@@ -3571,20 +4181,23 @@ where
         )?;
         active.publish_all_v1(key_provider, ciphertext_publisher)?;
         let completed = active.finish()?;
-        let manifest = ZkAmsMkheStreamingCollectiveCiphertextV1::from_completed_v1(
+        let product = ZkAmsMkheStreamingCollectiveCiphertextV1::from_completed_v1(
             completed,
             &authority.binding,
             authority.authority_digest,
             &profile,
         )?;
-        manifest.validate_for_authority_v1(authority)?;
-        Ok(manifest)
+        product.manifest.validate_for_authority_v1(authority)?;
+        product
+            .native_bgv_opening_receipt
+            .validate_for_manifest_v1(&product.manifest)?;
+        Ok(product)
     })();
     match result {
-        Ok(manifest) => {
+        Ok(product) => {
             authority.next_sample_index = next_sample_index;
             authority.failed = false;
-            Ok(manifest)
+            Ok(product)
         }
         Err(error) => Err(error),
     }
@@ -3614,6 +4227,7 @@ where
         ciphertext_publisher,
         || Ok(|_: &mut P, _: &[[u8; 32]], _: &[i64], _: &[i64], _: &[i64], _: &[u8; 32]| Ok(())),
     )
+    .and_then(VerifiedStreamingCollectiveEncryptionProductV1::into_verified_manifest_v1)
 }
 // This additive 38-to-40-limb arithmetic child is private and non-authorizing.
 // Its compiled V1 coordinator proves the pre-entropy callback chronology, but
@@ -3633,9 +4247,10 @@ pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publica
 // readiness, and release flag stays false.
 #[path = "incremental_source_rns_native_publication_assembler_v2.rs"]
 mod incremental_source_rns_native_publication_assembler_v2;
-// TODO: Reconnect the private Phase-23 source prototype after its confidential
-// spool dependency can enter the authorized workspace lock graph.
-#[cfg(any())]
+// The confidential-spool dependency is now part of the authorized workspace
+// graph, so this private structural corridor is compiled continuously. Its
+// production correspondence seal remains uninhabited and every downstream
+// algebraic/release gate remains independently fail-closed.
 #[path = "incremental_source_phase23.rs"]
 mod incremental_source_phase23;
 #[cfg(test)]

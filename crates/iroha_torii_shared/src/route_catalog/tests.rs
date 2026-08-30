@@ -94,6 +94,18 @@ mod tests {
         assert_eq!(method_paths.len(), offline::ROUTES.len());
     }
     #[test]
+    fn kagemusha_public_issuance_status_is_canonically_authenticated() {
+        let route = offline::KAGEMUSHA_ISSUANCE_STATUS;
+        assert_eq!(route.path(), "/v1/offline/kagemusha/issuance-status");
+        assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.implicit_head());
+    }
+    #[test]
     fn canonical_catalog_satisfies_closed_security_axes() {
         assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }

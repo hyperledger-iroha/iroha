@@ -36,6 +36,7 @@ def offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
         "mandatory": False,
         "cash_handoff_capability": "cash_handoff_v1",
+        "eligibility_cash_handoff_capability": "cash_handoff_eligibility_v1",
         "required_bridge_abi_version": 22,
         "max_hops": 8,
         "ready": True,

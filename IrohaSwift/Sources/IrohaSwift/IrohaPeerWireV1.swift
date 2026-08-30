@@ -23,20 +23,50 @@ public typealias IrohaPeerPayloadKind = IrohaPeerWireKindV1
 public extension IrohaPeerWireProfileV1 {
     static var kagemushaRecursiveSpend: Self { .kagemusha }
 
-    /// The sole first-release canonical payload schema admitted by this profile.
+    /// Legacy ABI-21/V4 schema retained for receive requests,
+    /// acknowledgements, and unchanged `cash_handoff_v1` payment bodies.
     var requiredSchemaVersion: UInt16 {
         switch self {
         case .reject: return 0
-        case .kagemusha: return 0x0102
+        case .kagemusha: return IrohaPeerWireMessageV1.kagemushaLegacySchemaVersion
+        }
+    }
+
+    func admits(schemaVersion: UInt16, kind: IrohaPeerWireKindV1) -> Bool {
+        switch (self, kind, schemaVersion) {
+        case (.kagemusha, _, IrohaPeerWireMessageV1.kagemushaLegacySchemaVersion),
+             (.kagemusha, .payment,
+              IrohaPeerWireMessageV1.kagemushaEligibilityPaymentSchemaVersion):
+            return true
+        default:
+            return false
         }
     }
 }
 
 public extension IrohaPeerWireKindV1 {
-    /// Exact native archive schema admitted for this Kagemusha IPM1 kind.
-    /// In particular, RECEIVE_REQUEST commits to the complete portable offer,
-    /// not only its nested signed payment request.
+    /// Exact native archive schema admitted for this Kagemusha IPM1
+    /// kind/schema pair. `0x0103` is PAYMENT-only and wraps the unchanged V4
+    /// payment in the eligibility credential plus one-use device signature.
+    /// RECEIVE_REQUEST still commits to the complete portable offer.
+    func requiredKagemushaCanonicalSchema(schemaVersion: UInt16) -> String? {
+        if schemaVersion == IrohaPeerWireMessageV1.kagemushaEligibilityPaymentSchemaVersion {
+            return self == .payment
+                ? KagemushaRecursiveSpend.eligibilityPaymentEnvelopeWireNameV1
+                : nil
+        }
+        guard schemaVersion == IrohaPeerWireMessageV1.kagemushaLegacySchemaVersion else {
+            return nil
+        }
+        return legacyKagemushaCanonicalSchema
+    }
+
+    /// ABI-21/V4 schema retained for legacy `cash_handoff_v1` messages.
     var requiredKagemushaCanonicalSchema: String {
+        legacyKagemushaCanonicalSchema
+    }
+
+    private var legacyKagemushaCanonicalSchema: String {
         switch self {
         case .receiveRequest:
             return KagemushaRecursiveSpend.recipientReceiveOfferWireName
@@ -68,32 +98,58 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
     /// portable receiver-lineage offer on the smallest shared NFC rail. Text
     /// and static-QR codecs retain their independent, smaller rail limits.
     public static let maximumKagemushaProfileBytes = 24_576
+    /// ABI-22 wrapper ceiling: unchanged 32 MiB ABI-21/V4 payment plus the
+    /// bounded eligibility credential, signature, and canonical framing.
+    public static let maximumKagemushaEligibilityEnvelopeBytes =
+        32 * 1024 * 1024 + 128 * 1024
 
     public let maximumCanonicalBytes: Int
     public let maximumKagemushaEncodedBytes: Int
+    public let maximumKagemushaEligibilityCanonicalBytes: Int
+    public let maximumKagemushaEligibilityEncodedBytes: Int
 
     public init(
         maximumCanonicalBytes: Int = 32 * 1024,
-        maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes
+        maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes,
+        maximumKagemushaEligibilityCanonicalBytes: Int =
+            Self.maximumKagemushaEligibilityEnvelopeBytes,
+        maximumKagemushaEligibilityEncodedBytes: Int =
+            Self.maximumKagemushaEligibilityEnvelopeBytes
     ) {
         precondition(
             Self.areValid(
                 maximumCanonicalBytes: maximumCanonicalBytes,
-                maximumKagemushaEncodedBytes: maximumKagemushaEncodedBytes
+                maximumKagemushaEncodedBytes: maximumKagemushaEncodedBytes,
+                maximumKagemushaEligibilityCanonicalBytes:
+                    maximumKagemushaEligibilityCanonicalBytes,
+                maximumKagemushaEligibilityEncodedBytes:
+                    maximumKagemushaEligibilityEncodedBytes
             )
         )
         self.maximumCanonicalBytes = maximumCanonicalBytes
         self.maximumKagemushaEncodedBytes = maximumKagemushaEncodedBytes
+        self.maximumKagemushaEligibilityCanonicalBytes =
+            maximumKagemushaEligibilityCanonicalBytes
+        self.maximumKagemushaEligibilityEncodedBytes =
+            maximumKagemushaEligibilityEncodedBytes
     }
 
     public static let peerV1 = IrohaPeerWireLimitsV1()
 
     static func areValid(
         maximumCanonicalBytes: Int,
-        maximumKagemushaEncodedBytes: Int
+        maximumKagemushaEncodedBytes: Int,
+        maximumKagemushaEligibilityCanonicalBytes: Int =
+            maximumKagemushaEligibilityEnvelopeBytes,
+        maximumKagemushaEligibilityEncodedBytes: Int =
+            maximumKagemushaEligibilityEnvelopeBytes
     ) -> Bool {
         (1...(32 * 1_024)).contains(maximumCanonicalBytes) &&
-            (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes)
+            (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes) &&
+            (1...maximumKagemushaEligibilityEnvelopeBytes)
+                .contains(maximumKagemushaEligibilityCanonicalBytes) &&
+            (1...maximumKagemushaEligibilityEnvelopeBytes)
+                .contains(maximumKagemushaEligibilityEncodedBytes)
     }
 
     public func maximumEncodedBytes(for profile: IrohaPeerWireProfileV1) throws -> Int {
@@ -103,6 +159,49 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
         case .kagemusha:
             return maximumKagemushaEncodedBytes
         }
+    }
+
+    /// Return the canonical allocation ceiling for an already-inspected
+    /// kind/schema pair. Legacy `0x0102` never inherits the larger bound.
+    public func maximumCanonicalBytes(
+        for profile: IrohaPeerWireProfileV1,
+        kind: IrohaPeerWireKindV1,
+        schemaVersion: UInt16
+    ) throws -> Int {
+        guard profile.admits(schemaVersion: schemaVersion, kind: kind) else {
+            throw IrohaPeerWireMessageErrorV1.schemaVersionMismatch(
+                profile: profile,
+                expected: profile.requiredSchemaVersion,
+                actual: schemaVersion
+            )
+        }
+        if profile == .kagemusha,
+           kind == .payment,
+           schemaVersion == IrohaPeerWireMessageV1.kagemushaEligibilityPaymentSchemaVersion {
+            return maximumKagemushaEligibilityCanonicalBytes
+        }
+        return maximumCanonicalBytes
+    }
+
+    /// Return the encoded-body ceiling for an already-inspected kind/schema pair.
+    public func maximumEncodedBytes(
+        for profile: IrohaPeerWireProfileV1,
+        kind: IrohaPeerWireKindV1,
+        schemaVersion: UInt16
+    ) throws -> Int {
+        guard profile.admits(schemaVersion: schemaVersion, kind: kind) else {
+            throw IrohaPeerWireMessageErrorV1.schemaVersionMismatch(
+                profile: profile,
+                expected: profile.requiredSchemaVersion,
+                actual: schemaVersion
+            )
+        }
+        if profile == .kagemusha,
+           kind == .payment,
+           schemaVersion == IrohaPeerWireMessageV1.kagemushaEligibilityPaymentSchemaVersion {
+            return maximumKagemushaEligibilityEncodedBytes
+        }
+        return try maximumEncodedBytes(for: profile)
     }
 }
 
@@ -191,6 +290,8 @@ public struct IrohaPeerWireHeaderV1: Equatable, Sendable {
 public struct IrohaPeerWireMessageV1: Equatable, Sendable {
     public static let magic = Data("IPM1".utf8)
     public static let wireVersion: UInt8 = 1
+    public static let kagemushaLegacySchemaVersion: UInt16 = 0x0102
+    public static let kagemushaEligibilityPaymentSchemaVersion: UInt16 = 0x0103
     public static let headerBytes = 84
     public static let qrDataShardBytes = 256
 
@@ -224,7 +325,7 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         guard schemaVersion != 0 else {
             throw IrohaPeerWireMessageErrorV1.invalidSchemaVersion
         }
-        guard schemaVersion == profile.requiredSchemaVersion else {
+        guard profile.admits(schemaVersion: schemaVersion, kind: kind) else {
             throw IrohaPeerWireMessageErrorV1.schemaVersionMismatch(
                 profile: profile,
                 expected: profile.requiredSchemaVersion,
@@ -234,18 +335,28 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         guard !canonicalPayload.isEmpty else {
             throw IrohaPeerWireMessageErrorV1.emptyCanonicalPayload
         }
-        guard canonicalPayload.count <= limits.maximumCanonicalBytes else {
+        let maximumCanonical = try limits.maximumCanonicalBytes(
+            for: profile,
+            kind: kind,
+            schemaVersion: schemaVersion
+        )
+        guard canonicalPayload.count <= maximumCanonical else {
             throw IrohaPeerWireMessageErrorV1.canonicalLengthOutOfRange(
                 actual: canonicalPayload.count,
-                maximum: limits.maximumCanonicalBytes
+                maximum: maximumCanonical
             )
         }
         try Self.validateCanonicalPayload(
             profile: profile,
             kind: kind,
+            schemaVersion: schemaVersion,
             canonicalPayload: canonicalPayload
         )
-        let maximumEncoded = try limits.maximumEncodedBytes(for: profile)
+        let maximumEncoded = try limits.maximumEncodedBytes(
+            for: profile,
+            kind: kind,
+            schemaVersion: schemaVersion
+        )
         let selected = try Self.selectEncoding(
             canonicalPayload,
             policy: compressionPolicy,
@@ -303,7 +414,7 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         guard data[9] == 0 else { throw IrohaPeerWireMessageErrorV1.invalidFlags(data[9]) }
         let schemaVersion = data.ipmUInt16BE(at: 10)
         guard schemaVersion != 0 else { throw IrohaPeerWireMessageErrorV1.invalidSchemaVersion }
-        guard schemaVersion == profile.requiredSchemaVersion else {
+        guard profile.admits(schemaVersion: schemaVersion, kind: kind) else {
             throw IrohaPeerWireMessageErrorV1.schemaVersionMismatch(
                 profile: profile,
                 expected: profile.requiredSchemaVersion,
@@ -318,13 +429,22 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         guard encodedLength > 0 else {
             throw IrohaPeerWireMessageErrorV1.emptyEncodedBody
         }
-        guard canonicalLength <= limits.maximumCanonicalBytes else {
+        let maximumCanonical = try limits.maximumCanonicalBytes(
+            for: profile,
+            kind: kind,
+            schemaVersion: schemaVersion
+        )
+        guard canonicalLength <= maximumCanonical else {
             throw IrohaPeerWireMessageErrorV1.canonicalLengthOutOfRange(
                 actual: canonicalLength,
-                maximum: limits.maximumCanonicalBytes
+                maximum: maximumCanonical
             )
         }
-        let maximumEncoded = try limits.maximumEncodedBytes(for: profile)
+        let maximumEncoded = try limits.maximumEncodedBytes(
+            for: profile,
+            kind: kind,
+            schemaVersion: schemaVersion
+        )
         guard encodedLength <= maximumEncoded else {
             throw IrohaPeerWireMessageErrorV1.encodedLengthOutOfRange(
                 actual: encodedLength,
@@ -394,7 +514,11 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
             canonicalPayload = try decodeZlib(
                 encodedBody,
                 expectedLength: header.canonicalLength,
-                maximumLength: limits.maximumCanonicalBytes
+                maximumLength: try limits.maximumCanonicalBytes(
+                    for: header.profile,
+                    kind: header.kind,
+                    schemaVersion: header.schemaVersion
+                )
             )
         }
         guard canonicalPayload.count == header.canonicalLength else {
@@ -403,6 +527,7 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         try validateCanonicalPayload(
             profile: header.profile,
             kind: header.kind,
+            schemaVersion: header.schemaVersion,
             canonicalPayload: canonicalPayload
         )
         let expectedCanonicalHash = canonicalHash(
@@ -420,17 +545,26 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
     private static func validateCanonicalPayload(
         profile: IrohaPeerWireProfileV1,
         kind: IrohaPeerWireKindV1,
+        schemaVersion: UInt16,
         canonicalPayload: Data
     ) throws {
         guard profile == .kagemusha else { return }
         do {
+            guard let schema = kind.requiredKagemushaCanonicalSchema(
+                schemaVersion: schemaVersion
+            ) else {
+                throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(
+                    profile: profile,
+                    kind: kind
+                )
+            }
             // Transport acceptance is deliberately native-independent:
             // canonical compact Norito framing, checksum, and the exact
-            // kind-specific ABI-21 schema. Deeper semantic validation remains
-            // in IrohaPeerKagemushaAdapterV1/KagemushaPeerPayload.
+            // kind/version-specific schema. Deeper semantic validation remains
+            // in the typed Kagemusha adapter/native bridge.
             try KagemushaRecursiveSpend.requireArchive(
                 canonicalPayload,
-                schema: kind.requiredKagemushaCanonicalSchema,
+                schema: schema,
                 field: "ipm1.kagemusha.\(kind)"
             )
         } catch {
@@ -596,6 +730,91 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
             second = (second + first) % modulus
         }
         return second << 16 | first
+    }
+}
+
+/// Opaque canonical archive for the eligibility-gated Kagemusha payment.
+///
+/// IPM1 validates the exact Norito type, compact framing, checksum, and size.
+/// Wallets must still pass the archive through the ABI-22 native semantic
+/// validator before accepting or persisting spendable value.
+public struct IrohaPeerKagemushaEligibilityPaymentEnvelopeV1: Equatable, Sendable {
+    public let archive: Data
+
+    public init(canonicalArchive: Data) throws {
+        let maximum = IrohaPeerWireLimitsV1.peerV1
+            .maximumKagemushaEligibilityCanonicalBytes
+        guard !canonicalArchive.isEmpty,
+              canonicalArchive.count <= maximum else {
+            throw IrohaPeerWireMessageErrorV1.canonicalLengthOutOfRange(
+                actual: canonicalArchive.count,
+                maximum: maximum
+            )
+        }
+        do {
+            try KagemushaRecursiveSpend.requireArchive(
+                canonicalArchive,
+                schema: KagemushaRecursiveSpend.eligibilityPaymentEnvelopeWireNameV1,
+                field: "eligibilityPaymentEnvelopeV1"
+            )
+        } catch {
+            throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(
+                profile: .kagemusha,
+                kind: .payment
+            )
+        }
+        archive = Data(canonicalArchive)
+    }
+}
+
+/// IPM1 adapter for the separately advertised
+/// `cash_handoff_eligibility_v1` capability.
+public enum IrohaPeerKagemushaEligibilityAdapterV1 {
+    public static let schemaVersion =
+        IrohaPeerWireMessageV1.kagemushaEligibilityPaymentSchemaVersion
+    public static let capability =
+        KagemushaRecursiveSpend.cashHandoffEligibilityCapabilityV1
+
+    public static func wrap(
+        _ envelope: IrohaPeerKagemushaEligibilityPaymentEnvelopeV1,
+        compressionPolicy: IrohaPeerWireCompressionPolicyV1 = .disabled,
+        limits: IrohaPeerWireLimitsV1 = .peerV1
+    ) throws -> IrohaPeerWireMessageV1 {
+        try IrohaPeerWireMessageV1(
+            profile: .kagemusha,
+            kind: .payment,
+            schemaVersion: schemaVersion,
+            canonicalPayload: envelope.archive,
+            compressionPolicy: compressionPolicy,
+            limits: limits
+        )
+    }
+
+    public static func decode(
+        _ message: IrohaPeerWireMessageV1
+    ) throws -> IrohaPeerKagemushaEligibilityPaymentEnvelopeV1 {
+        guard message.profile == .kagemusha else {
+            throw IrohaPeerWireMessageErrorV1.unexpectedProfile(
+                expected: .kagemusha,
+                actual: message.profile
+            )
+        }
+        guard message.kind == .payment else {
+            throw IrohaPeerWireMessageErrorV1.unexpectedKind(
+                expected: .payment,
+                actual: message.kind
+            )
+        }
+        guard message.schemaVersion == schemaVersion else {
+            throw IrohaPeerWireMessageErrorV1.schemaVersionMismatch(
+                profile: .kagemusha,
+                expected: schemaVersion,
+                actual: message.schemaVersion
+            )
+        }
+        return try IrohaPeerKagemushaEligibilityPaymentEnvelopeV1(
+            canonicalArchive: message.canonicalPayload
+        )
     }
 }
 

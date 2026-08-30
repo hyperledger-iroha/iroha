@@ -32,6 +32,38 @@ fn outbound_sccp_context() -> crate::bridge::SccpOutboundMessageContextV1 {
     )
     .expect("valid outbound SCCP context")
 }
+
+#[test]
+fn instruction_execution_error_appends_device_eligibility_without_renumbering_history() {
+    use iroha_schema::{IntoSchema as _, Metadata};
+
+    let schema = error::InstructionExecutionError::schema();
+    let Metadata::Enum(metadata) = schema
+        .get::<error::InstructionExecutionError>()
+        .expect("instruction-execution error schema")
+    else {
+        panic!("instruction-execution error schema must be an enum");
+    };
+    let expected = [
+        ("Evaluate", 0),
+        ("Query", 1),
+        ("Conversion", 2),
+        ("Find", 3),
+        ("Repetition", 4),
+        ("Mintability", 5),
+        ("Math", 6),
+        ("InvalidParameter", 7),
+        ("AccountAdmission", 8),
+        ("AssetTransferAdmission", 9),
+        ("InvariantViolation", 10),
+        ("OfflineDeviceEligibility", 11),
+    ];
+    assert_eq!(metadata.variants.len(), expected.len());
+    for (variant, (tag, discriminant)) in metadata.variants.iter().zip(expected) {
+        assert_eq!(variant.tag, tag);
+        assert_eq!(variant.discriminant, discriminant);
+    }
+}
 fn test_domain_id() -> DomainId {
     DomainId::try_new("wonderland", "universal").expect("domain id")
 }

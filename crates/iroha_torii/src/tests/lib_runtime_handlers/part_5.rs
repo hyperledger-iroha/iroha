@@ -1646,6 +1646,7 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
         let body = torii_body_bytes(response, "transaction-details response body").await;
         let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
             norito::json::from_slice(&body).expect("typed transaction-details JSON");
+        assert_eq!(details.block_height, 1);
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
         assert_eq!(
             details.transaction.result().batch_transfer_outcomes(),

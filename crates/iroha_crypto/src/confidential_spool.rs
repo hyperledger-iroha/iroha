@@ -76,6 +76,94 @@ pub const CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1: u64 = 16_384;
 /// plus one 16-byte tag per record.
 pub const CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1: u64 = 3_829_524_480;
 
+/// Exact slot count in the purpose-specific global-lookup plane-opening spool.
+pub const CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1: u64 = 306_603;
+
+/// Exact plaintext bytes in each global-lookup plane-opening spool record.
+pub const CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1: u64 = 16_384;
+
+/// Exact authenticated file bytes in the global-lookup plane-opening spool.
+///
+/// This audited geometry is the sole V1 exception to the general-purpose file
+/// ceiling and is admitted only by its purpose-specific constructor.
+pub const CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1: u64 = 5_028_289_200;
+
+/// Canonical plaintext-record count in the Phase23 RNS-Link secret source.
+pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_RECORDS_V1: u64 = 43;
+
+/// Fixed 8 KiB blocks occupied by one Phase23 RNS-Link secret record.
+pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_PER_RECORD_V1: u64 = 896;
+
+/// Exact 8 KiB slot count in the Phase23 RNS-Link secret-main spool.
+pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_V1: u64 = 38_528;
+
+/// Exact plaintext bytes in one Phase23 RNS-Link secret-main slot.
+pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_PLAINTEXT_BYTES_V1: u64 = 8_192;
+
+/// Exact authenticated file bytes in the Phase23 RNS-Link secret-main spool.
+pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_FILE_BYTES_V1: u64 = 316_237_824;
+
+/// Exact slot count in the Phase23 RNS-Link secret-nonce spool.
+pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_SLOTS_V1: u64 = 43;
+
+/// Exact plaintext bytes in one Phase23 RNS-Link secret-nonce slot.
+pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_PLAINTEXT_BYTES_V1: u64 = 32;
+
+/// Exact authenticated file bytes in the Phase23 RNS-Link secret-nonce spool.
+pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_FILE_BYTES_V1: u64 = 2_064;
+
+/// Combined authenticated file bytes in both Phase23 RNS-Link secret spools.
+pub const CONFIDENTIAL_SPOOL_PHASE23_SECRET_TOTAL_FILE_BYTES_V1: u64 = 316_239_888;
+
+const _: () = {
+    assert!(
+        CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_V1
+            == CONFIDENTIAL_SPOOL_PHASE23_SECRET_RECORDS_V1
+                * CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_PER_RECORD_V1
+    );
+    assert!(
+        CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_FILE_BYTES_V1
+            == CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_V1
+                * (CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_PLAINTEXT_BYTES_V1 + TAG_BYTES_V1)
+    );
+    assert!(
+        CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_SLOTS_V1
+            == CONFIDENTIAL_SPOOL_PHASE23_SECRET_RECORDS_V1
+    );
+    assert!(
+        CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_FILE_BYTES_V1
+            == CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_SLOTS_V1
+                * (CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_PLAINTEXT_BYTES_V1 + TAG_BYTES_V1)
+    );
+    assert!(
+        CONFIDENTIAL_SPOOL_PHASE23_SECRET_TOTAL_FILE_BYTES_V1
+            == CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_FILE_BYTES_V1
+                + CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_FILE_BYTES_V1
+    );
+    assert!(CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
+    assert!(
+        CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_PLAINTEXT_BYTES_V1
+            <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1
+    );
+    assert!(
+        CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_FILE_BYTES_V1
+            <= CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1
+    );
+    assert!(CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
+    assert!(
+        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1
+            <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1
+    );
+    assert!(
+        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1
+            == CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1
+                * (CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1 + TAG_BYTES_V1)
+    );
+    assert!(
+        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1
+    );
+};
+
 /// Width of the semantic coordinate bound to every confidential spool slot.
 pub const CONFIDENTIAL_SPOOL_COORDINATE_BYTES_V1: usize = 32;
 
@@ -216,6 +304,20 @@ impl ConfidentialSpoolLayoutV1 {
         plaintext_len: u64,
         context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
     ) -> Result<Self, ConfidentialSpoolErrorV1> {
+        Self::new_with_file_ceiling_v1(
+            slot_count,
+            plaintext_len,
+            context_digest,
+            CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1,
+        )
+    }
+
+    fn new_with_file_ceiling_v1(
+        slot_count: u64,
+        plaintext_len: u64,
+        context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
+        file_ceiling: u64,
+    ) -> Result<Self, ConfidentialSpoolErrorV1> {
         if slot_count == 0 {
             return Err(ConfidentialSpoolErrorV1::EmptyLayout);
         }
@@ -246,7 +348,7 @@ impl ConfidentialSpoolLayoutV1 {
         let file_len = slot_count
             .checked_mul(ciphertext_record_len)
             .ok_or(ConfidentialSpoolErrorV1::GeometryOverflow)?;
-        if file_len > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1 {
+        if file_len > file_ceiling {
             return Err(ConfidentialSpoolErrorV1::LimitExceeded("file length"));
         }
         usize::try_from(slot_count).map_err(|_| ConfidentialSpoolErrorV1::AddressSpaceExceeded)?;
@@ -273,6 +375,68 @@ impl ConfidentialSpoolLayoutV1 {
             aad_len,
             context_digest,
         })
+    }
+
+    /// Construct the sole approved global-lookup plane-opening layout.
+    ///
+    /// Its exact 306,603-by-16,384-byte geometry is the only V1 exception to
+    /// the general-purpose detached-file ceiling. The caller's nonzero public
+    /// digest must bind the complete plane/value/blinding/commitment mapping;
+    /// this freezes geometry only and mints no replay or release authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfidentialSpoolErrorV1`] if the context digest is inert or
+    /// the fixed layout cannot be represented on the current target.
+    pub fn global_lookup_plane_openings_v1(
+        context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
+    ) -> Result<Self, ConfidentialSpoolErrorV1> {
+        Self::new_with_file_ceiling_v1(
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1,
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1,
+            context_digest,
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1,
+        )
+    }
+
+    /// Construct the sole approved Phase23 RNS-Link secret-main layout.
+    ///
+    /// The caller-supplied public digest must bind the protocol version, the
+    /// `main` role, and the complete record/component/block mapping. This
+    /// freezes geometry only and mints no protocol authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfidentialSpoolErrorV1`] if the context digest is inert or
+    /// the fixed layout cannot be represented on the current target.
+    pub fn phase23_rns_link_secret_main_v1(
+        context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
+    ) -> Result<Self, ConfidentialSpoolErrorV1> {
+        Self::new_v1(
+            CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_SLOTS_V1,
+            CONFIDENTIAL_SPOOL_PHASE23_SECRET_MAIN_PLAINTEXT_BYTES_V1,
+            context_digest,
+        )
+    }
+
+    /// Construct the sole approved Phase23 RNS-Link secret-nonce layout.
+    ///
+    /// The caller-supplied public digest must bind the protocol version, the
+    /// `nonce` role, and the complete record mapping. This freezes geometry
+    /// only and creates no authentication or release authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfidentialSpoolErrorV1`] if the context digest is inert or
+    /// the fixed layout cannot be represented on the current target.
+    pub fn phase23_rns_link_secret_nonce_v1(
+        context_digest: [u8; CONTEXT_DIGEST_BYTES_V1],
+    ) -> Result<Self, ConfidentialSpoolErrorV1> {
+        Self::new_v1(
+            CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_SLOTS_V1,
+            CONFIDENTIAL_SPOOL_PHASE23_SECRET_NONCE_PLAINTEXT_BYTES_V1,
+            context_digest,
+        )
     }
 
     /// Return the fixed number of write-once slots.
@@ -1323,6 +1487,59 @@ mod tests {
         let nonce = layout_v1(43, 32, b"phase23-secret-nonces-v1");
         assert_eq!(nonce.file_len_v1(), 2_064);
         assert_eq!(main.file_len_v1() + nonce.file_len_v1(), 3_829_526_544);
+
+        let secret_main = ConfidentialSpoolLayoutV1::phase23_rns_link_secret_main_v1(
+            context_digest_v1(b"phase23-rns-link-secret-main-v1"),
+        )
+        .expect("exact secret-main layout");
+        assert_eq!(secret_main.slot_count_v1(), 38_528);
+        assert_eq!(secret_main.plaintext_len_v1(), 8_192);
+        assert_eq!(secret_main.ciphertext_record_len_v1(), 8_208);
+        assert_eq!(secret_main.file_len_v1(), 316_237_824);
+
+        let secret_nonce = ConfidentialSpoolLayoutV1::phase23_rns_link_secret_nonce_v1(
+            context_digest_v1(b"phase23-rns-link-secret-nonce-v1"),
+        )
+        .expect("exact secret-nonce layout");
+        assert_eq!(secret_nonce.slot_count_v1(), 43);
+        assert_eq!(secret_nonce.plaintext_len_v1(), 32);
+        assert_eq!(secret_nonce.ciphertext_record_len_v1(), 48);
+        assert_eq!(secret_nonce.file_len_v1(), 2_064);
+        assert_eq!(
+            secret_main.file_len_v1() + secret_nonce.file_len_v1(),
+            CONFIDENTIAL_SPOOL_PHASE23_SECRET_TOTAL_FILE_BYTES_V1
+        );
+
+        let plane_openings = ConfidentialSpoolLayoutV1::global_lookup_plane_openings_v1(
+            context_digest_v1(b"global-lookup-plane-openings-v1"),
+        )
+        .expect("exact purpose-specific plane-opening layout");
+        assert_eq!(
+            plane_openings.slot_count_v1(),
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1
+        );
+        assert_eq!(
+            plane_openings.plaintext_len_v1(),
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1
+        );
+        assert_eq!(plane_openings.ciphertext_record_len_v1(), 16_400);
+        assert_eq!(
+            plane_openings.file_len_v1(),
+            CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1
+        );
+        assert!(plane_openings.file_len_v1() > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
+        assert!(matches!(
+            ConfidentialSpoolLayoutV1::new_v1(
+                CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1,
+                CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1,
+                context_digest_v1(b"general-constructor-must-stay-bounded"),
+            ),
+            Err(ConfidentialSpoolErrorV1::LimitExceeded("file length"))
+        ));
+        assert!(matches!(
+            ConfidentialSpoolLayoutV1::global_lookup_plane_openings_v1([0; 32]),
+            Err(ConfidentialSpoolErrorV1::InertContextDigest)
+        ));
     }
 
     #[test]
@@ -1626,6 +1843,7 @@ mod tests {
             .write_slot_v1(1, chunk_v1(b"wxyz"))
             .expect("write one");
         let mut snapshot = writer.seal_v1().expect("seal");
+        let sealed_digest = *snapshot.snapshot_digest_v1();
         assert_live_descriptor_v1(snapshot.resources.as_ref().expect("snapshot resources"));
         assert!(matches!(
             snapshot.read_slot_v1(2, context_digest_v1(b"roundtrip")),
@@ -1665,10 +1883,15 @@ mod tests {
             .read_slot_v1(1, context_digest_v1(b"roundtrip"))
             .expect("authenticated read");
         assert_eq!(second.as_slice_v1(), b"wxyz");
+        let second_repeat = snapshot
+            .read_slot_v1(1, context_digest_v1(b"roundtrip"))
+            .expect("repeated authenticated read");
+        assert_eq!(second_repeat.as_slice_v1(), second.as_slice_v1());
         let first = snapshot
             .read_slot_v1(0, context_digest_v1(b"roundtrip"))
             .expect("random authenticated read");
         assert_eq!(first.as_slice_v1(), b"abcd");
+        assert_eq!(*snapshot.snapshot_digest_v1(), sealed_digest);
     }
 
     #[test]

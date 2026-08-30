@@ -217,13 +217,9 @@ def source_seal_home() -> pathlib.Path:
 def selected_lockfile_path(
     root: pathlib.Path, configured: pathlib.Path | None = None
 ) -> pathlib.Path:
-    """Return the canonical, non-symbolic root Cargo lock used by the build."""
+    """Return the canonical, non-symbolic Cargo lock consumed by the build."""
 
-    candidate = root / "Cargo.lock"
-    if configured is not None and configured != candidate:
-        raise RuntimeError(
-            f"source sealing requires the explicit root Cargo lock: {candidate}"
-        )
+    candidate = configured if configured is not None else root / "Cargo.lock"
     if not candidate.is_absolute():
         raise RuntimeError("selected Cargo lock path must be absolute")
     canonical_spelling = pathlib.Path(os.path.abspath(candidate))
@@ -240,8 +236,17 @@ def selected_lockfile_path(
         resolved != candidate
         or stat.S_ISLNK(metadata.st_mode)
         or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_mode & 0o111
+        or metadata.st_size <= 0
+        or metadata.st_size > 16 * 1024 * 1024
     ):
-        raise RuntimeError("selected Cargo lock must be a non-symbolic regular file")
+        raise RuntimeError(
+            "selected Cargo lock must be one bounded, singly linked, "
+            "non-executable regular file"
+        )
+    if candidate.name != "Cargo.lock":
+        raise RuntimeError("selected Cargo lock path must end in Cargo.lock")
     return candidate
 
 
@@ -637,6 +642,15 @@ def fingerprint(
 ) -> str:
     lockfile = selected_lockfile_path(root, lockfile_path)
     digest = hashlib.sha256()
+    workspace_lock = selected_lockfile_path(root, root / "Cargo.lock")
+    if lockfile != workspace_lock:
+        # The external release lock determines dependency resolution, while
+        # the tracked workspace lock remains a separate source authority.
+        # Bind both under distinct stable logical names.
+        digest.update(b"Cargo.workspace.lock")
+        digest.update(b"\0")
+        digest.update(workspace_lock.read_bytes())
+        digest.update(b"\0")
     for relative in listed_files(root, inputs, lockfile):
         source = lockfile if relative == "Cargo.lock" else root / relative
         if source.is_symlink():
@@ -659,11 +673,12 @@ def status(
     lockfile_path: pathlib.Path | None = None,
 ) -> str:
     lockfile = selected_lockfile_path(root, lockfile_path)
-    status_inputs = [
-        relative
-        for relative in inputs
-        if relative != "Cargo.lock" or lockfile == root / "Cargo.lock"
-    ]
+    # When an external release lock drives metadata and fingerprinting, the
+    # tracked root lock remains an independently authenticated source input.
+    # Always include its logical path in Git status so a dirty root authority
+    # cannot disappear merely because the build consumes reviewed external
+    # lock bytes.
+    status_inputs = list(inputs)
     cargo, rustc, rustdoc, git = source_seal_tools()
     output = run(
         root,

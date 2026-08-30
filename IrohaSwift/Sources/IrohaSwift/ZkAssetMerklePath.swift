@@ -952,8 +952,37 @@ enum StrictJSONDuplicateKeyRejector {
     }
 }
 
-extension ToriiClient: ZkAssetMerklePathProvider {
+/// Authenticated Torii-backed provider for callers that consume the common
+/// Merkle-path provider interface. Authentication is captured explicitly so
+/// no network query can fall back to an unsigned Torii request.
+public struct AuthenticatedToriiZkAssetMerklePathProvider: ZkAssetMerklePathProvider, Sendable {
+    private let client: ToriiClient
+    private let canonicalAuth: ToriiCanonicalRequestAuth
+
+    public init(
+        client: ToriiClient,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) {
+        self.client = client
+        self.canonicalAuth = canonicalAuth
+    }
+
+    public func getMerklePathForCommitment(
+        asset: String,
+        commitment: Data
+    ) async throws -> ZkAssetMerklePath {
+        try await client.getMerklePathForCommitment(
+            asset: asset,
+            commitment: commitment,
+            canonicalAuth: canonicalAuth
+        )
+    }
+
     public func getMerklePaths(asset: String, commitments: [Data]) async throws -> [ZkAssetMerklePath] {
-        try await getZkAssetMerklePaths(asset: asset, commitments: commitments)
+        try await client.getZkAssetMerklePaths(
+            asset: asset,
+            commitments: commitments,
+            canonicalAuth: canonicalAuth
+        )
     }
 }

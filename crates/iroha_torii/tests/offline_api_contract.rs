@@ -8,6 +8,18 @@ use iroha_torii_shared::{
 fn offline_catalog_exposes_only_the_first_release_routes() {
     assert_eq!(uri::OFFLINE_READINESS, "/v1/offline/readiness");
     assert_eq!(
+        uri::OFFLINE_DEVICE_ATTESTATION_POLICY,
+        "/v1/offline/device-attestation-policy"
+    );
+    assert_eq!(
+        uri::OFFLINE_DEVICE_ATTESTATION_POLICY_PROOF,
+        "/v1/offline/device-attestation-policy/proof"
+    );
+    assert_eq!(
+        uri::OFFLINE_DEVICE_ELIGIBILITY,
+        "/v1/offline/device-eligibility"
+    );
+    assert_eq!(
         uri::OFFLINE_RECIPIENT_LINEAGE,
         "/v1/offline/receiver-lineage"
     );
@@ -31,6 +43,12 @@ fn offline_catalog_exposes_only_the_first_release_routes() {
         actual,
         vec![
             (HttpMethod::Get, uri::OFFLINE_READINESS),
+            (HttpMethod::Get, uri::OFFLINE_DEVICE_ATTESTATION_POLICY),
+            (
+                HttpMethod::Post,
+                uri::OFFLINE_DEVICE_ATTESTATION_POLICY_PROOF,
+            ),
+            (HttpMethod::Post, uri::OFFLINE_DEVICE_ELIGIBILITY),
             (HttpMethod::Post, uri::OFFLINE_RECIPIENT_LINEAGE),
             (HttpMethod::Post, uri::OFFLINE_TOP_UP),
             (HttpMethod::Post, uri::OFFLINE_REDEEM),
@@ -45,17 +63,17 @@ fn offline_catalog_projections_are_explicit() {
     let features = EnabledFeatures::new(&enabled);
     assert_eq!(
         catalog.project(CatalogProjection::OpenApi, features).len(),
-        5
+        8
     );
     assert_eq!(
         catalog
             .project(CatalogProjection::Sdk, EnabledFeatures::none())
             .len(),
-        5
+        8
     );
     assert_eq!(
         catalog.project(CatalogProjection::Mcp, features).len(),
-        5,
+        8,
         "the universal offline interface must not require a separate feature flag"
     );
 }

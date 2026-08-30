@@ -195,6 +195,14 @@ export function browserTransactionPayloadHashHex(
   payloadBytes: BrowserTransactionBytes,
 ): string;
 
+export function browserInstructionBatchHashHex(
+  instructions: readonly Record<string, unknown>[],
+): string;
+
+export function browserInstructionArchiveBatchHashHex(
+  instructionArchives: readonly BrowserTransactionBytes[],
+): string;
+
 export function validateBrowserTransferSignable(
   signable: BrowserTransactionSignable,
   constraints?: BrowserTransactionSignableConstraints,
@@ -237,6 +245,8 @@ export const browserTransactionCodec: Readonly<NexusTransactionCodec> & Readonly
   buildInstructionPayload: typeof buildBrowserInstructionTransactionPayload;
   buildExecutableBatchPayload: typeof buildBrowserExecutableBatchPayload;
   payloadHashHex: typeof browserTransactionPayloadHashHex;
+  instructionBatchHashHex: typeof browserInstructionBatchHashHex;
+  instructionArchiveBatchHashHex: typeof browserInstructionArchiveBatchHashHex;
   finalizeSignedTransaction: typeof finalizeBrowserSignedTransaction;
   finalizeInstructionTransaction: typeof finalizeBrowserInstructionTransaction;
   finalizeExecutableBatchTransaction: typeof finalizeBrowserExecutableBatchTransaction;

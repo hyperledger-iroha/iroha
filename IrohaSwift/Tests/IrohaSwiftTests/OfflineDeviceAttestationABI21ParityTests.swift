@@ -3,8 +3,8 @@ import Foundation
 import XCTest
 @testable import IrohaSwift
 
-/// Exact Rust/Swift golden coverage for the ABI-21 device-registration model.
-final class OfflineDeviceAttestationABI21ParityTests: XCTestCase {
+/// Exact Rust/Swift golden coverage for ABI-22 device-registration V2.
+final class OfflineDeviceAttestationV2ParityTests: XCTestCase {
     func testRegistrationAndChallengeMatchRustCurrentModel() throws {
         let rust = try rustFixture()
         XCTAssertEqual(rust.fixture, "offline_device_attestation_abi21")
@@ -14,20 +14,21 @@ final class OfflineDeviceAttestationABI21ParityTests: XCTestCase {
             sec1Bytes: assertionPublicKey
         )
         let signingCertificate = Data(
-            SHA256.hash(data: Data("abi20-unit-test-signing-certificate".utf8))
+            SHA256.hash(data: Data("abi22-v2-unit-test-signing-certificate".utf8))
         )
         let registration = try KagemushaDeviceAttestationRegistration(
-            version: 1,
+            version: KagemushaDeviceAttestation.registrationVersion,
             platform: KagemushaDeviceAttestation.androidKeyMintPlatform,
             keyId: Data(SHA256.hash(data: assertionPublicKey)).hexLowercased(),
-            deviceId: "abi20-android-unit-test-device",
+            deviceId: "abi22-v2-android-unit-test-device",
             accountId: rust.accountId,
             assetDefinitionId: nil,
             iosTeamId: nil,
             iosBundleId: nil,
             iosEnvironment: nil,
-            androidPackageName: "org.hyperledger.iroha.abi20.fixture",
+            androidPackageName: "org.hyperledger.iroha.abi22.v2.fixture",
             androidSigningCertificateSha256: signingCertificate,
+            androidAttestedDeviceProperties: try Self.androidProperties(),
             publicKey: devicePublicKey,
             assertionScheme: KagemushaDeviceAttestation.androidKeyMintAssertionScheme,
             assertionKeyAlgorithm:
@@ -36,9 +37,9 @@ final class OfflineDeviceAttestationABI21ParityTests: XCTestCase {
             assertionUsageCountLimit: 1,
             oneUse: true,
             attestationReport:
-                Data("abi20-unit-test-not-physical-attestation-evidence".utf8),
+                Data("abi22-v2-unit-test-not-physical-attestation-evidence".utf8),
             recentBlockHeight: 42,
-            recentBlockHash: IrohaHash.hash(Data("abi20-unit-test-block".utf8)),
+            recentBlockHash: IrohaHash.hash(Data("abi22-v2-unit-test-block".utf8)),
             expiresAtMs: 2_000_000_000_000
         )
 
@@ -57,6 +58,26 @@ final class OfflineDeviceAttestationABI21ParityTests: XCTestCase {
         XCTAssertEqual(
             registration.canonicalRegistrationId,
             IrohaHash.hash(try registration.noritoEncoded())
+        )
+    }
+
+    private static func androidProperties() throws
+        -> OfflineAndroidAttestedDevicePropertiesV2 {
+        try OfflineAndroidAttestedDevicePropertiesV2(
+            attestationVersion: 300,
+            keymintVersion: 300,
+            securityLevel: .strongBox,
+            brand: "google",
+            device: "husky",
+            product: "husky",
+            manufacturer: "Google",
+            model: "Pixel 8 Pro",
+            osVersion: 140_000,
+            osPatchLevel: 202_608,
+            vendorPatchLevel: 20_260_805,
+            bootPatchLevel: 20_260_801,
+            verifiedBootKey: Data(repeating: 0x42, count: 32),
+            verifiedBootHash: Data(repeating: 0x24, count: 32)
         )
     }
 

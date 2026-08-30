@@ -1535,6 +1535,7 @@ fn pipeline_transaction_details_response(
             &hash,
         ),
         hash,
+        block_height,
         transaction,
     })
 }

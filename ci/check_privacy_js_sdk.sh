@@ -5,8 +5,8 @@ ROOT_DIR="${PRIVACY_JS_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd
 NODE_OVERRIDE="${PRIVACY_JS_SDK_NODE_BIN:-}"
 PYTHON_BIN="${PRIVACY_JS_SDK_PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+FROZEN_CARGO_LOCK_SHA256="31b5af592c235ce7a24e9ea219ceaa5c2f74400b650c5121182425d93e39811d"
+TRACKED_ROOT_CARGO_LOCK_SHA256="179f589da420c024725efd9a65adb9c1e34085fa022cc01a8c67bb2262e93bf7"
 ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-js-native.XXXXXX")"
 
@@ -25,6 +25,10 @@ WORKSPACE_CARGO_LOCK_STATE="$(
 cleanup_privacy_js_sdk_lock_state() {
   local status=$?
   trap - EXIT HUP INT TERM
+  if ! privacy_sdk_assert_ci_cargo_lock_state "${ROOT_DIR}" "${PYTHON_BIN}" \
+      || ! privacy_sdk_assert_ci_executable_path_order; then
+    status=1
+  fi
   if ! privacy_sdk_assert_optional_file_state \
     "${WORKSPACE_CARGO_LOCKFILE}" \
     "${WORKSPACE_CARGO_LOCK_STATE}" \
@@ -106,32 +110,27 @@ PY
   || { echo "error: privacy JavaScript native execution requires Cargo.lock" >&2; exit 1; }
 [[ "$(sha256_file "${WORKSPACE_CARGO_LOCKFILE}")" == "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] \
   || { echo "error: privacy JavaScript tracked root Cargo.lock authority changed" >&2; exit 1; }
-PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
+privacy_sdk_assert_ci_cargo_lock_state "${ROOT_DIR}" "${PYTHON_BIN}"
+privacy_sdk_assert_ci_executable_path_order
+PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH:-}"
 [[ -f "${PRIVACY_RELEASE_CARGO_LOCK}" && ! -L "${PRIVACY_RELEASE_CARGO_LOCK}" && \
   "${PRIVACY_RELEASE_CARGO_LOCK}" != "${WORKSPACE_CARGO_LOCKFILE}" ]] \
   || { echo "error: privacy JavaScript requires a distinct external release Cargo.lock" >&2; exit 1; }
 [[ "$(sha256_file "${PRIVACY_RELEASE_CARGO_LOCK}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
   || { echo "error: privacy JavaScript external Cargo.lock is not the frozen release lock" >&2; exit 1; }
-echo \
-  "error: privacy JavaScript native tooling requires external-lock requalification before it can consume cd9e without replacing the tracked c90b root authority" \
-  >&2
-exit 1
-
-RUSTUP_BIN="${PRIVACY_JS_SDK_RUSTUP_BIN:-$(command -v rustup)}"
-IROHA_JS_CARGO_PATH="$("${RUSTUP_BIN}" which --toolchain 1.93.1 cargo)"
-RUSTC="$("${RUSTUP_BIN}" which --toolchain 1.93.1 rustc)"
-RUSTDOC="$("${RUSTUP_BIN}" which --toolchain 1.93.1 rustdoc)"
+[[ "${IROHA_PRIVACY_CARGO_LOCKFILE_PATH:-}" == "${PRIVACY_RELEASE_CARGO_LOCK}" && \
+  "${IROHA_JS_CARGO_LOCKFILE_PATH:-}" == "${PRIVACY_RELEASE_CARGO_LOCK}" ]] \
+  || { echo "error: privacy JavaScript authenticated lock aliases diverged" >&2; exit 1; }
+IROHA_JS_CARGO_PATH="${IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH:-}"
+RUSTC="${IROHA_PRIVACY_AUTHENTICATED_RUSTC_PATH:-}"
+RUSTDOC="${IROHA_PRIVACY_AUTHENTICATED_RUSTDOC_PATH:-}"
+[[ -x "${IROHA_JS_CARGO_PATH}" && -x "${RUSTC}" && -x "${RUSTDOC}" ]] \
+  || { echo "error: privacy JavaScript authenticated Rust tools are unavailable" >&2; exit 1; }
 [[ "$("${RUSTC}" --version)" == rustc\ 1.93.1\ * ]] \
   || { echo "error: privacy JavaScript native execution requires exact rustc 1.93.1" >&2; exit 1; }
 export IROHA_JS_CARGO_PATH RUSTC RUSTDOC
-export CARGO_BUILD_JOBS=1
-export CARGO_INCREMENTAL=0
-export CARGO_NET_OFFLINE=true
-export CARGO_TARGET_DIR="${NATIVE_BUILD_ROOT}/target"
-export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"
 export IROHA_JS_NATIVE_DIR="${NATIVE_BUILD_ROOT}/native"
 export NORITO_SKIP_BINDINGS_SYNC=1
-export RUSTC_BOOTSTRAP=1
 
 cd "${ROOT_DIR}/javascript/iroha_js"
 NODE_VERSION="$("${NODE_BIN}" --version)"
@@ -190,3 +189,5 @@ NATIVE_TARGET="$("${NODE_BIN}" --eval 'process.stdout.write(`${process.platform}
   --node "${NODE_BIN}"
 [[ "$(sha256_file "${WORKSPACE_CARGO_LOCKFILE}")" == "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] \
   || { echo "error: tracked root Cargo.lock changed during privacy JavaScript native execution" >&2; exit 1; }
+privacy_sdk_assert_ci_cargo_lock_state "${ROOT_DIR}" "${PYTHON_BIN}"
+privacy_sdk_assert_ci_executable_path_order

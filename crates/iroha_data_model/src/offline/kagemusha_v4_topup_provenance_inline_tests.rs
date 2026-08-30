@@ -4,8 +4,8 @@ mod kagemusha_v4_topup_provenance_tests {
     use super::*;
     use crate::{
         block::{
-            BlockHeader,
             consensus_v2::{BlockSubject, ConsensusRound, ExecutionCommitment},
+            BlockHeader,
         },
         domain::DomainId,
         peer::PeerId,
@@ -258,11 +258,9 @@ mod kagemusha_v4_topup_provenance_tests {
         provenance: &KagemushaRecursiveSpendTopUpProvenanceV4,
         height: u64,
     ) {
-        assert!(
-            provenance
-                .validate_for_statement_at_height(&fixture.statement, Some(height))
-                .is_err()
-        );
+        assert!(provenance
+            .validate_for_statement_at_height(&fixture.statement, Some(height))
+            .is_err());
     }
     fn init_request(fixture: &Fixture) -> KagemushaRecursiveSpendInitRequestV4 {
         let evidence = &fixture.provenance.topup_finality_evidence[0];
@@ -432,39 +430,31 @@ mod kagemusha_v4_topup_provenance_tests {
         let fixture = fixture_with_seeds(&[0x31]);
         let mut wrong_network = fixture.statement.clone();
         wrong_network.network_id = network_id(0x52);
-        assert!(
-            fixture
-                .provenance
-                .validate_for_statement_at_height(&wrong_network, Some(50))
-                .is_err()
-        );
+        assert!(fixture
+            .provenance
+            .validate_for_statement_at_height(&wrong_network, Some(50))
+            .is_err());
         let mut wrong_asset = fixture.statement.clone();
         wrong_asset.asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("test domain"),
             "wrong".parse().expect("test asset name"),
         );
-        assert!(
-            fixture
-                .provenance
-                .validate_for_statement_at_height(&wrong_asset, Some(50))
-                .is_err()
-        );
+        assert!(fixture
+            .provenance
+            .validate_for_statement_at_height(&wrong_asset, Some(50))
+            .is_err());
         let mut wrong_scale = fixture.statement.clone();
         wrong_scale.asset_scale = 3;
-        assert!(
-            fixture
-                .provenance
-                .validate_for_statement_at_height(&wrong_scale, Some(50))
-                .is_err()
-        );
+        assert!(fixture
+            .provenance
+            .validate_for_statement_at_height(&wrong_scale, Some(50))
+            .is_err());
         let mut wrong_binding = fixture.statement.clone();
         wrong_binding.artifact_binding.manifest_sha256[0] ^= 1;
-        assert!(
-            fixture
-                .provenance
-                .validate_for_statement_at_height(&wrong_binding, Some(50))
-                .is_err()
-        );
+        assert!(fixture
+            .provenance
+            .validate_for_statement_at_height(&wrong_binding, Some(50))
+            .is_err());
         let mut wrong_generation = fixture.provenance.clone();
         wrong_generation
             .topup_finality_roster_artifact
@@ -534,13 +524,11 @@ mod kagemusha_v4_topup_provenance_tests {
         )
         .expect("two exact inventories merge canonically");
         assert_eq!(merged.topup_finality_evidence.len(), 2);
-        assert!(
-            merged
-                .anchor_refs()
-                .expect("merged refs")
-                .windows(2)
-                .all(|pair| pair[0] < pair[1])
-        );
+        assert!(merged
+            .anchor_refs()
+            .expect("merged refs")
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]));
         let mut wrong_roster = right.provenance.clone();
         wrong_roster.topup_finality_roster_artifact.windows[0].validator_set_pops[0][0] ^= 1;
         assert!(
@@ -580,6 +568,7 @@ mod kagemusha_v4_topup_provenance_tests {
             .is_err()
         );
     }
+    include!("kagemusha_eligibility_payment_envelope_inline_tests.rs");
 }
 impl KagemushaRecursiveSpendVerifyRequestV4 {
     /// Validate the terminal receiver request and every V4 proof/provenance binding.

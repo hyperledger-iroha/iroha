@@ -17,16 +17,22 @@ fn compiled_profile_digest_mutations_v1() -> [fn(&mut CompiledPrivacyProfileV1);
     ]
 }
 #[test]
-fn zk_ace_is_unavailable_and_bootle_release_context_binds_every_profile_digest() {
+fn zk_ace_release_profile_obeys_pin_gate_and_bootle_context_binds_every_digest() {
     let zk_ace = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
-    assert_eq!(
-        compiled_privacy_profile_v1(zk_ace),
-        Err(
-            crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                protocol_id: zk_ace,
-            }
-        )
-    );
+    let zk_ace_candidate =
+        zk_ace_release_candidate_profile_material_v2().expect("ZK-ACE candidate profile");
+    if crate::privacy_engines::zk_ace::zk_ace_public_release_pins_complete_v2() {
+        assert_eq!(compiled_privacy_profile_v1(zk_ace), Ok(zk_ace_candidate));
+    } else {
+        assert_eq!(
+            compiled_privacy_profile_v1(zk_ace),
+            Err(
+                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                    protocol_id: zk_ace,
+                }
+            )
+        );
+    }
 
     let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
     let profile = compiled_privacy_profile_v1(protocol_id).expect("compiled profile");
@@ -336,8 +342,8 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
     let transaction =
         vega_release_transaction_context_v1().expect("canonical Vega transaction context");
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-        .expect("compiled Vega profile");
+    let profile =
+        vega_release_candidate_profile_material_v1().expect("Vega candidate profile material");
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let context = PrivacyStatementContextV1 {
         network_id: transaction.network_id,
@@ -382,8 +388,8 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
 #[test]
 fn vega_release_envelope_requires_the_production_native_dispatch() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-        .expect("compiled Vega profile");
+    let profile =
+        vega_release_candidate_profile_material_v1().expect("Vega candidate profile material");
     let authoritative_network_id = release_network_id_from_genesis_hash(fixture.genesis_hash);
     let input = fixture.public_input;
     let record = fixture.issuer_record;
@@ -434,8 +440,11 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
         Ok(()),
     );
     statement.context.action_index = 1;
-    refresh_vega_device_authentication_digest_v1(&mut statement, fixture.genesis_hash)
-        .expect("rebound impossible Vega action index");
+    assert_eq!(
+        refresh_vega_device_authentication_digest_v1(&mut statement, fixture.genesis_hash),
+        Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed),
+        "an impossible Vega action index must not admit a rebound device digest"
+    );
     let pre_native_rejection = verify_vega_release_production_envelope_v1(
         &statement,
         Some(&record),
@@ -471,7 +480,7 @@ fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
     )
     .expect("canonical Vega action witness material");
     let mut rng = EvidenceRng06::new([0x91; 32]);
-    let prepared = prepare_vega_privacy_action_with_rng_v1(
+    let prepared = prepare_vega_release_candidate_privacy_action_with_rng_v1(
         vega_release_transaction_context_v1().expect("canonical transaction context"),
         fixture.public_input,
         witness_material,
@@ -1358,6 +1367,15 @@ fn every_protocol_has_one_distinct_nonempty_canonical_descriptor() {
     }
 }
 #[test]
+fn bootle_lantern_release_descriptor_does_not_claim_per_credential_revocation() {
+    let descriptor =
+        privacy_release_protocol_descriptor_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1);
+    assert!(descriptor.contains("revocation=whole-issuer-policy-lineage-lifecycle-only"));
+    assert!(descriptor.contains(
+        "per-credential-revocation-accumulator=unsupported-and-root-publication-rejected"
+    ));
+}
+#[test]
 fn vega_release_descriptor_is_derived_from_the_canonical_mc_constants() {
     let descriptor =
         privacy_release_protocol_descriptor_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0);
@@ -1415,21 +1433,133 @@ fn jindo_release_descriptor_does_not_condition_individual_s35_challenges_on_unit
 }
 
 #[test]
-fn zk_ace_release_stages_fail_closed_without_an_activatable_profile() {
+fn zk_ace_candidate_evidence_contract_is_stable_across_the_production_pin_gate() {
     let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
-    assert!(descriptor.contains("activation=disabled"));
-    assert!(descriptor.contains("commitment-binding-ceiling=32-bits"));
-    for case_kind in PrivacyReleaseCaseKindV1::ALL {
+    assert!(
+        descriptor.contains(
+            "activation=requires-reviewed-four-stage-and-committed-network-evidence-pins"
+        )
+    );
+    assert!(descriptor.contains("commitment-binding-target=128-bits-classical-ROM"));
+    assert!(descriptor.contains("candidate-proof-cap=1427158 exact bytes"));
+    assert!(descriptor.contains(
+        "evidence-path=feature-isolated-candidate-joins-production-validation-prover-and-verifier-core"
+    ));
+    for lane in 0..4 {
+        assert!(descriptor.contains(&format!(
+            "lane{lane}:zk-ace.poseidon-x7.digest-lane-{lane}.v2"
+        )));
+    }
+    let candidate = zk_ace_release_candidate_profile_material_v2()
+        .expect("candidate material must be deterministic before evidence admission");
+    assert_eq!(candidate.protocol_id, protocol_id);
+    let public_pins_complete =
+        crate::privacy_engines::zk_ace::zk_ace_public_release_pins_complete_v2();
+    if public_pins_complete {
+        assert_eq!(compiled_privacy_profile_v1(protocol_id), Ok(candidate));
+    } else {
         assert_eq!(
-            run_privacy_release_stage_v1(protocol_id, case_kind),
-            Err(PrivacyReleaseEvidenceErrorV1 {
-                protocol_id,
-                case_kind,
-                class: PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
-            })
+            compiled_privacy_profile_v1(protocol_id),
+            Err(
+                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                    protocol_id,
+                }
+            )
         );
     }
+    assert!(
+        !crate::privacy_engines::zk_ace::zk_ace_public_release_pins_complete_v2()
+            || crate::privacy_engines::zk_ace::zk_ace_release_evidence_pins_complete_v2(),
+        "public release evidence cannot be complete before native-stage evidence"
+    );
+    if crate::privacy_engines::zk_ace::zk_ace_nonshipping_release_candidate_available_v2() {
+        assert_eq!(
+            crate::privacy_profiles::nonshipping_zk_ace_release_candidate_profile_v2(),
+            Ok(candidate)
+        );
+    }
+}
+
+#[test]
+fn release_stage_admission_rederives_closed_coordinate_semantics() {
+    let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    let case_kind = PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd;
+    let proof = vec![0x5A];
+    let mut evidence = PrivacyReleaseStageEvidenceV1 {
+        schema_version: PRIVACY_RELEASE_EVIDENCE_SCHEMA_VERSION_V1,
+        stage_ordinal: privacy_release_stage_ordinal_v1(protocol_id, case_kind),
+        protocol_id,
+        case_kind,
+        protocol_descriptor: privacy_release_protocol_descriptor_v1(protocol_id).to_owned(),
+        public_statement_sha256: [0x41; 32],
+        proof_artifacts: vec![PrivacyReleaseProofArtifactEvidenceV1 {
+            artifact_ordinal: 0,
+            proof_sha256: sha256_v1(&proof),
+            canonical_proof_bytes: proof,
+            proof_bytes_ceiling: privacy_release_proof_artifact_ceiling_v1(
+                protocol_id,
+                case_kind,
+                0,
+            )
+            .expect("ZK-ACE proof ceiling"),
+        }],
+        failure_class: PrivacyReleaseFailureClassV1::NotApplicable,
+        resources: privacy_release_resource_facts_v1(protocol_id, case_kind)
+            .expect("ZK-ACE resource facts"),
+    };
+    assert!(validate_privacy_release_stage_evidence_v1(&evidence));
+    assert_ne!(
+        privacy_release_stage_evidence_sha256_v1(&evidence)
+            .expect("valid evidence must have a canonical digest"),
+        [0; 32]
+    );
+
+    let canonical = evidence.clone();
+    evidence.stage_ordinal ^= 1;
+    assert!(!validate_privacy_release_stage_evidence_v1(&evidence));
+    evidence = canonical.clone();
+    evidence.protocol_descriptor.push_str(":substituted");
+    assert!(!validate_privacy_release_stage_evidence_v1(&evidence));
+    evidence = canonical.clone();
+    evidence.public_statement_sha256 = [0; 32];
+    assert!(!validate_privacy_release_stage_evidence_v1(&evidence));
+    evidence = canonical.clone();
+    evidence.failure_class = PrivacyReleaseFailureClassV1::PublicStatementBindingRejected;
+    assert!(!validate_privacy_release_stage_evidence_v1(&evidence));
+    evidence = canonical.clone();
+    evidence.resources.primary_ceiling += 1;
+    assert!(!validate_privacy_release_stage_evidence_v1(&evidence));
+    evidence = canonical;
+    evidence.proof_artifacts[0].canonical_proof_bytes[0] ^= 1;
+    assert!(!validate_privacy_release_stage_evidence_v1(&evidence));
+    assert_eq!(privacy_release_stage_evidence_sha256_v1(&evidence), None);
+}
+
+#[test]
+#[ignore = "operator-only four-stage native ZK-ACE capture and reviewed-pin verification"]
+fn zk_ace_release_stages_execute_candidate_core_and_match_reviewed_pins() {
+    use crate::privacy_engines::zk_ace::ZK_ACE_RELEASE_STAGE_EVIDENCE_SHA256_V2;
+
+    let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    let observed = PrivacyReleaseCaseKindV1::ALL.map(|case_kind| {
+        let evidence = run_privacy_release_stage_v1(protocol_id, case_kind)
+            .expect("complete native ZK-ACE release stage");
+        assert_eq!(evidence.protocol_id, protocol_id);
+        assert_eq!(evidence.case_kind, case_kind);
+        assert!(validate_privacy_release_proof_artifacts_v1(
+            protocol_id,
+            case_kind,
+            &evidence.proof_artifacts,
+        ));
+        assert!(validate_privacy_release_stage_evidence_v1(&evidence));
+        privacy_release_stage_evidence_sha256_v1(&evidence)
+            .expect("complete ZK-ACE evidence has one reviewed-pin digest")
+    });
+    assert_eq!(
+        observed, ZK_ACE_RELEASE_STAGE_EVIDENCE_SHA256_V2,
+        "captured ZK-ACE stage evidence does not match the reviewed source pins"
+    );
 }
 
 #[test]

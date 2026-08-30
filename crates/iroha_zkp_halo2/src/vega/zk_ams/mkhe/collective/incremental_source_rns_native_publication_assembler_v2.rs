@@ -1322,8 +1322,8 @@ pub(super) const RNS_NATIVE_PUBLICATION_ASSEMBLER_BLOCKERS_V2:
         required_delta: "bind the existing parent-private reader entry path to this sealed consuming adapter seam and retain the published evidence beside the reader; no reader visibility or public/untyped constructor change is required",
     },
     RnsNativePublicationAssemblerBlockerV2 {
-        code: "PHASE23_DISABLED",
-        required_delta: "the Phase23 bridge and its external-source reexports remain cfg(any()); do not enable them without production correspondence and source-algebra seals",
+        code: "PHASE23_SOURCE_ALGEBRA_UNINHABITED",
+        required_delta: "the private move-only Phase23 context owner and external-source topology now compile continuously, but the production source-algebra adapters and seals remain uninhabited",
     },
 ];
 
