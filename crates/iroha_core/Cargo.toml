@@ -57,6 +57,10 @@ dev-tools = []
 # `iroha_test_network` daemon. The default/node feature graph never enables
 # these hooks.
 test-network-native-amx-fault-injection = ["json"]
+# Non-shipping, read-only private-settlement state commitments used only by
+# adversarial real-process release tests. Shipping/default feature graphs must
+# never expose the diagnostic surface that consumes this evidence.
+test-network-private-settlement-evidence = []
 # Non-shipping Parliament integration-test provider. The isolated test daemon
 # uses this to derive proof-valid beacon and TLE shares for its exact validator seat;
 # default/node/release feature sets never include it.

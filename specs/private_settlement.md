@@ -439,6 +439,13 @@ canary scans, exact public file/size/JSON-shape comparison, and mandatory paired
 V1 message-count manifests covering Torii, public/restricted P2P, block, query,
 event, log, and telemetry records. Its report binds the canary manifest, every
 scanned artifact, and both message-count manifests by byte length and SHA-256.
+Canonical account and asset canaries are expanded into their protocol-native
+I105-controller and asset-UUID byte encodings as well as ordinary text, integer,
+hex, Base64, URL, and JSON representations. The real loopback capture is split
+by the exact per-run Torii, public-lane P2P, and restricted-lane P2P port
+manifest with `scripts/private_settlement_capture_split.py`; packet payloads and
+timestamps are copied unchanged into canonical pcapng surfaces, and an empty
+declared channel fails closed.
 The DOI-bundle verifier independently requires those bindings to cover every
 archived public and restricted capture, Kura/merge and snapshot artifact,
 query/event/log/telemetry record, and both count manifests; a clean report from

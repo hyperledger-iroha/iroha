@@ -102,6 +102,10 @@ stable `--target-slot` names only when concurrent tasks need isolated Cargo
 locks; creating a fresh dated or temporary target for every build defeats
 incremental reuse. For intentionally cold or isolated lanes, use
 `--no-incremental` to improve `sccache` reuse across targets. The
+wrapper clears the exact single-worker Cargo/CMake fingerprint inherited from
+local automation so its fast defaults can take effect; pass
+`--preserve-build-limits` when those inherited limits are intentional. Explicit
+test-runner limits such as `RUST_TEST_THREADS` are preserved. The
 `local-release` profile and `--stable-local-metadata` are local-development
 tools only; release, packaging, and evidence workflows must keep using the
 unchanged `release` or `deploy` profiles and exact source metadata. Linker

@@ -995,7 +995,7 @@ fn claimed_inventory_direct_join_preserves_the_sole_schedule_and_whole_chronolog
         .split_once("pub(super) fn authenticate_claimed_inventory_v2")
         .expect("sealed inventory join")
         .1
-        .split_once("impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1>")
+        .split_once("impl<'qpcs, 'cross, S: ZkAmsMkheRnsNativeSourceSnapshotV1>")
         .expect("sealed inventory join boundary")
         .0;
     let final_bind = inventory_join

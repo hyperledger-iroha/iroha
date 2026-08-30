@@ -797,6 +797,10 @@ mod tests {
     #[test]
     fn owned_sumcheck_corridor_has_no_borrowed_table_clone() {
         let source = include_str!("sumcheck.rs");
+        let production = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("production sum-check source");
         let split_first = source
             .split("pub(super) fn prove_cubic_with_split_first_owned")
             .nth(1)
@@ -816,9 +820,9 @@ mod tests {
         assert!(split_first.contains("a.bind_first(first_challenge)"));
         assert!(split_first.contains("SecretScalarTable::try_eq_evals(&tau[1..])"));
         assert!(!quadratic.contains(".to_vec()"));
-        assert!(!source.contains("fn prove_cubic_with_three_inputs_owned"));
-        assert!(source.contains("upper[index].clear_secret()"));
-        assert!(source.contains("impl Drop for SecretScalarTable"));
+        assert!(!production.contains("fn prove_cubic_with_three_inputs_owned"));
+        assert!(production.contains("upper[index].clear_secret()"));
+        assert!(production.contains("impl Drop for SecretScalarTable"));
     }
     #[test]
     fn sumcheck_provers_reject_false_claims_shapes_and_work_overflow() {

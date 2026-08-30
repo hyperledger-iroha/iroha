@@ -1432,6 +1432,27 @@ def _regenerate_fault_report(raw_paths: Sequence[Path]) -> dict[str, Any]:
         ) from error
 
 
+def _load_fault_evidence_validator() -> Any:
+    """Load the strict nested command/state validator used by the runner."""
+
+    module_name = "private_settlement_release_runner"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    validator_path = Path(__file__).with_name("private_settlement_release_runner.py")
+    spec = importlib.util.spec_from_file_location(module_name, validator_path)
+    if spec is None or spec.loader is None:
+        raise EvidenceError("cannot load the strict nested fault-evidence validator")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        del sys.modules[module_name]
+        raise
+    return module
+
+
 def _validate_fault_trial_evidence_bindings(
     raw_paths: Sequence[Path], artifacts: Sequence[Artifact], root: Path
 ) -> None:
@@ -1446,6 +1467,8 @@ def _validate_fault_trial_evidence_bindings(
             capture_artifacts[artifact.sha256].append(artifact)
 
     record_cache: dict[PurePosixPath, dict[str, dict[str, Any]]] = {}
+    validated_files: set[tuple[PurePosixPath, str, int, int, int]] = set()
+    validator = _load_fault_evidence_validator()
 
     def archived_records(
         digest: str, candidates: dict[str, list[Artifact]], label: str
@@ -1553,59 +1576,92 @@ def _validate_fault_trial_evidence_bindings(
                         "collection": collection,
                         "trial_index": index,
                     }
-                    if collection == "loss_trials":
-                        expected_transcript = {
-                            **common,
-                            "phase": trial["phase"],
-                            "loss_percent": trial["loss_percent"],
-                            "control_acknowledged": trial["control_acknowledged"],
-                            "healed": trial["healed"],
-                            "converged": trial["converged"],
-                        }
-                    elif collection == "phase_cut_partitions":
-                        expected_transcript = {
-                            **common,
-                            "cut": trial["cut"],
-                            "control_acknowledged": trial["control_acknowledged"],
-                            "delayed_delivery": trial["delayed_delivery"],
-                            "healed": trial["healed"],
-                            "converged": trial["converged"],
-                        }
-                    else:
-                        expected_transcript = {
-                            **common,
-                            "boundary": trial["boundary"],
-                            "process_restarted": trial["process_restarted"],
-                            "durable_state_reconciled": trial[
-                                "durable_state_reconciled"
-                            ],
-                            "converged": trial["converged"],
-                        }
-                    if transcript_entry != expected_transcript:
+                    if any(
+                        transcript_entry.get(field) != value
+                        for field, value in common.items()
+                    ):
                         raise EvidenceError(
                             f"{path}:{line_number}.{collection}[{index}] control record "
-                            "does not exactly bind the raw fault trial"
+                            "does not bind the raw fault-trial identity"
                         )
-                    expected_capture = {
+                    capture_common = {
+                        **common,
                         "record": capture_record,
-                        "participants": record["participants"],
-                        "seed": record["seed"],
-                        "run": record["run"],
-                        "collection": collection,
-                        "trial_index": index,
-                        "continuous_checks": record["atomicity"]["continuous_checks"],
-                        "partial_visibility_observed": trial[
-                            "partial_visibility_observed"
-                        ],
-                        "partial_spendable_observations": record["atomicity"][
-                            "partial_spendable_observations"
-                        ],
-                        "converged": trial["converged"],
                     }
-                    if capture_entry != expected_capture:
+                    if any(
+                        capture_entry.get(field) != value
+                        for field, value in capture_common.items()
+                    ):
                         raise EvidenceError(
                             f"{path}:{line_number}.{collection}[{index}] observation record "
-                            "does not exactly bind the raw atomicity trial"
+                            "does not bind the raw fault-trial identity"
+                        )
+                    transcript_artifact = transcript_artifacts[transcript][0]
+                    capture_artifact = capture_artifacts[capture][0]
+                    binding = (
+                        record["participants"],
+                        record["seed"],
+                        record["run"],
+                    )
+                    transcript_key = (transcript_artifact.path, "control", *binding)
+                    capture_key = (capture_artifact.path, "capture", *binding)
+                    try:
+                        if transcript_key not in validated_files:
+                            bound_transcript_records = [
+                                entry
+                                for entry in transcript_records.values()
+                                if (
+                                    entry.get("participants"),
+                                    entry.get("seed"),
+                                    entry.get("run"),
+                                )
+                                == binding
+                            ]
+                            validator.validate_fault_control_records(
+                                bound_transcript_records,
+                                participants=binding[0],
+                                seed=binding[1],
+                                run=binding[2],
+                            )
+                            validated_files.add(transcript_key)
+                        if capture_key not in validated_files:
+                            bound_capture_records = [
+                                entry
+                                for entry in capture_records.values()
+                                if (
+                                    entry.get("participants"),
+                                    entry.get("seed"),
+                                    entry.get("run"),
+                                )
+                                == binding
+                            ]
+                            validator.validate_fault_observation_records(
+                                bound_capture_records,
+                                participants=binding[0],
+                                seed=binding[1],
+                                run=binding[2],
+                            )
+                            validated_files.add(capture_key)
+                        validator.validate_fault_trial_control_semantics(
+                            transcript_entry,
+                            collection=collection,
+                            trial=trial,
+                            label=f"{path}:{line_number}.{collection}[{index}]",
+                        )
+                    except Exception as error:
+                        raise EvidenceError(
+                            f"{path}:{line_number}.{collection}[{index}] "
+                            f"nested fault evidence is invalid: {error}"
+                        ) from error
+                    if (
+                        capture_entry["partial_visibility_observed"]
+                        != trial["partial_visibility_observed"]
+                        or capture_entry["partial_spendable_observations"]
+                        != record["atomicity"]["partial_spendable_observations"]
+                    ):
+                        raise EvidenceError(
+                            f"{path}:{line_number}.{collection}[{index}] observation record "
+                            "contradicts the raw atomicity trial"
                         )
 
 

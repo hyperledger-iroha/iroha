@@ -68,3 +68,7 @@ pub use sidecar_store::{
     PrivateSettlementSidecarStoreConfigV1, PrivateSettlementSidecarStoreErrorV1,
     PrivateSettlementSidecarStoreOutcomeV1, PrivateSettlementSponsorPhaseCertificatesV1,
 };
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+pub use sidecar_store::{
+    PrivateSettlementStagedLockCountsV1, PrivateSettlementStagedLockEvidenceV1,
+};

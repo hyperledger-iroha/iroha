@@ -30,6 +30,9 @@ default = ["tls-rustls-native-roots", "gost", "sm"]
 ids_projection = ["iroha_data_model/ids_projection"]
 # Expose deterministic, secret-free fixture constructors only to repository tooling.
 test-fixtures = ["iroha_data_model/test-fixtures"]
+# Non-shipping, operator-authenticated reader for the feature-isolated APS
+# release-evidence state-commitment route.
+test-network-private-settlement-evidence = []
 sm = [
     "iroha_config/sm",
     "iroha_crypto/sm",

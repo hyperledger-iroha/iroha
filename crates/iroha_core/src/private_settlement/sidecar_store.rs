@@ -86,6 +86,133 @@ pub const PRIVATE_SETTLEMENT_SIDECAR_DEFAULT_MAX_TOTAL_BYTES_V1: u64 =
 /// Maximum records examined by one finality-reconciliation page.
 pub const PRIVATE_SETTLEMENT_RECONCILIATION_MAX_PAGE_RECORDS_V1: usize = 256;
 
+/// Exact staged-lock counts bound by the non-shipping private-settlement
+/// sidecar commitment used in adversarial real-process tests.
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct PrivateSettlementStagedLockCountsV1 {
+    /// Reserved opaque pool heads.
+    pub pool_heads: u64,
+    /// Reserved nullifiers.
+    pub nullifiers: u64,
+    /// Reserved output commitments.
+    pub output_commitments: u64,
+    /// Sum of all three reservation-map counts.
+    pub total: u64,
+}
+
+/// Evidence-only commitment to every staged private-settlement reservation.
+///
+/// The digest and counts expose no reservation keys. They are compiled only
+/// for the authenticated test-network diagnostic and are not a production
+/// privacy API.
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateSettlementStagedLockEvidenceV1 {
+    /// Domain-separated commitment to canonical reservation maps and counts.
+    pub commitment: Hash,
+    /// Exact staged-lock count vector committed by `commitment`.
+    pub counts: PrivateSettlementStagedLockCountsV1,
+}
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+const PRIVATE_SETTLEMENT_STAGED_LOCK_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"iroha:test-network:private-settlement:staged-lock-evidence:v1\0";
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+fn private_settlement_staged_lock_commitment_v1(
+    sections: &[(&[u8], &[u8])],
+    counts: PrivateSettlementStagedLockCountsV1,
+) -> Result<Hash, PrivateSettlementSidecarStoreErrorV1> {
+    let counts_bytes = norito::encode_canonical(&counts)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+    let mut preimage = Vec::with_capacity(
+        PRIVATE_SETTLEMENT_STAGED_LOCK_EVIDENCE_DOMAIN_V1.len()
+            + counts_bytes.len()
+            + sections
+                .iter()
+                .map(|(label, bytes)| label.len().saturating_add(bytes.len()).saturating_add(16))
+                .sum::<usize>(),
+    );
+    preimage.extend_from_slice(PRIVATE_SETTLEMENT_STAGED_LOCK_EVIDENCE_DOMAIN_V1);
+    for (label, bytes) in sections {
+        let label_len = u64::try_from(label.len()).expect("static evidence label length fits u64");
+        let bytes_len = u64::try_from(bytes.len()).expect("canonical map length fits u64");
+        preimage.extend_from_slice(&label_len.to_le_bytes());
+        preimage.extend_from_slice(label);
+        preimage.extend_from_slice(&bytes_len.to_le_bytes());
+        preimage.extend_from_slice(bytes);
+    }
+    let counts_len = u64::try_from(counts_bytes.len()).expect("canonical count vector fits u64");
+    preimage.extend_from_slice(&counts_len.to_le_bytes());
+    preimage.extend_from_slice(&counts_bytes);
+    Ok(Hash::new(&preimage))
+}
+
+#[cfg(test)]
+mod staged_lock_evidence_tests {
+    use super::*;
+
+    const LABELS: [&[u8]; 3] = [b"pool_heads", b"nullifiers", b"output_commitments"];
+
+    fn counts() -> PrivateSettlementStagedLockCountsV1 {
+        PrivateSettlementStagedLockCountsV1 {
+            pool_heads: 1,
+            nullifiers: 2,
+            output_commitments: 3,
+            total: 6,
+        }
+    }
+
+    fn commitment(sections: &[Vec<u8>], counts: PrivateSettlementStagedLockCountsV1) -> Hash {
+        let borrowed: Vec<_> = LABELS
+            .iter()
+            .zip(sections)
+            .map(|(label, bytes)| (*label, bytes.as_slice()))
+            .collect();
+        private_settlement_staged_lock_commitment_v1(&borrowed, counts)
+            .expect("fixture evidence encodes")
+    }
+
+    #[test]
+    fn commitment_changes_for_every_reservation_map() {
+        let sections: Vec<_> = (0_u8..3).map(|index| vec![index, index + 1]).collect();
+        let baseline = commitment(&sections, counts());
+        for index in 0..sections.len() {
+            let mut changed = sections.clone();
+            changed[index].push(0x5a);
+            assert_ne!(
+                commitment(&changed, counts()),
+                baseline,
+                "reservation map {} was not bound",
+                String::from_utf8_lossy(LABELS[index])
+            );
+        }
+    }
+
+    #[test]
+    fn commitment_changes_for_every_staged_lock_count() {
+        let sections: Vec<_> = (0_u8..3).map(|index| vec![index, index + 1]).collect();
+        let baseline_counts = counts();
+        let baseline = commitment(&sections, baseline_counts);
+        for index in 0..4 {
+            let mut changed = baseline_counts;
+            match index {
+                0 => changed.pool_heads += 1,
+                1 => changed.nullifiers += 1,
+                2 => changed.output_commitments += 1,
+                3 => changed.total += 1,
+                _ => unreachable!("bounded count mutation index"),
+            }
+            assert_ne!(
+                commitment(&sections, changed),
+                baseline,
+                "staged-lock count field {index} was not bound"
+            );
+        }
+    }
+}
+
 /// Stable first-release durable restricted-sidecar profile descriptor.
 pub const PRIVATE_SETTLEMENT_SIDECAR_STORE_PROFILE_DESCRIPTOR_V1: &[u8] = b"APV1+APS1:provisional=magic-APV1,version-1,exact-zero-certificate-manifest,policy,authority,proof,delta,encrypted-capsule,availability-body,stored-height,address=payload-digest.apv1|certified=magic-APS1,version-1,manifest,policy,authority,encrypted-leg-payload,stored-height,lifecycle,lifecycle-height,audit-approvals,audit-approval-validation-height,verified-leg,prepare-qc,commit-qc,terminal-evidence-digest,verification-evidence-digest,address=payload-digest.aps1|promotion=exact-material+exact-body+valid-3-of-4-certificate,final-fsync-before-provisional-delete,restart-reconcile-exact-pair|bounds=each-record<=12MiB,combined-count<=4096,combined-total<=48GiB|access=owner-only-provisional,exact-four-validator-proof-view,governed-auditor-capsule-view,missing-and-denied-share-unavailable|durability=owner-0700,files-0600,nofollow,single-link,same-euid,process-lease+held-flock,temp-create-new+fsync+rename+directory-fsync|restart=reject-unknown-or-noncanonical-or-substituted-evidence,quorum-equivalent-qc-body+authority-index-replay-is-write-free,remove-only-well-formed-stale-temp,rebuild-pool-nullifier-output-reservations|retention=collecting-audited-prepared-commit-certified-never-pruned,terminal-only-at-ticket-height|plaintext=forbidden";
 
@@ -1016,6 +1143,54 @@ impl PrivateSettlementFileSidecarStoreV1 {
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Commit every staged reservation for a test-network atomicity
+    /// observation without exposing any reservation key.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the store is poisoned, its lock is unavailable, or
+    /// canonical encoding fails. Shipping builds do not compile this method.
+    #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+    pub fn staged_lock_evidence_v1(
+        &self,
+    ) -> Result<PrivateSettlementStagedLockEvidenceV1, PrivateSettlementSidecarStoreErrorV1> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        ensure_healthy_v1(&state)?;
+        let pool_heads = norito::encode_canonical(&state.pool_reservations)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        let nullifiers = norito::encode_canonical(&state.nullifier_reservations)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        let output_commitments = norito::encode_canonical(&state.output_reservations)
+            .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Backend)?;
+        let pool_head_count = u64::try_from(state.pool_reservations.len())
+            .expect("private-settlement pool reservation count fits u64");
+        let nullifier_count = u64::try_from(state.nullifier_reservations.len())
+            .expect("private-settlement nullifier reservation count fits u64");
+        let output_count = u64::try_from(state.output_reservations.len())
+            .expect("private-settlement output reservation count fits u64");
+        let counts = PrivateSettlementStagedLockCountsV1 {
+            pool_heads: pool_head_count,
+            nullifiers: nullifier_count,
+            output_commitments: output_count,
+            total: pool_head_count
+                .checked_add(nullifier_count)
+                .and_then(|count| count.checked_add(output_count))
+                .expect("private-settlement staged-lock count fits u64"),
+        };
+        let commitment = private_settlement_staged_lock_commitment_v1(
+            &[
+                (b"pool_heads", &pool_heads),
+                (b"nullifiers", &nullifiers),
+                (b"output_commitments", &output_commitments),
+            ],
+            counts,
+        )?;
+        Ok(PrivateSettlementStagedLockEvidenceV1 { commitment, counts })
     }
 
     /// Durably persist exact pre-certification material before issuing a share.

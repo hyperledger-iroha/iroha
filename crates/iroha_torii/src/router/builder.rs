@@ -38,6 +38,8 @@ const COMPILED_ROUTE_FEATURES: &[&str] = &[
     "zk-verify-batch",
     #[cfg(feature = "push")]
     "push",
+    #[cfg(feature = "test-network-private-settlement-route-control")]
+    "test-network-private-settlement-route-control",
 ];
 /// Return the Cargo features relevant to canonical route projection.
 #[must_use]

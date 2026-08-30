@@ -122,6 +122,61 @@ pub use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementPhaseCertificatesResponseV1, PrivateSettlementPhaseVoteResponseV1,
     PrivateSettlementPrepareVoteRequestV1,
 };
+
+/// Exact public-map count vector returned by the non-shipping APS evidence route.
+#[cfg(feature = "test-network-private-settlement-evidence")]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct PrivateSettlementTestNetworkStateCountsV1 {
+    /// Governed audit-policy records.
+    pub governance: u64,
+    /// Governed private-pool records.
+    pub pools: u64,
+    /// Current private-pool roots.
+    pub roots: u64,
+    /// Consumed nullifier records.
+    pub nullifiers: u64,
+    /// Fixed-shape output commitments.
+    pub commitments: u64,
+    /// Fixed-shape encrypted outputs.
+    pub encrypted_outputs: u64,
+    /// Finalized and aborted replay markers.
+    pub replay_markers: u64,
+    /// Finalized receipts.
+    pub receipts: u64,
+    /// Public abort markers.
+    pub abort_markers: u64,
+    /// Staged pool-head reservations.
+    pub staged_pool_heads: u64,
+    /// Staged nullifier reservations.
+    pub staged_nullifiers: u64,
+    /// Staged output-commitment reservations.
+    pub staged_output_commitments: u64,
+    /// Total staged bundle locks.
+    pub staged_locks: u64,
+}
+
+/// Redacted evidence-only state commitment from one instrumented validator.
+///
+/// This DTO is unavailable in ordinary shipping builds and contains no map
+/// keys, plaintext, ciphertext, commitment values, or reservation owners.
+#[cfg(feature = "test-network-private-settlement-evidence")]
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
+    /// Evidence format version.
+    pub format_version: u8,
+    /// Validator-local committed block height used by the evidence digest.
+    pub height: u64,
+    /// Combined ledger and staged-lock commitment.
+    pub commitment: Hash,
+    /// Commitment to every globally replicated APS ledger map.
+    pub ledger_commitment: Hash,
+    /// Commitment to every durable staged-lock reservation map.
+    pub staged_lock_commitment: Hash,
+    /// Exact public-map count vector.
+    pub counts: PrivateSettlementTestNetworkStateCountsV1,
+}
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_HIJIRI_QUOTE_MAX_QUALIFYING_TRANSFERS_V1,

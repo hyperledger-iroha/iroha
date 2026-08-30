@@ -5,7 +5,10 @@ use std::{
 };
 
 use super::super::super::super::super::{
-    rns_native_profile::{zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_topology_v1},
+    rns_native_profile::{
+        zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_release_candidate_digest_v1,
+        zk_ams_mkhe_rns_native_topology_v1,
+    },
     rns_native_source::{
         ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
         ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
@@ -30,7 +33,7 @@ fn fixture_layout_v2() -> ZkAmsMkheRnsNativeSourceLayoutV1 {
     ZkAmsMkheRnsNativeSourceLayoutV1::new(
         profile.profile_digest,
         topology.topology_digest,
-        fixture_digest_v2(b"release", 1),
+        zk_ams_mkhe_rns_native_release_candidate_digest_v1().expect("release candidate"),
         fixture_digest_v2(b"statement", 2),
         fixture_digest_v2(b"operational", 3),
     )
