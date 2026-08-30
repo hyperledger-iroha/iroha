@@ -18,7 +18,7 @@ maintenance = { status = "actively-developed" }
 
 # Enable JSON helpers backed by Norito.
 [features]
-default = ["json"]
+default = ["json", "simd-accel"]
 # Enable JSON helpers backed by Norito.
 json = []
 # Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)

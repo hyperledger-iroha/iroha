@@ -419,7 +419,7 @@ export function registerToriiClientGovernanceTests({
     assert.deepEqual(missingTyped, { found: false, proposal: null });
   });
 
-  test("getGovernanceProposalTyped closes over all nine V1 proposal kinds", async () => {
+  test("getGovernanceProposalTyped closes over all ten V1 proposal kinds", async () => {
     const contractAddress =
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     const payoutBinding = {
@@ -568,6 +568,14 @@ export function registerToriiClientGovernanceTests({
           duration_blocks: 3_600,
         },
         "contract_emergency_hold",
+      ],
+      [
+        "GlobalDataTriggerPermissionGovernance",
+        {
+          authority: FIXTURE_ALICE_ID,
+          action: { action: "grant", value: null },
+        },
+        "global_data_trigger_permission_governance",
       ],
     ];
     for (const [variant, payload, resultField] of variants) {
@@ -1518,6 +1526,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       "SorafsProviderGovernance",
       "ContractLifecycleGovernance",
       "ContractEmergencyHold",
+      "GlobalDataTriggerPermissionGovernance",
     ]) {
       assert.match(proposalKind[1], new RegExp(`variant: "${variant}"`, "u"));
     }

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 import pytest
 from client_test_support import CANONICAL_OWNER
 from iroha_torii_client.governance_proposals import (
     GovernanceContractLifecycleActionKind,
     GovernanceContractLifecycleEmergencyHoldRetrospective,
+    GovernanceGlobalDataTriggerPermissionAction,
     GovernanceProposalContractEmergencyHold,
     GovernanceProposalContractLifecycleGovernance,
+    GovernanceProposalGlobalDataTriggerPermissionGovernance,
     GovernanceProposalDeployContract,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
@@ -344,7 +348,27 @@ def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
             },
             GovernanceProposalContractEmergencyHold,
         ),
+        (
+            "GlobalDataTriggerPermissionGovernance",
+            {
+                "authority": CANONICAL_OWNER,
+                "action": {"action": "grant", "value": None},
+            },
+            GovernanceProposalGlobalDataTriggerPermissionGovernance,
+        ),
     ]
+
+
+def test_shared_fixture_pins_closed_proposal_inventory() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "governance"
+        / "parliament_api_v1.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    assert fixture["proposal_kinds"] == [kind.value for kind in GovernanceProposalKindTag]
 
 
 @pytest.mark.parametrize(("tag", "payload", "payload_type"), _variants())
@@ -469,6 +493,23 @@ def test_contract_hold_bounds_and_retrospective_root_fail_closed() -> None:
     with pytest.raises(TypeError, match=r"1\.\.3600"):
         GovernanceProposalKind.from_payload(
             {"kind": "ContractEmergencyHold", "payload": emergency}
+        )
+
+
+def test_global_data_trigger_permission_is_exact_account_and_closed_action() -> None:
+    proposal = GovernanceProposalKind.from_payload(
+        {
+            "kind": "GlobalDataTriggerPermissionGovernance",
+            "payload": _variants()[9][1],
+        }
+    )
+    assert proposal.payload.action is GovernanceGlobalDataTriggerPermissionAction.GRANT  # type: ignore[union-attr]
+
+    malformed = copy.deepcopy(_variants()[9][1])
+    malformed["action"]["value"] = {}  # type: ignore[index]
+    with pytest.raises(TypeError, match="must be null"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "GlobalDataTriggerPermissionGovernance", "payload": malformed}
         )
 
 

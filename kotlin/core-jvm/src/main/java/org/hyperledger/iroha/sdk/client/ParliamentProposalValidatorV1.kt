@@ -39,6 +39,7 @@ internal object ParliamentProposalValidatorV1 {
             "SorafsProviderGovernance" -> sorafsProvider(payload)
             "ContractLifecycleGovernance" -> contractLifecycle(payload)
             "ContractEmergencyHold" -> contractEmergencyHold(payload)
+            "GlobalDataTriggerPermissionGovernance" -> globalDataTriggerPermission(payload)
             else -> throw IllegalArgumentException("proposal.kind is unknown or retired")
         }
         return proposal
@@ -437,6 +438,37 @@ internal object ParliamentProposalValidatorV1 {
                 bytes(payload["retrospective_finding_root"], 32, "$kind.retrospective_finding_root", true)
             }
             else -> throw IllegalArgumentException("contract lifecycle action is unsupported")
+        }
+    }
+
+    private fun globalDataTriggerPermission(value: Map<String, Any?>) {
+        exact(
+            value,
+            setOf("authority", "action"),
+            "GlobalDataTriggerPermissionGovernance",
+        )
+        account(
+            value["authority"],
+            "GlobalDataTriggerPermissionGovernance.authority",
+        )
+        val action = objectValue(
+            value["action"],
+            "GlobalDataTriggerPermissionGovernance.action",
+        )
+        exact(
+            action,
+            setOf("action", "value"),
+            "GlobalDataTriggerPermissionGovernance.action",
+        )
+        val kind = text(
+            action["action"],
+            "GlobalDataTriggerPermissionGovernance.action.action",
+        )
+        require(kind == "grant" || kind == "revoke") {
+            "GlobalDataTriggerPermissionGovernance.action.action must be grant or revoke"
+        }
+        require(action["value"] == null) {
+            "GlobalDataTriggerPermissionGovernance.action.value must be null"
         }
     }
 

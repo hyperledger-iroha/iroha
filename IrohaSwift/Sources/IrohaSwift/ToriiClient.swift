@@ -18276,6 +18276,9 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
     case sorafsProviderGovernance(ToriiGovernanceSorafsProviderProposal)
     case contractLifecycleGovernance(ToriiGovernanceContractLifecycleProposalV1)
     case contractEmergencyHold(ToriiGovernanceContractEmergencyHoldProposalV1)
+    case globalDataTriggerPermissionGovernance(
+        ToriiGovernanceGlobalDataTriggerPermissionProposalV1
+    )
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case kind
@@ -18341,6 +18344,13 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
             self = .contractEmergencyHold(
                 try container.decode(
                     ToriiGovernanceContractEmergencyHoldProposalV1.self,
+                    forKey: .payload
+                )
+            )
+        case "GlobalDataTriggerPermissionGovernance":
+            self = .globalDataTriggerPermissionGovernance(
+                try container.decode(
+                    ToriiGovernanceGlobalDataTriggerPermissionProposalV1.self,
                     forKey: .payload
                 )
             )

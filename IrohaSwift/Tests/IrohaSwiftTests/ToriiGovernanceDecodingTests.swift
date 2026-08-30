@@ -297,7 +297,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiGovernanceTallyResponse.self, from: json))
     }
 
-    func testGovernanceProposalKindDecodesAllNineV1Variants() throws {
+    func testGovernanceProposalKindDecodesAllTenV1Variants() throws {
         let deploy = proposalKindJSON(
             kind: "DeployContract",
             payload: """
@@ -418,6 +418,50 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         XCTAssertEqual(emergencyHoldPayload.expectedCodeHash, Data(repeating: 0xab, count: 32))
         XCTAssertEqual(emergencyHoldPayload.incidentDigest, Data(repeating: 85, count: 32))
         XCTAssertEqual(emergencyHoldPayload.durationBlocks, 3_600)
+
+        let triggerPermission = proposalKindJSON(
+            kind: "GlobalDataTriggerPermissionGovernance",
+            payload: """
+            {"authority":"\(Self.governanceOwner)","action":{"action":"grant","value":null}}
+            """
+        )
+        guard case .globalDataTriggerPermissionGovernance(let triggerPermissionPayload) =
+            try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: triggerPermission) else {
+            return XCTFail("expected GlobalDataTriggerPermissionGovernance")
+        }
+        XCTAssertEqual(triggerPermissionPayload.authority, Self.governanceOwner)
+        XCTAssertEqual(triggerPermissionPayload.action, .grant)
+    }
+
+    func testGlobalDataTriggerPermissionRequiresCanonicalAccountAndClosedUnitAction() throws {
+        for action in ["grant", "revoke"] {
+            let proposal = proposalKindJSON(
+                kind: "GlobalDataTriggerPermissionGovernance",
+                payload: """
+                {"authority":"\(Self.governanceOwner)","action":{"action":"\(action)","value":null}}
+                """
+            )
+            XCTAssertNoThrow(
+                try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: proposal)
+            )
+        }
+
+        for payload in [
+            "{\"authority\":\"\(Self.governanceOwner)\",\"action\":{\"action\":\"grant\"}}",
+            "{\"authority\":\"\(Self.governanceOwner)\",\"action\":{\"action\":\"grant\",\"value\":{}}}",
+            "{\"authority\":\"\(Self.governanceOwner)\",\"action\":{\"action\":\"delegate\",\"value\":null}}",
+            "{\"authority\":\"alice@wonderland\",\"action\":{\"action\":\"grant\",\"value\":null}}",
+        ] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiGovernanceProposalKind.self,
+                    from: proposalKindJSON(
+                        kind: "GlobalDataTriggerPermissionGovernance",
+                        payload: payload
+                    )
+                )
+            )
+        }
     }
 
     func testContractLifecycleActionInventoryUsesCanonicalPayloadShapes() throws {

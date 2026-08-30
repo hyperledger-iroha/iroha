@@ -17287,6 +17287,7 @@ test("getGovernanceContract reads one governed binding", async () => {
         dataspace: "universal",
         active: true,
         lifecycle: {
+          version: 1,
           origin: "direct",
           origin_account: FIXTURE_ALICE_ID,
           origin_proposal_content_id_hex: null,
@@ -25499,6 +25500,7 @@ test("getGovernanceContract mirrors response handling", async () => {
         dataspace: "universal",
         active: true,
         lifecycle: {
+          version: 1,
           origin: "direct",
           origin_account: owner,
           origin_proposal_content_id_hex: null,
@@ -25539,6 +25541,7 @@ test("getGovernanceContract rejects coercible, non-canonical, or unexpected fiel
     dataspace: "universal",
     active: true,
     lifecycle: {
+      version: 1,
       origin: "direct",
       origin_account: FIXTURE_ALICE_ID,
       origin_proposal_content_id_hex: null,
@@ -25588,6 +25591,14 @@ test("getGovernanceContract rejects coercible, non-canonical, or unexpected fiel
         lifecycle: { ...activeResponse.lifecycle, active_code_hash_hex: "3".repeat(64) },
       },
       /active_code_hash_hex must match code_hash_hex/,
+    ],
+    [
+      "unsupported lifecycle version",
+      {
+        ...activeResponse,
+        lifecycle: { ...activeResponse.lifecycle, version: 0 },
+      },
+      /version must be the number 1/,
     ],
     [
       "unsorted public entrypoints",

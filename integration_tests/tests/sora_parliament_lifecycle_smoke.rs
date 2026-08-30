@@ -626,6 +626,15 @@ fn ordered_validator_roster(
             "the current frozen validator roster differs from signed genesis"
         ));
     }
+    eprintln!(
+        "SORA_PARLIAMENT_LIFECYCLE frozen_roster authority_height={} context_height={} epoch={} epoch_end_height={} next_epoch_snapshot={} roster_hash={}",
+        finalized_height,
+        context.height,
+        context.epoch,
+        context.epoch_end_height,
+        context.next_epoch_snapshot.is_some(),
+        hex::encode(global_threshold_beacon_roster_hash_v1(&roster)),
+    );
     Ok(roster)
 }
 
@@ -1126,6 +1135,17 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             install_height,
         )?),
     ];
+    let submission_authority_height = current_height(&client)?;
+    let submission_roster = ordered_validator_roster(&network, &client)?;
+    if submission_roster != ordered_roster {
+        return Err(eyre!(
+            "threshold-key installation roster changed between fixture derivation and submission"
+        ));
+    }
+    eprintln!(
+        "SORA_PARLIAMENT_LIFECYCLE submit_lifecycle authority_height={submission_authority_height} install_height={install_height} roster_hash={}",
+        hex::encode(global_threshold_beacon_roster_hash_v1(&ordered_roster)),
+    );
     client.submit_all_blocking(lifecycle_certificates, fee())?;
     assert_eq!(current_height(&client)?, install_height);
     let activation_height = install_height

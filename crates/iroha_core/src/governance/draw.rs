@@ -99,9 +99,7 @@ fn derive_body_plan(
     derived_by: CouncilDerivationKind,
     bodies: &[ParliamentBody],
 ) -> ParliamentDrawPlan {
-    let alternates_per_body = gov_cfg
-        .parliament_alternate_size
-        .unwrap_or(gov_cfg.parliament_committee_size);
+    let alternates_per_body = gov_cfg.parliament_alternate_size;
     let assignment_cap = smallest_feasible_assignment_cap(gov_cfg, candidates.len(), bodies);
     let mut rankings = BTreeMap::new();
     for body in bodies {
@@ -344,7 +342,7 @@ mod tests {
             fma_committee_size: 2,
             oversight_committee_size: 2,
             policy_jury_size: 2,
-            parliament_alternate_size: Some(0),
+            parliament_alternate_size: 0,
             ..Governance::default()
         };
         let plan = derive_body_plan(
@@ -378,7 +376,7 @@ mod tests {
         let cfg = Governance {
             rules_committee_size: 3,
             agenda_council_size: 3,
-            parliament_alternate_size: Some(2),
+            parliament_alternate_size: 2,
             ..Governance::default()
         };
         let bodies = [
@@ -417,7 +415,7 @@ mod tests {
             fma_committee_size: 2,
             oversight_committee_size: 2,
             policy_jury_size: 2,
-            parliament_alternate_size: Some(0),
+            parliament_alternate_size: 0,
             ..Governance::default()
         };
         let plan = derive_body_plan(

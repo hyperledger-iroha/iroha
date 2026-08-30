@@ -485,6 +485,9 @@ define_instruction_handlers! {
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance
     >,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeContractEmergencyHold>,
+    dispatch_instruction::<
+        iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance
+    >,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,

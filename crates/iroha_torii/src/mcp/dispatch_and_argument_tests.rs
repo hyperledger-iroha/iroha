@@ -2,6 +2,54 @@
 use base64::Engine as _;
 
 #[test]
+fn explorer_history_mcp_query_projection_accepts_only_cursor_contract_fields() {
+    let flat = norito::json!({
+        "cursor": "Abc_123-xyz",
+        "limit": 25,
+        "status": "committed",
+        "headers": {},
+        "accept": "application/json"
+    });
+    let projected = append_explorer_history_query_arguments(
+        "/v1/explorer/transactions".to_owned(),
+        flat.as_object().expect("flat arguments"),
+        &["cursor", "limit", "status"],
+        "transaction history",
+    )
+    .expect("flat cursor projection");
+    assert_eq!(
+        projected,
+        "/v1/explorer/transactions?cursor=Abc_123-xyz&limit=25&status=committed"
+    );
+
+    let nested = norito::json!({ "query": { "limit": 2 } });
+    assert_eq!(
+        append_explorer_history_query_arguments(
+            "/v1/explorer/blocks".to_owned(),
+            nested.as_object().expect("nested arguments"),
+            &["cursor", "limit"],
+            "block history",
+        )
+        .expect("nested cursor projection"),
+        "/v1/explorer/blocks?limit=2"
+    );
+    for invalid in [
+        norito::json!({ "page": 1 }),
+        norito::json!({ "offset": 1 }),
+        norito::json!({ "query": { "per_page": 10 } }),
+        norito::json!({ "query": { "limit": 2 }, "limit": 3 }),
+    ] {
+        append_explorer_history_query_arguments(
+            "/v1/explorer/blocks".to_owned(),
+            invalid.as_object().expect("invalid arguments"),
+            &["cursor", "limit"],
+            "block history",
+        )
+        .expect_err("retired, unknown, or ambiguous pagination must fail closed");
+    }
+}
+
+#[test]
 fn tool_registry_skips_ws_and_sse_routes() {
     let cfg = iroha_config::parameters::actual::ToriiMcp::default();
     let tools = build_tool_specs(&cfg);

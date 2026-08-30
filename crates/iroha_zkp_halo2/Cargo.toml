@@ -29,7 +29,7 @@ criterion = { workspace = true }
 hex-literal = { workspace = true }
 
 [features]
-default = []
+default = ["parallel"]
 bench = []
 # Mirror Norito derive cfgs so the derive macro can see destination-crate features
 schema-structural = ["dep:iroha_schema", "norito/schema-structural"]

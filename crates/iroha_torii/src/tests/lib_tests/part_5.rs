@@ -128,7 +128,9 @@ async fn norito_rpc_gate_records_metrics() {
             .get(),
         2
     );
-    let disabled_cfg = actual::NoritoRpcTransport::default();
+    let mut disabled_cfg = actual::NoritoRpcTransport::default();
+    disabled_cfg.enabled = false;
+    disabled_cfg.stage = actual::NoritoRpcStage::Disabled;
     let (disabled_app, disabled_metrics) = mk_norito_rpc_test_harness(disabled_cfg.clone()).await;
     assert!(
         disabled_app

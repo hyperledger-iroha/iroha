@@ -330,9 +330,9 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 361;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 362;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 361;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 362;
         #[cfg(not(feature = "governance"))]
         const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 344;
         let registry_source = include_str!("registry.rs");
@@ -384,9 +384,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "1771dea20955903e5e77663978ccf3d268bd7cbd7fc104e35d9a0bbb4b6a70bf";
+            "62f7394e1d351ed477dc9377333f0283bcd5e2022608a01f728c9501d5a88758";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "998e1d3bb28afe26a7e7f86379ee7db8168e191c855883502d7513eeaaacb054";
+            "ac4d2277c476c444ccc2463716a030e2b49c756f01fe7045e17ffd19215ae0ca";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -413,8 +413,8 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                    17,
-                    "governance-only V1 inventory changed without updating its explicit scope"
+                18,
+                "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(
                 assignment_digest(wire_ids::ALL.iter().collect()),
@@ -430,6 +430,7 @@ mod tests {
             "iroha.instruction.v1::governance::ProposeDeployContract",
             "iroha.instruction.v1::governance::ProposeContractLifecycleGovernance",
             "iroha.instruction.v1::governance::ProposeContractEmergencyHold",
+            "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance",
             "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal",
             "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
             "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance",

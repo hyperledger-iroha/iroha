@@ -135,10 +135,12 @@ from iroha_torii_client.governance_proposals import (
     GovernanceContractLifecycleDeactivate,
     GovernanceContractLifecycleEmergencyHoldRetrospective,
     GovernanceContractLifecycleOfferOwnership,
+    GovernanceGlobalDataTriggerPermissionAction,
     GovernanceManifestProvenance,
     GovernanceMusubiActionKind,
     GovernanceProposalContractEmergencyHold,
     GovernanceProposalContractLifecycleGovernance,
+    GovernanceProposalGlobalDataTriggerPermissionGovernance,
     GovernanceProposalDeployContract,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
@@ -5627,6 +5629,7 @@ class GovernanceContractEmergencyHoldRecord:
 class GovernanceContractLifecycleRecord:
     """Complete retained ownership and lifecycle projection for one contract."""
 
+    version: int
     origin: str
     origin_account: str
     origin_proposal_content_id_hex: Optional[str]
@@ -5643,6 +5646,7 @@ class GovernanceContractLifecycleRecord:
         cls, payload: Mapping[str, Any], *, context: str
     ) -> "GovernanceContractLifecycleRecord":
         expected = {
+            "version",
             "origin",
             "origin_account",
             "origin_proposal_content_id_hex",
@@ -5656,6 +5660,9 @@ class GovernanceContractLifecycleRecord:
         }
         if set(payload) != expected:
             raise TypeError(f"{context} must contain exactly the first-release lifecycle fields")
+        version = _normalize_positive_int(payload.get("version"), f"{context}.version")
+        if version != 1:
+            raise ValueError(f"{context}.version must be exactly 1")
 
         def optional_hash(name: str) -> Optional[str]:
             value = payload.get(name)
@@ -5704,6 +5711,7 @@ class GovernanceContractLifecycleRecord:
             return _normalize_exact_any_i105_account_id(value, f"{context}.{field}")
 
         return cls(
+            version=version,
             origin=origin,
             origin_account=_normalize_exact_any_i105_account_id(
                 payload.get("origin_account"), f"{context}.origin_account"
@@ -13317,11 +13325,13 @@ __all__ = [
     "GovernanceContractLifecycleDeactivate",
     "GovernanceContractLifecycleEmergencyHoldRetrospective",
     "GovernanceContractLifecycleOfferOwnership",
+    "GovernanceGlobalDataTriggerPermissionAction",
     "GovernanceManifestProvenance",
     "GovernanceMusubiActionKind",
     "GovernanceProposalDeployContract",
     "GovernanceProposalContractEmergencyHold",
     "GovernanceProposalContractLifecycleGovernance",
+    "GovernanceProposalGlobalDataTriggerPermissionGovernance",
     "GovernanceProposalKind",
     "GovernanceProposalKindTag",
     "GovernanceProposalMusubiRegistryGovernance",

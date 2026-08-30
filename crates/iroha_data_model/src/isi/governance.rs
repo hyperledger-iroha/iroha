@@ -8,12 +8,14 @@ pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
 pub use crate::governance::types::AtWindow;
 #[cfg(test)]
+use crate::governance::types::GlobalDataTriggerPermissionGovernanceActionV1;
+#[cfg(test)]
 use crate::isi::bridge::SccpRouteGovernanceActionV1;
 pub use crate::parliament_types::{CouncilDerivationKind, VotingMode};
 use crate::{
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, ContractEmergencyHoldProposalV1,
-        ContractLifecycleGovernanceProposalV1,
+        ContractLifecycleGovernanceProposalV1, GlobalDataTriggerPermissionGovernanceProposalV1,
     },
     isi::sorafs::SorafsProviderGovernanceActionV1,
     prelude::*,
@@ -80,6 +82,15 @@ pub struct ProposeContractEmergencyHold {
     pub proposal: ContractEmergencyHoldProposalV1,
 }
 impl crate::seal::Instruction for ProposeContractEmergencyHold {}
+/// Propose granting or revoking one exact account's global data-trigger capability.
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
+pub struct ProposeGlobalDataTriggerPermissionGovernance {
+    /// Complete exact-account permission proposal.
+    pub proposal: GlobalDataTriggerPermissionGovernanceProposalV1,
+}
+impl crate::seal::Instruction for ProposeGlobalDataTriggerPermissionGovernance {}
 /// Propose a runtime upgrade manifest through governance.
 ///
 /// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
@@ -317,6 +328,9 @@ impl_governance_decode_from_slice!(ProposeContractLifecycleGovernance {
 });
 impl_governance_decode_from_slice!(ProposeContractEmergencyHold {
     proposal: ContractEmergencyHoldProposalV1,
+});
+impl_governance_decode_from_slice!(ProposeGlobalDataTriggerPermissionGovernance {
+    proposal: GlobalDataTriggerPermissionGovernanceProposalV1,
 });
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     manifest: RuntimeUpgradeManifest,
@@ -664,6 +678,12 @@ mod tests {
         assert_slice_roundtrip(ProposeSorafsProviderGovernance {
             action: sorafs_provider_action(),
         });
+        assert_slice_roundtrip(ProposeGlobalDataTriggerPermissionGovernance {
+            proposal: GlobalDataTriggerPermissionGovernanceProposalV1 {
+                authority: account(2),
+                action: GlobalDataTriggerPermissionGovernanceActionV1::Grant,
+            },
+        });
         assert_slice_roundtrip(CastZkBallot {
             election_id: "referendum-1".to_owned(),
             proof_b64: "AQID".to_owned(),
@@ -723,6 +743,15 @@ mod tests {
             &registry,
             ProposeSorafsProviderGovernance {
                 action: sorafs_provider_action(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            ProposeGlobalDataTriggerPermissionGovernance {
+                proposal: GlobalDataTriggerPermissionGovernanceProposalV1 {
+                    authority: account(2),
+                    action: GlobalDataTriggerPermissionGovernanceActionV1::Revoke,
+                },
             },
         );
         assert_registry_decodes(

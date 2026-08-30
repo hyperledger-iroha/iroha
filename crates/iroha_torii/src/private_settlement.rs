@@ -362,14 +362,16 @@ async fn reconcile_private_settlement_finality_tick_v1(
         let (authoritative_height, work) =
             snapshot_private_settlement_reconciliation_work_v1(&state, page.candidates)?;
         let blocking_store = Arc::clone(&store);
-        tokio::task::spawn_blocking(move || {
-            reconcile_and_prune_private_settlement_page_v1(
-                &blocking_store,
-                work,
-                authoritative_height,
-            )
-            .map(|_| ())
-        })
+        crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+            move || {
+                reconcile_and_prune_private_settlement_page_v1(
+                    &blocking_store,
+                    work,
+                    authoritative_height,
+                )
+                .map(|_| ())
+            },
+        ))
         .await
         .map_err(|_| PrivateSettlementReconciliationFailureV1::BlockingWorkerFailed)??;
         cursor = page.next_cursor;
@@ -412,20 +414,20 @@ pub(crate) fn spawn_private_settlement_finality_reconciliation_v1(
         return;
     };
     let worker_shutdown = shutdown_signal.clone();
-    let worker = tokio::spawn(run_private_settlement_finality_reconciliation_v1(
-        store,
-        state,
-        worker_shutdown,
-    ));
+    let worker = crate::panic_recovery::spawn_joined_recoverable(
+        run_private_settlement_finality_reconciliation_v1(store, state, worker_shutdown),
+    );
     tokio::spawn(async move {
-        let failure = match worker.await {
+        let failure = match crate::panic_recovery::join_recoverable(worker).await {
             Ok(Ok(())) if shutdown_signal.is_sent() => return,
             Ok(Ok(())) => PrivateSettlementReconciliationFailureV1::WorkerExitedUnexpectedly,
             Ok(Err(failure)) => failure,
-            Err(error) if error.is_panic() => {
+            Err(crate::panic_recovery::RecoverableTaskError::Panicked) => {
                 PrivateSettlementReconciliationFailureV1::WorkerPanicked
             }
-            Err(_) => PrivateSettlementReconciliationFailureV1::WorkerCancelled,
+            Err(crate::panic_recovery::RecoverableTaskError::Join(_)) => {
+                PrivateSettlementReconciliationFailureV1::WorkerCancelled
+            }
         };
         iroha_logger::error!(
             code = failure.code(),

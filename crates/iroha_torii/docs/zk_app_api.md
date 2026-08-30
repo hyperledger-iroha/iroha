@@ -105,7 +105,7 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Default: 1000.
 - `torii.zk_prover_enabled` (bool)
   - Enables the background prover scan worker. When disabled, no new local diagnostic reports are created.
-  - Default: false.
+  - Default: true (idle until attachments exist).
 - `torii.zk_prover_scan_period_secs` (u64)
   - Scan period for the background prover.
   - Default: 30 seconds.

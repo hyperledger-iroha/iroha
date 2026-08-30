@@ -25,14 +25,20 @@ maintenance = { status = "actively-developed" }
 
 [features]
 # Use rustls by default to avoid OpenSSL dependency, simplifying compilation with musl.
-# Enable SM algorithm support unless downstream consumers opt out via `--no-default-features`.
-default = ["tls-rustls-native-roots", "sm"]
+# Enable every portable production algorithm while retaining one coherent TLS policy.
+default = ["tls-rustls-native-roots", "gost", "sm"]
 ids_projection = ["iroha_data_model/ids_projection"]
 # Expose deterministic, secret-free fixture constructors only to repository tooling.
 test-fixtures = ["iroha_data_model/test-fixtures"]
 sm = [
+    "iroha_config/sm",
     "iroha_crypto/sm",
     "iroha_data_model/sm",
+]
+gost = [
+    "iroha_config/gost",
+    "iroha_crypto/gost",
+    "iroha_data_model/gost",
 ]
 
 tls-native = [

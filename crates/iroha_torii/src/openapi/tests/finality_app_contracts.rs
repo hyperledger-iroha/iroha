@@ -1033,6 +1033,7 @@ fn protected_contract_identity_openapi_is_signed_and_exact() {
         (
             "GovernedContractLifecycleV1",
             [
+                "version",
                 "origin",
                 "origin_account",
                 "origin_proposal_content_id_hex",

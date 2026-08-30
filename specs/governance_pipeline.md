@@ -50,8 +50,8 @@ release qualified.
    optional Parliament pulse or mandatory NPoS pulse produced from the parent
    state is verified against the key session active at its own height, not the
    successor pointer visible after the block's transactions execute. The
-   retired consensus VRF commit/reveal protocol and independent epoch-council
-   records are neither entropy sources nor fallbacks.
+   retired consensus VRF commit/reveal protocol and restored compatibility
+   roster records are neither entropy sources nor fallbacks.
 4. The future pulse deterministically ranks primaries and alternates. Candidates
    accept or decline their own invitations under their transaction authority;
    `BeginInvitationAcceptance` is permissionless and carries only the election
@@ -70,7 +70,7 @@ release qualified.
    authenticated absence makes the immutable original-seat public-finding
    quorum mathematically unreachable, Core sets that body to `NoResult` and
    rejects the governance attempt.
-   The independent epoch-council read is not a roster source or fallback.
+   No public compatibility-roster read exists.
    Every member of a frozen candidate snapshot retains its citizenship bond
    while its election is `AwaitingPulse`, `Drawing`, or
    `AcceptingInvitations`. `NoRoster` and superseded elections release unseated

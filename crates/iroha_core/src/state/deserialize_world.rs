@@ -34,6 +34,37 @@ fn proposal_status_matches_latest_attempt_v1(
     )
 }
 
+fn validate_no_standalone_governance_state_for_typed_proposals_v1(
+    world: &World,
+) -> Result<(), json::Error> {
+    let proposals = world.governance_proposals.view();
+    let aliases_typed_proposal = |selector: &str| {
+        iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(selector)
+            .is_some_and(|proposal_id| proposals.get(&proposal_id).is_some())
+    };
+    macro_rules! reject_typed_alias {
+        ($field:literal, $storage:expr) => {{
+            let view = $storage.view();
+            if let Some((selector, _)) = view
+                .iter()
+                .find(|(selector, _)| aliases_typed_proposal(selector))
+            {
+                return Err(json::Error::InvalidField {
+                    field: $field.to_owned(),
+                    message: format!(
+                        "standalone governance selector {selector:?} aliases an exact typed proposal"
+                    ),
+                });
+            }
+        }};
+    }
+    reject_typed_alias!("governance_referenda", world.governance_referenda);
+    reject_typed_alias!("governance_locks", world.governance_locks);
+    reject_typed_alias!("governance_slashes", world.governance_slashes);
+    reject_typed_alias!("elections", world.elections);
+    Ok(())
+}
+
 struct SoracloudInrouPersistedStateV1<'a> {
     sequence_watermark: u64,
     service_revisions: &'a Storage<(String, String), SoraDeploymentBundleV1>,
@@ -7824,6 +7855,7 @@ fn parse_world(
         .rebuild_global_beacon_pulse_slots()
         .map_err(invalid_global_beacon_persistence)?;
     validate_parliament_attempt_encoded_size_bounds_v1(&world)?;
+    validate_no_standalone_governance_state_for_typed_proposals_v1(&world)?;
     {
         let parliament_attempts_view = world.parliament_attempts.view();
         let governance_proposals_view = world.governance_proposals.view();
@@ -7891,27 +7923,6 @@ fn parse_world(
                     message: "validation-fee proposal operator differs from its retained proposer"
                         .to_owned(),
                 });
-            }
-            let referendum_id = hex::encode(proposal_id);
-            if world
-                .governance_referenda
-                .view()
-                .get(&referendum_id)
-                .is_some()
-                || world.governance_locks.view().get(&referendum_id).is_some()
-                || world
-                    .governance_slashes
-                    .view()
-                    .get(&referendum_id)
-                    .is_some()
-                || world.elections.view().get(&referendum_id).is_some()
-            {
-                return Err(json::Error::InvalidField {
-                field: "governance_proposals".into(),
-                message:
-                    "certificate-only governance proposals cannot retain legacy public referendum or pipeline state"
-                        .to_owned(),
-            });
             }
             let governed_subject = proposal.kind.governed_subject_id_v1().map_err(|error| {
                 json::Error::InvalidField {
@@ -8206,6 +8217,11 @@ fn build_state(
     } = inputs;
     #[cfg(feature = "telemetry")]
     let telemetry_seed = telemetry.clone();
+    validate_no_standalone_governance_state_for_typed_proposals_v1(&world).map_err(|error| {
+        MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored standalone governance state is invalid: {error}"
+        ))
+    })?;
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
     let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
     let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
@@ -8611,24 +8627,13 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
         max_conviction: 6,
         min_enactment_delay: 20,
         window_span: 100,
-        plain_voting_enabled: false,
+        plain_voting_enabled:
+            iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
         approval_threshold_q_num: 1,
         approval_threshold_q_den: 2,
         min_turnout: 0,
-        parliament_committee_size:
-            iroha_config::parameters::defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-        parliament_term_blocks:
-            iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
-        parliament_min_stake: iroha_config::parameters::defaults::governance::parliament_min_stake(
-        ),
-        parliament_eligibility_asset_id:
-            iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
-                .parse()
-                .expect("valid default governance asset id"),
         parliament_alternate_size:
             iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
-        parliament_quorum_bps:
-            iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
         parliament_sortition_pulse_delay_blocks:
             iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
         parliament_invitation_phase_blocks:
@@ -8726,6 +8731,103 @@ mod decode_tests {
             .expect("derive deterministic Musubi snapshot account");
         AccountId::new(key_pair.public_key().clone())
     }
+
+    #[test]
+    fn restore_rejects_every_standalone_state_alias_for_a_typed_proposal() {
+        let kind = ProposalKind::DeployContract(
+            iroha_data_model::governance::types::DeployContractProposal {
+                contract_address:
+                    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                        .parse()
+                        .expect("contract address"),
+                code_hash: iroha_data_model::governance::types::ContractCodeHash::new([0x31; 32]),
+                abi_hash: iroha_data_model::governance::types::ContractAbiHash::new([0x41; 32]),
+                abi_version: iroha_data_model::governance::types::AbiVersion::new(1),
+                manifest_provenance: None,
+            },
+        );
+        let proposal_id = kind.fingerprint();
+        let mut world = World::default();
+        world.governance_proposals.insert(
+            proposal_id,
+            GovernanceProposalRecord {
+                proposer: musubi_account(59),
+                kind,
+                created_height: 1,
+                status: GovernanceProposalStatus::Proposed,
+            },
+        );
+        let lowercase = hex::encode(proposal_id);
+        let uppercase = lowercase.to_ascii_uppercase();
+        let mixed = lowercase
+            .chars()
+            .enumerate()
+            .map(|(index, character)| {
+                if index % 2 == 0 {
+                    character.to_ascii_uppercase()
+                } else {
+                    character
+                }
+            })
+            .collect::<String>();
+        let referendum_alias = uppercase;
+        world.governance_referenda.insert(
+            referendum_alias.clone(),
+            GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: 2,
+                status: GovernanceReferendumStatus::Proposed,
+                mode: GovernanceReferendumMode::Plain,
+            },
+        );
+        let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+            .expect_err("uppercase restored referendum alias must fail closed");
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { ref field, .. } if field == "governance_referenda"
+        ));
+        world.governance_referenda.remove(referendum_alias);
+
+        world
+            .governance_locks
+            .insert(mixed.clone(), GovernanceLocksForReferendum::default());
+        let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+            .expect_err("mixed-case restored lock alias must fail closed");
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { ref field, .. } if field == "governance_locks"
+        ));
+        world.governance_locks.remove(mixed);
+
+        let lower_prefixed = format!("0x{lowercase}");
+        world.governance_slashes.insert(
+            lower_prefixed.clone(),
+            GovernanceSlashLedger::default(),
+        );
+        let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+            .expect_err("0x-prefixed restored slash alias must fail closed");
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { ref field, .. } if field == "governance_slashes"
+        ));
+        world.governance_slashes.remove(lower_prefixed);
+
+        let upper_prefixed = format!("0X{}", lowercase.to_ascii_uppercase());
+        world
+            .elections
+            .insert(upper_prefixed.clone(), ElectionState::default());
+        let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+            .expect_err("0X-prefixed restored election alias must fail closed");
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { ref field, .. } if field == "elections"
+        ));
+        world.elections.remove(upper_prefixed);
+
+        validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+            .expect("typed proposal without standalone state is valid");
+    }
+
     fn musubi_package(name: &str) -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(7),

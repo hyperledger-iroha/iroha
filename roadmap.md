@@ -583,7 +583,7 @@ Completed history lives in [`status.md`](./status.md).
 - Finish the generated public-contract closure from a settled candidate.
   Regenerate the static served OpenAPI authority and truthful provenance after
   the source and pinned Cargo input are sealed, then publish the exact
-  nine-kind proposal, ten-kind no-result, six-action contract-lifecycle, body,
+  ten-kind proposal, ten-kind no-result, six-action contract-lifecycle, body,
   and route inventory. Keep the retired equal Parliament ballot
   route and proposal-backed referendum/finalize/enact surfaces absent from the
   served OpenAPI as they already are from source and SDKs. Current dirty-tree
@@ -21044,9 +21044,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   rejection shims. The first-release HTTP surface contains only typed
   readiness, top-up, redeem, and operation-status resources under
   `/v1/offline`; it has no nested route version or whole-payload wrapper.
-  Governance council selection now uses only the canonical on-chain
-  bonded-citizen sortition path; the unshipped `gov_vrf` derivation prototype
-  and its HTTP/MCP surface are removed. The shared
+  Attempt-local Parliament body selection uses the canonical bonded-citizen
+  snapshot and finalized threshold-beacon pulse; the unshipped
+  `gov_vrf`/manual epoch-roster paths are removed. The shared
 	  Offline V2 interop fixture now uses the chain-admissible key-certificate
 	  version directly, and Swift, Kotlin/JVM, and Java Android SDK constructors
 	  mirror that version for wallet-side fixture parity.

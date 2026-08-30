@@ -5326,6 +5326,7 @@ public final class HttpClientTransportTests {
             + "\"dataspace\":\"router\","
             + "\"active\":true,"
             + "\"lifecycle\":{"
+            + "\"version\":1,"
             + "\"origin\":\"direct\","
             + "\"origin_account\":\""
             + owner
@@ -5377,6 +5378,8 @@ public final class HttpClientTransportTests {
     assert contractAddress.equals(response.contractAddress()) : "Governance contract address mismatch";
     assert "router".equals(response.dataspace()) : "Governance dataspace mismatch";
     assert "77".repeat(32).equals(response.codeHashHex()) : "Governance code hash mismatch";
+    assert response.lifecycle() != null && response.lifecycle().version() == 1
+        : "Governance lifecycle version mismatch";
     assert response.lifecycle() != null && response.lifecycle().revision() == 7L
         : "Governance lifecycle revision mismatch";
     assert "parliament".equals(response.lifecycle().pendingOwner())
@@ -5408,6 +5411,12 @@ public final class HttpClientTransportTests {
                     "[\"view_balance\",\"transfer\"]")
                 .getBytes(StandardCharsets.UTF_8)),
         "Governance response must require sorted public entrypoints");
+    expectIllegalState(
+        () -> ContractJsonParser.parseGovernanceContractResponse(
+            responseBody
+                .replace("\"version\":1", "\"version\":2")
+                .getBytes(StandardCharsets.UTF_8)),
+        "Governance response must reject incompatible lifecycle versions");
     expectIllegalState(
         () -> ContractJsonParser.parseGovernanceContractResponse(
             ("{\"found\":false,\"contract_address\":\""

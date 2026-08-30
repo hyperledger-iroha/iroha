@@ -13,15 +13,15 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["application"]
+default = ["node-crypto"]
 dev-tools = []
 # General application surface. Consensus-only consumers should use
 # `consensus` so they do not pull PQC and batch-verification helpers.
 application = ["rand", "json", "ecc-batch", "bfv-accel", "pqc"]
 # Cryptography required by consensus and canonical node identities.
 consensus = ["rand", "bls"]
-# Complete shipping node surface.
-node-crypto = ["application", "consensus"]
+# Complete portable shipping node surface.
+node-crypto = ["application", "consensus", "gost", "sm", "rayon"]
 json = ["norito/json", "mv"]
 bfv-accel = []
 # Enable support for TC26 GOST (Streebog + GOST R 34.10-2012) algorithms.

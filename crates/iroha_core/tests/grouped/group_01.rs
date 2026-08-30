@@ -44,7 +44,5 @@ mod gov_bond_escrow;
 mod gov_citizen_service;
 #[path = "../gov_citizenship.rs"]
 mod gov_citizenship;
-#[path = "../gov_draw_replace.rs"]
-mod gov_draw_replace;
 #[path = "../gov_finalize_real_vk.rs"]
 mod gov_finalize_real_vk;

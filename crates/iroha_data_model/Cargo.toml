@@ -16,7 +16,7 @@ workspace = true
 default = ["application-model"]
 dev-tools = []
 # Public application model; node-only additions are requested by node crates.
-application-model = ["governance", "json", "pqc"]
+application-model = ["governance", "json", "pqc", "bls", "gost", "sm"]
 bridge = []
 # Enable JSON-related functionality
 json = [

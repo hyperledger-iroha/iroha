@@ -416,7 +416,7 @@ fn parliament_test_governance(
     requirements: &[RequiredParliamentBodyV1],
 ) -> iroha_config::parameters::actual::Governance {
     let mut governance = iroha_config::parameters::actual::Governance {
-        parliament_alternate_size: Some(0),
+        parliament_alternate_size: 0,
         ..iroha_config::parameters::actual::Governance::default()
     };
     for requirement in requirements {

@@ -3621,7 +3621,7 @@ pub(crate) mod tests {
         let governance = Governance {
             rules_committee_size: 2,
             policy_jury_size: 2,
-            parliament_alternate_size: Some(2),
+            parliament_alternate_size: 2,
             ..Governance::default()
         };
         let pulse_id = BeaconPulseId::new(pulse.pulse_id);

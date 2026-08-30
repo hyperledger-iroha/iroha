@@ -570,8 +570,9 @@ pub struct ContractCodeRecord {
 }
 /// Register a smart contract manifest on-chain via the canonical ISI.
 ///
-/// The authority must hold `CanRegisterSmartContractCode`. Networks can add
-/// `CanEnactGovernance` for specific namespaces via `gov_protected_namespaces`.
+/// The authority must hold `CanRegisterSmartContractCode`. This permission only
+/// registers an artifact; it cannot create a contract address. Namespaces listed
+/// in `gov_protected_namespaces` remain deployable only through Parliament.
 /// The manifest must include `code_hash` and `abi_hash`, and the corresponding
 /// bytecode must already be stored as a verified self-describing artifact.
 ///
@@ -1095,16 +1096,12 @@ mod tests {
         assert_eq!(borrowed.0, stored_ptr, "borrow helper must not clone bytes");
     }
     #[test]
-    fn protected_contract_activation_succeeds_with_governance_permission() {
+    fn protected_contract_activation_uses_existing_owner_lifecycle() {
         let (state, authority, kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
-        // Grant only the governance/parameter permissions needed to protect a namespace.
-        let enact: permission::Permission =
-            iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
-        Grant::account_permission(enact, authority.clone())
-            .execute(&authority, &mut stx)
-            .expect("grant CanEnactGovernance");
+        // Namespace protection applies to address deployment. Once Parliament has
+        // established a lifecycle binding, its owner may perform revision-CAS activation.
         let set_params: permission::Permission = CanSetParameters.into();
         Grant::account_permission(set_params, authority.clone())
             .execute(&authority, &mut stx)

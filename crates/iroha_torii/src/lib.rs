@@ -48,13 +48,13 @@
 #![allow(dead_code, clippy::unused_async, unused_imports)]
 //!
 //! Crate features:
-//! - `telemetry` (off by default): Status and Metrics endpoints
-//! - `schema` (off by default): Data Model Schema endpoint
+//! - `telemetry` (on by default): Status and Metrics endpoints
+//! - `schema` (on by default): Data Model Schema endpoint
 //! - `app_api` (on by default): app-facing JSON endpoints (filters, webhooks)
 //! - `transparent_api` (on by default): forwards data-model transparent API
 //! - `connect` (on by default): WalletConnect-style WS and minimal in-node relay
-//! - `app_api_https` (off by default): enables HTTPS webhook delivery using reqwest + rustls native roots
-//! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
+//! - `app_api_https` (on by default): enables HTTPS webhook delivery using reqwest + rustls native roots
+//! - `app_api_wss` (on by default): enables WebSocket/WebSocket Secure webhook delivery
 #[cfg(feature = "app_api")]
 mod account_activity;
 #[cfg(feature = "app_api")]
@@ -50057,7 +50057,7 @@ impl Torii {
                 );
             }
             if !emergency_fast {
-                // Non-consensus background prover hook (disabled by default)
+                // Non-consensus background prover hook; emergency Fast mode skips it.
                 crate::zk_prover::configure(
                     config.zk_prover_enabled,
                     config.zk_prover_scan_period_secs,

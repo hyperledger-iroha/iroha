@@ -4652,6 +4652,7 @@ def test_get_governance_contract_parses_response() -> None:
                 "dataspace": "universal",
                 "active": True,
                 "lifecycle": {
+                    "version": 1,
                     "origin": "direct",
                     "origin_account": CANONICAL_OWNER,
                     "origin_proposal_content_id_hex": None,
@@ -4700,6 +4701,7 @@ def test_governance_contract_response_enforces_the_exact_lifecycle_shape() -> No
         "dataspace": "universal",
         "active": True,
         "lifecycle": {
+            "version": 1,
             "origin": "direct",
             "origin_account": CANONICAL_OWNER,
             "origin_proposal_content_id_hex": None,
@@ -5469,6 +5471,7 @@ def test_contract_helpers_against_mock_server() -> None:
                         "dataspace": "universal",
                         "active": True,
                         "lifecycle": {
+                            "version": 1,
                             "origin": "direct",
                             "origin_account": CANONICAL_OWNER,
                             "origin_proposal_content_id_hex": None,

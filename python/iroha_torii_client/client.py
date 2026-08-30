@@ -5354,6 +5354,7 @@ class GovernanceContractEmergencyHold:
 class GovernanceContractLifecycle:
     """Complete retained ownership and lifecycle projection for one contract."""
 
+    version: int
     origin: str
     origin_account: str
     origin_proposal_content_id_hex: Optional[str]
@@ -18763,6 +18764,7 @@ class ToriiClient(
             record,
             required=frozenset(
                 {
+                    "version",
                     "origin",
                     "origin_account",
                     "origin_proposal_content_id_hex",
@@ -18777,6 +18779,11 @@ class ToriiClient(
             ),
             context=context,
         )
+        version = ToriiClient._coerce_unsigned(
+            record.get("version"), f"{context}.version"
+        )
+        if version != 1:
+            raise RuntimeError(f"{context}.version must be exactly 1")
         origin = ToriiClient._require_kaigi_exact_string(
             record.get("origin"), context=f"{context}.origin"
         )
@@ -18832,6 +18839,7 @@ class ToriiClient(
 
         pending_owner = record.get("pending_owner")
         return GovernanceContractLifecycle(
+            version=version,
             origin=origin,
             origin_account=ToriiClient._require_kaigi_canonical_account_id(
                 record.get("origin_account"), context=f"{context}.origin_account"

@@ -478,6 +478,8 @@ impl_direct_instruction_box!(crate::isi::governance::ProposeContractLifecycleGov
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeContractEmergencyHold);
 #[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::ProposeGlobalDataTriggerPermissionGovernance);
+#[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradeProposal);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::ProposeSccpRouteGovernance);

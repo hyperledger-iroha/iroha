@@ -5206,6 +5206,14 @@ export interface ToriiGovernanceContractEmergencyHoldProposal {
   duration_blocks: number;
 }
 
+export interface ToriiGovernanceGlobalDataTriggerPermissionProposal {
+  authority: string;
+  action: Readonly<{
+    action: "grant" | "revoke";
+    value: null;
+  }>;
+}
+
 export interface ToriiGovernanceContractEmergencyHold {
   incident_digest_hex: string;
   proposal_content_id_hex: string;
@@ -5216,6 +5224,7 @@ export interface ToriiGovernanceContractEmergencyHold {
 }
 
 export interface ToriiGovernanceContractLifecycle {
+  version: 1;
   origin: "direct" | "parliament";
   origin_account: string;
   origin_proposal_content_id_hex: string | null;
@@ -5277,6 +5286,10 @@ export type ToriiGovernanceProposalKind =
   | Readonly<{
       variant: "ContractEmergencyHold";
       contract_emergency_hold: ToriiGovernanceContractEmergencyHoldProposal;
+    }>
+  | Readonly<{
+      variant: "GlobalDataTriggerPermissionGovernance";
+      global_data_trigger_permission_governance: ToriiGovernanceGlobalDataTriggerPermissionProposal;
     }>;
 
 export interface ToriiGovernanceProposalRecord {
@@ -5410,7 +5423,10 @@ export type ParliamentProposalTagV1 =
   | "MusubiRegistryGovernance"
   | "SorafsProviderGovernance"
   | "ContractLifecycleGovernance"
-  | "ContractEmergencyHold";
+  | "ContractEmergencyHold"
+  | "GlobalDataTriggerPermissionGovernance";
+
+export const PARLIAMENT_PROPOSAL_KINDS_V1: ReadonlyArray<ParliamentProposalTagV1>;
 
 export type ParliamentPublicTransitionTagV1 =
   | "EscalateRisk"
@@ -5611,6 +5627,10 @@ export type ParliamentProposalV1 =
   | Readonly<{
       kind: "ContractEmergencyHold";
       payload: ToriiGovernanceContractEmergencyHoldProposal;
+    }>
+  | Readonly<{
+      kind: "GlobalDataTriggerPermissionGovernance";
+      payload: ToriiGovernanceGlobalDataTriggerPermissionProposal;
     }>;
 
 export type ParliamentLifecycleTransitionV1 =
@@ -13646,6 +13666,40 @@ export interface DeactivateContractInstanceInstruction {
     contract_address: string;
     expected_revision: string;
     reason: string | null;
+  };
+}
+
+export interface SetContractParliamentDelegationInstruction {
+  SetContractParliamentDelegation: {
+    contract_address: string;
+    expected_revision: string;
+    delegated: boolean;
+  };
+}
+
+export type ContractLifecycleOwnerV1 =
+  | Readonly<{ owner: "Account"; value: string }>
+  | Readonly<{ owner: "Parliament"; value: null }>;
+
+export interface OfferContractOwnershipInstruction {
+  OfferContractOwnership: {
+    contract_address: string;
+    expected_revision: string;
+    new_owner: ContractLifecycleOwnerV1;
+  };
+}
+
+export interface AcceptContractOwnershipInstruction {
+  AcceptContractOwnership: {
+    contract_address: string;
+    expected_revision: string;
+  };
+}
+
+export interface CancelContractOwnershipOfferInstruction {
+  CancelContractOwnershipOffer: {
+    contract_address: string;
+    expected_revision: string;
   };
 }
 

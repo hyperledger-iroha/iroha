@@ -2205,6 +2205,111 @@ async fn debug_witness_requires_a_developer_telemetry_profile() {
         assert_eq!(response.status(), expected_status, "profile {profile:?}");
     }
 }
+
+#[cfg(feature = "telemetry")]
+#[tokio::test]
+async fn debug_witness_operator_and_telemetry_profile_matrix() {
+    const ROUTES: &[iroha_torii_shared::route_catalog::RouteDescriptor] =
+        &[route_catalog::telemetry::DEBUG_WITNESS];
+    let descriptor = &ROUTES[0];
+    let uri = descriptor
+        .path()
+        .parse::<crate::Uri>()
+        .expect("debug witness URI");
+    let rogue_signer = checked_torii_test_keypair_from_seed_byte(
+        0xd1,
+        Algorithm::Secp256k1,
+        "derive untrusted debug-witness operator fixture key",
+    );
+
+    for (profile, expected_signed_status) in [
+        (TelemetryProfile::Disabled, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Extended, StatusCode::SERVICE_UNAVAILABLE),
+        (TelemetryProfile::Developer, StatusCode::OK),
+        (TelemetryProfile::Full, StatusCode::OK),
+    ] {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app)
+            .unwrap_or_else(|_| panic!("debug-witness fixture must have one app-state owner"));
+        inner.telemetry = inner.telemetry.with_profile(profile);
+        let app = Arc::new(inner);
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(ROUTES),
+            compiled_route_features(),
+        )
+        .expect("debug witness route catalog is valid");
+        builder.route(
+            descriptor,
+            catalog_get(super::handler_debug_witness).authenticated_operator(app.clone()),
+        );
+        let (router, _) = builder
+            .finish()
+            .expect("debug witness route mounts exactly once");
+        let router = router.with_state(app.clone());
+        let make_request = |headers: HeaderMap| {
+            let mut request = axum::http::Request::builder()
+                .method(axum::http::Method::GET)
+                .uri(uri.clone())
+                .header(axum::http::header::ACCEPT, "application/json")
+                .extension(crate::loopback_connect_info())
+                .body(axum::body::Body::empty())
+                .expect("debug witness request");
+            request.headers_mut().extend(headers);
+            request
+        };
+
+        let unsigned = router
+            .clone()
+            .oneshot(make_request(HeaderMap::new()))
+            .await
+            .expect("unsigned debug witness response");
+        assert_eq!(
+            unsigned.status(),
+            StatusCode::UNAUTHORIZED,
+            "unsigned profile {profile:?}"
+        );
+
+        let rogue_headers = operator_signatures::signed_request_headers(
+            &rogue_signer,
+            app.state.network_id_ref(),
+            &crate::Method::GET,
+            &uri,
+            &[],
+        )
+        .expect("untrusted operator request signature");
+        let untrusted = router
+            .clone()
+            .oneshot(make_request(rogue_headers))
+            .await
+            .expect("untrusted debug witness response");
+        assert_eq!(
+            untrusted.status(),
+            StatusCode::UNAUTHORIZED,
+            "untrusted profile {profile:?}"
+        );
+
+        let operator_headers = operator_signatures::signed_request_headers(
+            &app.da_receipt_signer,
+            app.state.network_id_ref(),
+            &crate::Method::GET,
+            &uri,
+            &[],
+        )
+        .expect("trusted operator request signature");
+        let signed = router
+            .oneshot(make_request(operator_headers))
+            .await
+            .expect("signed debug witness response");
+        assert_eq!(
+            signed.status(),
+            expected_signed_status,
+            "signed profile {profile:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn torii_tx_rate_uses_config_and_queue_default() {
     let mut cfg = crate::test_utils::mk_minimal_root_cfg();

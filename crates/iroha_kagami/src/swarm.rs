@@ -3567,6 +3567,13 @@ mod tests {
         );
         assert_eq!(
             table_at("torii")
+                .get("zk_prover_enabled")
+                .and_then(toml::Value::as_bool),
+            Some(false),
+            "prepared Compose validators must opt out until prover keys are projected"
+        );
+        assert_eq!(
+            table_at("torii")
                 .get("da_ingest")
                 .and_then(toml::Value::as_table)
                 .and_then(|da| da.get("manifest_store_dir"))

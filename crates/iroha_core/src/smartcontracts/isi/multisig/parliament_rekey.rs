@@ -51,7 +51,8 @@ fn validation_fee_proposal_references_account(
         | ProposalKind::SorafsProviderGovernance(_)
         | ProposalKind::MusubiRegistryGovernance(_)
         | ProposalKind::ContractLifecycleGovernance(_)
-        | ProposalKind::ContractEmergencyHold(_) => false,
+        | ProposalKind::ContractEmergencyHold(_)
+        | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => false,
     }
 }
 
@@ -92,7 +93,8 @@ fn terminal_validation_fee_retry_budget_is_exhausted(
         | ProposalKind::SorafsProviderGovernance(_)
         | ProposalKind::MusubiRegistryGovernance(_)
         | ProposalKind::ContractLifecycleGovernance(_)
-        | ProposalKind::ContractEmergencyHold(_) => None,
+        | ProposalKind::ContractEmergencyHold(_)
+        | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => None,
     }) else {
         return false;
     };

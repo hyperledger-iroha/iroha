@@ -5489,7 +5489,6 @@ mod tests {
                 "conviction_step_blocks",
                 "max_conviction",
                 "min_turnout",
-                "parliament_quorum_bps",
                 "plain_voting_enabled",
                 "validation_fee_plain_electorate_rules",
                 "validation_fee_plain_requires_explicit_finalization",

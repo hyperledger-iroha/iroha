@@ -33,9 +33,6 @@ fn referendum_open_and_close_by_height() {
         Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);
     let world = World::with([domain], [account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);
-    let mut cfg = state.gov.clone();
-    cfg.parliament_term_blocks = 100;
-    state.set_gov(cfg);
     // Block H=1: create a proposed referendum with explicit [2,3] window.
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let rid = "standalone-window".to_owned();

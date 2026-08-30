@@ -44448,6 +44448,10 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
             referendum_id = Some(payload.id.clone());
             unlocks_updated = true;
         }
+        GovernanceEvent::ReferendumDecided(payload) => {
+            referendum_id = Some(payload.referendum_id.clone());
+            unlocks_updated = true;
+        }
         GovernanceEvent::BallotAccepted(payload) => {
             referendum_id = Some(payload.referendum_id.clone());
             unlocks_updated = true;
@@ -44510,6 +44514,7 @@ mod governance_stream_tests {
         account::AccountId,
         events::data::governance::{
             GovernanceEvent, GovernanceLockCreated, GovernanceProposalSubmitted,
+            GovernanceReferendumDecided,
         },
     };
     fn sample_account() -> AccountId {
@@ -44578,6 +44583,29 @@ mod governance_stream_tests {
                 .and_then(Value::as_str),
             Some(referendum_id.as_str())
         );
+    }
+    routing_test! { sync standalone_referendum_decision_emits_only_referendum_identity
+        let referendum_id = "0XAbCd-standalone".to_owned();
+        let event = GovernanceEvent::ReferendumDecided(GovernanceReferendumDecided {
+            referendum_id: referendum_id.clone(),
+            approve: 21,
+            reject: 8,
+            abstain: 3,
+            approved: true,
+        });
+        let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Governance(event),
+        )));
+        assert!(find_kind(&payloads, "ProposalUpdated").is_none());
+        for kind in ["ReferendumUpdated", "LocksUpdated", "TallyUpdated"] {
+            assert_eq!(
+                find_kind(&payloads, kind)
+                    .and_then(|value| value.get("id"))
+                    .and_then(Value::as_str),
+                Some(referendum_id.as_str()),
+                "{kind} must retain the original standalone referendum selector"
+            );
+        }
     }
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -47460,7 +47488,7 @@ mod validation_fee_torii_ingress_tests {
     ) -> iroha_config::parameters::actual::Governance {
         use iroha_data_model::governance::types::ParliamentBody;
         let mut governance = iroha_config::parameters::actual::Governance {
-            parliament_alternate_size: Some(0),
+            parliament_alternate_size: 0,
             ..iroha_config::parameters::actual::Governance::default()
         };
         for requirement in requirements {

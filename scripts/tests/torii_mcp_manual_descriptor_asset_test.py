@@ -13,9 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 109_160
-EXPECTED_ASSET_SHA256 = "250ad7c03ff165727c689ad1cdb6d0c25a87f9b2aa53d7f1529ae19a02935071"
-EXPECTED_SEMANTIC_SHA256 = "e94c770fa63670de1a3ea4dbf4feb441976f404ef88f2ca29abb18b3886c9047"
+EXPECTED_ASSET_LENGTH = 112_201
+EXPECTED_ASSET_SHA256 = "ae0938c31351da71ec5e2099b92c942f5a57f5dfaf82018cd1f1dcede755431d"
+EXPECTED_SEMANTIC_SHA256 = "11dcb0f72f368587eb73374987ab338686b3d4dfacb19afcfa99ee76fdbeba16"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -23,13 +23,13 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "af338fada6916a39d324e9c907abebf5137bec028e9d88ad75f91c4ae3d4ffb3"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "1ecf40a166057d66dbe7f05951458174f5ad414db0b97ad753120a38e0d1c73d"
+    "9757e4567f26eb9b10819d3595ff4c529f3b10124f88e02a09f51d401c67957e"
 )
 EXPECTED_BLAKE3_BYTES = (
-    0x0C, 0xC8, 0x36, 0xD3, 0xE6, 0xED, 0x66, 0x07,
-    0xD4, 0xEF, 0x2F, 0xAE, 0x0A, 0x0B, 0xE9, 0x3B,
-    0x8B, 0x25, 0x5F, 0xCB, 0xDB, 0x25, 0x5A, 0x1C,
-    0x93, 0x84, 0x98, 0xD4, 0x52, 0xEB, 0xC5, 0x92,
+    0xA2, 0xAC, 0x7A, 0x48, 0xD9, 0xFF, 0x12, 0x8C,
+    0x4C, 0x36, 0xC8, 0x1C, 0x81, 0x2A, 0x68, 0xEA,
+    0xB2, 0x9E, 0x53, 0x2F, 0x0A, 0xFF, 0xE2, 0x3B,
+    0xC5, 0x41, 0x2A, 0xD5, 0xC0, 0x80, 0xDD, 0x31,
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
@@ -528,6 +528,51 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                 receipt_body["properties"]["owner_auto_renew_instruction"],
             ):
                 self.assertIn("null", {branch.get("type") for branch in nullable["oneOf"]})
+
+    def test_explorer_history_descriptors_use_snapshot_cursor_contract(self) -> None:
+        asset = json.loads(self.asset)
+        descriptors = {
+            descriptor["name"]: descriptor for descriptor in asset["descriptors"]
+        }
+        expected_query_fields = {
+            "iroha.transactions.list": {
+                "cursor", "limit", "authority", "block", "status", "asset_id",
+            },
+            "iroha.instructions.list": {
+                "cursor", "limit", "authority", "account", "transaction_hash",
+                "transaction_status", "block", "kind", "asset_id",
+            },
+            "iroha.blocks.list": {"cursor", "limit"},
+        }
+        for name, query_fields in expected_query_fields.items():
+            schema = descriptors[name]["input_schema"]
+            self.assertIs(schema.get("additionalProperties"), False, name)
+            properties = schema.get("properties")
+            self.assertIsInstance(properties, dict, name)
+            assert isinstance(properties, dict)
+            self.assertEqual(
+                set(properties),
+                query_fields | {"query", "headers", "accept"},
+                name,
+            )
+            query = properties["query"]
+            self.assertIs(query.get("additionalProperties"), False, name)
+            self.assertEqual(set(query.get("properties", {})), query_fields, name)
+            for owner in (properties, query["properties"]):
+                self.assertFalse(
+                    {"page", "per_page", "offset"} & set(owner),
+                    f"{name} retains offset pagination",
+                )
+                cursor = owner["cursor"]
+                self.assertEqual(cursor.get("pattern"), "^[A-Za-z0-9_-]+$")
+                self.assertEqual(cursor.get("minLength"), 1)
+                self.assertEqual(cursor.get("maxLength"), 1424)
+                limit = owner["limit"]
+                self.assertEqual(
+                    (limit.get("minimum"), limit.get("maximum"), limit.get("default")),
+                    (1, 100, 25),
+                )
+            self.assertIn("Optional canonical target authentication", descriptors[name]["description"])
 
     def test_source_mutations_fail_closed(self) -> None:
         mutations = (

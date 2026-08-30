@@ -1570,6 +1570,9 @@ fn governance_matches(
         GovernanceEvent::ProposalEnacted(p) => proposal_matches(&p.id),
         GovernanceEvent::LockCreated(lock) => referendum_matches(&lock.referendum_id),
         GovernanceEvent::LockExtended(lock) => referendum_matches(&lock.referendum_id),
+        GovernanceEvent::ReferendumDecided(decision) => {
+            referendum_matches(&decision.referendum_id)
+        }
         GovernanceEvent::ProposalApproved(_)
         | GovernanceEvent::ProposalRejected(_)
         | GovernanceEvent::BallotAccepted(_)

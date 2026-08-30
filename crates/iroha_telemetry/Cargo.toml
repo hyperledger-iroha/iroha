@@ -13,6 +13,9 @@ license.workspace = true
 workspace = true
 
 [features]
+default = []
+# Report the portable SM implementation as part of the shipping capability set.
+sm = ["iroha_config/sm", "iroha_data_model/sm"]
 # Send structured events to the configured WebSocket collector.
 event-exporter = [
     "dep:chrono",

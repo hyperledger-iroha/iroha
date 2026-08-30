@@ -12,10 +12,10 @@ license.workspace = true
 workspace = true
 
 [features]
-default = []
+default = ["gost", "sm"]
 gost = ["iroha_crypto/gost", "iroha_data_model/gost"]
 sm = ["iroha_crypto/sm", "iroha_data_model/sm"]
-sm-ffi-openssl = []
+sm-ffi-openssl = ["sm", "iroha_crypto/sm-ffi-openssl"]
 
 [[test]]
 name = "iroha_config_integration"

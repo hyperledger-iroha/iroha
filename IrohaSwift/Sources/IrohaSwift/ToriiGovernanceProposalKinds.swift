@@ -4257,3 +4257,64 @@ public struct ToriiGovernanceContractEmergencyHoldProposalV1: Decodable, Sendabl
         }
     }
 }
+
+/// Closed exact-account global data-trigger permission transition.
+public enum ToriiGovernanceGlobalDataTriggerPermissionActionV1: String, Decodable, Sendable, Equatable {
+    case grant
+    case revoke
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case action, value }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "global data-trigger permission action"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.value), try container.decodeNil(forKey: .value) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .value,
+                in: container,
+                debugDescription: "global data-trigger permission action value must be explicit null"
+            )
+        }
+        let raw = try container.decode(String.self, forKey: .action)
+        guard let action = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "global data-trigger permission action must be grant or revoke"
+            )
+        }
+        self = action
+    }
+}
+
+/// Complete Parliament proposal for one exact account's global data-trigger capability.
+public struct ToriiGovernanceGlobalDataTriggerPermissionProposalV1:
+    Decodable, Sendable, Equatable
+{
+    public let authority: String
+    public let action: ToriiGovernanceGlobalDataTriggerPermissionActionV1
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case authority, action }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "global data-trigger permission governance proposal"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        authority = try governanceCanonicalAccount(
+            container.decode(String.self, forKey: .authority),
+            codingPath: container.codingPath + [CodingKeys.authority],
+            field: "authority"
+        )
+        action = try container.decode(
+            ToriiGovernanceGlobalDataTriggerPermissionActionV1.self,
+            forKey: .action
+        )
+    }
+}

@@ -8612,6 +8612,26 @@
         ],
         "type": "object"
       },
+      "ExplorerBlocksHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/ExplorerHistoryCursorMeta"
+          }
+        },
+        "required": [
+          "pagination",
+          "items"
+        ],
+        "type": "object"
+      },
       "ExplorerCursorMeta": {
         "additionalProperties": false,
         "properties": {
@@ -8662,6 +8682,59 @@
         "required": [
           "pagination",
           "items"
+        ],
+        "type": "object"
+      },
+      "ExplorerHistoryCursorMeta": {
+        "additionalProperties": false,
+        "description": "Snapshot-bound seek metadata for one bounded Explorer history page. The opaque cursor is bound to the collection, committed snapshot, normalized filters, and the caller's visible-route-set digest.",
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "limit": {
+            "format": "uint32",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "maxLength": 1424,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshot_hash": {
+            "description": "Hash of the committed block at snapshot_height, or null when the chain is empty.",
+            "oneOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshot_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "snapshot_height",
+          "snapshot_hash",
+          "next_cursor",
+          "has_more"
         ],
         "type": "object"
       },
@@ -8774,6 +8847,26 @@
         ],
         "description": "Typed public explorer payload when a dedicated schema is available; otherwise the canonical public instruction projection."
       },
+      "ExplorerInstructionsHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExplorerInstructionDetail"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/ExplorerHistoryCursorMeta"
+          }
+        },
+        "required": [
+          "pagination",
+          "items"
+        ],
+        "type": "object"
+      },
       "ExplorerNftsCursorPage": {
         "additionalProperties": false,
         "properties": {
@@ -8854,6 +8947,26 @@
         },
         "required": [
           "anchor"
+        ],
+        "type": "object"
+      },
+      "ExplorerTransactionsHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/ExplorerHistoryCursorMeta"
+          }
+        },
+        "required": [
+          "pagination",
+          "items"
         ],
         "type": "object"
       },
@@ -12088,6 +12201,23 @@
               "payload"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "GlobalDataTriggerPermissionGovernance",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -13896,12 +14026,32 @@
       "GovernedContractEmergencyHoldV1": {
         "additionalProperties": false,
         "properties": {
-          "expires_at_height": { "format": "uint64", "minimum": 1, "type": "integer" },
-          "governance_attempt_id_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-          "imposed_at_height": { "format": "uint64", "minimum": 1, "type": "integer" },
-          "incident_digest_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-          "proposal_content_id_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-          "reason": { "minLength": 1, "type": "string" }
+          "expires_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "governance_attempt_id_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "imposed_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "incident_digest_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "proposal_content_id_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "type": "string"
+          }
         },
         "required": [
           "incident_digest_hex",
@@ -13918,47 +14068,102 @@
         "properties": {
           "active_code_hash_hex": {
             "anyOf": [
-              { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-              { "type": "null" }
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "emergency_hold": {
             "anyOf": [
-              { "$ref": "#/components/schemas/GovernedContractEmergencyHoldV1" },
-              { "type": "null" }
+              {
+                "$ref": "#/components/schemas/GovernedContractEmergencyHoldV1"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "origin": { "enum": ["direct", "parliament"], "type": "string" },
-          "origin_account": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+          "origin": {
+            "enum": [
+              "direct",
+              "parliament"
+            ],
+            "type": "string"
+          },
+          "origin_account": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
           "origin_governance_attempt_id_hex": {
             "anyOf": [
-              { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-              { "type": "null" }
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "origin_proposal_content_id_hex": {
             "anyOf": [
-              { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-              { "type": "null" }
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "owner": {
             "oneOf": [
-              { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
-              { "enum": ["parliament"], "type": "string" }
+              {
+                "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+              },
+              {
+                "enum": [
+                  "parliament"
+                ],
+                "type": "string"
+              }
             ]
           },
-          "parliament_delegated": { "type": "boolean" },
+          "parliament_delegated": {
+            "type": "boolean"
+          },
           "pending_owner": {
             "anyOf": [
-              { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
-              { "enum": ["parliament"], "type": "string" },
-              { "type": "null" }
+              {
+                "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+              },
+              {
+                "enum": [
+                  "parliament"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "revision": { "format": "uint64", "minimum": 1, "type": "integer" }
+          "revision": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "format": "uint16",
+            "minimum": 1,
+            "type": "integer"
+          }
         },
         "required": [
+          "version",
           "origin",
           "origin_account",
           "origin_proposal_content_id_hex",
@@ -13977,54 +14182,129 @@
           {
             "additionalProperties": false,
             "properties": {
-              "abi_hash_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-              "active": { "enum": [true], "type": "boolean" },
-              "code_hash_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-              "contract_address": { "type": "string" },
-              "contract_subject_account": { "type": "string" },
-              "dataspace": { "type": "string" },
-              "emergency_hold_active": { "type": "boolean" },
-              "found": { "enum": [true], "type": "boolean" },
-              "lifecycle": { "$ref": "#/components/schemas/GovernedContractLifecycleV1" },
+              "abi_hash_hex": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "active": {
+                "enum": [
+                  true
+                ],
+                "type": "boolean"
+              },
+              "code_hash_hex": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "contract_address": {
+                "type": "string"
+              },
+              "contract_subject_account": {
+                "type": "string"
+              },
+              "dataspace": {
+                "type": "string"
+              },
+              "emergency_hold_active": {
+                "type": "boolean"
+              },
+              "found": {
+                "enum": [
+                  true
+                ],
+                "type": "boolean"
+              },
+              "lifecycle": {
+                "$ref": "#/components/schemas/GovernedContractLifecycleV1"
+              },
               "public_entrypoints": {
                 "description": "Lexicographically sorted Kotoage and View entrypoint names from the authenticated artifact.",
-                "items": { "pattern": "^[a-z][a-z0-9_]{0,127}$", "type": "string" },
+                "items": {
+                  "pattern": "^[a-z][a-z0-9_]{0,127}$",
+                  "type": "string"
+                },
                 "minItems": 1,
                 "type": "array",
                 "uniqueItems": true
               }
             },
             "required": [
-              "found", "contract_address", "contract_subject_account", "dataspace", "active",
-              "lifecycle", "emergency_hold_active", "code_hash_hex", "abi_hash_hex", "public_entrypoints"
+              "found",
+              "contract_address",
+              "contract_subject_account",
+              "dataspace",
+              "active",
+              "lifecycle",
+              "emergency_hold_active",
+              "code_hash_hex",
+              "abi_hash_hex",
+              "public_entrypoints"
             ],
             "type": "object"
           },
           {
             "additionalProperties": false,
             "properties": {
-              "active": { "enum": [false], "type": "boolean" },
-              "contract_address": { "type": "string" },
-              "contract_subject_account": { "type": "string" },
-              "dataspace": { "type": "string" },
-              "emergency_hold_active": { "type": "boolean" },
-              "found": { "enum": [true], "type": "boolean" },
-              "lifecycle": { "$ref": "#/components/schemas/GovernedContractLifecycleV1" }
+              "active": {
+                "enum": [
+                  false
+                ],
+                "type": "boolean"
+              },
+              "contract_address": {
+                "type": "string"
+              },
+              "contract_subject_account": {
+                "type": "string"
+              },
+              "dataspace": {
+                "type": "string"
+              },
+              "emergency_hold_active": {
+                "type": "boolean"
+              },
+              "found": {
+                "enum": [
+                  true
+                ],
+                "type": "boolean"
+              },
+              "lifecycle": {
+                "$ref": "#/components/schemas/GovernedContractLifecycleV1"
+              }
             },
             "required": [
-              "found", "contract_address", "contract_subject_account", "dataspace", "active",
-              "lifecycle", "emergency_hold_active"
+              "found",
+              "contract_address",
+              "contract_subject_account",
+              "dataspace",
+              "active",
+              "lifecycle",
+              "emergency_hold_active"
             ],
             "type": "object"
           },
           {
             "additionalProperties": false,
             "properties": {
-              "contract_address": { "type": "string" },
-              "dataspace": { "type": "string" },
-              "found": { "enum": [false], "type": "boolean" }
+              "contract_address": {
+                "type": "string"
+              },
+              "dataspace": {
+                "type": "string"
+              },
+              "found": {
+                "enum": [
+                  false
+                ],
+                "type": "boolean"
+              }
             },
-            "required": ["found", "contract_address", "dataspace"],
+            "required": [
+              "found",
+              "contract_address",
+              "dataspace"
+            ],
             "type": "object"
           }
         ]
@@ -59054,6 +59334,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List accounts (explorer).",
         "tags": [
           "Explorer"
@@ -59087,6 +59379,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch account detail (explorer).",
         "tags": [
           "Explorer"
@@ -59121,6 +59425,18 @@
             "description": "QR code payload."
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch account QR code.",
         "tags": [
           "Explorer"
@@ -59188,6 +59504,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List asset definitions (explorer).",
         "tags": [
           "Explorer"
@@ -59221,6 +59549,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch asset definition detail (explorer).",
         "tags": [
           "Explorer"
@@ -59254,6 +59594,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch asset definition econometrics (explorer).",
         "tags": [
           "Explorer"
@@ -59287,6 +59639,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch asset definition snapshot (explorer).",
         "tags": [
           "Explorer"
@@ -59363,6 +59727,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List assets (explorer).",
         "tags": [
           "Explorer"
@@ -59396,6 +59772,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch asset detail (explorer).",
         "tags": [
           "Explorer"
@@ -59405,25 +59793,30 @@
     },
     "/v1/explorer/blocks": {
       "get": {
-        "description": "List blocks for explorer usage.",
+        "description": "List visible block summaries newest-first through a committed snapshot. Anonymous requests see active public dataspaces; a complete canonical account signature or witness adds the caller's authorized routes. Any partial or invalid authentication attempt returns 401. The opaque cursor is bound to this route, the committed snapshot, and the caller's visible-route-set digest.",
         "parameters": [
           {
-            "description": "Optional page number (default 1).",
+            "description": "Opaque canonical base64url cursor returned by the preceding request for the same visible-route set.",
             "in": "query",
-            "name": "page",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "type": "integer"
+              "maxLength": 1424,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           },
           {
-            "description": "Optional items per page (default 10).",
+            "description": "Maximum visible summaries to return (default 25, hard maximum 100). The history scan remains subject to Torii's hard candidate ceiling.",
             "in": "query",
-            "name": "per_page",
+            "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "default": 25,
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
               "type": "integer"
             }
           }
@@ -59433,13 +59826,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ExplorerBlocksHistoryPage"
                 }
               }
             },
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List blocks (explorer).",
         "tags": [
           "Explorer"
@@ -59495,6 +59900,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch block detail (explorer).",
         "tags": [
           "Explorer"
@@ -59553,6 +59970,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List domains (explorer).",
         "tags": [
           "Explorer"
@@ -59586,6 +60015,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch domain detail (explorer).",
         "tags": [
           "Explorer"
@@ -59595,25 +60036,30 @@
     },
     "/v1/explorer/instructions": {
       "get": {
-        "description": "List instructions for explorer usage (supports pagination and optional account/authority/transaction/block/kind/asset_id filtering).",
+        "description": "List visible instructions newest-first through a committed snapshot with optional account/authority/transaction/block/kind/asset_id filters. Anonymous requests see active public dataspaces; a complete canonical account signature or witness adds the caller's authorized routes. Any partial or invalid authentication attempt returns 401. The opaque cursor is bound to this route, snapshot, normalized filters, and visible-route-set digest.",
         "parameters": [
           {
-            "description": "Optional page number (default 1).",
+            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same filters and visible-route set.",
             "in": "query",
-            "name": "page",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "type": "integer"
+              "maxLength": 1424,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           },
           {
-            "description": "Optional items per page (default 10).",
+            "description": "Maximum visible instructions to return (default 25, hard maximum 100). The history scan remains subject to Torii's hard candidate ceiling.",
             "in": "query",
-            "name": "per_page",
+            "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "default": 25,
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -59687,13 +60133,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ExplorerInstructionsHistoryPage"
                 }
               }
             },
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List instructions (explorer).",
         "tags": [
           "Explorer"
@@ -59759,6 +60217,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch instruction detail (explorer).",
         "tags": [
           "Explorer"
@@ -59848,6 +60318,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List NFTs (explorer).",
         "tags": [
           "Explorer"
@@ -59881,6 +60363,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch NFT detail (explorer).",
         "tags": [
           "Explorer"
@@ -59948,6 +60442,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List RWAs (explorer).",
         "tags": [
           "Explorer"
@@ -59981,6 +60487,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch RWA detail (explorer).",
         "tags": [
           "Explorer"
@@ -59990,25 +60508,30 @@
     },
     "/v1/explorer/transactions": {
       "get": {
-        "description": "List transactions for explorer usage (supports pagination and optional authority/block/status/asset_id filtering).",
+        "description": "List visible transactions newest-first through a committed snapshot with optional authority/block/status/asset_id filters. Anonymous requests see active public dataspaces; a complete canonical account signature or witness adds the caller's authorized routes. Any partial or invalid authentication attempt returns 401. The opaque cursor is bound to this route, snapshot, normalized filters, and visible-route-set digest.",
         "parameters": [
           {
-            "description": "Optional page number (default 1).",
+            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same filters and visible-route set.",
             "in": "query",
-            "name": "page",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "type": "integer"
+              "maxLength": 1424,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           },
           {
-            "description": "Optional items per page (default 10).",
+            "description": "Maximum visible transactions to return (default 25, hard maximum 100). The history scan remains subject to Torii's hard candidate ceiling.",
             "in": "query",
-            "name": "per_page",
+            "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "default": 25,
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -60055,13 +60578,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ExplorerTransactionsHistoryPage"
                 }
               }
             },
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List transactions (explorer).",
         "tags": [
           "Explorer"
@@ -60117,6 +60652,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch transaction detail (explorer).",
         "tags": [
           "Explorer"
@@ -64441,11 +64988,11 @@
                   "type": "string"
                 }
               },
-              "X-Iroha-Iso-Signature-Domain": {
-                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
-              },
               "X-Iroha-Iso-Signature": {
                 "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
               },
               "X-Iroha-Iso-Signer": {
                 "$ref": "#/components/headers/IsoOutboundSignerV2"
@@ -64529,11 +65076,11 @@
                   "type": "string"
                 }
               },
-              "X-Iroha-Iso-Signature-Domain": {
-                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
-              },
               "X-Iroha-Iso-Signature": {
                 "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
               },
               "X-Iroha-Iso-Signer": {
                 "$ref": "#/components/headers/IsoOutboundSignerV2"
@@ -64617,11 +65164,11 @@
                   "type": "string"
                 }
               },
-              "X-Iroha-Iso-Signature-Domain": {
-                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
-              },
               "X-Iroha-Iso-Signature": {
                 "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
               },
               "X-Iroha-Iso-Signer": {
                 "$ref": "#/components/headers/IsoOutboundSignerV2"
@@ -64705,11 +65252,11 @@
                   "type": "string"
                 }
               },
-              "X-Iroha-Iso-Signature-Domain": {
-                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
-              },
               "X-Iroha-Iso-Signature": {
                 "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
               },
               "X-Iroha-Iso-Signer": {
                 "$ref": "#/components/headers/IsoOutboundSignerV2"
@@ -64793,11 +65340,11 @@
                   "type": "string"
                 }
               },
-              "X-Iroha-Iso-Signature-Domain": {
-                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
-              },
               "X-Iroha-Iso-Signature": {
                 "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
               },
               "X-Iroha-Iso-Signer": {
                 "$ref": "#/components/headers/IsoOutboundSignerV2"

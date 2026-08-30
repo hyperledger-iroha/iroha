@@ -278,15 +278,19 @@ const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
 );
 const BLOCK_PROOFS_TYPE_NAME =
   "iroha_data_model::block::proofs::BlockProofs";
-const REGISTER_SMART_CONTRACT_CODE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode";
-const REGISTER_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes";
-const DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance";
-const ACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::ActivateContractInstance";
-const COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID = "iroha_data_model::isi::smart_contract_code::CommitContractDeployment";
-const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk";
-const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload";
-const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload";
-const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes";
+const REGISTER_SMART_CONTRACT_CODE_WIRE_ID = "iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode";
+const REGISTER_SMART_CONTRACT_BYTES_WIRE_ID = "iroha.instruction.v1::smart_contract_code::RegisterSmartContractBytes";
+const DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha.instruction.v1::smart_contract_code::DeactivateContractInstance";
+const ACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha.instruction.v1::smart_contract_code::ActivateContractInstance";
+const SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID = "iroha.instruction.v1::smart_contract_code::SetContractParliamentDelegation";
+const OFFER_CONTRACT_OWNERSHIP_WIRE_ID = "iroha.instruction.v1::smart_contract_code::OfferContractOwnership";
+const ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID = "iroha.instruction.v1::smart_contract_code::AcceptContractOwnership";
+const CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID = "iroha.instruction.v1::smart_contract_code::CancelContractOwnershipOffer";
+const COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID = "iroha.instruction.v1::smart_contract_code::CommitContractDeployment";
+const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk";
+const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload";
+const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload";
+const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = "iroha.instruction.v1::smart_contract_code::RemoveSmartContractBytes";
 const CREATE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::CreateKaigi";
 const JOIN_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::JoinKaigi";
 const LEAVE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::LeaveKaigi";
@@ -358,6 +362,12 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [REGISTER_SMART_CONTRACT_BYTES_WIRE_ID]: REGISTER_SMART_CONTRACT_BYTES_WIRE_ID,
   [DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID]: DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
   [ACTIVATE_CONTRACT_INSTANCE_WIRE_ID]: ACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
+  [SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID]:
+    SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID,
+  [OFFER_CONTRACT_OWNERSHIP_WIRE_ID]: OFFER_CONTRACT_OWNERSHIP_WIRE_ID,
+  [ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID]: ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID,
+  [CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID]:
+    CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID,
   [COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID]: COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID,
   [UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID]: UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID,
   [FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]: FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
@@ -2980,6 +2990,10 @@ function encodePureJsInstructionPayload(instruction) {
     instruction.RegisterSmartContractBytes ||
     instruction.DeactivateContractInstance ||
     instruction.ActivateContractInstance ||
+    instruction.SetContractParliamentDelegation ||
+    instruction.OfferContractOwnership ||
+    instruction.AcceptContractOwnership ||
+    instruction.CancelContractOwnershipOffer ||
     instruction.CommitContractDeployment ||
     instruction.UploadSmartContractCodeChunk ||
     instruction.FinalizeSmartContractCodeUpload ||
@@ -3929,6 +3943,74 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
             "ActivateContractInstance.expected_revision",
           ),
           code_hash: decodeHashValue(fields.code_hash, "ActivateContractInstance.code_hash"),
+        },
+      };
+    }
+    case SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID: {
+      const fields = decodeStructFields(payload, "SetContractParliamentDelegation", [
+        "contract_address",
+        "expected_revision",
+        "delegated",
+      ]);
+      return {
+        SetContractParliamentDelegation: {
+          contract_address: decodeStringValue(
+            fields.contract_address,
+            "SetContractParliamentDelegation.contract_address",
+          ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            "SetContractParliamentDelegation.expected_revision",
+          ),
+          delegated: decodeBoolValue(
+            fields.delegated,
+            "SetContractParliamentDelegation.delegated",
+          ),
+        },
+      };
+    }
+    case OFFER_CONTRACT_OWNERSHIP_WIRE_ID: {
+      const fields = decodeStructFields(payload, "OfferContractOwnership", [
+        "contract_address",
+        "expected_revision",
+        "new_owner",
+      ]);
+      return {
+        OfferContractOwnership: {
+          contract_address: decodeStringValue(
+            fields.contract_address,
+            "OfferContractOwnership.contract_address",
+          ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            "OfferContractOwnership.expected_revision",
+          ),
+          new_owner: decodeContractLifecycleOwnerValue(
+            fields.new_owner,
+            "OfferContractOwnership.new_owner",
+          ),
+        },
+      };
+    }
+    case ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID:
+    case CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID: {
+      const name = wireId === ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID
+        ? "AcceptContractOwnership"
+        : "CancelContractOwnershipOffer";
+      const fields = decodeStructFields(payload, name, [
+        "contract_address",
+        "expected_revision",
+      ]);
+      return {
+        [name]: {
+          contract_address: decodeStringValue(
+            fields.contract_address,
+            `${name}.contract_address`,
+          ),
+          expected_revision: decodeU64Value(
+            fields.expected_revision,
+            `${name}.expected_revision`,
+          ),
         },
       };
     }
@@ -6004,6 +6086,39 @@ function encodeSocialInstruction(instruction) {
   );
 }
 
+function encodeContractLifecycleOwnerValue(value, context) {
+  assertExactObjectKeys(value, ["owner", "value"], context);
+  if (value.owner === "Account") {
+    return encodeEnumTagValue(0, () =>
+      encodeAccountIdValue(value.value, `${context}.value`));
+  }
+  if (value.owner === "Parliament") {
+    if (value.value !== null) {
+      throw new TypeError(`${context}.value must be null for Parliament`);
+    }
+    return encodeEnumTagValue(1);
+  }
+  throw new TypeError(`${context}.owner must be Account or Parliament`);
+}
+
+function decodeContractLifecycleOwnerValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("owner");
+  if (tag === 0) {
+    const account = decodeAccountIdValue(
+      readNoritoField(reader, "value"),
+      `${context}.value`,
+    );
+    reader.assertEof();
+    return { owner: "Account", value: account };
+  }
+  if (tag === 1) {
+    reader.assertEof();
+    return { owner: "Parliament", value: null };
+  }
+  throw new TypeError(`${context}.owner contains unsupported variant ${tag}`);
+}
+
 function encodeSmartContractInstruction(instruction) {
   return withNoritoCompactLengths(() =>
     encodeSmartContractInstructionCompact(instruction),
@@ -6079,6 +6194,64 @@ function encodeSmartContractInstructionCompact(instruction) {
         )],
       ]),
     );
+  }
+  if (isPlainObject(instruction.SetContractParliamentDelegation)) {
+    return encodeInstructionEnvelope(
+      SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID,
+      encodeStructValue([
+        [encodeNoritoStringValue(assertNonEmptyString(
+          instruction.SetContractParliamentDelegation.contract_address,
+          "SetContractParliamentDelegation.contract_address",
+        ))],
+        [encodeU64Value(
+          instruction.SetContractParliamentDelegation.expected_revision,
+          "SetContractParliamentDelegation.expected_revision",
+        )],
+        [encodeBoolValue(
+          instruction.SetContractParliamentDelegation.delegated,
+          "SetContractParliamentDelegation.delegated",
+        )],
+      ]),
+    );
+  }
+  if (isPlainObject(instruction.OfferContractOwnership)) {
+    return encodeInstructionEnvelope(
+      OFFER_CONTRACT_OWNERSHIP_WIRE_ID,
+      encodeStructValue([
+        [encodeNoritoStringValue(assertNonEmptyString(
+          instruction.OfferContractOwnership.contract_address,
+          "OfferContractOwnership.contract_address",
+        ))],
+        [encodeU64Value(
+          instruction.OfferContractOwnership.expected_revision,
+          "OfferContractOwnership.expected_revision",
+        )],
+        [encodeContractLifecycleOwnerValue(
+          instruction.OfferContractOwnership.new_owner,
+          "OfferContractOwnership.new_owner",
+        )],
+      ]),
+    );
+  }
+  for (const [name, wireId] of [
+    ["AcceptContractOwnership", ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID],
+    ["CancelContractOwnershipOffer", CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID],
+  ]) {
+    if (isPlainObject(instruction[name])) {
+      return encodeInstructionEnvelope(
+        wireId,
+        encodeStructValue([
+          [encodeNoritoStringValue(assertNonEmptyString(
+            instruction[name].contract_address,
+            `${name}.contract_address`,
+          ))],
+          [encodeU64Value(
+            instruction[name].expected_revision,
+            `${name}.expected_revision`,
+          )],
+        ]),
+      );
+    }
   }
   if (isPlainObject(instruction.CommitContractDeployment)) {
     return encodeInstructionEnvelope(

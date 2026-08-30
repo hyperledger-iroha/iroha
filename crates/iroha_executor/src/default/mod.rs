@@ -76,8 +76,9 @@ use iroha_smart_contract::data_model::{
         defi::DeFiInstructionBox,
         governance::{
             ProposeContractEmergencyHold, ProposeContractLifecycleGovernance,
-            ProposeSccpRouteGovernance, ProposeSorafsProviderGovernance,
-            ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy, RegisterCitizen,
+            ProposeGlobalDataTriggerPermissionGovernance, ProposeSccpRouteGovernance,
+            ProposeSorafsProviderGovernance, ProposeValidationFeePayoutLifecycle,
+            ProposeValidationFeePolicy, RegisterCitizen,
         },
         nexus::{
             ActivateFeeSponsorProgramRevision, BeginCloseFeeSponsorProgram, CloseFeeSponsorProgram,
@@ -1246,6 +1247,9 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<ProposeContractEmergencyHold>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ProposeGlobalDataTriggerPermissionGovernance>() {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<ProposeSorafsProviderGovernance>() {

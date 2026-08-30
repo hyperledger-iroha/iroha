@@ -2786,6 +2786,38 @@ class GovernanceProposalContractEmergencyHold:
         )
 
 
+class GovernanceGlobalDataTriggerPermissionAction(str, Enum):
+    """Closed exact-account global data-trigger permission transition."""
+
+    GRANT = "grant"
+    REVOKE = "revoke"
+
+
+@dataclass(frozen=True)
+class GovernanceProposalGlobalDataTriggerPermissionGovernance:
+    """Canonical exact-account global data-trigger permission proposal."""
+
+    authority: str
+    action: GovernanceGlobalDataTriggerPermissionAction
+
+    @classmethod
+    def from_payload(
+        cls, value: Any
+    ) -> "GovernanceProposalGlobalDataTriggerPermissionGovernance":
+        context = "GlobalDataTriggerPermissionGovernance payload"
+        record = _exact(value, frozenset({"authority", "action"}), context)
+        action_record = _exact(
+            record["action"], frozenset({"action", "value"}), f"{context}.action"
+        )
+        if action_record["value"] is not None:
+            raise TypeError(f"{context}.action.value must be null")
+        try:
+            action = GovernanceGlobalDataTriggerPermissionAction(action_record["action"])
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{context}.action.action must be grant or revoke") from exc
+        return cls(_account_id(record["authority"], f"{context}.authority"), action)
+
+
 GovernanceProposalPayload = Union[
     GovernanceProposalDeployContract,
     GovernanceProposalRuntimeUpgrade,
@@ -2796,11 +2828,12 @@ GovernanceProposalPayload = Union[
     GovernanceProposalSorafsProviderGovernance,
     GovernanceProposalContractLifecycleGovernance,
     GovernanceProposalContractEmergencyHold,
+    GovernanceProposalGlobalDataTriggerPermissionGovernance,
 ]
 
 
 class GovernanceProposalKindTag(str, Enum):
-    """Exactly the nine first-release `ProposalKind` tags."""
+    """Exactly the ten first-release `ProposalKind` tags."""
 
     DEPLOY_CONTRACT = "DeployContract"
     RUNTIME_UPGRADE = "RuntimeUpgrade"
@@ -2811,6 +2844,7 @@ class GovernanceProposalKindTag(str, Enum):
     SORAFS_PROVIDER_GOVERNANCE = "SorafsProviderGovernance"
     CONTRACT_LIFECYCLE_GOVERNANCE = "ContractLifecycleGovernance"
     CONTRACT_EMERGENCY_HOLD = "ContractEmergencyHold"
+    GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE = "GlobalDataTriggerPermissionGovernance"
 
 
 @dataclass(frozen=True)
@@ -2826,7 +2860,7 @@ class GovernanceProposalKind:
         try:
             kind = GovernanceProposalKindTag(record["kind"])
         except (ValueError, TypeError) as exc:
-            raise TypeError("proposal kind tag is not one of the nine first-release variants") from exc
+            raise TypeError("proposal kind tag is not one of the ten first-release variants") from exc
         parser = {
             kind.DEPLOY_CONTRACT: GovernanceProposalDeployContract.from_payload,
             kind.RUNTIME_UPGRADE: GovernanceProposalRuntimeUpgrade.from_payload,
@@ -2837,6 +2871,7 @@ class GovernanceProposalKind:
             kind.SORAFS_PROVIDER_GOVERNANCE: GovernanceProposalSorafsProviderGovernance.from_payload,
             kind.CONTRACT_LIFECYCLE_GOVERNANCE: GovernanceProposalContractLifecycleGovernance.from_payload,
             kind.CONTRACT_EMERGENCY_HOLD: GovernanceProposalContractEmergencyHold.from_payload,
+            kind.GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE: GovernanceProposalGlobalDataTriggerPermissionGovernance.from_payload,
         }[kind]
         payload = cast(GovernanceProposalPayload, parser(record["payload"]))
         return cls(kind, payload)

@@ -138,6 +138,8 @@ pub const CONTRACT_HAJIMARI_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint
 pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
 /// Maximum duration of a non-consensual Parliament emergency hold, in blocks.
 pub const MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1: u64 = 3_600;
+/// Exact first-release contract lifecycle schema version.
+pub const CONTRACT_LIFECYCLE_CONTROL_VERSION_V1: u16 = 1;
 /// Canonical human-readable prefix for every Bech32m contract address.
 ///
 /// Exact genesis-derived network identity is committed inside the address digest. The presentation
@@ -272,6 +274,8 @@ mod model {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct ContractLifecycleControlV1 {
+        /// Exact persisted schema version; first-release snapshots require `1`.
+        pub version: u16,
         /// Immutable first-deployment provenance.
         pub origin: ContractDeploymentOriginV1,
         /// Current lifecycle owner.
@@ -294,6 +298,7 @@ impl ContractLifecycleControlV1 {
     #[must_use]
     pub fn direct(deployer: AccountId) -> Self {
         Self {
+            version: CONTRACT_LIFECYCLE_CONTROL_VERSION_V1,
             origin: ContractDeploymentOriginV1::Direct(DirectContractDeploymentOriginV1 {
                 deployer: deployer.clone(),
             }),
@@ -314,6 +319,7 @@ impl ContractLifecycleControlV1 {
         governance_attempt_id: [u8; 32],
     ) -> Self {
         Self {
+            version: CONTRACT_LIFECYCLE_CONTROL_VERSION_V1,
             origin: ContractDeploymentOriginV1::Parliament(ParliamentContractDeploymentOriginV1 {
                 proposer,
                 proposal_content_id,
@@ -333,6 +339,11 @@ impl ContractLifecycleControlV1 {
     /// # Errors
     /// Returns a stable explanation when the record cannot be consensus-authoritative.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self.version != CONTRACT_LIFECYCLE_CONTROL_VERSION_V1 {
+            return Err(
+                "incompatible contract lifecycle schema version; regenerate first-release genesis and snapshots",
+            );
+        }
         if self.revision == 0 {
             return Err("contract lifecycle revision must be non-zero");
         }
@@ -1160,8 +1171,17 @@ mod lifecycle_tests {
     #[test]
     fn lifecycle_control_enforces_revision_and_bounded_hold() {
         let mut lifecycle = ContractLifecycleControlV1::direct(account());
+        assert_eq!(lifecycle.version, CONTRACT_LIFECYCLE_CONTROL_VERSION_V1);
         assert!(lifecycle.validate().is_ok());
         assert!(lifecycle.active_code_hash.is_none());
+        lifecycle.version = 0;
+        assert_eq!(
+            lifecycle.validate(),
+            Err(
+                "incompatible contract lifecycle schema version; regenerate first-release genesis and snapshots"
+            )
+        );
+        lifecycle.version = CONTRACT_LIFECYCLE_CONTROL_VERSION_V1;
         lifecycle.revision = 0;
         assert_eq!(
             lifecycle.validate(),

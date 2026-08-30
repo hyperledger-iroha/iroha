@@ -241,6 +241,7 @@ def _capabilities() -> dict[str, Any]:
             "CONTRACT_EMERGENCY_HOLD",
             "CONTRACT_LIFECYCLE_GOVERNANCE",
             "DEPLOY_CONTRACT",
+            "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
             "MUSUBI_REGISTRY_GOVERNANCE",
             "RUNTIME_UPGRADE",
             "SCCP_ROUTE_GOVERNANCE",

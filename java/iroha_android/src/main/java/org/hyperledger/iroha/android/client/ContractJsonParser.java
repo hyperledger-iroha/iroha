@@ -245,6 +245,7 @@ public final class ContractJsonParser {
     requireExactKeys(
         record,
         Set.of(
+            "version",
             "origin",
             "origin_account",
             "origin_proposal_content_id_hex",
@@ -256,6 +257,11 @@ public final class ContractJsonParser {
             "revision",
             "emergency_hold"),
         context);
+    final long version = asNonNegativeLong(record.get("version"), context + ".version");
+    if (version != 1L) {
+      throw new IllegalStateException(
+          context + ".version must equal the first-release lifecycle schema version 1");
+    }
     final String origin = requiredExactString(record.get("origin"), context + ".origin");
     if (!"direct".equals(origin) && !"parliament".equals(origin)) {
       throw new IllegalStateException(context + ".origin must be direct or parliament");
@@ -281,6 +287,7 @@ public final class ContractJsonParser {
           context + " Parliament origin requires both governance identifiers");
     }
     return new GovernanceContractLifecycle(
+        (int) version,
         origin,
         requiredExactAccountId(record.get("origin_account"), context + ".origin_account"),
         proposalContentIdHex,

@@ -11351,12 +11351,8 @@ fn participant_catalog_binds_initial_from_and_scopes_reads_to_both_parties() {
             parties,
         )
         .expect("durable authenticated admission");
-    let other_message = participant_message(
-        "pacs.008",
-        "OTHRDEFF",
-        "MARKDEFF",
-        "MsgId=other-payment",
-    );
+    let other_message =
+        participant_message("pacs.008", "OTHRDEFF", "MARKDEFF", "MsgId=other-payment");
     let other_parties = runtime
         .authorize_initial_submission(other_party.public_key(), profile, &other_message)
         .expect("other participant owns its From identity");
@@ -11496,6 +11492,120 @@ fn lifecycle_roles_reject_cross_party_updates() {
         ),
         Err(IsoAdmissionError::NotAuthorized)
     );
+}
+
+#[test]
+fn counterparty_owns_every_return_and_securities_lifecycle_message() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid participant config")
+        .expect("enabled runtime");
+    let originator = fixture_key_pair(0xAB);
+    let counterparty = fixture_key_pair(0xAC);
+    let profile = runtime.default_profile();
+
+    let payment = participant_message(
+        "pacs.008",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "MsgId=return-role-payment",
+    );
+    let payment_parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &payment)
+        .expect("originator owns payment From identity");
+    runtime
+        .admit_authenticated_inbound(
+            "return-role-payment",
+            inbound_metadata("return-role-payment", "pacs.008"),
+            payment_parties,
+        )
+        .expect("payment original admitted");
+    let payment_return = participant_message(
+        "pacs.004",
+        "MARKDEFF",
+        "DEUTDEFF",
+        "BizMsgIdr=return-role-1\nOrgnlGrpInf/OrgnlMsgId=return-role-payment",
+    );
+    assert_eq!(
+        runtime.authorize_lifecycle_submission(
+            originator.public_key(),
+            profile,
+            "pacs.004",
+            &payment_return,
+        ),
+        Err(IsoAdmissionError::NotAuthorized)
+    );
+    let admitted_return = runtime
+        .authorize_lifecycle_submission(
+            counterparty.public_key(),
+            profile,
+            "pacs.004",
+            &payment_return,
+        )
+        .expect("original counterparty owns pacs.004");
+    assert_eq!(
+        admitted_return.admitting_participant_id,
+        "counterparty-bank"
+    );
+
+    let securities = participant_message(
+        "sese.023",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "TxId=securities-role-trade",
+    );
+    let securities_parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &securities)
+        .expect("originator owns securities From identity");
+    runtime
+        .admit_authenticated_inbound(
+            "sese.023:securities-role-trade",
+            inbound_metadata("sese.023:securities-role-trade", "sese.023"),
+            securities_parties,
+        )
+        .expect("securities original admitted");
+    for (message_type, lifecycle) in [
+        (
+            "sese.024",
+            participant_message(
+                "sese.024",
+                "MARKDEFF",
+                "DEUTDEFF",
+                "BizMsgIdr=securities-status-1\nTxId=securities-role-trade\nSttlmSts=ACCP",
+            ),
+        ),
+        (
+            "sese.025",
+            participant_message(
+                "sese.025",
+                "MARKDEFF",
+                "DEUTDEFF",
+                "BizMsgIdr=securities-confirmation-1\nTxId=securities-role-trade\nConfSts=ACSC",
+            ),
+        ),
+    ] {
+        assert_eq!(
+            runtime.authorize_lifecycle_submission(
+                originator.public_key(),
+                profile,
+                message_type,
+                &lifecycle,
+            ),
+            Err(IsoAdmissionError::NotAuthorized),
+            "originator must not submit {message_type}"
+        );
+        let admitted = runtime
+            .authorize_lifecycle_submission(
+                counterparty.public_key(),
+                profile,
+                message_type,
+                &lifecycle,
+            )
+            .unwrap_or_else(|error| panic!("counterparty must own {message_type}: {error:?}"));
+        assert_eq!(admitted.admitting_participant_id, "counterparty-bank");
+    }
 }
 
 #[test]

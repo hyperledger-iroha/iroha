@@ -224,12 +224,16 @@ object ContractJsonParser {
         requireExactKeys(
             record,
             setOf(
-                "origin", "origin_account", "origin_proposal_content_id_hex",
+                "version", "origin", "origin_account", "origin_proposal_content_id_hex",
                 "origin_governance_attempt_id_hex", "owner", "pending_owner",
                 "parliament_delegated", "active_code_hash_hex", "revision", "emergency_hold",
             ),
             context,
         )
+        val version = asNonNegativeLong(record["version"], "$context.version")
+        check(version == 1L) {
+            "$context.version must equal the first-release lifecycle schema version 1"
+        }
         val origin = requiredExactString(record["origin"], "$context.origin")
         check(origin == "direct" || origin == "parliament") { "$context.origin must be direct or parliament" }
         val revision = asNonNegativeLong(record["revision"], "$context.revision")
@@ -249,6 +253,7 @@ object ContractJsonParser {
             "$context Parliament origin requires both governance identifiers"
         }
         return GovernanceContractLifecycle(
+            version = version.toInt(),
             origin = origin,
             originAccount = requiredExactAccountId(record["origin_account"], "$context.origin_account"),
             originProposalContentIdHex = proposalContentId,

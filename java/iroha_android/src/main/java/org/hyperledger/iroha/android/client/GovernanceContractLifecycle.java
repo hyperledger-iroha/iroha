@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 /** Complete retained ownership and lifecycle projection for one contract. */
 public final class GovernanceContractLifecycle {
+  private final int version;
   private final String origin;
   private final String originAccount;
   private final String originProposalContentIdHex;
@@ -14,6 +15,7 @@ public final class GovernanceContractLifecycle {
   private final GovernanceContractEmergencyHold emergencyHold;
 
   public GovernanceContractLifecycle(
+      final int version,
       final String origin,
       final String originAccount,
       final String originProposalContentIdHex,
@@ -24,6 +26,7 @@ public final class GovernanceContractLifecycle {
       final String activeCodeHashHex,
       final long revision,
       final GovernanceContractEmergencyHold emergencyHold) {
+    this.version = version;
     this.origin = origin;
     this.originAccount = originAccount;
     this.originProposalContentIdHex = originProposalContentIdHex;
@@ -36,6 +39,7 @@ public final class GovernanceContractLifecycle {
     this.emergencyHold = emergencyHold;
   }
 
+  public int version() { return version; }
   public String origin() { return origin; }
   public String originAccount() { return originAccount; }
   public String originProposalContentIdHex() { return originProposalContentIdHex; }

@@ -452,7 +452,8 @@ pub(crate) fn parliament_attempt_policy_v1(
         }
         ProposalKind::RuntimeUpgrade(_)
         | ProposalKind::MusubiRegistryGovernance(_)
-        | ProposalKind::SorafsProviderGovernance(_) => &[
+        | ProposalKind::SorafsProviderGovernance(_)
+        | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => &[
             ParliamentBody::RulesCommittee,
             ParliamentBody::AgendaCouncil,
             ParliamentBody::InterestPanel,

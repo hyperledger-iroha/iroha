@@ -90,7 +90,8 @@ public final class ParliamentApiV1 {
           "MusubiRegistryGovernance",
           "SorafsProviderGovernance",
           "ContractLifecycleGovernance",
-          "ContractEmergencyHold");
+          "ContractEmergencyHold",
+          "GlobalDataTriggerPermissionGovernance");
 
   public static final List<TransitionLayout> PUBLIC_TRANSITIONS =
       listOf(

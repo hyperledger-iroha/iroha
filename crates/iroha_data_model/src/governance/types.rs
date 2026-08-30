@@ -508,6 +508,9 @@ pub enum ProposalKind {
     /// Impose one narrow, time-bounded emergency execution hold.
     #[codec(index = 8)]
     ContractEmergencyHold(ContractEmergencyHoldProposalV1),
+    /// Grant or revoke one exact account's global data-trigger capability.
+    #[codec(index = 9)]
+    GlobalDataTriggerPermissionGovernance(GlobalDataTriggerPermissionGovernanceProposalV1),
 }
 /// Proposal payload for deploying an IVM contract via governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -659,6 +662,42 @@ pub struct ContractEmergencyHoldProposalV1 {
     pub reason: String,
     /// Hold duration, bounded by `MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1`.
     pub duration_blocks: u64,
+}
+/// Closed Parliament action for the global data-trigger capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(
+        tag = "action",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
+)]
+pub enum GlobalDataTriggerPermissionGovernanceActionV1 {
+    /// Grant the capability to the exact account.
+    #[codec(index = 0)]
+    Grant,
+    /// Revoke the capability from the exact account.
+    #[codec(index = 1)]
+    Revoke,
+}
+/// Complete Parliament proposal for one exact account's global data-trigger capability.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct GlobalDataTriggerPermissionGovernanceProposalV1 {
+    /// Exact account whose capability is granted or revoked.
+    pub authority: AccountId,
+    /// Closed grant-or-revoke effect.
+    pub action: GlobalDataTriggerPermissionGovernanceActionV1,
 }
 /// Proposal payload for scheduling a runtime upgrade through governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2973,7 +3012,8 @@ impl ProposalKind {
         match self {
             Self::DeployContract(_)
             | Self::ValidationFeePolicy(_)
-            | Self::ValidationFeePayoutLifecycle(_) => None,
+            | Self::ValidationFeePayoutLifecycle(_)
+            | Self::GlobalDataTriggerPermissionGovernance(_) => None,
             Self::ContractLifecycleGovernance(proposal) => (proposal.expected_revision > maximum)
                 .then_some(
                     "contract lifecycle expected revision exceeds the exact JSON integer maximum",
@@ -3035,6 +3075,9 @@ impl ProposalKind {
             }
             Self::ContractEmergencyHold(_) => {
                 crate::governance_fingerprint::CONTRACT_EMERGENCY_HOLD_V1
+            }
+            Self::GlobalDataTriggerPermissionGovernance(_) => {
+                crate::governance_fingerprint::GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE_V1
             }
         };
         crate::governance_fingerprint::fingerprint(domain, self)
@@ -3104,6 +3147,9 @@ impl ProposalKind {
             Self::SorafsProviderGovernance(proposal) => {
                 GovernanceSubjectPreimageV1::SorafsProvider(proposal.action.provider_id())
             }
+            Self::GlobalDataTriggerPermissionGovernance(proposal) => {
+                GovernanceSubjectPreimageV1::GlobalDataTriggerPermission(proposal.authority.clone())
+            }
         };
         Ok(crate::governance_fingerprint::fingerprint(
             crate::governance_fingerprint::GOVERNANCE_SUBJECT_ID_V1,
@@ -3134,6 +3180,8 @@ enum GovernanceSubjectPreimageV1 {
     MusubiRegistryPolicy,
     #[codec(index = 9)]
     SorafsProvider(crate::sorafs::capacity::ProviderId),
+    #[codec(index = 10)]
+    GlobalDataTriggerPermission(AccountId),
 }
 
 impl ProposalContentId {
@@ -3204,6 +3252,60 @@ mod tests {
             lifecycle.governed_subject_id_v1().expect("subject"),
             emergency.governed_subject_id_v1().expect("subject")
         );
+    }
+    #[test]
+    fn global_data_trigger_permission_proposals_are_account_scoped_and_append_only() {
+        assert_eq!(
+            GlobalDataTriggerPermissionGovernanceActionV1::Grant.encode(),
+            0_u32.to_le_bytes()
+        );
+        assert_eq!(
+            GlobalDataTriggerPermissionGovernanceActionV1::Revoke.encode(),
+            1_u32.to_le_bytes()
+        );
+        let authority = checked_account_id();
+        let authority_literal = authority.to_string();
+        let grant = ProposalKind::GlobalDataTriggerPermissionGovernance(
+            GlobalDataTriggerPermissionGovernanceProposalV1 {
+                authority: authority.clone(),
+                action: GlobalDataTriggerPermissionGovernanceActionV1::Grant,
+            },
+        );
+        let revoke = ProposalKind::GlobalDataTriggerPermissionGovernance(
+            GlobalDataTriggerPermissionGovernanceProposalV1 {
+                authority,
+                action: GlobalDataTriggerPermissionGovernanceActionV1::Revoke,
+            },
+        );
+
+        assert_ne!(grant.fingerprint(), revoke.fingerprint());
+        assert_eq!(
+            grant.governed_subject_id_v1().expect("grant subject"),
+            revoke.governed_subject_id_v1().expect("revoke subject")
+        );
+        assert_eq!(
+            grant.encode().get(..4),
+            Some(9_u32.to_le_bytes().as_slice()),
+            "the proposal kind must retain its append-only Norito index"
+        );
+        let framed = norito::to_bytes(&grant).expect("encode permission proposal");
+        assert_eq!(
+            norito::decode_from_bytes::<ProposalKind>(&framed).expect("decode permission proposal"),
+            grant
+        );
+        for (proposal, action) in [(&grant, "grant"), (&revoke, "revoke")] {
+            let expected = format!(
+                "{{\"kind\":\"GlobalDataTriggerPermissionGovernance\",\"payload\":{{\"authority\":\"{authority_literal}\",\"action\":{{\"action\":\"{action}\",\"value\":null}}}}}}"
+            );
+            let json = norito::json::to_json(proposal)
+                .expect("encode canonical global data-trigger permission proposal JSON");
+            assert_eq!(json, expected);
+            assert_eq!(
+                norito::json::from_json::<ProposalKind>(&json)
+                    .expect("decode canonical global data-trigger permission proposal JSON"),
+                *proposal
+            );
+        }
     }
     #[test]
     fn emergency_hold_retrospective_action_is_append_only_and_binding_complete() {
@@ -3403,6 +3505,9 @@ mod tests {
             ProposalKind::ContractEmergencyHold(_) => {
                 panic!("unexpected contract emergency-hold proposal")
             }
+            ProposalKind::GlobalDataTriggerPermissionGovernance(_) => {
+                panic!("unexpected global data-trigger permission proposal")
+            }
         }
     }
 
@@ -3547,6 +3652,9 @@ mod tests {
             }
             ProposalKind::ContractEmergencyHold(_) => {
                 panic!("unexpected contract emergency-hold proposal")
+            }
+            ProposalKind::GlobalDataTriggerPermissionGovernance(_) => {
+                panic!("unexpected global data-trigger permission proposal")
             }
         }
     }

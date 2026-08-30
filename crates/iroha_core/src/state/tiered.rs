@@ -3805,6 +3805,9 @@ mod measured_bytes_impls {
                 ProposalKind::ContractEmergencyHold(payload) => {
                     total = total.saturating_add(norito::codec::Encode::encode(payload).len());
                 }
+                ProposalKind::GlobalDataTriggerPermissionGovernance(payload) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(payload).len());
+                }
             }
             total
         }

@@ -48,6 +48,11 @@ export function normalizeGovernanceProposalWireV1(value, context = "proposal") {
       return { kind, payload: normalizeContractLifecycle(record.payload, payloadContext) };
     case "ContractEmergencyHold":
       return { kind, payload: normalizeContractEmergencyHold(record.payload, payloadContext) };
+    case "GlobalDataTriggerPermissionGovernance":
+      return {
+        kind,
+        payload: normalizeGlobalDataTriggerPermission(record.payload, payloadContext),
+      };
     default:
       throw new TypeError(`${context}.kind contains an unsupported V1 proposal variant: ${kind}`);
   }
@@ -872,6 +877,22 @@ function normalizeContractEmergencyHold(value, context) {
     ),
     reason,
     duration_blocks: durationBlocks,
+  };
+}
+
+function normalizeGlobalDataTriggerPermission(value, context) {
+  const record = exactRecord(value, ["authority", "action"], context);
+  const action = exactRecord(record.action, ["action", "value"], `${context}.action`);
+  const kind = nonEmptyString(action.action, `${context}.action.action`);
+  if (kind !== "grant" && kind !== "revoke") {
+    throw new TypeError(`${context}.action.action must be grant or revoke`);
+  }
+  if (action.value !== null) {
+    throw new TypeError(`${context}.action.value must be null`);
+  }
+  return {
+    authority: ensureCanonicalAccountId(record.authority, `${context}.authority`),
+    action: { action: kind, value: null },
   };
 }
 

@@ -8,7 +8,7 @@ use iroha_config::parameters::user::ParseError;
 use iroha_config::parameters::{
     actual::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
-        LaneProfile, NexusFeeSettlementMode, NexusStorage, OperatorAuthLockout,
+        LaneProfile, NexusFeeSettlementMode, NexusStorage, NoritoRpcStage, OperatorAuthLockout,
         OperatorTokenFallback, OperatorTokenSource, OracleChangeThresholds, OracleEconomics,
         OracleGovernance, OracleTwitterBinding, Queue, Root as Config, SoranetVpn, Streaming,
         StreamingSync, ToriiOperatorAuth, TransactionGossiper,
@@ -215,6 +215,26 @@ fn torii_max_content_len_defaults_to_sixty_four_megabytes() {
         defaults::torii::MAX_CONTENT_LEN.0,
         "minimal configs should inherit the runtime Torii body-cap default"
     );
+}
+#[test]
+fn portable_production_capabilities_default_to_enabled() {
+    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("config should be valid");
+
+    assert!(config.confidential.enabled);
+    assert!(!config.confidential.assume_valid);
+    assert!(config.zk.halo2.enabled);
+    assert!(config.zk.stark.enabled);
+    assert!(config.gov.plain_voting_enabled);
+    assert!(config.streaming.sync.enabled);
+    assert!(config.streaming.sync.observe_only);
+    assert!(config.torii.webhooks_enabled);
+    assert!(config.torii.zk_attachments_enabled);
+    assert!(config.torii.zk_prover_enabled);
+    assert!(config.torii.transport.norito_rpc.enabled);
+    assert_eq!(config.torii.transport.norito_rpc.stage, NoritoRpcStage::Ga);
+    assert!(config.torii.mcp.enabled);
+    assert!(!config.torii.mcp.expose_operator_routes);
 }
 #[test]
 fn ivm_banner_override_applies() {

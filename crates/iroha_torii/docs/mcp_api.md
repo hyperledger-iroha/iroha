@@ -4,7 +4,9 @@ Torii exposes a native Model Context Protocol bridge at `/v1/mcp`.
 It lets MCP clients discover tools and call Torii/Connect endpoints through JSON-RPC.
 
 ## Enable And Configure
-MCP is disabled by default. Enable it under `torii.mcp`.
+MCP defaults to the bounded `read_only` profile with operator routes hidden.
+Set `torii.mcp.enabled = false` to disable it, or configure a broader profile
+only when the deployment policy requires one.
 
 ```json
 {

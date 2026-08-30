@@ -797,6 +797,39 @@ baseTest("contract activation lifecycle instructions retain mandatory CAS revisi
         reason: "incident containment",
       },
     },
+    {
+      SetContractParliamentDelegation: {
+        contract_address: contractAddress,
+        expected_revision: "9",
+        delegated: true,
+      },
+    },
+    {
+      OfferContractOwnership: {
+        contract_address: contractAddress,
+        expected_revision: "10",
+        new_owner: { owner: "Account", value: ACCOUNT_ID },
+      },
+    },
+    {
+      OfferContractOwnership: {
+        contract_address: contractAddress,
+        expected_revision: "11",
+        new_owner: { owner: "Parliament", value: null },
+      },
+    },
+    {
+      AcceptContractOwnership: {
+        contract_address: contractAddress,
+        expected_revision: "12",
+      },
+    },
+    {
+      CancelContractOwnershipOffer: {
+        contract_address: contractAddress,
+        expected_revision: "13",
+      },
+    },
   ]) {
     const decoded = withMissingNativeBinding(() =>
       noritoDecodeInstruction(noritoEncodeInstruction(instruction)),
@@ -820,6 +853,24 @@ baseTest("contract activation lifecycle instructions reject omitted CAS revision
         contract_address: contractAddress,
         reason: null,
       },
+    },
+    {
+      SetContractParliamentDelegation: {
+        contract_address: contractAddress,
+        delegated: true,
+      },
+    },
+    {
+      OfferContractOwnership: {
+        contract_address: contractAddress,
+        new_owner: { owner: "Parliament", value: null },
+      },
+    },
+    {
+      AcceptContractOwnership: { contract_address: contractAddress },
+    },
+    {
+      CancelContractOwnershipOffer: { contract_address: contractAddress },
     },
   ]) {
     assert.throws(

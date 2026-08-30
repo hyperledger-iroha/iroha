@@ -16,6 +16,8 @@ class GovernanceContractResponse(
 
 /** Complete retained ownership and lifecycle projection for one contract. */
 class GovernanceContractLifecycle(
+    /** Exact first-release lifecycle schema version. */
+    @JvmField val version: Int,
     @JvmField val origin: String,
     @JvmField val originAccount: String,
     @JvmField val originProposalContentIdHex: String?,

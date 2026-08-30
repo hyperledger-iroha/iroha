@@ -1,5 +1,6 @@
 """Static guards for fail-closed OpenAPI release generation."""
 
+import json
 import re
 from pathlib import Path
 
@@ -117,6 +118,89 @@ def test_openapi_static_authorities_are_exact_package_mirrors() -> None:
     )
     assert 'for authority in "${CURRENT_SPEC_PATH}" "${PACKAGE_SPEC_PATH}"' in release_gate
     assert 'cmp -s "${SPEC_PATH}" "${authority}"' in release_gate
+
+
+def test_explorer_openapi_matches_dataspace_auth_and_history_cursor_contract() -> None:
+    document = json.loads(OPENAPI_AUTHORITIES[0].read_bytes())
+    optional_canonical_security = [
+        {},
+        {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": [],
+        },
+        {"IrohaCanonicalWitness": []},
+    ]
+    dataspace_paths = (
+        "/v1/explorer/accounts",
+        "/v1/explorer/accounts/{account_id}",
+        "/v1/explorer/accounts/{account_id}/qr",
+        "/v1/explorer/domains",
+        "/v1/explorer/domains/{domain_id}",
+        "/v1/explorer/asset-definitions",
+        "/v1/explorer/asset-definitions/{definition_id}",
+        "/v1/explorer/asset-definitions/{definition_id}/econometrics",
+        "/v1/explorer/asset-definitions/{definition_id}/snapshot",
+        "/v1/explorer/assets",
+        "/v1/explorer/assets/{asset_id}",
+        "/v1/explorer/nfts",
+        "/v1/explorer/nfts/{nft_id}",
+        "/v1/explorer/rwas",
+        "/v1/explorer/rwas/{rwa_id}",
+        "/v1/explorer/blocks",
+        "/v1/explorer/blocks/{identifier}",
+        "/v1/explorer/transactions",
+        "/v1/explorer/transactions/{hash}",
+        "/v1/explorer/instructions",
+        "/v1/explorer/instructions/{hash}/{index}",
+    )
+    for path in dataspace_paths:
+        assert document["paths"][path]["get"]["security"] == optional_canonical_security
+
+    history_pages = {
+        "/v1/explorer/blocks": "ExplorerBlocksHistoryPage",
+        "/v1/explorer/transactions": "ExplorerTransactionsHistoryPage",
+        "/v1/explorer/instructions": "ExplorerInstructionsHistoryPage",
+    }
+    for path, component in history_pages.items():
+        operation = document["paths"][path]["get"]
+        parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+        assert not {"page", "per_page", "offset"} & parameters.keys()
+        assert parameters["cursor"]["schema"] == {
+            "maxLength": 1424,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string",
+        }
+        assert parameters["limit"]["schema"] == {
+            "default": 25,
+            "format": "uint32",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer",
+        }
+        assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+            "$ref": f"#/components/schemas/{component}"
+        }
+
+    schemas = document["components"]["schemas"]
+    cursor_meta = schemas["ExplorerHistoryCursorMeta"]
+    assert cursor_meta["additionalProperties"] is False
+    assert set(cursor_meta["required"]) == {
+        "limit",
+        "snapshot_height",
+        "snapshot_hash",
+        "next_cursor",
+        "has_more",
+    }
+    lifecycle = schemas["GovernedContractLifecycleV1"]
+    assert lifecycle["properties"]["version"] == {
+        "format": "uint16",
+        "minimum": 1,
+        "type": "integer",
+    }
+    assert "version" in lifecycle["required"]
 
 
 def test_every_openapi_manifest_boundary_validates_release_shape() -> None:

@@ -9065,7 +9065,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the runtime-upgrade payload when the proposal represents a runtime upgrade.
@@ -9083,7 +9086,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the SCCP registry action when the proposal represents SCCP governance.
@@ -9101,7 +9107,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the SoraFS provider-owner action when the proposal represents SoraFS governance.
@@ -9119,7 +9128,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the validation-fee policy payload when present.
@@ -9137,7 +9149,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the validation-fee payout lifecycle payload when present.
@@ -9155,7 +9170,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the exact Musubi Parliament action retained by this proposal.
@@ -9173,7 +9191,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
 }
@@ -9421,23 +9442,6 @@ pub enum GovernanceReferendumMode {
     Zk,
     /// Plain (non-ZK) voting mode
     Plain,
-}
-/// Compute the approval count required to reach quorum (ceil-divided).
-#[must_use]
-pub fn council_quorum_threshold(members: usize, quorum_bps: u16) -> u32 {
-    if members == 0 {
-        return 0;
-    }
-    let bps = u128::from(quorum_bps.max(1));
-    let members_u = u128::try_from(members).unwrap_or_else(|_| u128::from(u32::MAX));
-    let required = members_u
-        .saturating_mul(bps)
-        .saturating_add(9_999)
-        .saturating_div(10_000);
-    required
-        .clamp(1, u128::from(u32::MAX))
-        .try_into()
-        .unwrap_or(u32::MAX)
 }
 impl json::FastJsonWrite for GovernanceReferendumMode {
     fn write_json(&self, out: &mut String) {
@@ -25451,14 +25455,23 @@ impl State {
                 "persisted private-settlement state is invalid during startup: {error}"
             ))
         })?;
+        crate::smartcontracts::isi::sorafs_moderation::validate_persisted_moderation_schema_v1(
+            &world.view(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "incompatible persisted SoraFS moderation V1 policy/case state; regenerate first-release genesis and snapshots: {error}"
+            ))
+        })?;
         crate::smartcontracts::ivm::active_runtime_abi_hash(&world.view(), u64::MAX)
             .unwrap_or_else(|error| {
                 panic!(
                     "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
                 )
             });
-        crate::smartcontracts::code::initialize_contract_subject_bindings(&mut world)
-            .expect("new v2 world must contain valid contract subject bindings");
+        crate::smartcontracts::code::initialize_contract_subject_bindings(&mut world).expect(
+            "incompatible contract lifecycle state; regenerate first-release genesis and snapshots",
+        );
         let default_sns_payment_asset_id =
             iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
         crate::sns::try_seed_default_namespace_policies(
@@ -25799,23 +25812,13 @@ impl State {
                 max_conviction: 6,
                 min_enactment_delay: 20,
                 window_span: 100,
-                plain_voting_enabled: false,
+                plain_voting_enabled:
+                    iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
                 approval_threshold_q_num: 1,
                 approval_threshold_q_den: 2,
                 min_turnout: 0,
-                parliament_committee_size:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-                parliament_term_blocks:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
-                parliament_min_stake:
-                    iroha_config::parameters::defaults::governance::parliament_min_stake(),
-                parliament_eligibility_asset_id: iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
-                    .parse()
-                    .expect("valid default governance asset id"),
                 parliament_alternate_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
-                parliament_quorum_bps:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
                 parliament_sortition_pulse_delay_blocks:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
                 parliament_invitation_phase_blocks:
@@ -27022,7 +27025,7 @@ impl State {
                         },
                     ),
                 ));
-                // Automatic decision at h_end: compute tally and emit Approved/Rejected.
+                // Compute the exact standalone-referendum tally after its inclusive end height.
                 let mut approve: u128 = 0;
                 let mut reject: u128 = 0;
                 let mut abstain: u128 = 0;
@@ -27083,16 +27086,6 @@ impl State {
                         }
                     }
                 }
-                let referendum_event_id = if let Ok(bytes) =
-                    hex::decode(rid.trim_start_matches("0x"))
-                    && bytes.len() == 32
-                {
-                    let mut id = [0u8; 32];
-                    id.copy_from_slice(&bytes);
-                    id
-                } else {
-                    [0u8; 32]
-                };
                 if decision_ready {
                     let turnout = approve.saturating_add(reject).saturating_add(abstain);
                     let threshold_numerator = sb.gov.approval_threshold_q_num;
@@ -27104,23 +27097,17 @@ impl State {
                     } else {
                         false
                     };
-                    if decision_approve {
-                        wtx.emit_events(Some(
-                            governance_events::GovernanceEvent::ProposalApproved(
-                                governance_events::GovernanceProposalApproved {
-                                    id: referendum_event_id,
-                                },
-                            ),
-                        ));
-                    } else {
-                        wtx.emit_events(Some(
-                            governance_events::GovernanceEvent::ProposalRejected(
-                                governance_events::GovernanceProposalRejected {
-                                    id: referendum_event_id,
-                                },
-                            ),
-                        ));
-                    }
+                    wtx.emit_events(Some(
+                        governance_events::GovernanceEvent::ReferendumDecided(
+                            governance_events::GovernanceReferendumDecided {
+                                referendum_id: rid,
+                                approve,
+                                reject,
+                                abstain,
+                                approved: decision_approve,
+                            },
+                        ),
+                    ));
                 }
             }
             wtx.apply();

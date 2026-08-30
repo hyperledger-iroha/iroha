@@ -134,6 +134,11 @@ fn target_policy_requires_inner_canonical_proof_only_for_canonical_route() {
         ExtraHeaderPolicy::CanonicalAccountAuthentication
     );
     assert_eq!(
+        target_extra_header_policy(&Method::GET, "/v1/explorer/transactions")
+            .expect("cataloged dataspace route"),
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
+    );
+    assert_eq!(
         target_extra_header_policy(&Method::GET, "/health").expect("cataloged public route"),
         ExtraHeaderPolicy::Default
     );
@@ -168,6 +173,38 @@ fn every_catalog_canonical_auth_tool_publishes_a_strict_required_envelope() {
         covered > 0,
         "canonical-auth catalog projection is non-empty"
     );
+}
+#[test]
+fn every_catalog_optional_canonical_auth_tool_publishes_a_strict_optional_envelope() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    let mut covered = 0_usize;
+    for tool in &tools {
+        let Some(descriptor) = catalog_descriptor_for_method_path(
+            CATALOG_PROJECTION_GROUPS,
+            &tool.method,
+            tool.path_template.as_str(),
+        ) else {
+            continue;
+        };
+        if descriptor.authentication() == AuthenticationPolicy::OptionalCanonicalAccountSignature
+        {
+            covered += 1;
+            validate_optional_canonical_auth_tool_schema(tool).unwrap_or_else(|error| {
+                panic!(
+                    "{} {} failed optional schema validation: {error}",
+                    tool.method, tool.path_template
+                )
+            });
+            let schema = tool.input_schema.as_object().expect("root object schema");
+            assert!(
+                !schema_requires(schema, "headers"),
+                "{} must preserve anonymous dispatch",
+                tool.name
+            );
+        }
+    }
+    assert!(covered > 0, "optional canonical-auth projection is non-empty");
 }
 #[test]
 fn every_catalog_operator_auth_tool_publishes_a_strict_required_tuple() {
@@ -240,6 +277,47 @@ fn canonical_target_headers_require_one_complete_unambiguous_proof() {
         )
         .expect_err("ambiguous or incomplete target proof must fail closed");
     }
+}
+
+#[test]
+fn optional_canonical_target_headers_allow_absence_but_reject_partial_proofs() {
+    let mut outer = HeaderMap::new();
+    outer.insert(
+        HEADER_X_IROHA_ACCOUNT,
+        HeaderValue::from_static("outer-account"),
+    );
+    apply_extra_headers_with_policy(
+        &mut outer,
+        None,
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication,
+    )
+    .expect("anonymous dataspace dispatch");
+    assert!(
+        !outer.contains_key(HEADER_X_IROHA_ACCOUNT),
+        "outer canonical identity must not bleed into the target request"
+    );
+    apply_extra_headers_with_policy(
+        &mut HeaderMap::new(),
+        Some(&norito::json!({})),
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication,
+    )
+    .expect_err("a supplied but empty authentication envelope must fail closed");
+    apply_extra_headers_with_policy(
+        &mut HeaderMap::new(),
+        Some(&norito::json!({ "X-Iroha-Account": "operator@sora" })),
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication,
+    )
+    .expect_err("partial optional authentication must fail closed");
+
+    let witness = canonical_test_witness_header();
+    let mut authenticated = HeaderMap::new();
+    apply_extra_headers_with_policy(
+        &mut authenticated,
+        Some(&norito::json!({ "X-Iroha-Witness": witness })),
+        ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication,
+    )
+    .expect("complete optional witness");
+    assert!(authenticated.contains_key(HEADER_X_IROHA_WITNESS));
 }
 
 #[test]

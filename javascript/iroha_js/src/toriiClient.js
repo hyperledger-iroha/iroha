@@ -15363,6 +15363,14 @@ async function parseGovernanceProposalKind(payload, context) {
           context,
         ).payload,
       };
+    case "GlobalDataTriggerPermissionGovernance":
+      return {
+        variant,
+        global_data_trigger_permission_governance: normalizeGovernanceProposalWireV1(
+          record,
+          context,
+        ).payload,
+      };
     default:
       throw new TypeError(`${context}.kind contains unsupported proposal variant: ${variant}`);
   }
@@ -24230,6 +24238,7 @@ function normalizeGovernanceContractLifecycle(value, context) {
   const record = requireExactGovernanceProposalRecord(
     value,
     [
+      "version",
       "origin",
       "origin_account",
       "origin_proposal_content_id_hex",
@@ -24243,11 +24252,15 @@ function normalizeGovernanceContractLifecycle(value, context) {
     ],
     context,
   );
+  if (record.version !== 1) {
+    throw new TypeError(`${context}.version must be the number 1`);
+  }
   const origin = requireExactNonEmptyString(record.origin, `${context}.origin`);
   if (origin !== "direct" && origin !== "parliament") {
     throw new TypeError(`${context}.origin must be direct or parliament`);
   }
   const lifecycle = {
+    version: 1,
     origin,
     origin_account: requireCanonicalGovernanceAccountId(
       record.origin_account,

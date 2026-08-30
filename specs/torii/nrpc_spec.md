@@ -133,7 +133,7 @@ Clients must surface both HTTP status and `X-Iroha-Error-Code` to the caller. SD
   | Key | Default | Notes |
   |-----|---------|-------|
   | `torii.transport.norito_rpc.enabled` | `true` (`crates/iroha_config/src/parameters/defaults.rs:552`) | Master switch. When `false`, the gate rejects every Norito request before it reaches the router. |
-  | `torii.transport.norito_rpc.stage` | `"disabled"` (`crates/iroha_config/src/parameters/defaults.rs:556`) | Parsed into `NoritoRpcStage::{Disabled,Canary,Ga}` (`crates/iroha_config/src/parameters/actual.rs:1899`). The label is surfaced verbatim via `/rpc/capabilities`. |
+  | `torii.transport.norito_rpc.stage` | `"ga"` | Parsed into `NoritoRpcStage::{Disabled,Canary,Ga}`. The label is surfaced verbatim via `/rpc/capabilities`. |
   | `torii.transport.norito_rpc.require_mtls` | `false` (`crates/iroha_config/src/parameters/defaults.rs:555`) | When `true`, Torii rejects Norito-RPC requests that do not present an mTLS marker header (e.g. `X-Forwarded-Client-Cert`). Clients must surface the flag and operators must configure their proxies to propagate the header. |
   | `torii.transport.norito_rpc.allowed_clients[]` | `[]` (`crates/iroha_config/src/parameters/defaults.rs:559`) | Canonical list of API tokens that are allowed to use the transport while the stage is `canary`. The list size is mirrored in `/rpc/capabilities`. |
 

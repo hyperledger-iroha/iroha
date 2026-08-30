@@ -1269,12 +1269,110 @@ fn should_auto_bootstrap_npos_validators(config: Option<&actual::Root>) -> bool 
         actual::LaneValidatorMode::StakeElected
     )
 }
+
+/// Apply the exact deterministic manifest preparation performed before staged-context binding.
+///
+/// The external signer and prepared-bundle admission both use this function so topology handling,
+/// NPoS validator bootstrap, consensus metadata, and configured stake semantics cannot drift.
+pub(super) fn prepare_genesis_for_signing(
+    mut genesis: RawGenesisTransaction,
+    config: Option<&actual::Root>,
+    consensus_mode: SumeragiConsensusMode,
+    topology_override: Option<&[PeerId]>,
+    peer_pops: &[String],
+) -> Result<RawGenesisTransaction, color_eyre::eyre::Error> {
+    let _chain_discriminant = staged_genesis_chain_discriminant(&genesis);
+    if let Some(config) = config {
+        ensure_peer_config_matches_manifest(config, &genesis)?;
+    }
+    require_v2_wire_protocol_only(&genesis)?;
+    if topology_override.is_some() {
+        genesis = genesis.clear_topology();
+    }
+    if matches!(consensus_mode, SumeragiConsensusMode::Npos) {
+        ensure_npos_parameters(&genesis)?;
+    }
+    let final_topology = topology_override
+        .map(<[PeerId]>::to_vec)
+        .unwrap_or_else(|| collect_topology_peers(&genesis));
+    ensure_valid_genesis_committee(&final_topology)?;
+    if topology_override.is_none() && !peer_pops.is_empty() {
+        return Err(eyre!(
+            "--peer-pop requires --topology to align PoPs with peers"
+        ));
+    }
+
+    let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
+    let topology_peers = if uses_npos {
+        final_topology
+    } else {
+        Vec::new()
+    };
+    let needs_npos_bootstrap = uses_npos
+        && should_auto_bootstrap_npos_validators(config)
+        && !manifest_has_npos_bootstrap(&genesis)
+        && !topology_peers.is_empty();
+    let mut bootstrap_registrations = if needs_npos_bootstrap {
+        BootstrapRegistrations::from_manifest(&genesis)
+    } else {
+        BootstrapRegistrations {
+            domains: BTreeSet::new(),
+            accounts: BTreeSet::new(),
+            asset_defs: BTreeSet::new(),
+        }
+    };
+    let bootstrap_stake_asset_id = if needs_npos_bootstrap {
+        configured_npos_bootstrap_stake_asset_id(&genesis, config)?
+    } else {
+        default_npos_bootstrap_stake_asset_id()
+    };
+    let bootstrap_escrow_account_id = if needs_npos_bootstrap {
+        Some(configured_npos_bootstrap_escrow_account_id(
+            &genesis, config,
+        )?)
+    } else {
+        None
+    };
+
+    let direct_sign_safe = topology_override.is_none() && !needs_npos_bootstrap;
+    let prepared = if direct_sign_safe {
+        genesis.with_consensus_mode(consensus_mode)
+    } else {
+        let chain_discriminant = genesis.chain_discriminant();
+        let mut builder = genesis.into_builder();
+        if let Some(topology) = topology_override {
+            // Put topology into a dedicated transaction so it remains separate
+            // from other genesis instructions.
+            let entries = build_topology_entries(topology, peer_pops)?;
+            builder = builder.next_transaction().set_topology(entries);
+        }
+        if needs_npos_bootstrap {
+            builder = append_npos_bootstrap(
+                builder,
+                &mut bootstrap_registrations,
+                &topology_peers,
+                bootstrap_escrow_account_id
+                    .as_ref()
+                    .expect("NPoS bootstrap escrow resolved above"),
+                &bootstrap_stake_asset_id,
+            )?;
+        }
+        builder
+            .build_raw()
+            .with_chain_discriminant(chain_discriminant)
+            .with_consensus_mode(consensus_mode)
+            .with_consensus_meta()
+    };
+    ensure_valid_genesis_committee(&collect_topology_peers(&prepared))?;
+    Ok(prepared)
+}
+
 impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Signing genesis manifest");
         let artifact_paths = resolve_artifact_paths(&self)?;
-        let mut genesis = RawGenesisTransaction::from_path(&artifact_paths.genesis_input)?;
+        let genesis = RawGenesisTransaction::from_path(&artifact_paths.genesis_input)?;
         reject_retired_public_chain_id(genesis.chain_id().as_str())?;
         // Keep every same-thread rebuild, config parse, and bound-manifest
         // serialization on the manifest's network. Staged execution re-enters
@@ -1284,57 +1382,20 @@ impl<T: Write> RunArgs<T> for Args {
         // below borrows this immutable snapshot, so replacing the source file
         // concurrently cannot create a mixed genesis generation.
         let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
-        if let Some(config) = peer_config.as_ref() {
-            ensure_peer_config_matches_manifest(config, &genesis)?;
-        }
         let manifest_consensus_mode = genesis.consensus_mode();
-        require_v2_wire_protocol_only(&genesis)?;
         let consensus_mode = manifest_consensus_mode;
-        if self.topology.is_some() {
-            genesis = genesis.clear_topology();
-        }
-        if matches!(consensus_mode, SumeragiConsensusMode::Npos) {
-            ensure_npos_parameters(&genesis)?;
-        }
         let topology_override = if let Some(raw) = self.topology.as_deref() {
             Some(norito::json::from_str::<Vec<PeerId>>(raw).wrap_err("parse --topology JSON")?)
         } else {
             None
         };
-        let final_topology = topology_override
-            .clone()
-            .unwrap_or_else(|| collect_topology_peers(&genesis));
-        ensure_valid_genesis_committee(&final_topology)?;
-        let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
-        let auto_bootstrap_npos = should_auto_bootstrap_npos_validators(peer_config.as_ref());
-        let topology_peers = if uses_npos {
-            final_topology
-        } else {
-            Vec::new()
-        };
-        let needs_npos_bootstrap = uses_npos
-            && auto_bootstrap_npos
-            && !manifest_has_npos_bootstrap(&genesis)
-            && !topology_peers.is_empty();
-        let mut bootstrap_registrations = if needs_npos_bootstrap {
-            BootstrapRegistrations::from_manifest(&genesis)
-        } else {
-            BootstrapRegistrations {
-                domains: BTreeSet::new(),
-                accounts: BTreeSet::new(),
-                asset_defs: BTreeSet::new(),
-            }
-        };
-        let bootstrap_stake_asset_id = if needs_npos_bootstrap {
-            configured_npos_bootstrap_stake_asset_id(&genesis, peer_config.as_ref())?
-        } else {
-            default_npos_bootstrap_stake_asset_id()
-        };
-        if self.topology.is_none() && !self.peer_pops.is_empty() {
-            return Err(eyre!(
-                "--peer-pop requires --topology to align PoPs with peers"
-            ));
-        }
+        let prepared_genesis = prepare_genesis_for_signing(
+            genesis,
+            peer_config.as_ref(),
+            consensus_mode,
+            topology_override.as_deref(),
+            &self.peer_pops,
+        )?;
         let genesis_key_pair = load_genesis_key_file(&self.private_key_file)?;
         ensure_expected_public_key(&genesis_key_pair, self.expected_public_key.as_ref())?;
         let da_proof_policies = resolve_da_proof_policies(peer_config.as_ref());
@@ -1346,45 +1407,6 @@ impl<T: Write> RunArgs<T> for Args {
                 "genesis signing key does not match the public key pinned by --config"
             ));
         }
-        let bootstrap_escrow_account_id = if needs_npos_bootstrap {
-            Some(configured_npos_bootstrap_escrow_account_id(
-                &genesis,
-                peer_config.as_ref(),
-            )?)
-        } else {
-            None
-        };
-        let direct_sign_safe = topology_override.is_none() && !needs_npos_bootstrap;
-        let prepared_genesis = if direct_sign_safe {
-            genesis.with_consensus_mode(consensus_mode)
-        } else {
-            let chain_discriminant = genesis.chain_discriminant();
-            let mut builder = genesis.into_builder();
-            if let Some(topology) = topology_override.as_ref() {
-                // Put topology into a dedicated transaction so it remains separate
-                // from other genesis instructions.
-                let entries = build_topology_entries(topology, &self.peer_pops)?;
-                builder = builder.next_transaction().set_topology(entries);
-            }
-            if needs_npos_bootstrap {
-                let escrow_account_id = bootstrap_escrow_account_id
-                    .as_ref()
-                    .expect("NPoS bootstrap escrow resolved above");
-                builder = append_npos_bootstrap(
-                    builder,
-                    &mut bootstrap_registrations,
-                    &topology_peers,
-                    escrow_account_id,
-                    &bootstrap_stake_asset_id,
-                )?;
-            }
-            builder
-                .build_raw()
-                .with_chain_discriminant(chain_discriminant)
-                .with_consensus_mode(consensus_mode)
-                .with_consensus_meta()
-        };
-        ensure_valid_genesis_committee(&collect_topology_peers(&prepared_genesis))?;
         let (bound_manifest, genesis_block) = bind_and_sign_staged_sumeragi_v2_context(
             prepared_genesis,
             &genesis_key_pair,

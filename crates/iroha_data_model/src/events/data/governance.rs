@@ -90,6 +90,8 @@ mod model {
         CitizenRevoked(GovernanceCitizenRevoked),
         /// A citizen service discipline event was recorded.
         CitizenServiceRecorded(GovernanceCitizenServiceRecorded),
+        /// A standalone governance referendum reached an exact final decision.
+        ReferendumDecided(GovernanceReferendumDecided),
     }
 
     /// Public audit record for one QC-authorized threshold-key lifecycle action.
@@ -534,6 +536,22 @@ mod model {
         #[norito(default)]
         pub cooldown_until: u64,
     }
+    /// Exact decision for one standalone governance referendum.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    pub struct GovernanceReferendumDecided {
+        /// Original standalone referendum selector, without normalization.
+        pub referendum_id: String,
+        /// Exact accumulated approval weight.
+        pub approve: u128,
+        /// Exact accumulated rejection weight.
+        pub reject: u128,
+        /// Exact accumulated abstention weight.
+        pub abstain: u128,
+        /// Whether the configured turnout and approval thresholds were met.
+        pub approved: bool,
+    }
 }
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
@@ -568,6 +586,7 @@ impl_json_via_norito_bytes!(
     GovernanceCitizenRegistered,
     GovernanceCitizenRevoked,
     GovernanceCitizenServiceRecorded,
+    GovernanceReferendumDecided,
 );
 /// Prelude exports
 pub mod prelude {
@@ -582,8 +601,8 @@ pub mod prelude {
         GovernanceParliamentCertificateIssued, GovernanceParliamentConcentrationWarning,
         GovernanceParliamentLifecycleTransitionApplied, GovernanceParliamentSelected,
         GovernanceProposalApproved, GovernanceProposalEnacted, GovernanceProposalRejected,
-        GovernanceProposalSubmitted, GovernanceReferendumClosed, GovernanceReferendumOpened,
-        GovernanceSlashReason, GovernanceThresholdKeyLifecycleAppliedV1,
+        GovernanceProposalSubmitted, GovernanceReferendumClosed, GovernanceReferendumDecided,
+        GovernanceReferendumOpened, GovernanceSlashReason, GovernanceThresholdKeyLifecycleAppliedV1,
     };
 }
 
@@ -608,6 +627,25 @@ mod tests {
         let decoded = norito::decode_from_bytes::<GovernanceEvent>(&bytes)
             .expect("decode canonical governance event");
         assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn standalone_referendum_decision_roundtrips_exact_identity_and_tally() {
+        let event = GovernanceEvent::ReferendumDecided(
+            GovernanceReferendumDecided {
+                referendum_id: "0XAbCd-referendum".to_owned(),
+                approve: u128::MAX,
+                reject: u128::from(u64::MAX) + 1,
+                abstain: 17,
+                approved: true,
+            },
+        );
+        assert_eq!(
+            event.encode().get(..4),
+            Some(28_u32.to_le_bytes().as_slice()),
+            "the standalone decision event must retain its append-only enum tag"
+        );
+        assert_roundtrip(event);
     }
 
     #[test]

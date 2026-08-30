@@ -2216,18 +2216,8 @@ pub struct Governance {
     pub approval_threshold_q_den: u64,
     /// Minimum turnout required (approve + reject + abstain) to consider the referendum.
     pub min_turnout: u128,
-    /// Sortition council committee size.
-    pub parliament_committee_size: usize,
-    /// Number of blocks per council term.
-    pub parliament_term_blocks: u64,
-    /// Minimum stake required to qualify for sortition.
-    pub parliament_min_stake: Quantity,
-    /// Asset definition used to measure governance stake eligibility.
-    pub parliament_eligibility_asset_id: AssetDefinitionId,
-    /// Alternates drawn per term (None = committee size).
-    pub parliament_alternate_size: Option<usize>,
-    /// Quorum requirement for council approvals (basis points, ceil-divided).
-    pub parliament_quorum_bps: u16,
+    /// Alternates retained for each attempt-local Parliament body draw.
+    pub parliament_alternate_size: usize,
     /// Exact future-beacon delay frozen into Parliament sortition requests.
     pub parliament_sortition_pulse_delay_blocks: u64,
     /// Consensus block-height span for immutable Parliament invitation responses.
@@ -2321,19 +2311,11 @@ impl_default!(Governance => {
             max_conviction: 6,
             min_enactment_delay: 20,
             window_span: 100,
-            plain_voting_enabled: false,
+            plain_voting_enabled: defaults::governance::PLAIN_VOTING_ENABLED,
             approval_threshold_q_num: 1,
             approval_threshold_q_den: 2,
             min_turnout: 0,
-            parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-            parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake: defaults::governance::parliament_min_stake(),
-            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
-            )
-            .parse()
-            .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
-            parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
             parliament_sortition_pulse_delay_blocks:
                 defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
             parliament_invitation_phase_blocks:
@@ -3643,9 +3625,6 @@ fn execution_policy_usize(value: usize) -> u64 {
     u64::try_from(value)
         .expect("Iroha execution policy requires a pointer width of at most 64 bits")
 }
-fn execution_policy_optional_usize(value: Option<usize>) -> Option<u64> {
-    value.map(execution_policy_usize)
-}
 fn execution_policy_duration(value: Duration) -> (u64, u32) {
     (value.as_secs(), value.subsec_nanos())
 }
@@ -4213,28 +4192,8 @@ pub fn execution_policy_digest_v1(
     );
     policy.push("governance.min_turnout", &governance.min_turnout);
     policy.push(
-        "governance.parliament_committee_size",
-        &execution_policy_usize(governance.parliament_committee_size),
-    );
-    policy.push(
-        "governance.parliament_term_blocks",
-        &governance.parliament_term_blocks,
-    );
-    policy.push(
-        "governance.parliament_min_stake",
-        &governance.parliament_min_stake,
-    );
-    policy.push(
-        "governance.parliament_eligibility_asset_id",
-        &governance.parliament_eligibility_asset_id,
-    );
-    policy.push(
         "governance.parliament_alternate_size",
-        &execution_policy_optional_usize(governance.parliament_alternate_size),
-    );
-    policy.push(
-        "governance.parliament_quorum_bps",
-        &governance.parliament_quorum_bps,
+        &execution_policy_usize(governance.parliament_alternate_size),
     );
     policy.push(
         "governance.parliament_sortition_pulse_delay_blocks",
@@ -8415,12 +8374,12 @@ pub struct NoritoRpcTransport {
 /// Rollout stage for the Norito-RPC transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NoritoRpcStage {
-    /// Norito-RPC disabled outright (future default for prod until GA).
-    #[default]
+    /// Norito-RPC disabled outright.
     Disabled,
     /// Canary stage: restricted to the configured allowlist.
     Canary,
-    /// General availability: all authenticated clients may use Norito-RPC.
+    /// General availability: all authenticated clients may use Norito-RPC (default).
+    #[default]
     Ga,
 }
 impl NoritoRpcStage {

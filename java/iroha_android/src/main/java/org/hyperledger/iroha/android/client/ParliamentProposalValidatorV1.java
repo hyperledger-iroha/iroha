@@ -50,6 +50,7 @@ final class ParliamentProposalValidatorV1 {
       case "SorafsProviderGovernance" -> sorafsProvider(payload);
       case "ContractLifecycleGovernance" -> contractLifecycle(payload);
       case "ContractEmergencyHold" -> contractEmergencyHold(payload);
+      case "GlobalDataTriggerPermissionGovernance" -> globalDataTriggerPermission(payload);
       default -> throw invalid("proposal.kind is unknown or retired");
     }
     return proposal;
@@ -609,6 +610,35 @@ final class ParliamentProposalValidatorV1 {
             true);
       }
       default -> throw invalid("contract lifecycle action is unsupported");
+    }
+  }
+
+  private static void globalDataTriggerPermission(final Map<String, Object> value) {
+    exact(
+        value,
+        fields("authority", "action"),
+        "GlobalDataTriggerPermissionGovernance");
+    account(
+        value.get("authority"),
+        "GlobalDataTriggerPermissionGovernance.authority");
+    final Map<String, Object> action =
+        objectValue(
+            value.get("action"),
+            "GlobalDataTriggerPermissionGovernance.action");
+    exact(
+        action,
+        fields("action", "value"),
+        "GlobalDataTriggerPermissionGovernance.action");
+    final String kind =
+        text(
+            action.get("action"),
+            "GlobalDataTriggerPermissionGovernance.action.action");
+    if (!"grant".equals(kind) && !"revoke".equals(kind)) {
+      throw invalid(
+          "GlobalDataTriggerPermissionGovernance.action.action must be grant or revoke");
+    }
+    if (action.get("value") != null) {
+      throw invalid("GlobalDataTriggerPermissionGovernance.action.value must be null");
     }
   }
 

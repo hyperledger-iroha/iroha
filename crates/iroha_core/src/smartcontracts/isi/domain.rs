@@ -2434,15 +2434,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if asset_definition_id == state_transaction.gov.parliament_eligibility_asset_id {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it is configured as governance parliament eligibility asset definition (`gov.parliament_eligibility_asset_id`); update governance config first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
             if asset_definition_id
                 == state_transaction
                     .gov

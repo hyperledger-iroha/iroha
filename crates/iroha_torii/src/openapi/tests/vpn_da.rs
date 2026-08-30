@@ -1866,6 +1866,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "SorafsProviderGovernance",
             "ContractLifecycleGovernance",
             "ContractEmergencyHold",
+            "GlobalDataTriggerPermissionGovernance",
         ]
     );
 

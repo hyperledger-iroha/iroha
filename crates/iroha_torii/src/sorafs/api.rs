@@ -5560,10 +5560,12 @@ where
         Ok(permit) => permit,
         Err(error) => return error.into_response(),
     };
-    match tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        iroha_core::panic_hook::with_hook_suppressed(|| operation(&state))
-    })
+    match crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
+            let _permit = permit;
+            operation(&state)
+        }),
+    )
     .await
     {
         Ok(response) => response,
@@ -5589,10 +5591,12 @@ where
         Ok(permit) => permit,
         Err(error) => return Err(error.into_response()),
     };
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        iroha_core::panic_hook::with_hook_suppressed(operation)
-    })
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || {
+            let _permit = permit;
+            operation()
+        },
+    ))
     .await
     .map_err(|error| {
         error!(?error, worker_label, "SoraFS blocking worker failed");
@@ -11633,18 +11637,20 @@ pub(crate) async fn handle_post_sorafs_moderation_dead_letter_prepare(
     let action = moderation_dead_letter_action_from_api(request.action);
     let authorized_at_unix_ms = request.authorized_at_unix_ms;
     let orchestrator = runtime.orchestrator();
-    let prepared = tokio::task::spawn_blocking(move || {
-        let resolution = orchestrator.prepare_dead_letter_resolution(
-            identity,
-            kind,
-            action,
-            authorized_at_unix_ms,
-        )?;
-        let signing_message = resolution.signing_message()?;
-        let bytes = norito::to_bytes(&resolution)
-            .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
-        Ok::<_, ModerationOrchestratorError>((resolution, signing_message, bytes))
-    })
+    let prepared = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
+            let resolution = orchestrator.prepare_dead_letter_resolution(
+                identity,
+                kind,
+                action,
+                authorized_at_unix_ms,
+            )?;
+            let signing_message = resolution.signing_message()?;
+            let bytes = norito::to_bytes(&resolution)
+                .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
+            Ok::<_, ModerationOrchestratorError>((resolution, signing_message, bytes))
+        }),
+    )
     .await;
     let (resolution, signing_message, resolution_bytes) = match prepared {
         Ok(Ok(prepared)) => prepared,
@@ -11737,10 +11743,11 @@ pub(crate) async fn handle_post_sorafs_moderation_dead_letter_apply(
     let kind = resolution.kind;
     let action = resolution.action;
     let orchestrator = runtime.orchestrator();
-    let applied = tokio::task::spawn_blocking(move || {
-        orchestrator.apply_dead_letter_resolution(resolution, signature)
-    })
-    .await;
+    let applied =
+        crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+            move || orchestrator.apply_dead_letter_resolution(resolution, signature),
+        ))
+        .await;
     match applied {
         Ok(Ok(())) => {}
         Ok(Err(error)) => return moderation_orchestrator_error_response(error),
@@ -15593,10 +15600,12 @@ async fn sign_sorafs_appeal_finance_delivery(
     payload.fee_payment = crate::quote_internal_fee_payment(state, &payload).ok()?;
     let expected_payload = payload.clone();
     let signer = signer.clone();
-    let transaction = tokio::task::spawn_blocking(move || signer.sign(payload))
-        .await
-        .ok()?
-        .ok()?;
+    let transaction = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || signer.sign(payload)),
+    )
+    .await
+    .ok()?
+    .ok()?;
     if transaction.payload() != &expected_payload
         || transaction.authority() != &request.authority
         || transaction.verify_signature().is_err()
@@ -16462,10 +16471,12 @@ async fn sign_sorafs_proof_outcome_delivery(
     let mut payload = builder.into_payload().ok()?;
     payload.fee_payment = crate::quote_internal_fee_payment(state, &payload).ok()?;
     let expected_payload = payload.clone();
-    let transaction = tokio::task::spawn_blocking(move || signer.sign(payload))
-        .await
-        .ok()?
-        .ok()?;
+    let transaction = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || signer.sign(payload)),
+    )
+    .await
+    .ok()?
+    .ok()?;
     native_signer_returned_exact_transaction(&transaction, &expected_payload, &expected_authority)
         .then_some(transaction)
 }
@@ -17808,14 +17819,16 @@ async fn enqueue_sorafs_finalized_native_repair_work(
                 let node = state.sorafs_node.clone();
                 let authority = authority.clone();
                 let transaction_context = transaction_context.clone();
-                let execution = tokio::task::spawn_blocking(move || {
-                    node.execute_finalized_native_repair(
-                        &finalized_task,
-                        &authority,
-                        &transaction_context,
-                        now_unix_ms,
-                    )
-                })
+                let execution = crate::panic_recovery::join_recoverable(
+                    crate::panic_recovery::spawn_blocking_recoverable(move || {
+                        node.execute_finalized_native_repair(
+                            &finalized_task,
+                            &authority,
+                            &transaction_context,
+                            now_unix_ms,
+                        )
+                    }),
+                )
                 .await;
                 match execution {
                     Ok(Ok(_)) => {
@@ -18299,10 +18312,12 @@ async fn sign_sorafs_repair_transaction(
     let mut payload = builder.into_payload().ok()?;
     payload.fee_payment = crate::quote_internal_fee_payment(state, &payload).ok()?;
     let expected_payload = payload.clone();
-    let transaction = tokio::task::spawn_blocking(move || signer.sign(payload))
-        .await
-        .ok()?
-        .ok()?;
+    let transaction = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || signer.sign(payload)),
+    )
+    .await
+    .ok()?
+    .ok()?;
     if !native_signer_returned_exact_transaction(
         &transaction,
         &expected_payload,
@@ -18539,7 +18554,7 @@ fn finish_sorafs_moderation_maintenance_pass(
     runtime: &super::moderation_runtime::ModerationOrchestratorRuntimeV1,
     result: Result<
         Result<ModerationMaintenancePassV1, ModerationOrchestratorError>,
-        tokio::task::JoinError,
+        crate::panic_recovery::RecoverableTaskError,
     >,
 ) {
     let pass = match result {
@@ -18556,8 +18571,7 @@ fn finish_sorafs_moderation_maintenance_pass(
         Err(error) => {
             runtime.finish_failure();
             warn!(
-                cancelled = error.is_cancelled(),
-                panicked = error.is_panic(),
+                ?error,
                 "SoraFS finalized-chain moderation orchestrator blocking task failed",
             );
             return;
@@ -18633,13 +18647,15 @@ pub(crate) fn spawn_sorafs_moderation_orchestrator_worker(
                     }
                     let orchestrator = runtime.orchestrator();
                     let authority = maintenance_authority.clone();
-                    let mut blocking = tokio::task::spawn_blocking(move || {
-                        run_sorafs_moderation_maintenance_pass(
-                            orchestrator.as_ref(),
-                            authority,
-                            maintenance_batch_limit,
-                        )
-                    });
+                    let mut blocking = Box::pin(crate::panic_recovery::join_recoverable(
+                        crate::panic_recovery::spawn_blocking_recoverable(move || {
+                            run_sorafs_moderation_maintenance_pass(
+                                orchestrator.as_ref(),
+                                authority,
+                                maintenance_batch_limit,
+                            )
+                        }),
+                    ));
                     let result = tokio::select! {
                         () = shutdown_signal.receive() => {
                             runtime.mark_worker_stopped();
@@ -23935,15 +23951,15 @@ pub(crate) async fn handle_get_sorafs_capacity_state(
         Ok(permit) => permit,
         Err(error) => return error.into_response(),
     };
-    let projection = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        iroha_core::panic_hook::with_hook_suppressed(|| {
+    let projection = crate::panic_recovery::join_recoverable(
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
+            let _permit = permit;
             let world = state.state.world_view();
             let snapshot =
                 collect_snapshot(&world, limit).map_err(|error| format!("registry: {error}"))?;
             snapshot_to_json(snapshot, limit).map_err(|error| format!("json: {error}"))
-        })
-    })
+        }),
+    )
     .await;
     match projection {
         Ok(Ok(value)) => JsonBody(value).into_response(),
@@ -39667,6 +39683,52 @@ mod advert_tests {
                 "public, max-age=31536000, immutable"
             ))
         );
+    }
+    #[tokio::test]
+    async fn public_site_and_cid_reads_share_provider_admission_policy() {
+        let mut context = token_test_context();
+        let stored = context.manifest();
+        let content_cid = encode_content_cid(stored.manifest_cid());
+        let manifest_digest_hex = hex::encode(stored.manifest_digest());
+        let mut inner = Arc::try_unwrap(context.app)
+            .unwrap_or_else(|_| panic!("token test context must own its app state"));
+        inner.sorafs_site_bindings = Some(Arc::new(crate::sorafs::site::SiteBindingsDocument {
+            version: 1,
+            sites: vec![crate::sorafs::site::SiteBinding {
+                hostname: "policy.sora.org".to_owned(),
+                manifest_digest_hex,
+                index_document: None,
+                spa_fallback: None,
+            }],
+        }));
+        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
+        inner.sorafs_gateway_config.enforce_admission = true;
+        refresh_api_test_gateway_security(&mut inner);
+        context.app = Arc::new(inner);
+
+        let mut site_headers = HeaderMap::new();
+        site_headers.insert(header::HOST, HeaderValue::from_static("policy.sora.org"));
+        let site_response = crate::sorafs::public_gateway::handle_get_sorafs_site_manifest(
+            State(context.app.clone()),
+            site_headers,
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        let site_value =
+            api_test_response_json_with_status(site_response, StatusCode::PRECONDITION_FAILED)
+                .await;
+        assert_json_fields!(site_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
+
+        let cid_response = crate::sorafs::public_gateway::handle_get_sorafs_cid_lookup(
+            State(context.app.clone()),
+            HeaderMap::new(),
+            Path(content_cid),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        let cid_value =
+            api_test_response_json_with_status(cid_response, StatusCode::PRECONDITION_FAILED).await;
+        assert_json_fields!(cid_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
     }
     #[derive(Clone, Copy)]
     enum AuthoritativeSiteBindingCase {

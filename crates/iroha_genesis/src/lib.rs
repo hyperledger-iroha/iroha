@@ -3634,6 +3634,44 @@ impl RawGenesisTransaction {
 #[path = "genesis_manifest_tests.rs"]
 mod tests2;
 impl RawGenesisTransaction {
+    fn resolve_paths_relative_to(mut self, here: &Path) -> Self {
+        if let Some(executor) = &mut self.executor {
+            executor.resolve(here);
+        }
+        self.ivm_dir.resolve(here);
+        for tx in &mut self.transactions {
+            tx.ivm_triggers
+                .iter_mut()
+                .for_each(|trigger| trigger.action.executable.resolve(&self.ivm_dir.0));
+        }
+        self
+    }
+
+    /// Construct [`RawGenesisTransaction`] from JSON bytes while resolving relative paths as if
+    /// the bytes had been read from `json_path`.
+    ///
+    /// This is the in-memory counterpart of [`Self::from_path`]. Admission tooling which has
+    /// already read and hashed a manifest can therefore reproduce the signer's path semantics
+    /// without reopening or rewriting the source file.
+    ///
+    /// # Errors
+    ///
+    /// - `json_path` has no parent directory
+    /// - deserialization failed
+    pub fn from_json_slice_at_path(json: &[u8], json_path: impl AsRef<Path>) -> Result<Self> {
+        let json_path = json_path.as_ref();
+        let here = json_path
+            .parent()
+            .ok_or_else(|| eyre!("json file should be in some directory"))?;
+        let value = Self::from_json_slice(json).map_err(|err| {
+            eyre!(
+                "failed to deserialize raw genesis transaction for {}: {err}",
+                json_path.display()
+            )
+        })?;
+        Ok(value.resolve_paths_relative_to(here))
+    }
+
     /// Iterate over all instructions contained in this manifest.
     #[must_use]
     pub fn instructions(&self) -> impl Iterator<Item = &InstructionBox> {
@@ -3666,10 +3704,6 @@ impl RawGenesisTransaction {
     /// - the path is not a stable direct regular file or exceeds the first-release byte limit
     /// - deserialization failed
     pub fn from_path(json_path: impl AsRef<Path>) -> Result<Self> {
-        let here = json_path
-            .as_ref()
-            .parent()
-            .expect("json file should be in some directory");
         let contents = bounded_manifest::read_genesis_manifest_bytes(json_path.as_ref())
             .wrap_err_with(|| {
                 eyre!(
@@ -3677,22 +3711,7 @@ impl RawGenesisTransaction {
                     json_path.as_ref().display()
                 )
             })?;
-        let mut value = Self::from_json_slice(&contents).map_err(|err| {
-            eyre!(
-                "failed to deserialize raw genesis transaction from {}: {err}",
-                json_path.as_ref().display()
-            )
-        })?;
-        if let Some(executor) = &mut value.executor {
-            executor.resolve(here);
-        }
-        value.ivm_dir.resolve(here);
-        for tx in &mut value.transactions {
-            tx.ivm_triggers
-                .iter_mut()
-                .for_each(|trigger| trigger.action.executable.resolve(&value.ivm_dir.0));
-        }
-        Ok(value)
+        Self::from_json_slice_at_path(&contents, json_path)
     }
     /// Revert to builder to add modifications.
     pub fn into_builder(self) -> GenesisBuilder {
@@ -4723,7 +4742,16 @@ mod tests {
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, genesis).unwrap();
         let kp = checked_genesis_fixture_keypair();
-        RawGenesisTransaction::from_path(&genesis_path)?.build_and_sign(&kp)?;
+        let from_path = RawGenesisTransaction::from_path(&genesis_path)?;
+        let bytes = std::fs::read(&genesis_path)?;
+        let from_hashed_bytes =
+            RawGenesisTransaction::from_json_slice_at_path(&bytes, &genesis_path)?;
+        assert_eq!(
+            norito::json::to_vec(&from_path)?,
+            norito::json::to_vec(&from_hashed_bytes)?,
+            "in-memory admission must reproduce the signer's exact path semantics"
+        );
+        from_path.build_and_sign(&kp)?;
         Ok(())
     }
     #[test]

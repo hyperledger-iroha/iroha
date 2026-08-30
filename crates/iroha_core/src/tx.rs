@@ -959,6 +959,7 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
+        iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
@@ -8204,6 +8205,9 @@ pub mod tests {
             TypeId::of::<CancelRuntimeUpgrade>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>(),
+            TypeId::of::<
+                iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
+            >(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle>(),
         ];

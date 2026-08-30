@@ -147,7 +147,7 @@ CASES = (
         "success",
         10613,
         "iroha.instructions.list",
-        "PageOne",
+        "LimitTwo",
         "instructions list alias with flat query fields should dispatch successfully",
     ),
     (
@@ -201,7 +201,7 @@ CASES = (
         "success",
         10616,
         "iroha.blocks.list",
-        "PageOne",
+        "LimitTwo",
         "blocks list alias with flat query fields should dispatch successfully",
     ),
     (

@@ -39,7 +39,7 @@ SOURCE_LINE_LEDGER = {
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 2_262,
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': 841,
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 1_544,
-    'crates/iroha_torii/src/openapi.rs': 5_817,
+    'crates/iroha_torii/src/openapi.rs': 5_816,
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2_749,
 }
 ASSETS = {

@@ -23,7 +23,8 @@
     "MusubiRegistryGovernance",
     "SorafsProviderGovernance",
     "ContractLifecycleGovernance",
-    "ContractEmergencyHold"
+    "ContractEmergencyHold",
+    "GlobalDataTriggerPermissionGovernance"
   ],
   "limits": {
     "attempt_state_bytes": 16777216,

@@ -22,6 +22,7 @@ def active_response() -> dict[str, object]:
         "dataspace": "universal",
         "active": True,
         "lifecycle": {
+            "version": 1,
             "origin": "direct",
             "origin_account": OWNER,
             "origin_proposal_content_id_hex": None,
@@ -44,6 +45,7 @@ def test_governance_contract_record_parses_active_and_absent_shapes() -> None:
     active = GovernanceContractRecord.from_payload(active_response())
     assert active.active is True
     assert active.lifecycle is not None
+    assert active.lifecycle.version == 1
     assert active.lifecycle.revision == 7
     assert active.public_entrypoints == ("transfer", "view_balance")
 
@@ -75,6 +77,9 @@ def test_governance_contract_record_rejects_cross_field_and_shape_drift() -> Non
         "55" * 32
     )
     invalid.append(direct_with_parliament_ids)
+    unsupported_version = active_response()
+    unsupported_version["lifecycle"]["version"] = 2  # type: ignore[index]
+    invalid.append(unsupported_version)
     absent_with_extra = {
         "found": False,
         "contract_address": CONTRACT_ADDRESS,

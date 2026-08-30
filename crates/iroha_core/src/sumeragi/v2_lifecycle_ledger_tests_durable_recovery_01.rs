@@ -2979,6 +2979,120 @@ pub(crate) fn complete_tip_retirement_binds_only_the_exact_unlaunched_successor_
 }
 
 #[test]
+fn complete_tip_post_settlement_reauthentication_refreezes_exact_successor() {
+    let fixture = RecoveryFixture::new("complete-tip-post-settlement-reauthentication", 0x5A);
+    let (predecessor, projection) = terminal_decision_chain_fixture(&fixture);
+    let verified_successor = complete_tip_successor_fixture(&fixture, &projection);
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (predecessor_store, empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open post-settlement CompleteTip predecessor");
+    assert!(empty.records().is_empty());
+    predecessor_store
+        .persist(&predecessor)
+        .expect("persist post-settlement CompleteTip predecessor");
+    let retirement =
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+            .into_canonical_predecessor_storage(&fixture.keys[0])
+            .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+            .expect("retire predecessor and authenticate its empty successor");
+    let successor_root = retirement
+        .successor_store
+        .path
+        .parent()
+        .expect("canonical successor store has a parent root")
+        .to_path_buf();
+    let body_root = kura.sumeragi_v2_storage_root().join("bodies");
+    let owner = empty_successor_owner_for_complete_tip(
+        &retirement,
+        kura.as_ref(),
+        verified_successor.clone(),
+        &body_root,
+        &successor_root,
+        retirement.successor_store.clone(),
+    );
+    let mut bound = retirement
+        .bind_successor_owner(owner)
+        .expect("bind the exact pre-launch CompleteTip successor owner");
+    assert!(bound.remains_exact_for_test());
+
+    let retained_frame = bound.retirement.successor_frame_identity;
+    let retained = bound.retirement.successor_ledger.clone();
+    let settled_ordinal = retained
+        .high_water()
+        .checked_add(1)
+        .expect("post-settlement ordinal remains representable");
+    let settled_owner = OwnerId::new(
+        CausalRoot::new(LifecycleDigest::new([0x5B; 32])),
+        settled_ordinal,
+    );
+    let settled = LifecycleLedgerV1::new(
+        retained.context(),
+        settled_ordinal,
+        vec![unrelated_terminal_record(
+            retained.context(),
+            settled_owner,
+            settled_ordinal,
+            0x5C,
+        )],
+        BTreeMap::new(),
+    )
+    .expect("construct exact post-launch settlement successor");
+    bound
+        .retirement
+        .successor_store
+        .persist_exact_successor(&retained, &settled)
+        .expect("publish exact post-launch settlement successor");
+
+    let authority = authority::lifecycle_storage_owner_test_authority(&verified_successor, 0, 0)
+        .expect("construct post-settlement lifecycle authority");
+    let mut coordinator = LifecycleCoordinator::new_with_authority(authority, settled_ordinal);
+    coordinator.reconcile_restart(
+        settled
+            .recovery_snapshot(BTreeMap::from([(
+                settled_ordinal,
+                std::collections::BTreeSet::<PhysicalSlotId>::new(),
+            )]))
+            .expect("project post-settlement recovery snapshot"),
+    );
+    assert!(coordinator.fault.is_none());
+    coordinator.ledger_store = Some(bound.retirement.successor_store.clone());
+    assert_eq!(
+        LifecycleLedgerV1::from_coordinator(&coordinator)
+            .expect("project post-settlement coordinator"),
+        settled
+    );
+    bound.owner.coordinator = coordinator;
+    let body_store = bound
+        .owner
+        .body_store
+        .take()
+        .expect("pre-launch owner retains its body store");
+    bound.owner.body_store_identity = Some(body_store.instance_identity());
+    assert!(bound.owner.adapter_startup.take().is_some());
+
+    assert_ne!(retained_frame, settled.frame_identity());
+    assert!(
+        !bound.retirement.authorizes_retained_successor(),
+        "the retirement must not authorize a post-settlement frame before reauthentication"
+    );
+    bound
+        .retirement
+        .reauthenticate_launched_successor_owner(&mut bound.owner)
+        .expect("reauthenticate the exact post-settlement CompleteTip successor");
+    assert_eq!(
+        bound.retirement.successor_frame_identity,
+        settled.frame_identity(),
+        "reauthentication must refreeze the exact settled successor frame"
+    );
+    assert!(bound.retirement.authorizes_retained_successor());
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness() {
     let fixture = RecoveryFixture::new("complete-tip-nonempty-owner-open", 0x52);

@@ -69,6 +69,7 @@ pub mod isi {
         sccp::CanProposeSccpRouteGovernance,
         settlement::CanExecuteSettlement,
         smart_contract::CanRegisterSmartContractCode,
+        trigger::CanRegisterGlobalDataTrigger,
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -111,7 +112,9 @@ pub mod isi {
             CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
             ContractEmergencyHoldProposalV1, ContractLifecycleGovernanceActionV1,
             ContractLifecycleGovernanceProposalV1, DeployContractProposal,
-            GovernanceAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
+            GlobalDataTriggerPermissionGovernanceActionV1,
+            GlobalDataTriggerPermissionGovernanceProposalV1, GovernanceAttemptStatusV1,
+            GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
             GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
             MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentAggregateOutcomeV1,
             ParliamentAggregateTallyV1, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
@@ -259,8 +262,8 @@ pub mod isi {
     use super::*;
     use crate::{
         governance::timed_ovn::{
-                TIMED_OVN_BALLOT_RECORD_BYTES_V1, TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
-                TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
+            TIMED_OVN_BALLOT_RECORD_BYTES_V1, TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
+            TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
         },
         smartcontracts::{
             code::fetch_bound_contract_record,
@@ -2546,7 +2549,7 @@ pub mod isi {
         rec: &crate::state::GovernanceLockRecord,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<crate::state::GovernanceLockCustody, Error> {
-        if typed_proposal_for_legacy_referendum(referendum_id, state_transaction)?.is_some() {
+        if typed_proposal_for_standalone_referendum(referendum_id, state_transaction)?.is_some() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "typed Parliament proposals cannot own public referendum locks".into(),
             )
@@ -3144,6 +3147,90 @@ pub mod isi {
             )
         }
     }
+    fn global_data_trigger_permission(authority: &AccountId) -> Permission {
+        CanRegisterGlobalDataTrigger {
+            authority: authority.clone(),
+        }
+        .into()
+    }
+    fn has_direct_global_data_trigger_permission(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> bool {
+        let permission = global_data_trigger_permission(authority);
+        state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|permissions| permissions.contains(&permission))
+    }
+    impl Execute for gov::ProposeGlobalDataTriggerPermissionGovernance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !is_bonded_citizen(authority, state_transaction) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a bonded citizen may propose global data-trigger permission governance"
+                        .into(),
+                ));
+            }
+            let payload = self.proposal;
+            state_transaction
+                .world
+                .account(&payload.authority)
+                .map_err(Error::from)?;
+            let is_granted =
+                has_direct_global_data_trigger_permission(&payload.authority, state_transaction);
+            match payload.action {
+                GlobalDataTriggerPermissionGovernanceActionV1::Grant if is_granted => {
+                    return Err(invalid_governance_parameter(
+                        "global data-trigger permission is already granted directly",
+                    ));
+                }
+                GlobalDataTriggerPermissionGovernanceActionV1::Revoke if !is_granted => {
+                    return Err(invalid_governance_parameter(
+                        "global data-trigger permission is not granted directly",
+                    ));
+                }
+                GlobalDataTriggerPermissionGovernanceActionV1::Grant
+                | GlobalDataTriggerPermissionGovernanceActionV1::Revoke => {}
+            }
+            let kind = ProposalKind::GlobalDataTriggerPermissionGovernance(payload);
+            let id = kind.fingerprint();
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                if existing.kind != kind {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                ensure_certificate_only_proposal_v1(id, existing, state_transaction)?;
+                return Ok(());
+            }
+            let record = crate::state::GovernanceProposalRecord {
+                proposer: authority.clone(),
+                kind,
+                created_height: state_transaction.block_height(),
+                status: crate::state::GovernanceProposalStatus::Proposed,
+            };
+            ensure_certificate_only_proposal_v1(id, &record, state_transaction)?;
+            state_transaction
+                .world
+                .put_governance_proposal(id, record)
+                .map_err(governance_proposal_storage_error)?;
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
     fn ensure_sccp_route_governance_proposer(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
@@ -3509,8 +3596,38 @@ pub mod isi {
             | ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
             | ProposalKind::SorafsProviderGovernance(_)
+            | ProposalKind::GlobalDataTriggerPermissionGovernance(_)
             | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
+    }
+    fn standalone_governance_state_contains_proposal_id_v1(
+        proposal_id: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> bool {
+        let aliases_proposal_id = |selector: &str| {
+            iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(selector)
+                == Some(proposal_id)
+        };
+        state_transaction
+            .world
+            .governance_referenda
+            .iter()
+            .any(|(selector, _)| aliases_proposal_id(selector))
+            || state_transaction
+                .world
+                .governance_locks
+                .iter()
+                .any(|(selector, _)| aliases_proposal_id(selector))
+            || state_transaction
+                .world
+                .governance_slashes
+                .iter()
+                .any(|(selector, _)| aliases_proposal_id(selector))
+            || state_transaction
+                .world
+                .elections
+                .iter()
+                .any(|(selector, _)| aliases_proposal_id(selector))
     }
     fn ensure_certificate_only_proposal_status_v1(
         proposal_id: [u8; 32],
@@ -3518,23 +3635,8 @@ pub mod isi {
         expected_status: crate::state::GovernanceProposalStatus,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let selector = hex::encode(proposal_id);
-        let has_legacy_state = state_transaction
-            .world
-            .governance_referenda
-            .get(&selector)
-            .is_some()
-            || state_transaction
-                .world
-                .governance_locks
-                .get(&selector)
-                .is_some()
-            || state_transaction
-                .world
-                .governance_slashes
-                .get(&selector)
-                .is_some()
-            || state_transaction.world.elections.get(&selector).is_some();
+        let has_standalone_state =
+            standalone_governance_state_contains_proposal_id_v1(proposal_id, state_transaction);
         if proposal.kind.fingerprint() != proposal_id
             || proposal.status != expected_status
             || proposal
@@ -3542,7 +3644,7 @@ pub mod isi {
                 .is_some()
             || validation_fee_proposal_operator(&proposal.kind)
                 .is_some_and(|operator| operator != &proposal.proposer)
-            || has_legacy_state
+            || has_standalone_state
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "typed governance proposal is not a canonical certificate-only Parliament record"
@@ -3934,7 +4036,8 @@ pub mod isi {
                 &self.election_id,
                 state_transaction,
             )?;
-            if typed_proposal_for_legacy_referendum(&self.election_id, state_transaction)?.is_some()
+            if typed_proposal_for_standalone_referendum(&self.election_id, state_transaction)?
+                .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "typed governance proposals accept only timed-private Parliament ballots"
@@ -4636,21 +4739,15 @@ pub mod isi {
             Ok(())
         }
     }
-    fn typed_proposal_for_legacy_referendum(
+    fn typed_proposal_for_standalone_referendum(
         referendum_id: &str,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Option<crate::state::GovernanceProposalRecord>, Error> {
-        if referendum_id.len() != 64
-            || !referendum_id
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Ok(None);
-        }
-        let Some(bytes) = hex::decode(referendum_id).ok() else {
-            return Ok(None);
-        };
-        let Some(proposal_id) = <[u8; 32]>::try_from(bytes).ok() else {
+        let Some(proposal_id) =
+            iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(
+                referendum_id,
+            )
+        else {
             return Ok(None);
         };
         let Some(proposal) = state_transaction
@@ -4696,7 +4793,11 @@ pub mod isi {
                 "owner must equal authority".into(),
             ));
         }
-        if typed_proposal_for_legacy_referendum(&ballot.referendum_id, state_transaction)?.is_some()
+        if typed_proposal_for_standalone_referendum(
+            &ballot.referendum_id,
+            state_transaction,
+        )?
+        .is_some()
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "typed governance proposals accept only timed-private Parliament ballots".into(),
@@ -8108,6 +8209,21 @@ pub mod isi {
                         |owner| parliament_present_head_v1(subject_id, 1, owner),
                     )
             }
+            ProposalKind::GlobalDataTriggerPermissionGovernance(payload) => {
+                state_transaction
+                    .world
+                    .account(&payload.authority)
+                    .map_err(Error::from)?;
+                let is_granted = has_direct_global_data_trigger_permission(
+                    &payload.authority,
+                    state_transaction,
+                );
+                parliament_present_head_v1(
+                    subject_id,
+                    if is_granted { 2 } else { 1 },
+                    &(payload.authority.clone(), is_granted),
+                )
+            }
             ProposalKind::MusubiRegistryGovernance(action) => {
                 use iroha_data_model::musubi::MusubiParliamentActionV1;
 
@@ -8231,6 +8347,35 @@ pub mod isi {
                         "certified SoraFS provider compare-and-set changed during atomic enactment"
                             .into(),
                     ))
+                }
+            }
+            ProposalKind::GlobalDataTriggerPermissionGovernance(payload) => {
+                state_transaction
+                    .world
+                    .account(&payload.authority)
+                    .map_err(Error::from)?;
+                let permission = global_data_trigger_permission(&payload.authority);
+                let is_granted = has_direct_global_data_trigger_permission(
+                    &payload.authority,
+                    state_transaction,
+                );
+                match payload.action {
+                    GlobalDataTriggerPermissionGovernanceActionV1::Grant if !is_granted => {
+                        Grant::account_permission(permission, payload.authority.clone())
+                            .execute(&proposal.proposer, state_transaction)
+                    }
+                    GlobalDataTriggerPermissionGovernanceActionV1::Revoke if is_granted => {
+                        Revoke::account_permission(permission, payload.authority.clone())
+                            .execute(&proposal.proposer, state_transaction)
+                    }
+                    GlobalDataTriggerPermissionGovernanceActionV1::Grant
+                    | GlobalDataTriggerPermissionGovernanceActionV1::Revoke => {
+                        Err(InstructionExecutionError::InvariantViolation(
+                            "certified global data-trigger permission head changed during atomic enactment"
+                                .into(),
+                        )
+                        .into())
+                    }
                 }
             }
             ProposalKind::MusubiRegistryGovernance(action) => {
@@ -15971,7 +16116,7 @@ pub mod isi {
                 ));
             }
             ensure_valid_governance_selector_v1("election_id", self.election_id())?;
-            if typed_proposal_for_legacy_referendum(self.election_id(), state_transaction)?
+            if typed_proposal_for_standalone_referendum(self.election_id(), state_transaction)?
                 .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -16093,7 +16238,8 @@ pub mod isi {
                 &self.election_id,
                 state_transaction,
             )?;
-            if typed_proposal_for_legacy_referendum(&self.election_id, state_transaction)?.is_some()
+            if typed_proposal_for_standalone_referendum(&self.election_id, state_transaction)?
+                .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "typed governance proposals cannot use legacy ZK ballots".into(),
@@ -16209,7 +16355,7 @@ pub mod isi {
                 ));
             }
             ensure_valid_governance_selector_v1("election_id", self.election_id())?;
-            if typed_proposal_for_legacy_referendum(self.election_id(), state_transaction)?
+            if typed_proposal_for_standalone_referendum(self.election_id(), state_transaction)?
                 .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -19581,15 +19727,6 @@ pub mod isi {
                     )
                     .into());
                 }
-                if asset_definition_id == &state_transaction.gov.parliament_eligibility_asset_id {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as governance parliament eligibility asset definition (`gov.parliament_eligibility_asset_id`); update governance config first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
                 if asset_definition_id
                     == &state_transaction
                         .gov
@@ -20358,9 +20495,9 @@ pub mod isi {
     #[cfg(test)]
     mod tests {
         use super::{
-            TonBreakerPriorTransitionV1, ton_breaker_anchor_matches_current_governance_v1,
-            ensure_citizenship_bond_releasable, ton_breaker_disabled_latch_transition_v1,
-            ton_breaker_observation_allows_outbound_v1,
+            TonBreakerPriorTransitionV1, ensure_citizenship_bond_releasable,
+            ton_breaker_anchor_matches_current_governance_v1,
+            ton_breaker_disabled_latch_transition_v1, ton_breaker_observation_allows_outbound_v1,
         };
         use crate::{
             governance::{
@@ -20991,7 +21128,10 @@ pub mod isi {
                     .get(&attempt_id)
                     .is_some()
             );
-            assert_eq!(state_transaction.world.council.get(&7), Some(&legacy_council));
+            assert_eq!(
+                state_transaction.world.council.get(&7),
+                Some(&legacy_council)
+            );
             assert_eq!(
                 state_transaction.world.parliament_bodies.get(&7),
                 Some(&legacy_bodies),
@@ -21681,7 +21821,7 @@ pub mod isi {
             requirements: &[RequiredParliamentBodyV1],
         ) -> iroha_config::parameters::actual::Governance {
             let mut governance = iroha_config::parameters::actual::Governance {
-                parliament_alternate_size: Some(0),
+                parliament_alternate_size: 0,
                 ..iroha_config::parameters::actual::Governance::default()
             };
             for requirement in requirements {
@@ -22964,6 +23104,76 @@ pub mod isi {
                 &fixture,
                 gov::ParliamentAutomaticExecutionOutcomeV1::Enacted,
             );
+        }
+
+        #[test]
+        fn parliament_due_certificate_grants_and_revokes_exact_global_trigger_permission() {
+            fn run(action: GlobalDataTriggerPermissionGovernanceActionV1, initially_granted: bool) {
+                let state = blank_test_state();
+                let block = new_dummy_block_at_height(
+                    NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT)
+                        .expect("due height is nonzero"),
+                );
+                let mut state_block = state.block(block.as_ref().header());
+                let permission = Permission::from(CanRegisterGlobalDataTrigger {
+                    authority: ALICE_ID.clone(),
+                });
+                let fixture = {
+                    let mut seed = state_block.transaction();
+                    Register::account(Account::new(ALICE_ID.clone()))
+                        .execute(&ALICE_ID, &mut seed)
+                        .expect("seed exact permission target");
+                    if initially_granted {
+                        seed.world
+                            .add_account_permission(&ALICE_ID, permission.clone());
+                    }
+                    let fixture = seed_due_parliament_certificate(
+                        &mut seed,
+                        ProposalKind::GlobalDataTriggerPermissionGovernance(
+                            GlobalDataTriggerPermissionGovernanceProposalV1 {
+                                authority: ALICE_ID.clone(),
+                                action,
+                            },
+                        ),
+                    );
+                    seed.apply();
+                    fixture
+                };
+
+                let mut execution = state_block.transaction();
+                assert_eq!(
+                    execute_due_parliament_certificate_v1(
+                        fixture.governance_attempt_id,
+                        &mut execution,
+                    )
+                    .expect("execute certified exact-account permission transition"),
+                    DueParliamentCertificateExecutionV1::Applied
+                );
+                let is_granted = execution
+                    .world
+                    .account_permissions
+                    .get(&ALICE_ID)
+                    .is_some_and(|permissions| permissions.contains(&permission));
+                assert_eq!(
+                    is_granted,
+                    action == GlobalDataTriggerPermissionGovernanceActionV1::Grant
+                );
+                let permission_event = execution.world.internal_event_buf.iter().any(|event| {
+                    matches!(
+                        event.as_ref(),
+                        DataEvent::Account(AccountEvent::PermissionAdded(change))
+                            | DataEvent::Account(AccountEvent::PermissionRemoved(change))
+                            if change.account == *ALICE_ID && change.permission == permission
+                    )
+                });
+                assert!(
+                    permission_event,
+                    "certified transition must emit an account event"
+                );
+            }
+
+            run(GlobalDataTriggerPermissionGovernanceActionV1::Grant, false);
+            run(GlobalDataTriggerPermissionGovernanceActionV1::Revoke, true);
         }
 
         #[test]
@@ -25821,6 +26031,154 @@ pub mod isi {
                     format!("{error:?}"),
                     "exact JSON integer maximum",
                     "unexpected inexact runtime-height rejection: {error:?}"
+                );
+            }
+        });
+        world_test!(typed_proposal_admission_rejects_preexisting_standalone_selector_alias {
+            second_height_transaction!(state, block, state_transaction);
+            let contract_address =
+                ContractAddress::derive(
+                    state_transaction.network_id(),
+                    &ALICE_ID,
+                    801,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("contract address");
+            let proposal = gov::ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash: ContractCodeHash::new([0x31; 32]),
+                abi_hash: ContractAbiHash::new(ivm::syscalls::compute_abi_hash(
+                    ivm::SyscallPolicy::AbiV1,
+                )),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            };
+            let kind = ProposalKind::DeployContract(DeployContractProposal {
+                contract_address: contract_address.clone(),
+                code_hash: proposal.code_hash,
+                abi_hash: proposal.abi_hash,
+                abi_version: proposal.abi_version,
+                manifest_provenance: None,
+            });
+            let proposal_id = kind.fingerprint();
+            let selector = format!("0X{}", hex::encode(proposal_id).to_ascii_uppercase());
+            state_transaction.world.governance_referenda.insert(
+                selector,
+                crate::state::GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 2,
+                    status: crate::state::GovernanceReferendumStatus::Proposed,
+                    mode: crate::state::GovernanceReferendumMode::Plain,
+                },
+            );
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanProposeContractDeployment {
+                    contract_address,
+                })]),
+            );
+            let error = proposal.expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "a pre-existing standalone alias must block typed proposal admission",
+            );
+            assert_err!(
+                format!("{error:?}"),
+                "canonical certificate-only Parliament record",
+                "unexpected typed-proposal alias rejection: {error:?}"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .governance_proposals
+                    .get(&proposal_id)
+                    .is_none(),
+                "rejected typed proposal must not be retained"
+            );
+        });
+        world_test!(standalone_plain_and_zk_ballots_reject_every_typed_proposal_selector_alias {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            let kind = ProposalKind::DeployContract(DeployContractProposal {
+                contract_address:
+                    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                        .parse()
+                        .expect("contract address"),
+                code_hash: ContractCodeHash::new([0x31; 32]),
+                abi_hash: ContractAbiHash::new([0x41; 32]),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            });
+            let proposal_id = kind.fingerprint();
+            state_transaction
+                .world
+                .put_governance_proposal(
+                    proposal_id,
+                    crate::state::GovernanceProposalRecord {
+                        proposer: ALICE_ID.clone(),
+                        kind,
+                        created_height: 1,
+                        status: crate::state::GovernanceProposalStatus::Proposed,
+                    },
+                )
+                .expect("store exact typed proposal");
+            let lowercase = hex::encode(proposal_id);
+            let uppercase = lowercase.to_ascii_uppercase();
+            let mixed = lowercase
+                .chars()
+                .enumerate()
+                .map(|(index, character)| {
+                    if index % 2 == 0 {
+                        character.to_ascii_uppercase()
+                    } else {
+                        character
+                    }
+                })
+                .collect::<String>();
+            for selector in [
+                lowercase.clone(),
+                uppercase.clone(),
+                mixed,
+                format!("0x{lowercase}"),
+                format!("0X{uppercase}"),
+            ] {
+                state_transaction.world.account_permissions.insert(
+                    ALICE_ID.clone(),
+                    BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                        referendum_id: selector.clone(),
+                    })]),
+                );
+                let plain_error = gov::CastPlainBallot {
+                    referendum_id: selector.clone(),
+                    owner: ALICE_ID.clone(),
+                    amount: Quantity::zero(),
+                    duration_blocks: 0,
+                    direction: 0,
+                }
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut state_transaction,
+                    "typed proposal alias must not enter standalone PLAIN voting",
+                );
+                assert_err!(
+                    format!("{plain_error:?}"),
+                    "only timed-private Parliament ballots",
+                    "unexpected PLAIN alias rejection for {selector:?}: {plain_error:?}"
+                );
+                let zk_error = gov::CastZkBallot {
+                    election_id: selector.clone(),
+                    proof_b64: "AA==".to_owned(),
+                    public_inputs_json: "{}".to_owned(),
+                }
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut state_transaction,
+                    "typed proposal alias must not enter standalone ZK voting",
+                );
+                assert_err!(
+                    format!("{zk_error:?}"),
+                    "only timed-private Parliament ballots",
+                    "unexpected ZK alias rejection for {selector:?}: {zk_error:?}"
                 );
             }
         });
@@ -38906,11 +39264,11 @@ seiyaku GovernanceLifecycle {
             };
             let error = rotation
                 .clone()
-                .expect_execute_err(&ALICE_ID, &mut stx, "protected rotation requires governance authority");
+                .expect_execute_err(&ALICE_ID, &mut stx, "protected rotation requires Parliament deployment");
             let message = smart_contract_error_message(
                 iroha_data_model::ValidationFail::InstructionFailed(error),
             );
-            assert_contains!(message, "CanEnactGovernance");
+            assert_contains!(message, "require Parliament deployment");
             assert_eq!(
                 stx.world.contract_address_by_alias_at(&alias, 0),
                 Some(address_at_nonce_0.clone())
@@ -38921,34 +39279,20 @@ seiyaku GovernanceLifecycle {
                     iroha_executor_data_model::permission::governance::CanEnactGovernance,
                 ),
             );
-            rotation
-                .clone()
-                .expect_execute(&ALICE_ID, &mut stx, "governance-authorized protected rotation");
-            assert!(
-                stx.world
-                    .contract_instances
-                    .get(&address_at_nonce_0)
-                    .is_none(),
-                "the exact prior alias target must be deactivated"
+            let error = rotation.expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "CanEnactGovernance must not bypass Parliament-only deployment",
             );
-            assert_eq!(
-                stx.world.contract_instances.get(&address_at_nonce_1),
-                Some(&code_hash)
-            );
-            assert_eq!(
-                stx.world.contract_address_by_alias_at(&alias, 0),
-                Some(address_at_nonce_1.clone())
-            );
-            let error = rotation
-                .expect_execute_err(&ALICE_ID, &mut stx, "a concurrent deployment using the consumed nonce must lose CAS");
             let message = smart_contract_error_message(
                 iroha_data_model::ValidationFail::InstructionFailed(error),
             );
-            assert_contains!(message, "stale contract deployment nonce", "unexpected stale deployment error: {message}");
+            assert_contains!(message, "require Parliament deployment");
             assert_eq!(
                 stx.world.contract_address_by_alias_at(&alias, 0),
-                Some(address_at_nonce_1)
+                Some(address_at_nonce_0)
             );
+            assert!(stx.world.contract_instances.get(&address_at_nonce_1).is_none());
         });
         world_test!(activate_contract_instance_requires_governance_for_protected_namespace {
             blank_test_state_transaction!(state, block, stx);

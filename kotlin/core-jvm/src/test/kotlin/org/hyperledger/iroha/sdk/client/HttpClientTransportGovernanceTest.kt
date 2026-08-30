@@ -42,6 +42,7 @@ class HttpClientTransportGovernanceTest {
                   "dataspace": "router",
                   "active": true,
                   "lifecycle": {
+                    "version": 1,
                     "origin": "direct",
                     "origin_account": "$owner",
                     "origin_proposal_content_id_hex": null,
@@ -81,6 +82,7 @@ class HttpClientTransportGovernanceTest {
         assertEquals(contractAddress, response.contractAddress)
         assertEquals("router", response.dataspace)
         assertEquals("77".repeat(32), response.codeHashHex)
+        assertEquals(1, response.lifecycle?.version)
         assertEquals(7L, response.lifecycle?.revision)
         assertEquals("parliament", response.lifecycle?.pendingOwner)
         assertEquals("77".repeat(32), response.lifecycle?.activeCodeHashHex)
@@ -107,6 +109,7 @@ class HttpClientTransportGovernanceTest {
               "dataspace": "router",
               "active": true,
               "lifecycle": {
+                "version": 1,
                 "origin": "direct",
                 "origin_account": "$owner",
                 "origin_proposal_content_id_hex": null,
@@ -133,6 +136,7 @@ class HttpClientTransportGovernanceTest {
                 "[\"transfer\", \"view_balance\"]",
                 "[\"view_balance\", \"transfer\"]",
             ),
+            active.replace("\"version\": 1", "\"version\": 2"),
             """{"found":false,"contract_address":"$contractAddress","dataspace":"router","active":null}""",
         )
         for (payload in invalid) {
