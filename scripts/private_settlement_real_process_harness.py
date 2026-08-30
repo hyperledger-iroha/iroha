@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Run one genuine AtomicPrivateSettlementV1 benchmark experiment.
+"""Run one genuine AtomicPrivateSettlementV1 release experiment.
 
 This executable implements the exact three-path contract consumed by
 ``private_settlement_release_runner.py``.  Private settlement and its
-transparent Native AMX control are backed by the ignored Rust real-process
-test. Fault injection and leakage capture remain fail-closed until their own
-real-process implementations exist.
+transparent Native AMX control and authenticated fault campaign are backed by
+ignored Rust real-process tests. Leakage capture remains fail-closed until its
+real-process implementation exists.
 
 The Python boundary authenticates the request, source revision, configuration,
 Rust result freshness, and final response before publishing the response with
@@ -55,6 +55,18 @@ REQUEST_FIELDS = {
     "payload",
 }
 BENCHMARK_REQUEST_PAYLOAD_FIELDS = {"profile", "warmup", "stages", "resources"}
+FAULT_REQUEST_PAYLOAD_FIELDS = {
+    "loss_phases",
+    "loss_percentages",
+    "phase_cuts",
+    "crash_boundaries",
+    "committee_validator_restarts",
+    "restart_coordinator",
+    "restart_global_node",
+    "maximum_simultaneously_unavailable_per_committee",
+    "continuous_atomicity_checks",
+    "prepare_qc_normalization",
+}
 RUST_RESULT_FIELDS = {
     "version",
     "protocol",
@@ -75,9 +87,13 @@ BENCHMARK_RESULT_FIELDS = {
     *runner.BENCHMARK_CORRECTNESS_FIELDS,
 }
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
-TEST_NAME = (
+BENCHMARK_TEST_NAME = (
     "nexus::atomic_private_settlement_localnet::"
     "atomic_private_settlement_real_process_benchmark_harness"
+)
+FAULT_TEST_NAME = (
+    "nexus::atomic_private_settlement_localnet::"
+    "atomic_private_settlement_real_process_fault_harness"
 )
 TARGET_DIR = REPOSITORY_ROOT / "target" / "aps-private-settlement-real-process"
 VALIDATOR_EXECUTABLE = TARGET_DIR / "release" / "iroha3d"
@@ -218,7 +234,7 @@ def validate_paths(request: Path, response: Path, evidence: Path) -> None:
     except OSError as error:
         raise HarnessError("cannot enumerate the evidence directory") from error
     if entries:
-        raise HarnessError("benchmark evidence directory must start empty")
+        raise HarnessError("release evidence directory must start empty")
 
 
 def _require_sha(value: Any, label: str, *, git: bool = False) -> str:
@@ -239,7 +255,7 @@ def _configuration_file_bytes(value: Mapping[str, Any]) -> bytes:
 
 
 def validate_request(value: Any) -> dict[str, Any]:
-    """Validate and canonically bind one supported benchmark request."""
+    """Validate and canonically bind one supported release request."""
 
     try:
         request = runner.exact_fields(value, REQUEST_FIELDS, "harness request")
@@ -247,25 +263,19 @@ def validate_request(value: Any) -> dict[str, Any]:
         raise HarnessError(str(error)) from error
     if request["version"] != runner.VERSION or request["protocol"] != runner.PROTOCOL:
         raise HarnessError("request protocol header is invalid")
-    # TODO: Implement the fault branch only after authenticated loss, phase-cut,
-    # restart, and persistence-cut acknowledgements are emitted by real nodes.
-    if request["kind"] == "fault":
-        raise HarnessError(
-            "real process harness currently supports benchmark requests only"
-        )
     # TODO: Implement the leakage branch only after every required public and
     # restricted capture surface is collected from the real process topology.
     if request["kind"] == "leakage":
         raise HarnessError(
-            "real process harness currently supports benchmark requests only"
+            "real process harness does not yet support leakage requests"
         )
-    if request["kind"] != "benchmark":
+    if request["kind"] not in {"benchmark", "fault"}:
         raise HarnessError(
-            "real process harness currently supports benchmark requests only"
+            "real process harness currently supports benchmark and fault requests only"
         )
     participants = request["participants"]
     if participants not in runner.PARTICIPANTS:
-        raise HarnessError("unsupported benchmark participant count")
+        raise HarnessError("unsupported release participant count")
     if (
         request["validators_per_dataspace"] != runner.VALIDATORS_PER_DATASPACE
         or request["global_validators"] != runner.GLOBAL_VALIDATORS
@@ -299,20 +309,45 @@ def validate_request(value: Any) -> dict[str, Any]:
     try:
         payload = runner.exact_fields(
             request["payload"],
-            BENCHMARK_REQUEST_PAYLOAD_FIELDS,
+            BENCHMARK_REQUEST_PAYLOAD_FIELDS
+            if request["kind"] == "benchmark"
+            else FAULT_REQUEST_PAYLOAD_FIELDS,
             "harness request.payload",
         )
     except runner.RunnerError as error:
         raise HarnessError(str(error)) from error
-    profile = payload["profile"]
-    if profile not in runner.PROFILES:
-        raise HarnessError("unsupported real-process benchmark profile")
-    if not isinstance(payload["warmup"], bool):
-        raise HarnessError("benchmark warmup must be a boolean")
-    if payload["stages"] != list(benchmark_stages(profile)):
-        raise HarnessError("benchmark stages differ from the canonical profile")
-    if payload["resources"] != list(runner.benchmark_report.RESOURCE_FIELDS):
-        raise HarnessError("benchmark resource fields differ from the canonical profile")
+    if request["kind"] == "benchmark":
+        profile = payload["profile"]
+        if profile not in runner.PROFILES:
+            raise HarnessError("unsupported real-process benchmark profile")
+        if not isinstance(payload["warmup"], bool):
+            raise HarnessError("benchmark warmup must be a boolean")
+        if payload["stages"] != list(benchmark_stages(profile)):
+            raise HarnessError("benchmark stages differ from the canonical profile")
+        if payload["resources"] != list(runner.benchmark_report.RESOURCE_FIELDS):
+            raise HarnessError("benchmark resource fields differ from the canonical profile")
+    else:
+        expected_fault = {
+            "loss_phases": list(runner.fault_report.REQUIRED_LOSS_PHASES),
+            "loss_percentages": list(runner.fault_report.REQUIRED_LOSS_PERCENTAGES),
+            "phase_cuts": list(runner.fault_report.REQUIRED_PHASE_CUTS),
+            "crash_boundaries": list(runner.fault_report.REQUIRED_CRASH_BOUNDARIES),
+            "committee_validator_restarts": list(range(participants)),
+            "restart_coordinator": True,
+            "restart_global_node": True,
+            "maximum_simultaneously_unavailable_per_committee": 1,
+            "continuous_atomicity_checks": True,
+            "prepare_qc_normalization": {
+                "first_signer_subset": [0, 1, 2],
+                "second_signer_subset": [0, 1, 3],
+                "accept_equivalent_subsets_only_for_identical_body": True,
+                "bind_authority_indices": True,
+                "bind_every_signed_body": True,
+                "reject_changed_certified_body": True,
+            },
+        }
+        if payload != expected_fault:
+            raise HarnessError("fault request differs from the canonical release matrix")
     configuration = request["configuration"]
     if not isinstance(configuration, dict):
         raise HarnessError("request configuration must be an object")
@@ -335,25 +370,28 @@ def validate_request(value: Any) -> dict[str, Any]:
     if actual_configuration_sha != configuration_sha:
         raise HarnessError("configuration digest does not bind the embedded configuration")
     run_limit = (
-        benchmark["warmups_per_profile"]
-        if payload["warmup"]
-        else benchmark["measured_bundles_per_profile"]
+        (
+            benchmark["warmups_per_profile"]
+            if payload["warmup"]
+            else benchmark["measured_bundles_per_profile"]
+        )
+        if request["kind"] == "benchmark"
+        else len(seeds)
     )
     if request["run"] >= run_limit:
-        raise HarnessError("benchmark run index is outside the configured matrix")
+        raise HarnessError("release run index is outside the configured matrix")
     if request["seed"] != seeds[request["run"] % len(seeds)]:
-        raise HarnessError("benchmark seed does not match the canonical run schedule")
+        raise HarnessError("release seed does not match the canonical run schedule")
     job_body = {
-        "kind": "benchmark",
-        "profile": profile,
+        "kind": request["kind"],
+        **({"profile": profile, "warmup": payload["warmup"]} if request["kind"] == "benchmark" else {}),
         "participants": participants,
         "seed": request["seed"],
         "run": request["run"],
-        "warmup": payload["warmup"],
         "configuration_sha256": configuration_sha,
     }
     if request["request_id"] != runner.object_digest(job_body):
-        raise HarnessError("request_id does not bind the canonical benchmark job")
+        raise HarnessError("request_id does not bind the canonical release job")
     return request
 
 
@@ -410,6 +448,7 @@ def run_rust_harness(
     request_path: Path,
     raw_request: bytes,
     request: Mapping[str, Any],
+    evidence_dir: Path,
 ) -> dict[str, Any]:
     """Build the feature-isolated daemon and run the exact ignored Rust test."""
 
@@ -428,6 +467,7 @@ def run_rust_harness(
                 "APS_REAL_PROCESS_REQUEST": str(request_path),
                 "APS_REAL_PROCESS_RESULT": str(rust_result),
                 "APS_REAL_PROCESS_REQUEST_SHA256": request_sha,
+                "APS_REAL_PROCESS_EVIDENCE_DIR": str(evidence_dir),
             }
         )
         _run(
@@ -465,7 +505,9 @@ def run_rust_harness(
                 "atomic-private-settlement-release",
                 "--target-dir",
                 str(TARGET_DIR),
-                TEST_NAME,
+                BENCHMARK_TEST_NAME
+                if request["kind"] == "benchmark"
+                else FAULT_TEST_NAME,
                 "--",
                 "--ignored",
                 "--exact",
@@ -486,11 +528,20 @@ def run_rust_harness(
         result = _strict_json_loads(decoded, "Rust benchmark result")
         if hashlib.sha256(raw_request).hexdigest() != request_sha:
             raise HarnessError("request changed while the Rust benchmark ran")
-        return validate_rust_result(result, request=request, request_sha=request_sha)
+        return validate_rust_result(
+            result,
+            request=request,
+            request_sha=request_sha,
+            evidence_dir=evidence_dir,
+        )
 
 
 def validate_rust_result(
-    value: Any, *, request: Mapping[str, Any], request_sha: str
+    value: Any,
+    *,
+    request: Mapping[str, Any],
+    request_sha: str,
+    evidence_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Validate an exact, fresh Rust measurement with no response reuse."""
 
@@ -524,8 +575,14 @@ def validate_rust_result(
             commit=request["commit"],
             label="Rust result.process_inventory",
         )
-        payload = runner.exact_fields(
-            result["payload"], BENCHMARK_RESULT_FIELDS, "Rust result.payload"
+        payload = (
+            runner.exact_fields(
+                result["payload"], BENCHMARK_RESULT_FIELDS, "Rust result.payload"
+            )
+            if request["kind"] == "benchmark"
+            else runner.exact_fields(
+                result["payload"], runner.FAULT_PAYLOAD_FIELDS, "Rust result.payload"
+            )
         )
     except runner.RunnerError as error:
         raise HarnessError(str(error)) from error
@@ -542,18 +599,36 @@ def validate_rust_result(
     job = {
         "request_id": request["request_id"],
         "invocation_nonce": request["invocation_nonce"],
-        "kind": "benchmark",
-        "profile": request["payload"]["profile"],
+        "kind": request["kind"],
+        **(
+            {
+                "profile": request["payload"]["profile"],
+                "warmup": request["payload"]["warmup"],
+            }
+            if request["kind"] == "benchmark"
+            else {}
+        ),
         "participants": request["participants"],
         "seed": request["seed"],
         "run": request["run"],
-        "warmup": request["payload"]["warmup"],
         "configuration_sha256": request["configuration_sha256"],
     }
     try:
-        runner.materialize_benchmark_response(envelope, plan=plan, job=job)
+        if request["kind"] == "benchmark":
+            runner.materialize_benchmark_response(envelope, plan=plan, job=job)
+        else:
+            if evidence_dir is None:
+                raise HarnessError("fault result validation requires its evidence directory")
+            with tempfile.TemporaryDirectory(prefix="aps-fault-validation-") as publication:
+                runner.materialize_fault_response(
+                    envelope,
+                    plan=plan,
+                    job=job,
+                    evidence_dir=evidence_dir,
+                    publication_root=Path(publication),
+                )
     except runner.RunnerError as error:
-        raise HarnessError(f"Rust benchmark measurement is invalid: {error}") from error
+        raise HarnessError(f"Rust release measurement is invalid: {error}") from error
     result["payload"] = payload
     return result
 
@@ -568,7 +643,7 @@ def build_response(
         "protocol": runner.PROTOCOL,
         "request_id": request["request_id"],
         "invocation_nonce": request["invocation_nonce"],
-        "kind": "benchmark",
+        "kind": request["kind"],
         "commit": request["commit"],
         "hardware_sha256": request["hardware_sha256"],
         "hardware_profile_sha256": request["hardware_profile_sha256"],
@@ -640,7 +715,7 @@ def publish_response(path: Path, response: Mapping[str, Any]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Execute one fully bound real-process benchmark request."""
+    """Execute one fully bound real-process release request."""
 
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -657,11 +732,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise HarnessError("harness request is not UTF-8") from error
         request = validate_request(_strict_json_loads(request_text, "harness request"))
         bind_source_revision(request)
-        result = run_rust_harness(request_path, raw_request, request)
+        result = run_rust_harness(request_path, raw_request, request, evidence_dir)
         if _regular_file_bytes(request_path, "harness request", MAX_REQUEST_BYTES) != raw_request:
             raise HarnessError("request changed during real-process execution")
-        if list(evidence_dir.iterdir()):
+        if request["kind"] == "benchmark" and list(evidence_dir.iterdir()):
             raise HarnessError("benchmark emitted undeclared evidence files")
+        if request["kind"] == "fault" and {
+            entry.name for entry in evidence_dir.iterdir()
+        } != {
+            runner.FAULT_CONTROL_EVIDENCE_FILE,
+            runner.FAULT_OBSERVATION_EVIDENCE_FILE,
+        }:
+            raise HarnessError("fault campaign did not emit its exact evidence inventory")
         publish_response(response_path, build_response(request, result))
         return 0
     except HarnessError as error:

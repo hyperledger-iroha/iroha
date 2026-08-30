@@ -56,6 +56,11 @@ profiling = ["pprof"]
 schema = ["iroha_schema", "iroha_schema_gen"]
 # App-facing JSON API (convenience endpoints, JSON DSL).
 app_api = []
+# Feature-isolated, owner-only controller for authenticated private-settlement
+# route faults in real-process tests. Shipping/default builds never enable it.
+test-network-private-settlement-route-control = [
+    "iroha_core/test-network-private-settlement-evidence",
+]
 ## Enable ZK batch verify handler and tests that depend on iroha_zkp_halo2.
 zk-verify-batch = ["dep:iroha_zkp_halo2", "app_api"]
 # Forward `transparent_api` to data model so Torii can gate fields like authority/timestamp

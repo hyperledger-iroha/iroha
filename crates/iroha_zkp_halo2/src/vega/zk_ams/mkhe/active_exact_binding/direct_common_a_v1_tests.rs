@@ -407,15 +407,12 @@ fn replay_authority_is_move_only_opaque_and_has_no_digest_escape() {
 fn typed_selector_uses_only_the_creator_replay_typestate() {
     let active = include_str!("../active_exact_binding.rs");
     let common_a = include_str!("direct_common_a_v1.rs");
+    let creator = include_str!("direct_common_a_v1/creator_replay_v1.rs");
     let constructor_tail = common_a
         .split("fn new_rkg_round_one_selector_v1")
         .nth(1)
         .unwrap();
-    let (constructor, _) = constructor_tail
-        .split_once(
-            "#[cfg(test)]\npub(super) fn mint_mismatched_rkg_round_one_selector_for_test_v1",
-        )
-        .unwrap();
+    let (constructor, _) = constructor_tail.split_once("fn sampler_frame(").unwrap();
     assert!(constructor.contains("VerifiedDirectCommonAStatementV1"));
     assert!(!constructor.contains("common_a_statement_digest: [u8; 32]"));
     assert!(!common_a.contains("pub(super) fn new_rkg_round_one_selector_v1("));
@@ -423,7 +420,16 @@ fn typed_selector_uses_only_the_creator_replay_typestate() {
     assert!(!common_a.contains("pub(super) fn statement_digest_for("));
     assert!(!common_a.contains("pub(super) fn derive_verified_direct_common_a_statement_v1("));
     assert!(!common_a.contains("fn mint_rkg_round_one_selector_v1("));
+    assert!(!common_a.contains("mint_mismatched_rkg_round_one_selector_for_test_v1"));
     assert!(!active.contains("fn mint_rkg_round_one_selector_v1("));
+    assert!(!active.contains("mint_mismatched_rkg_round_one_selector_for_test_v1"));
+    assert!(creator.contains("authority: VerifiedDirectCommonAStatementV1"));
+    assert!(
+        creator
+            .contains("derive_verified_direct_common_a_statement_v1(roster, bindings, context)?")
+    );
+    assert!(creator.contains("completed: CompletedDirectCommonACreatorAuthorityV1"));
+    assert!(creator.contains("new_rkg_round_one_selector_v1("));
     assert!(active.contains("direct_common_a_v1::prepare_direct_common_a_creator_h0_v1("));
     assert!(active.contains("direct_common_a_v1::consume_completed_creator_authority_v1("));
     assert!(!active.contains("VerifiedDirectCommonAStatementV1"));
@@ -434,5 +440,5 @@ fn typed_selector_uses_only_the_creator_replay_typestate() {
     assert!(active.contains("let canonical_complete_wire_certified = false;"));
     assert!(active.contains("Err(ZkAmsMkheErrorV1::ReleaseUnavailable)"));
     let statement = include_str!("direct_relation_wire_v1/statement_v1.rs");
-    assert!(statement.contains("put(&mut bytes, 448, &selector.common_a_statement_digest);"));
+    assert!(statement.contains("put(output, 448, &selector.common_a_statement_digest);"));
 }

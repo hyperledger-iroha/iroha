@@ -23,3 +23,10 @@ def test_shipping_packages_exclude_test_fixtures() -> None:
     for package in checker.DEFAULT_PACKAGES:
         graph = checker.feature_graph(REPO, package)
         assert all(feature not in graph for feature in checker.FORBIDDEN_FEATURES)
+
+
+def test_shipping_proof_consumers_keep_complete_parallel_engine() -> None:
+    checker = load_checker()
+    for package, required_features in checker.REQUIRED_FEATURES.items():
+        graph = checker.feature_graph(REPO, package)
+        assert all(feature in graph for feature in required_features)

@@ -877,6 +877,54 @@ impl Client {
         self.send_builder(builder.max_response_bytes(PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1))
     }
 
+    /// Read the redacted APS state commitment from this exact test-network validator.
+    ///
+    /// The route and this method are compiled only for the feature-isolated
+    /// release harness. The request uses the client's configured operator key;
+    /// Torii additionally requires that identity to be the local validator.
+    ///
+    /// # Errors
+    ///
+    /// Fails if operator signing is unavailable, Torii rejects the identity,
+    /// the response is cacheable, or the strict V1 response cannot be decoded.
+    #[cfg(feature = "test-network-private-settlement-evidence")]
+    pub fn private_settlement_test_network_state_evidence_v1(
+        &self,
+    ) -> Result<super::PrivateSettlementTestNetworkStateEvidenceResponseV1> {
+        let url = join_torii_url(
+            &self.torii_url,
+            "v1/nexus/private-settlements/test-network/state-commitment",
+        );
+        let response = self.send_private_settlement_builder_v1(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        let cache_control = response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok());
+        if cache_control != Some("private, no-store") {
+            return Err(eyre!(
+                "private-settlement test-network state evidence is missing no-store"
+            ));
+        }
+        let decoded: super::PrivateSettlementTestNetworkStateEvidenceResponseV1 =
+            Self::decode_private_settlement_response_v1(
+                response,
+                "private-settlement test-network state evidence failed",
+            )?;
+        if decoded.format_version != 1
+            || decoded.commitment == Hash::prehashed([0_u8; Hash::LENGTH])
+            || decoded.ledger_commitment == Hash::prehashed([0_u8; Hash::LENGTH])
+            || decoded.staged_lock_commitment == Hash::prehashed([0_u8; Hash::LENGTH])
+        {
+            return Err(eyre!(
+                "private-settlement test-network state evidence is malformed"
+            ));
+        }
+        Ok(decoded)
+    }
+
     /// Ask one committee endpoint to durably persist provisional material and sign it.
     ///
     /// The request is authenticated as the manifest sponsor. The returned

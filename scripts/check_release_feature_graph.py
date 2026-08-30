@@ -14,6 +14,16 @@ FORBIDDEN_FEATURES = (
     'iroha feature "test-fixtures"',
     'iroha_data_model feature "test-fixtures"',
 )
+REQUIRED_FEATURES = {
+    "irohad": (
+        'iroha_zkp_halo2 feature "full"',
+        'iroha_zkp_halo2 feature "parallel"',
+    ),
+    "iroha_cli": (
+        'iroha_zkp_halo2 feature "full"',
+        'iroha_zkp_halo2 feature "parallel"',
+    ),
+}
 
 
 def feature_graph(repo: Path, package: str) -> str:
@@ -60,12 +70,15 @@ def main() -> int:
         for forbidden in FORBIDDEN_FEATURES:
             if forbidden in graph:
                 failures.append(f"{package}: enabled {forbidden}")
+        for required in REQUIRED_FEATURES.get(package, ()):
+            if required not in graph:
+                failures.append(f"{package}: missing {required}")
     if failures:
-        print("development-only features reached a shipping graph:", file=sys.stderr)
+        print("shipping feature graph violations:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
-    print("shipping feature graphs exclude Iroha test fixtures")
+    print("shipping feature graphs preserve proof engines and exclude test fixtures")
     return 0
 
 

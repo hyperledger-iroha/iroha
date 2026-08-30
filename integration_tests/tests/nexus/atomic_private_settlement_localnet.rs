@@ -192,6 +192,19 @@ struct PreparedLeg {
     initial_commitments: [PrivacyCommitmentV1; 2],
 }
 
+#[derive(Clone)]
+struct PrivateSettlementLegPrivateData {
+    payer: KeyPair,
+    recipient: KeyPair,
+    amount: u128,
+    memo: Vec<u8>,
+}
+
+const LEAKAGE_ACCOUNT_LEFT_I105: &str = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP";
+const LEAKAGE_ACCOUNT_RIGHT_I105: &str = "sorauﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP";
+const LEAKAGE_ASSET_LEFT: &str = "4Zust3cNxfvUrJRuFjSMmNXho9rF";
+const LEAKAGE_ASSET_RIGHT: &str = "7fnqfbvxnCke21nA2Zy1C3KktDdi";
+
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
 }
@@ -750,11 +763,70 @@ fn signing_key(seed: u8) -> KeyPair {
     KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
 }
 
+fn leakage_canary_keypair(variant: &str) -> Result<KeyPair> {
+    let seed = match variant {
+        "left" => [
+            0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec,
+            0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
+            0x1c, 0xae, 0x7f, 0x60,
+        ],
+        "right" => [
+            0x4c, 0xcd, 0x08, 0x9b, 0x28, 0xff, 0x96, 0xda, 0x9d, 0xb6, 0xc3, 0x46, 0xec, 0x11,
+            0x4e, 0x0f, 0x5b, 0x8a, 0x31, 0x9f, 0x35, 0xab, 0xa6, 0x24, 0xda, 0x8c, 0xf6, 0xed,
+            0x4f, 0xb8, 0xa6, 0xfb,
+        ],
+        _ => return Err(eyre!("leakage variant must be left or right")),
+    };
+    KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+        .wrap_err("derive the fixed RFC 8032 leakage canary key")
+}
+
+fn leakage_canary_account_id(variant: &str) -> Result<AccountId> {
+    Ok(AccountId::new(
+        leakage_canary_keypair(variant)?.public_key().clone(),
+    ))
+}
+
+fn leakage_canary_asset_definition_id(variant: &str) -> Result<AssetDefinitionId> {
+    let literal = match variant {
+        "left" => LEAKAGE_ASSET_LEFT,
+        "right" => LEAKAGE_ASSET_RIGHT,
+        _ => return Err(eyre!("leakage variant must be left or right")),
+    };
+    literal
+        .parse()
+        .wrap_err("parse the fixed canonical leakage asset definition id")
+}
+
+fn default_private_settlement_leg_data(ordinal: usize) -> PrivateSettlementLegPrivateData {
+    PrivateSettlementLegPrivateData {
+        payer: signing_key(0xA1 + ordinal as u8),
+        recipient: signing_key(0xB1 + ordinal as u8),
+        amount: 42 + ordinal as u128,
+        memo: format!("BCK26-private-settlement-leg-{ordinal}").into_bytes(),
+    }
+}
+
 fn governed_legs(
     routes: &[PrivateSettlementRouteV1],
     authority_context_height: u64,
     expiry_height: u64,
 ) -> Result<Vec<GovernedLeg>> {
+    governed_legs_with_asset_definitions(routes, authority_context_height, expiry_height, None)
+}
+
+fn governed_legs_with_asset_definitions(
+    routes: &[PrivateSettlementRouteV1],
+    authority_context_height: u64,
+    expiry_height: u64,
+    asset_definition_ids: Option<&[AssetDefinitionId]>,
+) -> Result<Vec<GovernedLeg>> {
+    if let Some(asset_definition_ids) = asset_definition_ids {
+        ensure!(
+            asset_definition_ids.len() == routes.len(),
+            "private settlement asset override count must equal the route count"
+        );
+    }
     routes
         .iter()
         .enumerate()
@@ -783,7 +855,10 @@ fn governed_legs(
             let governance = PrivateSettlementPoolGovernanceV1::from_restricted_mapping(
                 *route,
                 PrivacyPoolIdV1::new(bytes(0x60 + ordinal as u8)),
-                cbdc_asset_definition_id(ordinal),
+                asset_definition_ids.map_or_else(
+                    || cbdc_asset_definition_id(ordinal),
+                    |ids| ids[ordinal].clone(),
+                ),
                 bytes(0x70 + ordinal as u8),
                 &policy,
                 PrivateSettlementPoolGovernanceLifecycleV1 {
@@ -981,6 +1056,17 @@ fn prepare_leg(
     manifest: &AtomicPrivateSettlementV1,
     authority_digest: Hash,
 ) -> Result<PreparedLeg> {
+    let private_data = default_private_settlement_leg_data(ordinal);
+    prepare_leg_with_private_data(ordinal, governed, manifest, authority_digest, &private_data)
+}
+
+fn prepare_leg_with_private_data(
+    ordinal: usize,
+    governed: GovernedLeg,
+    manifest: &AtomicPrivateSettlementV1,
+    authority_digest: Hash,
+    private_data: &PrivateSettlementLegPrivateData,
+) -> Result<PreparedLeg> {
     let profile = PrivateSettlementProofProfileV1::IvmPrivateNoteFixed2In3Out;
     let placeholders = [
         placeholder_encrypted_output(0x11 + ordinal as u8 * 6),
@@ -1020,8 +1106,8 @@ fn prepare_leg(
     };
     statement.validate()?;
 
-    let payer = signing_key(0xA1 + ordinal as u8);
-    let recipient = signing_key(0xB1 + ordinal as u8);
+    let payer = &private_data.payer;
+    let recipient = &private_data.recipient;
     let input_secrets = [
         bytes(0xC1 + ordinal as u8 * 2),
         bytes(0xC2 + ordinal as u8 * 2),
@@ -1038,7 +1124,11 @@ fn prepare_leg(
     ];
     let reimbursement = if ordinal == 0 { 5 } else { 0 };
     let change = 7;
-    let amount = 42 + ordinal as u128;
+    let amount = private_data.amount;
+    let input_amount = amount
+        .checked_add(change)
+        .and_then(|value| value.checked_add(reimbursement))
+        .ok_or_else(|| eyre!("private settlement input amount overflow"))?;
     let mut plaintext = PrivateSettlementAuditPlaintextV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         network_id: manifest.network_id,
@@ -1050,7 +1140,7 @@ fn prepare_leg(
         payer_authorization: placeholder_payer_authorization(
             manifest.network_id,
             governed.route,
-            &payer,
+            payer,
             manifest.expiry_height,
         ),
         recipient: AccountId::new(recipient.public_key().clone()),
@@ -1062,14 +1152,10 @@ fn prepare_leg(
         fee_intent_digest: manifest.fee_intent_digest,
         settlement_expiry_height: manifest.expiry_height,
         reimbursement_terms_salt: bytes(0x94),
-        memo: format!("BCK26-private-settlement-leg-{ordinal}").into_bytes(),
+        memo: private_data.memo.clone(),
         policy_references: vec![governed.governance.governance_digest],
         inputs: vec![
-            note_opening(
-                0x70 + ordinal as u8 * 5,
-                true,
-                amount + change + reimbursement,
-            ),
+            note_opening(0x70 + ordinal as u8 * 5, true, input_amount),
             note_opening(0x71 + ordinal as u8 * 5, false, 0),
         ],
         outputs: vec![
@@ -1079,7 +1165,7 @@ fn prepare_leg(
                 view_key_authorization: placeholder_view_authorization(
                     manifest.network_id,
                     governed.route,
-                    &recipient,
+                    recipient,
                     manifest.expiry_height,
                 ),
                 encryption_opening: PrivateSettlementAuditEncryptionOpeningV1 {
@@ -1093,7 +1179,7 @@ fn prepare_leg(
                 view_key_authorization: placeholder_view_authorization(
                     manifest.network_id,
                     governed.route,
-                    &payer,
+                    payer,
                     manifest.expiry_height,
                 ),
                 encryption_opening: PrivateSettlementAuditEncryptionOpeningV1 {
@@ -1143,10 +1229,7 @@ fn prepare_leg(
             SignatureOf::try_new(payer.private_key(), &payer_body)?,
         )],
     );
-    for (index, signer) in [&recipient, &payer, &*ALICE_KEYPAIR]
-        .into_iter()
-        .enumerate()
-    {
+    for (index, signer) in [recipient, payer, &*ALICE_KEYPAIR].into_iter().enumerate() {
         let body = plaintext.output_view_key_authorization_body(index)?;
         plaintext.outputs[index].view_key_authorization =
             PrivateSettlementAuditViewKeyAuthorizationV1::new(
@@ -1640,6 +1723,25 @@ fn unsupported_real_process_participant_count_fails_closed() {
     assert!(TopologyShape::new(5).validate().is_err());
     assert!(TopologyShape::new(17).validate().is_err());
     assert_eq!(GLOBAL_LANE_ID, 0);
+}
+
+#[test]
+fn leakage_canary_identifiers_are_canonical_typed_values() {
+    let left_account = leakage_canary_account_id("left").expect("left canary account");
+    let right_account = leakage_canary_account_id("right").expect("right canary account");
+    assert_eq!(left_account.to_string(), LEAKAGE_ACCOUNT_LEFT_I105);
+    assert_eq!(right_account.to_string(), LEAKAGE_ACCOUNT_RIGHT_I105);
+    assert_ne!(left_account, right_account);
+
+    let left_asset =
+        leakage_canary_asset_definition_id("left").expect("left canary asset definition");
+    let right_asset =
+        leakage_canary_asset_definition_id("right").expect("right canary asset definition");
+    assert_eq!(left_asset.to_string(), LEAKAGE_ASSET_LEFT);
+    assert_eq!(right_asset.to_string(), LEAKAGE_ASSET_RIGHT);
+    assert_ne!(left_asset, right_asset);
+    assert!(leakage_canary_account_id("unknown").is_err());
+    assert!(leakage_canary_asset_definition_id("unknown").is_err());
 }
 
 include!("atomic_private_settlement_real_process_harness.rs");

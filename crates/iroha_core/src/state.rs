@@ -8754,7 +8754,178 @@ pub struct WorldView<'world> {
     pub(crate) global_beacon_pulse_slots:
         StorageView<'world, (iroha_data_model::NetworkId, u64), [u8; 32]>,
 }
+
+/// Exact public-map counts bound by the non-shipping private-settlement state
+/// commitment used in adversarial real-process tests.
+///
+/// This deliberately exposes no keys or values. `commitments` and
+/// `encrypted_outputs` are equal because both are represented by the same
+/// fixed-shape output record map; keeping both fields makes the release
+/// assertion explicit. `replay_markers` counts both finalized receipts and
+/// terminal abort/expiry markers.
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct PrivateSettlementLedgerMapCountsV1 {
+    /// Governed opaque pool projections.
+    pub governance: u64,
+    /// Authoritative opaque pool frontiers.
+    pub pools: u64,
+    /// Retained root provenance records.
+    pub roots: u64,
+    /// Consumed nullifiers.
+    pub nullifiers: u64,
+    /// Fixed-shape output commitments.
+    pub commitments: u64,
+    /// Fixed-shape encrypted outputs.
+    pub encrypted_outputs: u64,
+    /// Finalized or terminal bundle replay markers.
+    pub replay_markers: u64,
+    /// Finalized public receipts.
+    pub receipts: u64,
+    /// Public abort and expiry markers.
+    pub abort_markers: u64,
+}
+
+/// Evidence-only commitment to every globally replicated private-settlement
+/// map and its exact public count vector.
+///
+/// The digest is intended only for test-network atomicity observations. It is
+/// not a production privacy API and is unavailable unless the dedicated
+/// non-shipping feature is compiled.
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateSettlementLedgerEvidenceV1 {
+    /// Domain-separated commitment to the canonical map contents and counts.
+    pub commitment: Hash,
+    /// Exact public-map count vector committed by `commitment`.
+    pub counts: PrivateSettlementLedgerMapCountsV1,
+}
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+const PRIVATE_SETTLEMENT_LEDGER_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"iroha:test-network:private-settlement:ledger-evidence:v1\0";
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+fn private_settlement_ledger_evidence_commitment_v1(
+    sections: &[(&[u8], &[u8])],
+    counts: PrivateSettlementLedgerMapCountsV1,
+) -> Result<Hash, norito::Error> {
+    let counts_bytes = norito::encode_canonical(&counts)?;
+    let mut preimage = Vec::with_capacity(
+        PRIVATE_SETTLEMENT_LEDGER_EVIDENCE_DOMAIN_V1.len()
+            + counts_bytes.len()
+            + sections
+                .iter()
+                .map(|(label, bytes)| label.len().saturating_add(bytes.len()).saturating_add(16))
+                .sum::<usize>(),
+    );
+    preimage.extend_from_slice(PRIVATE_SETTLEMENT_LEDGER_EVIDENCE_DOMAIN_V1);
+    for (label, bytes) in sections {
+        let label_len = u64::try_from(label.len()).expect("static evidence label length fits u64");
+        let bytes_len = u64::try_from(bytes.len()).expect("canonical map length fits u64");
+        preimage.extend_from_slice(&label_len.to_le_bytes());
+        preimage.extend_from_slice(label);
+        preimage.extend_from_slice(&bytes_len.to_le_bytes());
+        preimage.extend_from_slice(bytes);
+    }
+    let counts_len = u64::try_from(counts_bytes.len()).expect("canonical count vector fits u64");
+    preimage.extend_from_slice(&counts_len.to_le_bytes());
+    preimage.extend_from_slice(&counts_bytes);
+    Ok(Hash::new(&preimage))
+}
+
 impl WorldView<'_> {
+    /// Commit every globally replicated private-settlement map for a
+    /// test-network atomicity observation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if canonical Norito encoding fails. Shipping
+    /// builds do not compile this method.
+    #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+    pub fn private_settlement_ledger_evidence_v1(
+        &self,
+    ) -> Result<PrivateSettlementLedgerEvidenceV1, norito::Error> {
+        let governance: Vec<_> = self
+            .private_settlement_governance
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect();
+        let pools: Vec<_> = self
+            .private_settlement_pools
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect();
+        let roots: Vec<_> = self
+            .private_settlement_roots
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect();
+        let nullifiers: Vec<_> = self
+            .private_settlement_nullifiers
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect();
+        let outputs: Vec<_> = self
+            .private_settlement_outputs
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect();
+        let receipts: Vec<_> = self
+            .private_settlement_receipts
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect();
+        let aborts: Vec<_> = self
+            .private_settlement_aborts
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect();
+
+        let governance_bytes = norito::encode_canonical(&governance)?;
+        let pools_bytes = norito::encode_canonical(&pools)?;
+        let roots_bytes = norito::encode_canonical(&roots)?;
+        let nullifiers_bytes = norito::encode_canonical(&nullifiers)?;
+        let outputs_bytes = norito::encode_canonical(&outputs)?;
+        let receipts_bytes = norito::encode_canonical(&receipts)?;
+        let aborts_bytes = norito::encode_canonical(&aborts)?;
+
+        let output_count =
+            u64::try_from(outputs.len()).expect("private-settlement output map length fits u64");
+        let receipt_count =
+            u64::try_from(receipts.len()).expect("private-settlement receipt map length fits u64");
+        let abort_count =
+            u64::try_from(aborts.len()).expect("private-settlement abort map length fits u64");
+        let counts = PrivateSettlementLedgerMapCountsV1 {
+            governance: u64::try_from(governance.len())
+                .expect("private-settlement governance map length fits u64"),
+            pools: u64::try_from(pools.len()).expect("private-settlement pool map length fits u64"),
+            roots: u64::try_from(roots.len()).expect("private-settlement root map length fits u64"),
+            nullifiers: u64::try_from(nullifiers.len())
+                .expect("private-settlement nullifier map length fits u64"),
+            commitments: output_count,
+            encrypted_outputs: output_count,
+            replay_markers: receipt_count
+                .checked_add(abort_count)
+                .expect("private-settlement terminal marker count fits u64"),
+            receipts: receipt_count,
+            abort_markers: abort_count,
+        };
+        let commitment = private_settlement_ledger_evidence_commitment_v1(
+            &[
+                (b"governance", &governance_bytes),
+                (b"pools", &pools_bytes),
+                (b"roots", &roots_bytes),
+                (b"nullifiers", &nullifiers_bytes),
+                (b"outputs", &outputs_bytes),
+                (b"receipts", &receipts_bytes),
+                (b"aborts", &aborts_bytes),
+            ],
+            counts,
+        )?;
+        Ok(PrivateSettlementLedgerEvidenceV1 { commitment, counts })
+    }
+
     /// Read one public private-settlement receipt by opaque bundle id.
     #[must_use]
     pub fn private_settlement_receipt_v1(
@@ -8795,6 +8966,89 @@ impl WorldView<'_> {
         Some((epoch, root))
     }
 }
+
+#[cfg(test)]
+mod private_settlement_ledger_evidence_tests {
+    use super::*;
+
+    const LABELS: [&[u8]; 7] = [
+        b"governance",
+        b"pools",
+        b"roots",
+        b"nullifiers",
+        b"outputs",
+        b"receipts",
+        b"aborts",
+    ];
+
+    fn counts() -> PrivateSettlementLedgerMapCountsV1 {
+        PrivateSettlementLedgerMapCountsV1 {
+            governance: 1,
+            pools: 2,
+            roots: 3,
+            nullifiers: 4,
+            commitments: 5,
+            encrypted_outputs: 5,
+            replay_markers: 7,
+            receipts: 6,
+            abort_markers: 1,
+        }
+    }
+
+    fn commitment(sections: &[Vec<u8>], counts: PrivateSettlementLedgerMapCountsV1) -> Hash {
+        let borrowed: Vec<_> = LABELS
+            .iter()
+            .zip(sections)
+            .map(|(label, bytes)| (*label, bytes.as_slice()))
+            .collect();
+        private_settlement_ledger_evidence_commitment_v1(&borrowed, counts)
+            .expect("fixture evidence encodes")
+    }
+
+    #[test]
+    fn commitment_changes_for_every_included_map() {
+        let sections: Vec<_> = (0_u8..7).map(|index| vec![index, index + 1]).collect();
+        let baseline = commitment(&sections, counts());
+        for index in 0..sections.len() {
+            let mut changed = sections.clone();
+            changed[index].push(0xa5);
+            assert_ne!(
+                commitment(&changed, counts()),
+                baseline,
+                "map section {} was not bound",
+                String::from_utf8_lossy(LABELS[index])
+            );
+        }
+    }
+
+    #[test]
+    fn commitment_changes_for_every_public_count() {
+        let sections: Vec<_> = (0_u8..7).map(|index| vec![index, index + 1]).collect();
+        let baseline_counts = counts();
+        let baseline = commitment(&sections, baseline_counts);
+        for index in 0..9 {
+            let mut changed = baseline_counts;
+            match index {
+                0 => changed.governance += 1,
+                1 => changed.pools += 1,
+                2 => changed.roots += 1,
+                3 => changed.nullifiers += 1,
+                4 => changed.commitments += 1,
+                5 => changed.encrypted_outputs += 1,
+                6 => changed.replay_markers += 1,
+                7 => changed.receipts += 1,
+                8 => changed.abort_markers += 1,
+                _ => unreachable!("bounded count mutation index"),
+            }
+            assert_ne!(
+                commitment(&sections, changed),
+                baseline,
+                "count field {index} was not bound"
+            );
+        }
+    }
+}
+
 /// Verifying-key binding enforced for a ZK asset operation.
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,

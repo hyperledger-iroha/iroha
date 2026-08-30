@@ -1,6 +1,6 @@
 //! Client side of the feature-isolated real-network consensus message controller.
 use color_eyre::eyre::{Result, eyre};
-use iroha_crypto::{Hash as CryptoHash, HashOf};
+use iroha_crypto::{Hash as CryptoHash, HashOf, sha256};
 use iroha_data_model::{
     block::{
         BlockHeader,
@@ -30,6 +30,9 @@ const ACK_FILE: &str = "ack.norito.json";
 const NATIVE_AMX_FAULT_COMMAND_FILE: &str = "native-amx-fault-command.norito.json";
 const NATIVE_AMX_FAULT_ACK_FILE: &str = "native-amx-fault-ack.norito.json";
 const NATIVE_AMX_FAULT_FORMAT_VERSION: u64 = 1;
+const PRIVATE_SETTLEMENT_ROUTE_COMMAND_FILE: &str = "private-settlement-route-command.norito.json";
+const PRIVATE_SETTLEMENT_ROUTE_ACK_FILE: &str = "private-settlement-route-ack.norito.json";
+const PRIVATE_SETTLEMENT_ROUTE_FORMAT_VERSION: u64 = 1;
 const FORMAT_VERSION: u64 = 5;
 const MAX_CONTROL_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
@@ -204,6 +207,122 @@ pub struct NativeAmxFaultAck {
     /// Exact protocol source identity: a Native AMX transaction digest or private-settlement
     /// bundle id.
     pub source_id: [u8; 32],
+}
+/// Exact canonical process-cut command installed for one validator child.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeAmxFaultCommand {
+    /// Monotonic controller-local command revision.
+    pub revision: u64,
+    /// SHA-256 of `canonical_bytes`.
+    pub sha256: String,
+    /// Exact fsynced command bytes consumed and copied to the acknowledgement.
+    pub canonical_bytes: Vec<u8>,
+}
+
+/// Authenticated private-settlement Torii phase controlled after ordinary request auth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateSettlementRouteControlPhase {
+    /// Restricted provisional upload and availability-share persistence.
+    RestrictedDa,
+    /// Prepare vote and Prepare-certificate persistence.
+    Prepare,
+    /// Commit vote and Commit-certificate persistence.
+    Commit,
+}
+
+impl PrivateSettlementRouteControlPhase {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RestrictedDa => "restricted_da",
+            Self::Prepare => "prepare",
+            Self::Commit => "commit",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "restricted_da" => Ok(Self::RestrictedDa),
+            "prepare" => Ok(Self::Prepare),
+            "commit" => Ok(Self::Commit),
+            _ => Err(eyre!(
+                "unknown private-settlement route-control phase `{value}`"
+            )),
+        }
+    }
+}
+
+/// Action installed at the post-authentication private-settlement route boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateSettlementRouteControlAction {
+    /// Reject the first configured number of matching requests, then pass.
+    Loss,
+    /// Retain each matching request until an explicit [`Self::Pass`] command.
+    Hold,
+    /// Heal a prior command and pass retained or subsequent requests.
+    Pass,
+}
+
+impl PrivateSettlementRouteControlAction {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Loss => "loss",
+            Self::Hold => "hold",
+            Self::Pass => "pass",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "loss" => Ok(Self::Loss),
+            "hold" => Ok(Self::Hold),
+            "pass" => Ok(Self::Pass),
+            _ => Err(eyre!(
+                "unknown private-settlement route-control action `{value}`"
+            )),
+        }
+    }
+}
+
+/// Exact canonical command bytes installed for one controlled peer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateSettlementRouteControlCommand {
+    /// Monotonic controller-local revision.
+    pub revision: u64,
+    /// SHA-256 of `canonical_bytes`.
+    pub sha256: String,
+    /// Exact fsynced command bytes consumed by the daemon.
+    pub canonical_bytes: Vec<u8>,
+}
+
+/// Durable daemon acknowledgement for authenticated APS route control.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateSettlementRouteControlAck {
+    /// Applied command revision.
+    pub revision: u64,
+    /// SHA-256 of the exact command bytes.
+    pub command_sha256: String,
+    /// Exact predecessor Hold command released by this Pass revision, when any.
+    pub predecessor_command_sha256: Option<String>,
+    /// Controlled phase.
+    pub phase: PrivateSettlementRouteControlPhase,
+    /// Applied action.
+    pub action: PrivateSettlementRouteControlAction,
+    /// Exact bundle identity.
+    pub bundle_id: [u8; 32],
+    /// Deterministic trial seed.
+    pub seed: u64,
+    /// Number of authenticated matching requests observed.
+    pub matched: u64,
+    /// Number admitted into the ordinary production handler.
+    pub passed: u64,
+    /// Number rejected as controlled loss.
+    pub dropped: u64,
+    /// Number durably acknowledged before being held.
+    pub held: u64,
+    /// Number released by this healing revision.
+    pub released: u64,
+    /// SHA-256 of each exact authenticated request occurrence in admission order.
+    pub request_digests: Vec<String>,
 }
 impl ConsensusMessageControlAction {
     const fn as_str(self) -> &'static str {
@@ -516,6 +635,20 @@ pub struct ConsensusMessageControlAck {
     /// Revision that initiated the active or most recently completed drain.
     pub drain_fence: Option<u64>,
 }
+/// Exact, stable command and acknowledgement bytes for one applied consensus
+/// message-control revision.
+///
+/// This is evidence from the feature-isolated test controller. It is not a
+/// production consensus API.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsensusMessageControlEvidence {
+    /// Canonical command bytes consumed by the daemon.
+    pub command_bytes: Vec<u8>,
+    /// Canonical acknowledgement bytes durably published by the daemon.
+    pub acknowledgement_bytes: Vec<u8>,
+    /// Parsed acknowledgement bound to both byte strings.
+    pub acknowledgement: ConsensusMessageControlAck,
+}
 /// Per-peer handle for the feature-isolated controller.
 #[derive(Debug)]
 pub struct ConsensusMessageControl {
@@ -524,6 +657,7 @@ pub struct ConsensusMessageControl {
     initial_command: InitialCommand,
     next_revision: Mutex<u64>,
     next_native_amx_fault_revision: Mutex<u64>,
+    next_private_settlement_route_revision: Mutex<u64>,
     operation: tokio::sync::Mutex<()>,
 }
 #[derive(Clone, Debug)]
@@ -571,6 +705,7 @@ impl ConsensusMessageControl {
             },
             next_revision: Mutex::new(1),
             next_native_amx_fault_revision: Mutex::new(0),
+            next_private_settlement_route_revision: Mutex::new(0),
             operation: tokio::sync::Mutex::new(()),
         };
         let command_digest = control.write_command(1, &[], &[], DEFAULT_QUEUE_CAPACITY, false)?;
@@ -714,6 +849,32 @@ impl ConsensusMessageControl {
     }
     /// Read and validate the latest stable canonical acknowledgement.
     pub fn read_ack(&self) -> Result<ConsensusMessageControlAck> {
+        let (_, acknowledgement) = self.read_ack_bytes()?;
+        Ok(acknowledgement)
+    }
+    /// Read the exact canonical bytes for the current command and its durable
+    /// acknowledgement, rejecting a torn or substituted pair.
+    pub fn read_current_evidence(&self) -> Result<ConsensusMessageControlEvidence> {
+        validate_root_identity(&self.root, self.root_identity)?;
+        let command_bytes = read_bounded_private_file(
+            &self.root.join(CONTROL_FILE),
+            MAX_CONTROL_BYTES,
+            self.root_identity.owner,
+        )?;
+        let (acknowledgement_bytes, acknowledgement) = self.read_ack_bytes()?;
+        validate_root_identity(&self.root, self.root_identity)?;
+        if acknowledgement.command_digest != CryptoHash::new(&command_bytes) {
+            return Err(eyre!(
+                "consensus message-control evidence acknowledgement binds another command"
+            ));
+        }
+        Ok(ConsensusMessageControlEvidence {
+            command_bytes,
+            acknowledgement_bytes,
+            acknowledgement,
+        })
+    }
+    fn read_ack_bytes(&self) -> Result<(Vec<u8>, ConsensusMessageControlAck)> {
         validate_root_identity(&self.root, self.root_identity)?;
         let bytes = read_bounded_private_file(
             &self.root.join(ACK_FILE),
@@ -721,7 +882,8 @@ impl ConsensusMessageControl {
             self.root_identity.owner,
         )?;
         validate_root_identity(&self.root, self.root_identity)?;
-        parse_ack(&bytes)
+        let acknowledgement = parse_ack(&bytes)?;
+        Ok((bytes, acknowledgement))
     }
     /// Arm one exact, one-shot Native AMX process cut for this peer.
     ///
@@ -735,6 +897,16 @@ impl ConsensusMessageControl {
         phase: NativeAmxFaultPhase,
         source_id: [u8; 32],
     ) -> Result<u64> {
+        Ok(self
+            .arm_native_amx_fault_with_evidence(phase, source_id)?
+            .revision)
+    }
+    /// Arm a process cut and return the exact fsynced command evidence.
+    pub fn arm_native_amx_fault_with_evidence(
+        &self,
+        phase: NativeAmxFaultPhase,
+        source_id: [u8; 32],
+    ) -> Result<NativeAmxFaultCommand> {
         validate_root_identity(&self.root, self.root_identity)?;
         let mut next = self
             .next_native_amx_fault_revision
@@ -746,6 +918,7 @@ impl ConsensusMessageControl {
         let revision = *next;
         let command = native_amx_fault_value(revision, phase, source_id);
         let bytes = canonical_json(&command)?;
+        let sha256 = crate::hex_lower(&sha256(&bytes));
         write_atomic_private_file(
             &self.root,
             NATIVE_AMX_FAULT_COMMAND_FILE,
@@ -754,10 +927,19 @@ impl ConsensusMessageControl {
         )?;
         validate_root_identity(&self.root, self.root_identity)?;
         drop(next);
-        Ok(revision)
+        Ok(NativeAmxFaultCommand {
+            revision,
+            sha256,
+            canonical_bytes: bytes,
+        })
     }
     /// Read and authenticate the latest durable Native AMX phase acknowledgement.
     pub fn read_native_amx_fault_ack(&self) -> Result<NativeAmxFaultAck> {
+        let (_, ack) = self.read_native_amx_fault_ack_bytes()?;
+        Ok(ack)
+    }
+    /// Read the exact durable process-cut acknowledgement bytes.
+    pub fn read_native_amx_fault_ack_bytes(&self) -> Result<(Vec<u8>, NativeAmxFaultAck)> {
         validate_root_identity(&self.root, self.root_identity)?;
         let bytes = read_bounded_private_file(
             &self.root.join(NATIVE_AMX_FAULT_ACK_FILE),
@@ -765,7 +947,8 @@ impl ConsensusMessageControl {
             self.root_identity.owner,
         )?;
         validate_root_identity(&self.root, self.root_identity)?;
-        parse_native_amx_fault(&bytes)
+        let ack = parse_native_amx_fault(&bytes)?;
+        Ok((bytes, ack))
     }
     /// Wait until the daemon durably proves that it reached the armed phase.
     pub async fn wait_for_native_amx_fault(
@@ -801,6 +984,124 @@ impl ConsensusMessageControl {
             if Instant::now() >= deadline {
                 return Err(eyre!(
                     "timed out waiting for Native AMX fault revision {revision}"
+                ));
+            }
+            sleep(ACK_POLL).await;
+        }
+    }
+    /// Atomically install one exact post-authentication APS route command.
+    ///
+    /// `drop_first` and `match_limit` must be non-zero only for [`PrivateSettlementRouteControlAction::Loss`].
+    /// A hold uses `(0, 1)` and a healing pass uses `(0, 0)`.
+    pub fn arm_private_settlement_route_control(
+        &self,
+        phase: PrivateSettlementRouteControlPhase,
+        action: PrivateSettlementRouteControlAction,
+        bundle_id: [u8; 32],
+        seed: u64,
+        drop_first: u64,
+        match_limit: u64,
+    ) -> Result<PrivateSettlementRouteControlCommand> {
+        match action {
+            PrivateSettlementRouteControlAction::Loss
+                if match_limit > 0 && drop_first <= match_limit && match_limit <= 10_000 => {}
+            PrivateSettlementRouteControlAction::Hold if drop_first == 0 && match_limit == 1 => {}
+            PrivateSettlementRouteControlAction::Pass if drop_first == 0 && match_limit == 0 => {}
+            _ => return Err(eyre!("invalid private-settlement route-control bounds")),
+        }
+        validate_root_identity(&self.root, self.root_identity)?;
+        let revision = {
+            let mut next = self
+                .next_private_settlement_route_revision
+                .lock()
+                .expect("private-settlement route-control revision lock poisoned");
+            *next = next
+                .checked_add(1)
+                .ok_or_else(|| eyre!("private-settlement route-control revision overflow"))?;
+            *next
+        };
+        let value = object_value([
+            ("action", Value::from(action.as_str())),
+            ("bundle_id", Value::from(crate::hex_lower(&bundle_id))),
+            ("drop_first", Value::from(drop_first)),
+            (
+                "format_version",
+                Value::from(PRIVATE_SETTLEMENT_ROUTE_FORMAT_VERSION),
+            ),
+            ("match_limit", Value::from(match_limit)),
+            ("phase", Value::from(phase.as_str())),
+            ("revision", Value::from(revision)),
+            ("seed", Value::from(seed)),
+        ]);
+        let canonical_bytes = canonical_json(&value)?;
+        let sha256 = crate::hex_lower(&sha256(&canonical_bytes));
+        write_atomic_private_file(
+            &self.root,
+            PRIVATE_SETTLEMENT_ROUTE_COMMAND_FILE,
+            &canonical_bytes,
+            self.root_identity.owner,
+        )?;
+        validate_root_identity(&self.root, self.root_identity)?;
+        Ok(PrivateSettlementRouteControlCommand {
+            revision,
+            sha256,
+            canonical_bytes,
+        })
+    }
+    /// Read and authenticate the latest durable APS route acknowledgement.
+    pub fn read_private_settlement_route_control_ack(
+        &self,
+    ) -> Result<PrivateSettlementRouteControlAck> {
+        let (_, ack) = self.read_private_settlement_route_control_ack_bytes()?;
+        Ok(ack)
+    }
+    /// Return the exact acknowledgement bytes together with their parsed shape.
+    pub fn read_private_settlement_route_control_ack_bytes(
+        &self,
+    ) -> Result<(Vec<u8>, PrivateSettlementRouteControlAck)> {
+        validate_root_identity(&self.root, self.root_identity)?;
+        let bytes = read_bounded_private_file(
+            &self.root.join(PRIVATE_SETTLEMENT_ROUTE_ACK_FILE),
+            MAX_ACK_BYTES,
+            self.root_identity.owner,
+        )?;
+        validate_root_identity(&self.root, self.root_identity)?;
+        let ack = parse_private_settlement_route_ack(&bytes)?;
+        Ok((bytes, ack))
+    }
+    /// Wait for a durable acknowledgement of the exact installed command.
+    pub async fn wait_for_private_settlement_route_control(
+        &self,
+        command: &PrivateSettlementRouteControlCommand,
+        timeout: Duration,
+    ) -> Result<(Vec<u8>, PrivateSettlementRouteControlAck)> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.read_private_settlement_route_control_ack_bytes() {
+                Ok((bytes, ack))
+                    if ack.revision == command.revision && ack.command_sha256 == command.sha256 =>
+                {
+                    return Ok((bytes, ack));
+                }
+                Ok((_, ack)) if ack.revision >= command.revision => {
+                    return Err(eyre!(
+                        "private-settlement route acknowledgement differs from revision {}: {ack:?}",
+                        command.revision
+                    ));
+                }
+                Ok(_) | Err(_) if Instant::now() < deadline => {}
+                Err(error) => return Err(error),
+                Ok((_, ack)) => {
+                    return Err(eyre!(
+                        "timed out waiting for private-settlement route revision {}; latest={ack:?}",
+                        command.revision
+                    ));
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(eyre!(
+                    "timed out waiting for private-settlement route revision {}",
+                    command.revision
                 ));
             }
             sleep(ACK_POLL).await;
@@ -1115,6 +1416,116 @@ fn parse_native_amx_fault(bytes: &[u8]) -> Result<NativeAmxFaultAck> {
         revision,
         phase,
         source_id,
+    })
+}
+fn parse_private_settlement_route_ack(bytes: &[u8]) -> Result<PrivateSettlementRouteControlAck> {
+    if bytes.is_empty() || bytes.len() > MAX_ACK_BYTES {
+        return Err(eyre!(
+            "private-settlement route acknowledgement has invalid size"
+        ));
+    }
+    let value: Value = norito::json::from_slice(bytes)?;
+    if canonical_json(&value)?.as_slice() != bytes {
+        return Err(eyre!(
+            "private-settlement route acknowledgement is not canonical"
+        ));
+    }
+    let object = exact_object(
+        &value,
+        &[
+            "action",
+            "bundle_id",
+            "command_sha256",
+            "dropped",
+            "format_version",
+            "held",
+            "matched",
+            "passed",
+            "phase",
+            "predecessor_command_sha256",
+            "released",
+            "request_digests",
+            "revision",
+            "seed",
+        ],
+        "private-settlement route acknowledgement",
+    )?;
+    if required_u64(object, "format_version")? != PRIVATE_SETTLEMENT_ROUTE_FORMAT_VERSION {
+        return Err(eyre!(
+            "unsupported private-settlement route acknowledgement version"
+        ));
+    }
+    let revision = required_u64(object, "revision")?;
+    if revision == 0 {
+        return Err(eyre!(
+            "private-settlement route acknowledgement revision must be positive"
+        ));
+    }
+    let phase = PrivateSettlementRouteControlPhase::parse(required_string(object, "phase")?)?;
+    let action = PrivateSettlementRouteControlAction::parse(required_string(object, "action")?)?;
+    let bundle_id = decode_lower_hex_32(required_string(object, "bundle_id")?)
+        .ok_or_else(|| eyre!("private-settlement route bundle id is not canonical"))?;
+    let command_sha256 = required_string(object, "command_sha256")?.to_owned();
+    if decode_lower_hex_32(&command_sha256).is_none() {
+        return Err(eyre!(
+            "private-settlement route command SHA-256 is not canonical"
+        ));
+    }
+    let predecessor_command_sha256 = match object.get("predecessor_command_sha256") {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) if decode_lower_hex_32(value).is_some() => Some(value.clone()),
+        _ => {
+            return Err(eyre!(
+                "private-settlement route predecessor command SHA-256 is invalid"
+            ));
+        }
+    };
+    let request_digests = object
+        .get("request_digests")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("private-settlement route acknowledgement lacks request digests"))?
+        .iter()
+        .map(|value| {
+            let digest = value
+                .as_str()
+                .ok_or_else(|| eyre!("private-settlement route request digest is not a string"))?;
+            if decode_lower_hex_32(digest).is_none() {
+                return Err(eyre!(
+                    "private-settlement route request digest is not canonical"
+                ));
+            }
+            Ok(digest.to_owned())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let matched = required_u64(object, "matched")?;
+    let passed = required_u64(object, "passed")?;
+    let dropped = required_u64(object, "dropped")?;
+    let held = required_u64(object, "held")?;
+    let released = required_u64(object, "released")?;
+    if request_digests.len() != usize::try_from(matched)?
+        || passed.saturating_add(dropped).saturating_add(held) != matched
+        || released > held
+        || (released == 0 && predecessor_command_sha256.is_some())
+        || (released > 0 && predecessor_command_sha256.is_none())
+    {
+        return Err(eyre!(
+            "private-settlement route acknowledgement counters are inconsistent"
+        ));
+    }
+    Ok(PrivateSettlementRouteControlAck {
+        revision,
+        command_sha256,
+        predecessor_command_sha256,
+        phase,
+        action,
+        bundle_id,
+        seed: required_u64(object, "seed")?,
+        matched,
+        passed,
+        dropped,
+        held,
+        released,
+        request_digests,
     })
 }
 fn parse_ack(bytes: &[u8]) -> Result<ConsensusMessageControlAck> {
@@ -1738,6 +2149,12 @@ fn required_u64(object: &Map, field: &str) -> Result<u64> {
         .get(field)
         .and_then(Value::as_u64)
         .ok_or_else(|| eyre!("message-control acknowledgement lacks integer `{field}`"))
+}
+fn required_string<'a>(object: &'a Map, field: &str) -> Result<&'a str> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("message-control acknowledgement lacks string `{field}`"))
 }
 fn optional_u64(object: &Map, field: &str) -> Result<Option<u64>> {
     match object.get(field) {
@@ -2507,6 +2924,103 @@ mod tests {
                 }
             );
         }
+    }
+    #[test]
+    fn private_settlement_route_control_command_and_ack_bind_exact_occurrences() {
+        let parent = tempdir().expect("temporary parent");
+        let control = ConsensusMessageControl::create(parent.path().join("control"))
+            .expect("create route control");
+        let bundle_id = [0x51; 32];
+        let command = control
+            .arm_private_settlement_route_control(
+                PrivateSettlementRouteControlPhase::Prepare,
+                PrivateSettlementRouteControlAction::Loss,
+                bundle_id,
+                9,
+                5,
+                25,
+            )
+            .expect("arm route loss");
+        assert_eq!(command.revision, 1);
+        assert_eq!(
+            command.sha256,
+            crate::hex_lower(&sha256(&command.canonical_bytes))
+        );
+        let ack = object_value([
+            ("action", Value::from("loss")),
+            ("bundle_id", Value::from(crate::hex_lower(&bundle_id))),
+            ("command_sha256", Value::from(command.sha256.clone())),
+            ("dropped", Value::from(5_u64)),
+            (
+                "format_version",
+                Value::from(PRIVATE_SETTLEMENT_ROUTE_FORMAT_VERSION),
+            ),
+            ("held", Value::from(0_u64)),
+            ("matched", Value::from(25_u64)),
+            ("passed", Value::from(20_u64)),
+            ("phase", Value::from("prepare")),
+            ("predecessor_command_sha256", Value::Null),
+            ("released", Value::from(0_u64)),
+            (
+                "request_digests",
+                Value::Array(
+                    (0..25)
+                        .map(|index| Value::from(format!("{index:064x}")))
+                        .collect(),
+                ),
+            ),
+            ("revision", Value::from(command.revision)),
+            ("seed", Value::from(9_u64)),
+        ]);
+        let ack = parse_private_settlement_route_ack(
+            &canonical_json(&ack).expect("canonical acknowledgement"),
+        )
+        .expect("parse route acknowledgement");
+        assert_eq!(ack.bundle_id, bundle_id);
+        assert_eq!(ack.matched, 25);
+        assert_eq!(ack.dropped, 5);
+        assert_eq!(ack.passed, 20);
+        assert_eq!(ack.predecessor_command_sha256, None);
+    }
+
+    #[test]
+    fn private_settlement_route_heal_ack_binds_all_released_holds() {
+        let predecessor = "4".repeat(64);
+        let ack = object_value([
+            ("action", Value::from("pass")),
+            ("bundle_id", Value::from("51".repeat(32))),
+            ("command_sha256", Value::from("5".repeat(64))),
+            ("dropped", Value::from(0_u64)),
+            (
+                "format_version",
+                Value::from(PRIVATE_SETTLEMENT_ROUTE_FORMAT_VERSION),
+            ),
+            ("held", Value::from(2_u64)),
+            ("matched", Value::from(2_u64)),
+            ("passed", Value::from(0_u64)),
+            ("phase", Value::from("commit")),
+            (
+                "predecessor_command_sha256",
+                Value::from(predecessor.clone()),
+            ),
+            ("released", Value::from(2_u64)),
+            (
+                "request_digests",
+                Value::Array(vec![
+                    Value::from("6".repeat(64)),
+                    Value::from("7".repeat(64)),
+                ]),
+            ),
+            ("revision", Value::from(2_u64)),
+            ("seed", Value::from(11_u64)),
+        ]);
+        let parsed = parse_private_settlement_route_ack(
+            &canonical_json(&ack).expect("canonical healing acknowledgement"),
+        )
+        .expect("parse healing acknowledgement");
+        assert_eq!(parsed.predecessor_command_sha256, Some(predecessor));
+        assert_eq!(parsed.held, 2);
+        assert_eq!(parsed.released, 2);
     }
     #[test]
     fn staged_initial_rules_replace_revision_one_before_startup() {

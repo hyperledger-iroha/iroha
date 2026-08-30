@@ -932,6 +932,8 @@ mod panic_recovery;
 mod predicates;
 #[cfg(feature = "app_api")]
 mod private_settlement;
+#[cfg(feature = "test-network-private-settlement-route-control")]
+mod private_settlement_route_control;
 mod router;
 pub(crate) mod routing;
 mod runtime;
@@ -49696,7 +49698,7 @@ impl Torii {
         builder.route(
             &routes::BUNDLE_SUBMIT,
             catalog_post(private_settlement::handler_bundle_submit)
-                .authenticated_canonical_account_body(app_state, upload_limit),
+                .authenticated_canonical_account_body(app_state.clone(), upload_limit),
         );
         builder.route(
             &routes::BUNDLE_STATUS,
@@ -49707,6 +49709,13 @@ impl Torii {
             &routes::BUNDLE_RECEIPT,
             catalog_get(private_settlement::handler_bundle_receipt)
                 .layer(axum::Extension(self.private_settlement_runtime.clone())),
+        );
+        #[cfg(feature = "test-network-private-settlement-route-control")]
+        builder.route(
+            &routes::TEST_NETWORK_STATE_COMMITMENT,
+            catalog_get(private_settlement::handler_test_network_state_commitment)
+                .layer(axum::Extension(self.private_settlement_runtime.clone()))
+                .authenticated_identity_bound(app_state),
         );
     }
     /// Construct `Torii` with telemetry disabled.

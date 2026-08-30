@@ -1,7 +1,7 @@
 const CLEANUP_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const CLEANUP_CONTRACT_ASSET_LEN: usize = 51_407;
+const CLEANUP_CONTRACT_ASSET_LEN: usize = 53_080;
 const CLEANUP_CONTRACT_ASSET_SHA3_256: &str =
-    "7f9fe2f45abefaa78fbf6b44687366f9dd51a827928f1bfa78a8a14c14dafa3e";
+    "b770cd3980853578a1c3d7efedd5b96e97b29162e4a1b0484e1b6a9e751cf528";
 const CLEANUP_CONTRACT_ASSET: &[u8] =
     include_bytes!("generalized_bulletproof_secret_cleanup_contracts_v1.txt");
 
@@ -1719,7 +1719,7 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
     assert_ne!(product.0.as_ptr(), left_pointer);
     assert_ne!(product.0.as_ptr(), right_pointer);
     assert_eq!(product.len(), left.len());
-    assert!(product.0.capacity() >= product.len());
+    assert_eq!(product.0.capacity(), product.len());
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 0);
     drop(product);
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
@@ -1798,7 +1798,7 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
     );
     assert_eq!(
         borrowed_product
-            .matches("debug_assert_eq!(product.0.capacity(), allocation_capacity);")
+            .matches("debug_assert_eq!(product.0.capacity(), exact_len);")
             .count(),
         2
     );

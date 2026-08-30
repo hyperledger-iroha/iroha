@@ -67,6 +67,7 @@ DEFAULT_BOOTSTRAP_ITERATIONS = 2_000
 MAX_HARNESS_RESPONSE_BYTES = 16 * 1024 * 1024
 GIT_OBJECT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 SHA256 = re.compile(r"[0-9a-f]{64}")
+IROHA_HASH_LITERAL = re.compile(r"hash:([0-9A-F]{64})#[0-9A-F]{4}")
 
 SURFACE_FILES: Mapping[str, str] = {
     "block_wire_capture": "block-wire.bin",
@@ -109,9 +110,10 @@ COMMON_RESPONSE_FIELDS = {
 
 # The reviewed partial harness now lives at
 # ``scripts/private_settlement_real_process_harness.py`` and implements genuine
-# N=2,3,4,8,16 private and transparent-control benchmark runs under this contract.
-# TODO: Keep fault and leakage execution fail-closed until that harness gains
-# reviewed real-process implementations for those branches.
+# N=2,3,4,8,16 private/transparent-control benchmarks and the authenticated
+# real-process recovery campaign under this contract.
+# TODO: Keep leakage execution fail-closed until the harness archives every
+# required real-process public and restricted capture surface.
 HARNESS_CONTRACT: Mapping[str, Any] = {
     "version": VERSION,
     "invocation_arguments": [
@@ -149,6 +151,41 @@ FAULT_PAYLOAD_FIELDS = {
     "atomicity",
     "all_nodes_converged",
 }
+
+FAULT_CONTROL_EVIDENCE_FILE = "fault-control.jsonl"
+FAULT_OBSERVATION_EVIDENCE_FILE = "fault-observations.jsonl"
+FAULT_EVIDENCE_MAX_BYTES = 64 * 1024 * 1024
+FAULT_STATE_COUNT_FIELDS = {
+    "governance",
+    "pools",
+    "roots",
+    "nullifiers",
+    "commitments",
+    "encrypted_outputs",
+    "replay_markers",
+    "receipts",
+    "abort_markers",
+    "staged_pool_heads",
+    "staged_nullifiers",
+    "staged_output_commitments",
+    "staged_locks",
+}
+FAULT_STAGED_COUNT_FIELDS = {
+    "staged_pool_heads",
+    "staged_nullifiers",
+    "staged_output_commitments",
+    "staged_locks",
+}
+FAULT_LEDGER_COUNT_FIELDS = FAULT_STATE_COUNT_FIELDS - FAULT_STAGED_COUNT_FIELDS
+
+LEAKAGE_ACCOUNT_LEFT_I105 = (
+    "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+)
+LEAKAGE_ACCOUNT_RIGHT_I105 = (
+    "sorauﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP"
+)
+LEAKAGE_ASSET_LEFT = "4Zust3cNxfvUrJRuFjSMmNXho9rF"
+LEAKAGE_ASSET_RIGHT = "7fnqfbvxnCke21nA2Zy1C3KktDdi"
 
 BENCHMARK_CORRECTNESS_FIELDS = {
     "finalized_receipt_observed",
@@ -190,6 +227,27 @@ def nonnegative_integer(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise RunnerError(f"{label} must be a non-negative integer")
     return value
+
+
+def canonical_iroha_hash_body(value: Any, label: str) -> str:
+    """Return the lowercase body of one checksum-valid canonical Hash literal."""
+
+    matched = IROHA_HASH_LITERAL.fullmatch(value) if isinstance(value, str) else None
+    if matched is None:
+        raise RunnerError(f"{label} is not a canonical Iroha hash literal")
+    body = matched.group(1)
+    crc = 0xFFFF
+    for byte in f"hash:{body}".encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (
+                ((crc << 1) ^ 0x1021) & 0xFFFF
+                if crc & 0x8000
+                else (crc << 1) & 0xFFFF
+            )
+    if value[-4:] != f"{crc:04X}":
+        raise RunnerError(f"{label} has an invalid Iroha hash checksum")
+    return body.lower()
 
 
 def positive_integer(value: Any, label: str) -> int:
@@ -421,17 +479,21 @@ def build_canary_manifest(commit: str) -> dict[str, Any]:
     seed = hashlib.sha256(f"{PROTOCOL}:{commit}:leakage-canaries".encode()).digest()
     tag_a = seed[:12].hex()
     tag_b = seed[12:24].hex()
-    amount_a = int.from_bytes(seed[:16], "big") | (1 << 127)
-    amount_b = int.from_bytes(hashlib.sha256(seed).digest()[:16], "big") | (1 << 127)
+    amount_a = (1 << 118) + int.from_bytes(seed[:15], "big") % (1 << 118)
+    amount_b = (1 << 118) + int.from_bytes(
+        hashlib.sha256(seed).digest()[:15], "big"
+    ) % (1 << 118)
+    if amount_b == amount_a:
+        amount_b += 1
     entries = {
-        "account_id": ("text", f"aps-account-{tag_a}@canary.invalid"),
-        "account_id_variant_b": ("text", f"aps-account-{tag_b}@canary.invalid"),
+        "account_id": ("text", LEAKAGE_ACCOUNT_LEFT_I105),
+        "account_id_variant_b": ("text", LEAKAGE_ACCOUNT_RIGHT_I105),
         "amount": ("integer", amount_a),
         "amount_variant_b": ("integer", amount_b),
         "asset_alias": ("text", f"aps-cbdc-alias-{tag_a}"),
         "asset_alias_variant_b": ("text", f"aps-cbdc-alias-{tag_b}"),
-        "asset_id": ("text", f"aps-cbdc-{tag_a}#canary.invalid"),
-        "asset_id_variant_b": ("text", f"aps-cbdc-{tag_b}#canary.invalid"),
+        "asset_id": ("text", LEAKAGE_ASSET_LEFT),
+        "asset_id_variant_b": ("text", LEAKAGE_ASSET_RIGHT),
         "capsule": ("binary_base64", base64.b64encode(seed + seed[:16]).decode()),
         "capsule_variant_b": (
             "binary_base64",
@@ -1310,52 +1372,6 @@ def validate_common_response(
     return record
 
 
-def fault_control_record(
-    record_id: str,
-    participants: int,
-    seed: int,
-    run: int,
-    collection: str,
-    trial_index: int,
-    trial: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Build one verifier-compatible controller transcript row."""
-
-    common = {
-        "record": record_id,
-        "participants": participants,
-        "seed": seed,
-        "run": run,
-        "collection": collection,
-        "trial_index": trial_index,
-    }
-    if collection == "loss_trials":
-        return {
-            **common,
-            "phase": trial["phase"],
-            "loss_percent": trial["loss_percent"],
-            "control_acknowledged": trial["control_acknowledged"],
-            "healed": trial["healed"],
-            "converged": trial["converged"],
-        }
-    if collection == "phase_cut_partitions":
-        return {
-            **common,
-            "cut": trial["cut"],
-            "control_acknowledged": trial["control_acknowledged"],
-            "delayed_delivery": trial["delayed_delivery"],
-            "healed": trial["healed"],
-            "converged": trial["converged"],
-        }
-    return {
-        **common,
-        "boundary": trial["boundary"],
-        "process_restarted": trial["process_restarted"],
-        "durable_state_reconciled": trial["durable_state_reconciled"],
-        "converged": trial["converged"],
-    }
-
-
 def validate_prepare_qc_normalization(value: Any, label: str) -> None:
     """Require positive and negative evidence for quorum-equivalent QC encoding."""
 
@@ -1411,11 +1427,1193 @@ def validate_prepare_qc_normalization(value: Any, label: str) -> None:
         require_true(record[field], f"{label}.{field}")
 
 
+def read_bound_jsonl_file(path: Path, label: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read one stable, bounded, non-empty strict JSONL evidence file."""
+
+    descriptor, metadata = _open_regular_nofollow(path)
+    if metadata.st_size <= 0 or metadata.st_size > FAULT_EVIDENCE_MAX_BYTES:
+        os.close(descriptor)
+        raise RunnerError(f"{label} must be non-empty and at most {FAULT_EVIDENCE_MAX_BYTES} bytes")
+    try:
+        with os.fdopen(descriptor, "rb") as stream:
+            raw = stream.read(FAULT_EVIDENCE_MAX_BYTES + 1)
+            final_metadata = os.fstat(stream.fileno())
+    except OSError as error:
+        raise RunnerError(f"cannot read {label}: {error}") from error
+    stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if len(raw) != metadata.st_size or len(raw) > FAULT_EVIDENCE_MAX_BYTES or any(
+        getattr(metadata, field) != getattr(final_metadata, field)
+        for field in stable_fields
+    ):
+        raise RunnerError(f"{label} changed while it was read")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RunnerError(f"{label} is not UTF-8") from error
+    if not text.endswith("\n") or any(not line for line in text.splitlines()):
+        raise RunnerError(f"{label} must contain non-empty newline-terminated JSON records")
+    records: list[dict[str, Any]] = []
+    for index, line in enumerate(text.splitlines()):
+        decoded = strict_json_loads(line, f"{label}[{index}]")
+        if not isinstance(decoded, dict):
+            raise RunnerError(f"{label}[{index}] must be an object")
+        records.append(decoded)
+    if not records:
+        raise RunnerError(f"{label} must contain at least one record")
+    return records, {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+
+
+def _decode_bound_evidence_json_hex(value: Any, label: str) -> tuple[bytes, dict[str, Any]]:
+    """Decode one bounded canonical JSON byte transcript represented as lowercase hex."""
+
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 2 * 1024 * 1024
+        or len(value) % 2
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise RunnerError(f"{label} must be non-empty bounded lowercase hex")
+    raw = bytes.fromhex(value)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RunnerError(f"{label} is not UTF-8 JSON") from error
+    decoded = strict_json_loads(text, label)
+    if not isinstance(decoded, dict):
+        raise RunnerError(f"{label} must decode to a JSON object")
+    if canonical_bytes(decoded) != raw:
+        raise RunnerError(f"{label} is not canonical compact JSON")
+    return raw, decoded
+
+
+def _validate_validator_restart_control(
+    control: Mapping[str, Any],
+    command: Mapping[str, Any],
+    acknowledgement: Mapping[str, Any],
+    label: str,
+) -> None:
+    """Bind a validator restart transcript to its peer and PID transition."""
+
+    command = exact_fields(
+        command,
+        {"format_version", "revision", "operation", "peer_index", "before_pid"},
+        f"{label}.command",
+    )
+    acknowledgement = exact_fields(
+        acknowledgement,
+        {
+            "format_version",
+            "revision",
+            "command_sha256",
+            "operation",
+            "peer_index",
+            "before_pid",
+            "after_pid",
+            "health_observed",
+        },
+        f"{label}.acknowledgement",
+    )
+    expected_ack_operation = {
+        "stop_validator_for_quorum_progress": (
+            "validator_restarted_after_quorum_progress"
+        ),
+        "restart_validator": "restart_validator",
+        "recover_crashed_validator": "recover_crashed_validator",
+    }.get(command["operation"])
+    if (
+        command["format_version"] != 1
+        or acknowledgement["format_version"] != 1
+        or positive_integer(command["revision"], f"{label}.command.revision")
+        != acknowledgement["revision"]
+        or acknowledgement["command_sha256"] != control["command_sha256"]
+        or command["peer_index"] != control["peer_index"]
+        or acknowledgement["peer_index"] != control["peer_index"]
+        or command["before_pid"] != control["before_pid"]
+        or acknowledgement["before_pid"] != control["before_pid"]
+        or acknowledgement["after_pid"] != control["after_pid"]
+        or expected_ack_operation is None
+        or acknowledgement["operation"] != expected_ack_operation
+        or acknowledgement["health_observed"] is not True
+    ):
+        raise RunnerError(f"{label} restart acknowledgement is substituted")
+
+
+def _validate_coordinator_restart_control(
+    control: Mapping[str, Any],
+    command: Mapping[str, Any],
+    acknowledgement: Mapping[str, Any],
+    *,
+    participants: int,
+    label: str,
+) -> None:
+    """Bind the restartable helper to complete Prepare/Commit recovery."""
+
+    command = exact_fields(
+        command,
+        {
+            "format_version",
+            "revision",
+            "operation",
+            "committee_endpoints",
+            "manifest",
+            "authority_catalog",
+            "deltas",
+            "barrier",
+        },
+        f"{label}.command",
+    )
+    acknowledgement = exact_fields(
+        acknowledgement,
+        {
+            "format_version",
+            "revision",
+            "command_sha256",
+            "pid",
+            "operation",
+            "barrier",
+            "commit_certificates",
+        },
+        f"{label}.acknowledgement",
+    )
+    endpoints = command["committee_endpoints"]
+    if (
+        command["format_version"] != 1
+        or acknowledgement["format_version"] != 1
+        or positive_integer(command["revision"], f"{label}.command.revision")
+        != acknowledgement["revision"]
+        or command["operation"] != "recover_prepare_commit"
+        or acknowledgement["operation"] != command["operation"]
+        or acknowledgement["command_sha256"] != control["command_sha256"]
+        or acknowledgement["pid"] != control["after_pid"]
+        or not isinstance(endpoints, list)
+        or len(endpoints) != participants
+        or any(
+            not isinstance(committee, list)
+            or len(committee) != VALIDATORS_PER_DATASPACE
+            or any(not isinstance(endpoint, str) or not endpoint for endpoint in committee)
+            for committee in endpoints
+        )
+        or not isinstance(command["manifest"], dict)
+        or not isinstance(command["authority_catalog"], list)
+        or len(command["authority_catalog"]) != participants
+        or not isinstance(command["deltas"], list)
+        or len(command["deltas"]) != participants
+        or command["barrier"] is not None
+        or not isinstance(acknowledgement["barrier"], dict)
+        or not isinstance(acknowledgement["commit_certificates"], list)
+        or len(acknowledgement["commit_certificates"]) != participants
+    ):
+        raise RunnerError(f"{label} coordinator recovery acknowledgement is substituted")
+
+
+def validate_fault_control_records(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    participants: int,
+    seed: int,
+    run: int,
+) -> dict[str, Mapping[str, Any]]:
+    """Validate exact durable command/acknowledgement bytes for every fault trial."""
+
+    by_record: dict[str, Mapping[str, Any]] = {}
+    observed_control_types: set[str] = set()
+    observed_bundle_ids: set[str] = set()
+    for index, item in enumerate(records):
+        row = exact_fields(
+            item,
+            {
+                "record",
+                "bundle_id",
+                "participants",
+                "seed",
+                "run",
+                "collection",
+                "trial_index",
+                "controls",
+            },
+            f"fault control evidence[{index}]",
+        )
+        record_id = row["record"]
+        if not isinstance(record_id, str) or not re.fullmatch(
+            r"[a-z0-9][a-z0-9._:-]{0,127}", record_id
+        ):
+            raise RunnerError(f"fault control evidence[{index}].record is invalid")
+        if record_id in by_record:
+            raise RunnerError(f"fault control evidence reuses record {record_id}")
+        bundle_id = row["bundle_id"]
+        if (
+            not isinstance(bundle_id, str)
+            or SHA256.fullmatch(bundle_id) is None
+            or bundle_id == "0" * 64
+        ):
+            raise RunnerError(f"fault control evidence[{index}].bundle_id is invalid")
+        if bundle_id in observed_bundle_ids:
+            raise RunnerError("fault control evidence reuses an APS bundle")
+        observed_bundle_ids.add(bundle_id)
+        if (
+            row["participants"] != participants
+            or row["seed"] != seed
+            or row["run"] != run
+            or row["collection"]
+            not in {"loss_trials", "phase_cut_partitions", "crash_recoveries"}
+            or isinstance(row["trial_index"], bool)
+            or not isinstance(row["trial_index"], int)
+            or row["trial_index"] < 0
+        ):
+            raise RunnerError(f"fault control evidence[{index}] changes its bound job")
+        controls = row["controls"]
+        if not isinstance(controls, list) or not controls:
+            raise RunnerError(f"fault control evidence[{index}].controls must be non-empty")
+        bundle_bound = False
+        for control_index, item_control in enumerate(controls):
+            control = exact_fields(
+                item_control,
+                {
+                    "control_type",
+                    "peer_index",
+                    "command_sha256",
+                    "command_hex",
+                    "acknowledgement_sha256",
+                    "acknowledgement_hex",
+                    "before_pid",
+                    "after_pid",
+                },
+                f"fault control evidence[{index}].controls[{control_index}]",
+            )
+            control_type = control["control_type"]
+            if control_type not in {
+                "restricted_da",
+                "prepare",
+                "commit",
+                "consensus_carrier",
+                "persistence_cut",
+                "validator_restart",
+                "global_restart",
+                "coordinator_restart",
+            }:
+                raise RunnerError(
+                    f"fault control evidence[{index}].controls[{control_index}] has an unknown type"
+                )
+            observed_control_types.add(control_type)
+            peer_index = control["peer_index"]
+            if (
+                isinstance(peer_index, bool)
+                or not isinstance(peer_index, int)
+                or not 0 <= peer_index < (participants + 1) * VALIDATORS_PER_DATASPACE
+            ):
+                if control_type != "coordinator_restart" or peer_index is not None:
+                    raise RunnerError(
+                        f"fault control evidence[{index}].controls[{control_index}].peer_index is invalid"
+                    )
+            command, command_object = _decode_bound_evidence_json_hex(
+                control["command_hex"],
+                f"fault control evidence[{index}].controls[{control_index}].command_hex",
+            )
+            acknowledgement, acknowledgement_object = _decode_bound_evidence_json_hex(
+                control["acknowledgement_hex"],
+                f"fault control evidence[{index}].controls[{control_index}].acknowledgement_hex",
+            )
+            command_digest = hashlib.sha256(command).hexdigest()
+            acknowledgement_digest = hashlib.sha256(acknowledgement).hexdigest()
+            if (
+                control["command_sha256"] != command_digest
+                or control["acknowledgement_sha256"] != acknowledgement_digest
+                or SHA256.fullmatch(command_digest) is None
+                or SHA256.fullmatch(acknowledgement_digest) is None
+            ):
+                raise RunnerError(
+                    f"fault control evidence[{index}].controls[{control_index}] digest mismatch"
+                )
+            acknowledged_command = acknowledgement_object.get("command_sha256")
+            if acknowledged_command is not None and acknowledged_command != command_digest:
+                raise RunnerError(
+                    f"fault control evidence[{index}].controls[{control_index}] acknowledgement binds another command"
+                )
+            if control_type in {"restricted_da", "prepare", "commit"}:
+                if command_object.get("bundle_id") != bundle_id:
+                    raise RunnerError(
+                        f"fault control evidence[{index}].controls[{control_index}] binds another APS bundle"
+                    )
+                bundle_bound = True
+            elif control_type == "persistence_cut":
+                if command_object.get("source_id") != bundle_id:
+                    raise RunnerError(
+                        f"fault control evidence[{index}].controls[{control_index}] cuts another APS bundle"
+                    )
+                bundle_bound = True
+            elif control_type == "coordinator_restart":
+                manifest = command_object.get("manifest")
+                literal = manifest.get("bundle_id") if isinstance(manifest, dict) else None
+                try:
+                    literal_body = canonical_iroha_hash_body(
+                        literal,
+                        f"fault control evidence[{index}].controls[{control_index}].command.manifest.bundle_id",
+                    )
+                except RunnerError as error:
+                    raise RunnerError(
+                        f"fault control evidence[{index}].controls[{control_index}] coordinator recovered another APS bundle"
+                    ) from error
+                if literal_body != bundle_id:
+                    raise RunnerError(
+                        f"fault control evidence[{index}].controls[{control_index}] coordinator recovered another APS bundle"
+                    )
+                bundle_bound = True
+            if "revision" in command_object and acknowledgement_object.get("revision") != command_object["revision"]:
+                raise RunnerError(
+                    f"fault control evidence[{index}].controls[{control_index}] revision mismatch"
+                )
+            before_pid = control["before_pid"]
+            after_pid = control["after_pid"]
+            for pid, suffix in ((before_pid, "before_pid"), (after_pid, "after_pid")):
+                if pid is not None and (
+                    isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0
+                ):
+                    raise RunnerError(
+                        f"fault control evidence[{index}].controls[{control_index}].{suffix} is invalid"
+                    )
+            if control_type.endswith("restart") and (
+                before_pid is None or after_pid is None or before_pid == after_pid
+            ):
+                raise RunnerError(
+                    f"fault control evidence[{index}].controls[{control_index}] lacks a genuine PID transition"
+                )
+            control_label = f"fault control evidence[{index}].controls[{control_index}]"
+            if control_type in {"validator_restart", "global_restart"}:
+                _validate_validator_restart_control(
+                    control,
+                    command_object,
+                    acknowledgement_object,
+                    control_label,
+                )
+            elif control_type == "coordinator_restart":
+                _validate_coordinator_restart_control(
+                    control,
+                    command_object,
+                    acknowledgement_object,
+                    participants=participants,
+                    label=control_label,
+                )
+        if not bundle_bound:
+            raise RunnerError(
+                f"fault control evidence[{index}] has no command bound to its APS bundle"
+            )
+        by_record[record_id] = row
+    required_types = {
+        "restricted_da",
+        "prepare",
+        "commit",
+        "consensus_carrier",
+        "persistence_cut",
+        "validator_restart",
+        "global_restart",
+        "coordinator_restart",
+    }
+    if not required_types.issubset(observed_control_types):
+        raise RunnerError(
+            "fault control evidence is missing genuine control classes: "
+            f"{sorted(required_types - observed_control_types)}"
+        )
+    return by_record
+
+
+def _decoded_control_pair(
+    control: Mapping[str, Any], label: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return the already hash-bound canonical command and acknowledgement."""
+
+    _command_bytes, command = _decode_bound_evidence_json_hex(
+        control["command_hex"], f"{label}.command_hex"
+    )
+    _ack_bytes, acknowledgement = _decode_bound_evidence_json_hex(
+        control["acknowledgement_hex"], f"{label}.acknowledgement_hex"
+    )
+    return command, acknowledgement
+
+
+def _validate_route_control_pair(
+    control: Mapping[str, Any], label: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    command, acknowledgement = _decoded_control_pair(control, label)
+    command = exact_fields(
+        command,
+        {
+            "action",
+            "bundle_id",
+            "drop_first",
+            "format_version",
+            "match_limit",
+            "phase",
+            "revision",
+            "seed",
+        },
+        f"{label}.command",
+    )
+    acknowledgement = exact_fields(
+        acknowledgement,
+        {
+            "action",
+            "bundle_id",
+            "command_sha256",
+            "dropped",
+            "format_version",
+            "held",
+            "matched",
+            "passed",
+            "phase",
+            "predecessor_command_sha256",
+            "released",
+            "request_digests",
+            "revision",
+            "seed",
+        },
+        f"{label}.acknowledgement",
+    )
+    if (
+        command["format_version"] != 1
+        or command["action"] not in {"loss", "hold", "pass"}
+        or command["phase"] not in {"restricted_da", "prepare", "commit"}
+        or not isinstance(command["bundle_id"], str)
+        or SHA256.fullmatch(command["bundle_id"]) is None
+        or command["revision"] != acknowledgement["revision"]
+        or command["phase"] != acknowledgement["phase"]
+        or command["action"] != acknowledgement["action"]
+        or command["bundle_id"] != acknowledgement["bundle_id"]
+        or command["seed"] != acknowledgement["seed"]
+        or acknowledgement["format_version"] != 1
+        or acknowledgement["command_sha256"] != control["command_sha256"]
+    ):
+        raise RunnerError(f"{label} route command acknowledgement is substituted")
+    counters = {}
+    for field in ("matched", "passed", "dropped", "held", "released"):
+        counters[field] = nonnegative_integer(
+            acknowledgement[field], f"{label}.acknowledgement.{field}"
+        )
+    request_digests = acknowledgement["request_digests"]
+    if (
+        not isinstance(request_digests, list)
+        or len(request_digests) != counters["matched"]
+        or any(not isinstance(digest, str) or SHA256.fullmatch(digest) is None for digest in request_digests)
+        or counters["passed"] + counters["dropped"] + counters["held"]
+        != counters["matched"]
+        or counters["released"] > counters["held"]
+    ):
+        raise RunnerError(f"{label} route acknowledgement counters are inconsistent")
+    predecessor = acknowledgement["predecessor_command_sha256"]
+    if (counters["released"] == 0 and predecessor is not None) or (
+        counters["released"] > 0
+        and (not isinstance(predecessor, str) or SHA256.fullmatch(predecessor) is None)
+    ):
+        raise RunnerError(f"{label} route healing predecessor is inconsistent")
+    action = command["action"]
+    drop_first = nonnegative_integer(command["drop_first"], f"{label}.command.drop_first")
+    match_limit = nonnegative_integer(command["match_limit"], f"{label}.command.match_limit")
+    if (
+        (action == "loss" and not (0 <= drop_first <= match_limit <= 10_000 and match_limit > 0))
+        or (action == "hold" and (drop_first, match_limit) != (0, 1))
+        or (action == "pass" and (drop_first, match_limit) != (0, 0))
+    ):
+        raise RunnerError(f"{label} route action bounds are invalid")
+    return command, acknowledgement
+
+
+def _validate_consensus_carrier_control(
+    control: Mapping[str, Any], label: str
+) -> tuple[str, int]:
+    """Validate one exact Sumeragi carrier Hold or drain acknowledgement."""
+
+    command, acknowledgement = _decoded_control_pair(control, label)
+    command = exact_fields(
+        command,
+        {"drain", "queue_capacity", "release", "revision", "rules", "version"},
+        f"{label}.command",
+    )
+    acknowledgement = exact_fields(
+        acknowledgement,
+        {
+            "command_digest",
+            "delivered",
+            "dropped",
+            "drain_fence",
+            "draining",
+            "fatal",
+            "held",
+            "held_bytes",
+            "in_flight",
+            "in_flight_bytes",
+            "last_error",
+            "overflowed",
+            "queue_capacity",
+            "rejected_commands",
+            "release_pending",
+            "retired",
+            "revision",
+            "rules",
+            "version",
+        },
+        f"{label}.acknowledgement",
+    )
+    revision = positive_integer(command["revision"], f"{label}.command.revision")
+    queue_capacity = positive_integer(
+        command["queue_capacity"], f"{label}.command.queue_capacity"
+    )
+    digest_literal = acknowledgement["command_digest"]
+    try:
+        digest_body = canonical_iroha_hash_body(
+            digest_literal, f"{label}.acknowledgement.command_digest"
+        )
+    except RunnerError as error:
+        raise RunnerError(f"{label} carrier command acknowledgement is substituted") from error
+    rules = command["rules"]
+    release = command["release"]
+    held = acknowledgement["held"]
+    delivered = acknowledgement["delivered"]
+    retired = acknowledgement["retired"]
+    release_pending = acknowledgement["release_pending"]
+    if (
+        command["version"] != 5
+        or acknowledgement["version"] != 5
+        or acknowledgement["revision"] != revision
+        or digest_body != control["command_sha256"]
+        or not isinstance(command["drain"], bool)
+        or not isinstance(rules, list)
+        or not isinstance(release, list)
+        or not isinstance(held, list)
+        or not isinstance(delivered, list)
+        or not isinstance(retired, list)
+        or not isinstance(release_pending, list)
+        or acknowledgement["rules"] != rules
+        or acknowledgement["queue_capacity"] != queue_capacity
+        or acknowledgement["fatal"] is not False
+        or acknowledgement["last_error"] is not None
+        or acknowledgement["draining"] is not False
+        or acknowledgement["in_flight"] is not None
+        or acknowledgement["in_flight_bytes"] != 0
+        or release_pending
+        or nonnegative_integer(
+            acknowledgement["dropped"], f"{label}.acknowledgement.dropped"
+        )
+        != 0
+        or nonnegative_integer(
+            acknowledgement["overflowed"],
+            f"{label}.acknowledgement.overflowed",
+        )
+        != 0
+        or nonnegative_integer(
+            acknowledgement["rejected_commands"],
+            f"{label}.acknowledgement.rejected_commands",
+        )
+        != 0
+    ):
+        raise RunnerError(f"{label} carrier command acknowledgement is substituted")
+    held_bytes = nonnegative_integer(
+        acknowledgement["held_bytes"], f"{label}.acknowledgement.held_bytes"
+    )
+    if command["drain"]:
+        if (
+            queue_capacity != 512
+            or rules
+            or release
+            or held
+            or held_bytes != 0
+            or acknowledgement["drain_fence"] != revision
+            or not delivered + retired
+        ):
+            raise RunnerError(f"{label} does not prove a completed carrier drain")
+        return "heal", revision
+    if (
+        queue_capacity != 256
+        or release
+        or not rules
+        or not held
+        or held_bytes <= 0
+        or acknowledgement["drain_fence"] is not None
+        or delivered
+        or retired
+        or any(
+            not isinstance(rule, dict)
+            or rule.get("action") != "hold"
+            or rule.get("kind") != "proposal"
+            for rule in rules
+        )
+    ):
+        raise RunnerError(f"{label} does not prove an active carrier Hold")
+    return "hold", revision
+
+
+def validate_fault_trial_control_semantics(
+    control_row: Mapping[str, Any],
+    *,
+    collection: str,
+    trial: Mapping[str, Any],
+    label: str,
+) -> None:
+    """Bind each trial declaration to the exact authenticated control semantics."""
+
+    controls = control_row["controls"]
+    route_controls: list[tuple[Mapping[str, Any], dict[str, Any], dict[str, Any]]] = []
+    for index, control in enumerate(controls):
+        if control["control_type"] in {"restricted_da", "prepare", "commit"}:
+            command, acknowledgement = _validate_route_control_pair(
+                control, f"{label}.controls[{index}]"
+            )
+            route_controls.append((control, command, acknowledgement))
+
+    if collection == "loss_trials":
+        phase = trial["phase"]
+        matching = [
+            (control, command, ack)
+            for control, command, ack in route_controls
+            if control["control_type"] == phase and command["phase"] == phase
+        ]
+        loss = [(command, ack) for _control, command, ack in matching if command["action"] == "loss"]
+        healing = [ack for _control, command, ack in matching if command["action"] == "pass"]
+        matched = sum(ack["matched"] for _command, ack in loss)
+        dropped = sum(ack["dropped"] for _command, ack in loss)
+        if (
+            not loss
+            or not healing
+            or matched == 0
+            or dropped * 100 != matched * trial["loss_percent"]
+            or any(ack["matched"] == 0 for ack in healing)
+            or any(
+                control["control_type"] in {"restricted_da", "prepare", "commit"}
+                and control["control_type"] != phase
+                for control in controls
+            )
+        ):
+            raise RunnerError(f"{label} does not prove its exact route loss and healing")
+        return
+
+    if collection == "phase_cut_partitions":
+        cut_to_phase = {
+            "da_before_availability_qc": "restricted_da",
+            "prepare_before_complete_barrier": "prepare",
+            "commit_before_complete_barrier": "commit",
+        }
+        cut = trial["cut"]
+        if cut == "carrier_before_global_finality":
+            carrier_controls = [
+                control
+                for control in controls
+                if control["control_type"] == "consensus_carrier"
+            ]
+            validator_restarts = [
+                control
+                for control in controls
+                if control["control_type"] == "validator_restart"
+            ]
+            global_restarts = [
+                control
+                for control in controls
+                if control["control_type"] == "global_restart"
+            ]
+            coordinator_restarts = [
+                control
+                for control in controls
+                if control["control_type"] == "coordinator_restart"
+            ]
+            participants = control_row["participants"]
+            participant_restart_coverage = all(
+                sum(
+                    1
+                    for control in validator_restarts
+                    if 4 + 4 * dataspace_ordinal
+                    <= control["peer_index"]
+                    <= 7 + 4 * dataspace_ordinal
+                )
+                == 1
+                for dataspace_ordinal in range(participants)
+            )
+            carrier_actions: dict[int, list[tuple[str, int]]] = {
+                peer_index: [] for peer_index in range(VALIDATORS_PER_DATASPACE)
+            }
+            for control_index, control in enumerate(controls):
+                if control["control_type"] != "consensus_carrier":
+                    continue
+                peer_index = control["peer_index"]
+                if peer_index not in carrier_actions:
+                    raise RunnerError(
+                        f"{label} controls a carrier outside the global lane"
+                    )
+                carrier_actions[peer_index].append(
+                    _validate_consensus_carrier_control(
+                        control, f"{label}.controls[{control_index}]"
+                    )
+                )
+            carrier_peer_coverage = all(
+                len(actions) == 2
+                and {action for action, _revision in actions} == {"hold", "heal"}
+                and next(
+                    revision for action, revision in actions if action == "hold"
+                )
+                < next(revision for action, revision in actions if action == "heal")
+                for actions in carrier_actions.values()
+            )
+            restart_controls = [
+                *validator_restarts,
+                *global_restarts,
+                *coordinator_restarts,
+            ]
+            pid_transitions = {
+                (control["before_pid"], control["after_pid"])
+                for control in restart_controls
+            }
+            before_pids = {control["before_pid"] for control in restart_controls}
+            after_pids = {control["after_pid"] for control in restart_controls}
+            if (
+                len(carrier_controls) != 2 * VALIDATORS_PER_DATASPACE
+                or not carrier_peer_coverage
+                or len(validator_restarts) != participants
+                or not participant_restart_coverage
+                or len(global_restarts) != 1
+                or global_restarts[0]["peer_index"] not in range(VALIDATORS_PER_DATASPACE)
+                or len(coordinator_restarts) != 1
+                or coordinator_restarts[0]["peer_index"] is not None
+                or len(pid_transitions) != len(restart_controls)
+                or len(before_pids) != len(restart_controls)
+                or len(after_pids) != len(restart_controls)
+            ):
+                raise RunnerError(
+                    f"{label} does not prove the exact carrier control/restart topology"
+                )
+            return
+        phase = cut_to_phase.get(cut)
+        holds = [
+            (control, command, ack)
+            for control, command, ack in route_controls
+            if control["control_type"] == phase
+            and command["phase"] == phase
+            and command["action"] == "hold"
+        ]
+        passes = [
+            (control, command, ack)
+            for control, command, ack in route_controls
+            if control["control_type"] == phase
+            and command["phase"] == phase
+            and command["action"] == "pass"
+        ]
+        hold_digests = {control["command_sha256"] for control, _command, ack in holds if ack["held"] > 0}
+        released = sum(ack["released"] for _control, _command, ack in passes)
+        if (
+            phase is None
+            or not hold_digests
+            or released == 0
+            or any(ack["predecessor_command_sha256"] not in hold_digests for _control, _command, ack in passes)
+        ):
+            raise RunnerError(f"{label} does not prove an acknowledged Hold-to-Pass phase cut")
+        return
+
+    boundary_to_phase = {
+        "sidecar_fsync": "after_private_settlement_sidecar_fsync",
+        "staged_delta_fsync": "after_private_settlement_staged_delta_fsync",
+        "prepare_qc": "after_private_settlement_prepare_qc_fsync",
+        "commit_qc": "after_private_settlement_commit_qc_fsync",
+        "kura_append": "after_private_settlement_kura_append",
+        "wsv_application": "after_private_settlement_wsv_application",
+        "receipt_publication": "after_private_settlement_receipt_publication",
+    }
+    expected_phase = boundary_to_phase.get(trial["boundary"])
+    cuts = []
+    restarts = []
+    for index, control in enumerate(controls):
+        if control["control_type"] == "persistence_cut":
+            command, acknowledgement = _decoded_control_pair(control, f"{label}.controls[{index}]")
+            if command != acknowledgement or command.get("phase") != expected_phase:
+                raise RunnerError(f"{label} persistence cut acknowledgement is substituted")
+            cuts.append(control)
+        if control["control_type"].endswith("restart"):
+            restarts.append(control)
+    boundary = trial["boundary"]
+    expected_global_target = boundary in {"kura_append", "wsv_application"}
+    expected_restart_type = (
+        "global_restart" if expected_global_target else "validator_restart"
+    )
+    if (
+        expected_phase is None
+        or len(cuts) != 1
+        or len(restarts) != 1
+        or restarts[0]["control_type"] != expected_restart_type
+        or restarts[0]["peer_index"] != cuts[0]["peer_index"]
+        or (
+            expected_global_target
+            and cuts[0]["peer_index"] not in range(VALIDATORS_PER_DATASPACE)
+        )
+        or (
+            not expected_global_target
+            and not VALIDATORS_PER_DATASPACE
+            <= cuts[0]["peer_index"]
+            < (control_row["participants"] + 1) * VALIDATORS_PER_DATASPACE
+        )
+        or restarts[0]["before_pid"] == restarts[0]["after_pid"]
+    ):
+        raise RunnerError(f"{label} does not prove its persistence cut and process recovery")
+
+
+def _validate_fault_state_response(
+    item: Any,
+    *,
+    label: str,
+    expected_peer_index: int,
+) -> tuple[str, str, tuple[tuple[str, int], ...]]:
+    observation = exact_fields(
+        item,
+        {
+            "peer_index",
+            "response_sha256",
+            "response_hex",
+            "height",
+            "commitment",
+            "ledger_commitment",
+            "staged_lock_commitment",
+            "counts",
+        },
+        label,
+    )
+    if observation["peer_index"] != expected_peer_index:
+        raise RunnerError(f"{label}.peer_index is not canonical")
+    raw, decoded = _decode_bound_evidence_json_hex(observation["response_hex"], f"{label}.response_hex")
+    if observation["response_sha256"] != hashlib.sha256(raw).hexdigest():
+        raise RunnerError(f"{label}.response_sha256 does not bind response_hex")
+    decoded = exact_fields(
+        decoded,
+        {
+            "format_version",
+            "height",
+            "commitment",
+            "ledger_commitment",
+            "staged_lock_commitment",
+            "counts",
+        },
+        f"{label}.decoded_response",
+    )
+    if decoded["format_version"] != 1:
+        raise RunnerError(f"{label} has an unsupported state-evidence version")
+    for field in ("commitment", "ledger_commitment", "staged_lock_commitment"):
+        digest = observation[field]
+        if (
+            not isinstance(digest, str)
+            or SHA256.fullmatch(digest) is None
+            or digest == "0" * 64
+            or decoded[field] != digest
+        ):
+            raise RunnerError(f"{label}.{field} is invalid or substituted")
+    if (
+        isinstance(observation["height"], bool)
+        or not isinstance(observation["height"], int)
+        or observation["height"] <= 0
+        or decoded["height"] != observation["height"]
+    ):
+        raise RunnerError(f"{label}.height is invalid or substituted")
+    counts = exact_fields(observation["counts"], FAULT_STATE_COUNT_FIELDS, f"{label}.counts")
+    decoded_counts = exact_fields(
+        decoded["counts"], FAULT_STATE_COUNT_FIELDS, f"{label}.decoded_response.counts"
+    )
+    normalized_counts = tuple(
+        (field, nonnegative_integer(counts[field], f"{label}.counts.{field}"))
+        for field in sorted(FAULT_STATE_COUNT_FIELDS)
+    )
+    if decoded_counts != counts:
+        raise RunnerError(f"{label}.counts do not bind response_hex")
+    return observation["ledger_commitment"], observation["staged_lock_commitment"], normalized_counts
+
+
+def validate_fault_observation_records(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    participants: int,
+    seed: int,
+    run: int,
+) -> tuple[dict[str, Mapping[str, Any]], int]:
+    """Validate all-validator before/nonfinalized/after APS state commitments."""
+
+    by_record: dict[str, Mapping[str, Any]] = {}
+    observed_bundle_ids: set[str] = set()
+    total_continuous_checks = 0
+    peer_count = (participants + 1) * VALIDATORS_PER_DATASPACE
+    for index, item in enumerate(records):
+        row = exact_fields(
+            item,
+            {
+                "record",
+                "bundle_id",
+                "participants",
+                "seed",
+                "run",
+                "collection",
+                "trial_index",
+                "expected_after_state",
+                "continuous_checks",
+                "continuous_observations",
+                "partial_visibility_observed",
+                "partial_spendable_observations",
+                "snapshots",
+            },
+            f"fault observation evidence[{index}]",
+        )
+        record_id = row["record"]
+        if (
+            not isinstance(record_id, str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9._:-]{0,127}", record_id) is None
+            or record_id in by_record
+        ):
+            raise RunnerError(f"fault observation evidence[{index}].record is invalid or reused")
+        bundle_id = row["bundle_id"]
+        if (
+            not isinstance(bundle_id, str)
+            or SHA256.fullmatch(bundle_id) is None
+            or bundle_id == "0" * 64
+        ):
+            raise RunnerError(f"fault observation evidence[{index}].bundle_id is invalid")
+        if bundle_id in observed_bundle_ids:
+            raise RunnerError("fault observation evidence reuses an APS bundle")
+        observed_bundle_ids.add(bundle_id)
+        if (
+            row["participants"] != participants
+            or row["seed"] != seed
+            or row["run"] != run
+            or row["collection"]
+            not in {"loss_trials", "phase_cut_partitions", "crash_recoveries"}
+            or isinstance(row["trial_index"], bool)
+            or not isinstance(row["trial_index"], int)
+            or row["trial_index"] < 0
+        ):
+            raise RunnerError(f"fault observation evidence[{index}] changes its bound job")
+        expected_after_state = row["expected_after_state"]
+        if expected_after_state not in {"reverted", "finalized"}:
+            raise RunnerError(
+                f"fault observation evidence[{index}].expected_after_state is invalid"
+            )
+        if row["collection"] == "crash_recoveries":
+            pre_application = {
+                "sidecar_fsync",
+                "staged_delta_fsync",
+                "prepare_qc",
+                "commit_qc",
+            }
+            post_carrier = {
+                "kura_append",
+                "wsv_application",
+                "receipt_publication",
+            }
+            # The boundary is bound to the payload below. Here the ordered trial
+            # index already has the canonical crash-boundary meaning.
+            if row["trial_index"] >= len(fault_report.REQUIRED_CRASH_BOUNDARIES):
+                raise RunnerError(
+                    f"fault observation evidence[{index}].trial_index is out of range"
+                )
+            boundary = fault_report.REQUIRED_CRASH_BOUNDARIES[row["trial_index"]]
+            required_after_state = (
+                "reverted" if boundary in pre_application else "finalized"
+            )
+            if boundary not in pre_application | post_carrier or expected_after_state != required_after_state:
+                raise RunnerError(
+                    f"fault observation evidence[{index}] misclassifies crash recovery outcome"
+                )
+        checks = positive_integer(
+            row["continuous_checks"], f"fault observation evidence[{index}].continuous_checks"
+        )
+        if checks < peer_count:
+            raise RunnerError(
+                f"fault observation evidence[{index}] did not continuously sample every validator"
+            )
+        total_continuous_checks += checks
+        if row["partial_visibility_observed"] is not False:
+            raise RunnerError(f"fault observation evidence[{index}] observed partial visibility")
+        if row["partial_spendable_observations"] != 0:
+            raise RunnerError(f"fault observation evidence[{index}] observed partial spendability")
+        snapshots = row["snapshots"]
+        if not isinstance(snapshots, list) or [snapshot.get("label") if isinstance(snapshot, dict) else None for snapshot in snapshots] != [
+            "before",
+            "nonfinalized",
+            "after",
+        ]:
+            raise RunnerError(
+                f"fault observation evidence[{index}] requires before/nonfinalized/after snapshots"
+            )
+        state_vectors: dict[str, list[tuple[str, str, tuple[tuple[str, int], ...]]]] = {}
+        for snapshot_index, snapshot_item in enumerate(snapshots):
+            snapshot = exact_fields(
+                snapshot_item,
+                {"label", "validators"},
+                f"fault observation evidence[{index}].snapshots[{snapshot_index}]",
+            )
+            validators = snapshot["validators"]
+            if not isinstance(validators, list) or len(validators) != peer_count:
+                raise RunnerError(
+                    f"fault observation evidence[{index}].snapshots[{snapshot_index}] must cover every validator"
+                )
+            state_vectors[snapshot["label"]] = [
+                _validate_fault_state_response(
+                    validator,
+                    label=(
+                        f"fault observation evidence[{index}].snapshots[{snapshot_index}]"
+                        f".validators[{peer_index}]"
+                    ),
+                    expected_peer_index=peer_index,
+                )
+                for peer_index, validator in enumerate(validators)
+            ]
+        before = state_vectors["before"]
+        nonfinalized = state_vectors["nonfinalized"]
+        after = state_vectors["after"]
+        if len(set(before)) != 1:
+            raise RunnerError(
+                f"fault observation evidence[{index}] lacks a coherent before state"
+            )
+        before_ledger = {
+            (
+                ledger,
+                tuple((field, count) for field, count in counts if field in FAULT_LEDGER_COUNT_FIELDS),
+            )
+            for ledger, _staged, counts in before
+        }
+        nonfinalized_ledger = {
+            (
+                ledger,
+                tuple((field, count) for field, count in counts if field in FAULT_LEDGER_COUNT_FIELDS),
+            )
+            for ledger, _staged, counts in nonfinalized
+        }
+        if len(before_ledger) != 1 or nonfinalized_ledger != before_ledger:
+            raise RunnerError(
+                f"fault observation evidence[{index}] changed a global APS map before finality"
+            )
+        if len(set(after)) != 1:
+            raise RunnerError(
+                f"fault observation evidence[{index}] did not converge every validator"
+            )
+        before_identity = before[0]
+        after_identity = after[0]
+        if expected_after_state == "reverted":
+            if after_identity != before_identity:
+                raise RunnerError(
+                    f"fault observation evidence[{index}] did not restore pre-carrier state"
+                )
+        else:
+            before_ledger_commitment, before_staged, before_counts_tuple = before_identity
+            after_ledger_commitment, after_staged, after_counts_tuple = after_identity
+            before_counts = dict(before_counts_tuple)
+            after_counts = dict(after_counts_tuple)
+            unchanged = {
+                "governance",
+                "pools",
+                "abort_markers",
+                "staged_pool_heads",
+                "staged_nullifiers",
+                "staged_output_commitments",
+                "staged_locks",
+            }
+            expected_deltas = {
+                "roots": participants,
+                "nullifiers": participants * 2,
+                "commitments": participants * 3,
+                "encrypted_outputs": participants * 3,
+                "replay_markers": 1,
+                "receipts": 1,
+            }
+            if (
+                after_ledger_commitment == before_ledger_commitment
+                or after_staged != before_staged
+                or any(after_counts[field] != before_counts[field] for field in unchanged)
+                or any(
+                    after_counts[field] != before_counts[field] + delta
+                    for field, delta in expected_deltas.items()
+                )
+            ):
+                raise RunnerError(
+                    f"fault observation evidence[{index}] is not one complete {participants}-leg finalization"
+                )
+        continuous_observations = row["continuous_observations"]
+        if not isinstance(continuous_observations, list) or len(continuous_observations) != peer_count:
+            raise RunnerError(
+                f"fault observation evidence[{index}].continuous_observations must cover every validator"
+            )
+        captured_checks = 0
+        for peer_index, summary_item in enumerate(continuous_observations):
+            summary = exact_fields(
+                summary_item,
+                {
+                    "peer_index",
+                    "check_count",
+                    "first_response_sha256",
+                    "last_response_sha256",
+                    "response_chain_sha256",
+                    "baseline_observations",
+                    "finalized_observations",
+                },
+                f"fault observation evidence[{index}].continuous_observations[{peer_index}]",
+            )
+            if summary["peer_index"] != peer_index:
+                raise RunnerError(
+                    f"fault observation evidence[{index}].continuous_observations is reordered"
+                )
+            check_count = positive_integer(
+                summary["check_count"],
+                f"fault observation evidence[{index}].continuous_observations[{peer_index}].check_count",
+            )
+            if check_count < 3:
+                raise RunnerError(
+                    f"fault observation evidence[{index}].continuous_observations[{peer_index}] lacks a live polling observation"
+                )
+            baseline_observations = nonnegative_integer(
+                summary["baseline_observations"],
+                f"fault observation evidence[{index}].continuous_observations[{peer_index}].baseline_observations",
+            )
+            finalized_observations = nonnegative_integer(
+                summary["finalized_observations"],
+                f"fault observation evidence[{index}].continuous_observations[{peer_index}].finalized_observations",
+            )
+            if baseline_observations + finalized_observations != check_count:
+                raise RunnerError(
+                    f"fault observation evidence[{index}].continuous_observations[{peer_index}] has an unclassified observation"
+                )
+            if baseline_observations == 0 or (
+                expected_after_state == "reverted" and finalized_observations != 0
+            ) or (
+                expected_after_state == "finalized" and finalized_observations == 0
+            ):
+                raise RunnerError(
+                    f"fault observation evidence[{index}].continuous_observations[{peer_index}] contradicts the trial outcome"
+                )
+            for digest_field in (
+                "first_response_sha256",
+                "last_response_sha256",
+                "response_chain_sha256",
+            ):
+                digest = summary[digest_field]
+                if (
+                    not isinstance(digest, str)
+                    or SHA256.fullmatch(digest) is None
+                    or digest == "0" * 64
+                ):
+                    raise RunnerError(
+                        f"fault observation evidence[{index}].continuous_observations[{peer_index}].{digest_field} is invalid"
+                    )
+            if (
+                summary["first_response_sha256"]
+                != snapshots[0]["validators"][peer_index]["response_sha256"]
+                or summary["last_response_sha256"]
+                != snapshots[2]["validators"][peer_index]["response_sha256"]
+            ):
+                raise RunnerError(
+                    f"fault observation evidence[{index}].continuous_observations[{peer_index}] is not bound to the exemplar endpoints"
+                )
+            captured_checks += check_count
+        if captured_checks != checks:
+            raise RunnerError(
+                f"fault observation evidence[{index}].continuous_checks does not equal its per-validator summaries"
+            )
+        by_record[record_id] = row
+    return by_record, total_continuous_checks
+
+
 def materialize_fault_response(
     response: Mapping[str, Any],
     *,
     plan: Mapping[str, Any],
     job: Mapping[str, Any],
+    evidence_dir: Path,
     publication_root: Path,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Validate a fault response and bind it to transcript/capture JSONL files."""
@@ -1438,6 +2636,10 @@ def materialize_fault_response(
             "healed",
             "converged",
             "partial_visibility_observed",
+            "control_transcript_sha256",
+            "control_transcript_record",
+            "observation_capture_sha256",
+            "observation_capture_record",
         },
         "phase_cut_partitions": {
             "cut",
@@ -1446,6 +2648,10 @@ def materialize_fault_response(
             "healed",
             "converged",
             "partial_visibility_observed",
+            "control_transcript_sha256",
+            "control_transcript_record",
+            "observation_capture_sha256",
+            "observation_capture_record",
         },
         "crash_recoveries": {
             "boundary",
@@ -1453,10 +2659,49 @@ def materialize_fault_response(
             "durable_state_reconciled",
             "converged",
             "partial_visibility_observed",
+            "control_transcript_sha256",
+            "control_transcript_record",
+            "observation_capture_sha256",
+            "observation_capture_record",
         },
     }
-    control_rows: list[dict[str, Any]] = []
-    capture_rows: list[dict[str, Any]] = []
+    try:
+        evidence_entries = list(evidence_dir.iterdir())
+    except OSError as error:
+        raise RunnerError(f"cannot enumerate fault evidence: {error}") from error
+    expected_evidence_names = {
+        FAULT_CONTROL_EVIDENCE_FILE,
+        FAULT_OBSERVATION_EVIDENCE_FILE,
+    }
+    if (
+        {entry.name for entry in evidence_entries} != expected_evidence_names
+        or any(entry.is_symlink() or not entry.is_file() for entry in evidence_entries)
+    ):
+        raise RunnerError(
+            "fault harness must emit exactly the bound control and observation JSONL files"
+        )
+    control_source = regular_file_under(
+        evidence_dir,
+        PurePosixPath(FAULT_CONTROL_EVIDENCE_FILE),
+        "fault control evidence",
+    )
+    observation_source = regular_file_under(
+        evidence_dir,
+        PurePosixPath(FAULT_OBSERVATION_EVIDENCE_FILE),
+        "fault observation evidence",
+    )
+    control_rows, control_binding = read_bound_jsonl_file(
+        control_source, "fault control evidence"
+    )
+    observation_rows, observation_binding = read_bound_jsonl_file(
+        observation_source, "fault observation evidence"
+    )
+    control_by_record = validate_fault_control_records(
+        control_rows, participants=participants, seed=seed, run=run
+    )
+    observation_by_record, total_continuous_checks = validate_fault_observation_records(
+        observation_rows, participants=participants, seed=seed, run=run
+    )
     prepared: dict[str, list[dict[str, Any]]] = {}
     atomicity = payload["atomicity"]
     if not isinstance(atomicity, dict):
@@ -1465,6 +2710,7 @@ def materialize_fault_response(
         payload["prepare_qc_normalization"],
         "fault payload.prepare_qc_normalization",
     )
+    observed_bundle_ids: set[str] = set()
     for collection in collections:
         trials = payload[collection]
         if not isinstance(trials, list):
@@ -1474,57 +2720,64 @@ def materialize_fault_response(
             trial = exact_fields(
                 item, trial_fields[collection], f"fault payload.{collection}[{index}]"
             )
-            record_id = (
-                f"n{participants}:s{seed}:r{run}:{collection}:{index}"
-            )
-            control_rows.append(
-                fault_control_record(
-                    record_id,
-                    participants,
-                    seed,
-                    run,
-                    collection,
-                    index,
-                    trial,
+            record_id = f"n{participants}:s{seed}:r{run}:{collection}:{index}"
+            if (
+                trial["control_transcript_sha256"] != control_binding["sha256"]
+                or trial["control_transcript_record"] != record_id
+                or trial["observation_capture_sha256"]
+                != observation_binding["sha256"]
+                or trial["observation_capture_record"] != record_id
+            ):
+                raise RunnerError(
+                    f"fault payload.{collection}[{index}] does not bind the exact harness evidence"
                 )
+            control_row = control_by_record.get(record_id)
+            observation_row = observation_by_record.get(record_id)
+            if (
+                control_row is None
+                or observation_row is None
+                or control_row["collection"] != collection
+                or observation_row["collection"] != collection
+                or control_row["trial_index"] != index
+                or observation_row["trial_index"] != index
+                or control_row["bundle_id"] != observation_row["bundle_id"]
+                or control_row["bundle_id"] in observed_bundle_ids
+            ):
+                raise RunnerError(
+                    f"fault payload.{collection}[{index}] has no unique exact bundle-bound evidence record"
+                )
+            observed_bundle_ids.add(control_row["bundle_id"])
+            validate_fault_trial_control_semantics(
+                control_row,
+                collection=collection,
+                trial=trial,
+                label=f"fault payload.{collection}[{index}]",
             )
-            capture_rows.append(
-                {
-                    "record": record_id,
-                    "participants": participants,
-                    "seed": seed,
-                    "run": run,
-                    "collection": collection,
-                    "trial_index": index,
-                    "continuous_checks": atomicity.get("continuous_checks"),
-                    "partial_visibility_observed": trial[
-                        "partial_visibility_observed"
-                    ],
-                    "partial_spendable_observations": atomicity.get(
-                        "partial_spendable_observations"
-                    ),
-                    "converged": trial["converged"],
-                }
-            )
+            if (
+                observation_row["partial_visibility_observed"]
+                != trial["partial_visibility_observed"]
+                or observation_row["partial_spendable_observations"]
+                != atomicity.get("partial_spendable_observations")
+            ):
+                raise RunnerError(
+                    f"fault payload.{collection}[{index}] contradicts its state observations"
+                )
             prepared[collection].append(dict(trial))
+    expected_record_count = sum(len(prepared[collection]) for collection in collections)
+    if (
+        len(control_by_record) != expected_record_count
+        or len(observation_by_record) != expected_record_count
+    ):
+        raise RunnerError("fault evidence contains missing or undeclared trial records")
+    if atomicity.get("continuous_checks") != total_continuous_checks:
+        raise RunnerError(
+            "fault payload.atomicity.continuous_checks does not equal the captured observations"
+        )
     stem = f"n{participants}-s{seed}-r{run}"
     control_path = publication_root / "fault" / "control" / f"{stem}.jsonl"
     capture_path = publication_root / "fault" / "observations" / f"{stem}.jsonl"
-    write_jsonl(control_path, control_rows)
-    write_jsonl(capture_path, capture_rows)
-    control_binding = file_binding(control_path)
-    capture_binding = file_binding(capture_path)
-    for collection in collections:
-        for index, trial in enumerate(prepared[collection]):
-            record_id = f"n{participants}:s{seed}:r{run}:{collection}:{index}"
-            trial.update(
-                {
-                    "control_transcript_sha256": control_binding["sha256"],
-                    "control_transcript_record": record_id,
-                    "observation_capture_sha256": capture_binding["sha256"],
-                    "observation_capture_record": record_id,
-                }
-            )
+    copy_bound_file(control_source, control_path, expected=control_binding)
+    copy_bound_file(observation_source, capture_path, expected=observation_binding)
     raw = {
         "version": VERSION,
         "protocol": PROTOCOL,
@@ -1940,8 +3193,8 @@ def invoke_harness(
 
     The executable receives ``--aps-request``, ``--aps-response``, and
     ``--aps-evidence-dir``.  It must exit zero, create exactly one response
-    JSON file, and (for leakage jobs) write the declared capture files beneath
-    the evidence directory.  Stdout/stderr never substitute for the response.
+    JSON file, and (for fault or leakage jobs) write only their declared files
+    beneath the evidence directory. Stdout/stderr never substitute for the response.
     The returned temporary directory remains owned by the caller until its
     ``cleanup`` method is called.
     """
@@ -2014,9 +3267,9 @@ def invoke_harness(
     except RunnerError as error:
         temporary.cleanup()
         raise RunnerError(str(error)) from error
-    if request.get("kind") != "leakage" and any(evidence_dir.iterdir()):
+    if request.get("kind") == "benchmark" and any(evidence_dir.iterdir()):
         temporary.cleanup()
-        raise RunnerError("non-leakage harness wrote undeclared evidence files")
+        raise RunnerError("benchmark harness wrote undeclared evidence files")
     expected_root_names = {
         "request.json",
         "response.json",
@@ -2447,6 +3700,7 @@ def execute_plan(
                         response,
                         plan=plan,
                         job=execution_job,
+                        evidence_dir=evidence_dir,
                         publication_root=publication,
                     )
                     fault_rows.append(raw)

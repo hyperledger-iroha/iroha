@@ -115,95 +115,40 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             + "\n"
         ).encode()
 
-        def evidence_record(
-            participants: int, seed: int, kind: str, name: str
-        ) -> str:
-            return f"n{participants}:s{seed}:r{seed}:{kind}:{name}"
-
         fault_transcript_entries: list[dict[str, Any]] = []
         fault_capture_entries: list[dict[str, Any]] = []
-
-        def append_fault_evidence(
-            participants: int,
-            seed: int,
-            collection: str,
-            trial_index: int,
-            record: str,
-            transcript_fields: dict[str, Any],
-        ) -> None:
-            common = {
-                "record": record,
-                "participants": participants,
-                "seed": seed,
-                "run": seed,
-                "collection": collection,
-                "trial_index": trial_index,
-            }
-            fault_transcript_entries.append({**common, **transcript_fields})
-            fault_capture_entries.append(
-                {
-                    **common,
-                    "continuous_checks": 100,
-                    "partial_visibility_observed": False,
-                    "partial_spendable_observations": 0,
-                    "converged": True,
-                }
-            )
+        fault_payloads: dict[tuple[int, int], dict[str, Any]] = {}
+        from scripts.tests.private_settlement_release_runner_test import (
+            MODULE as RUNNER_MODULE,
+            fault_payload as runner_fault_payload,
+            write_fault_evidence,
+        )
 
         for participants in MODULE.REQUIRED_PARTICIPANTS:
             for seed in range(MODULE.REQUIRED_SEEDS_PER_PARTICIPANT):
-                for trial_index, (phase, percentage) in enumerate(
-                    (phase, percentage)
-                    for phase in MODULE.REQUIRED_LOSS_PHASES
-                    for percentage in MODULE.REQUIRED_LOSS_PERCENTAGES
-                ):
-                    append_fault_evidence(
-                        participants,
-                        seed,
-                        "loss_trials",
-                        trial_index,
-                        evidence_record(
-                            participants, seed, "loss", f"{phase}:{percentage}"
-                        ),
-                        {
-                            "phase": phase,
-                            "loss_percent": percentage,
-                            "control_acknowledged": True,
-                            "healed": True,
-                            "converged": True,
-                        },
+                payload = runner_fault_payload(participants)
+                with tempfile.TemporaryDirectory() as evidence_temporary:
+                    evidence_dir = Path(evidence_temporary)
+                    write_fault_evidence(
+                        evidence_dir,
+                        payload,
+                        participants=participants,
+                        seed=seed,
+                        run=seed,
                     )
-                for trial_index, cut in enumerate(MODULE.REQUIRED_PHASE_CUTS):
-                    append_fault_evidence(
-                        participants,
-                        seed,
-                        "phase_cut_partitions",
-                        trial_index,
-                        evidence_record(participants, seed, "cut", cut),
-                        {
-                            "cut": cut,
-                            "control_acknowledged": True,
-                            "delayed_delivery": True,
-                            "healed": True,
-                            "converged": True,
-                        },
+                    fault_transcript_entries.extend(
+                        json.loads(line)
+                        for line in (
+                            evidence_dir / "fault-control.jsonl"
+                        ).read_text(encoding="utf-8").splitlines()
                     )
-                for trial_index, boundary in enumerate(
-                    MODULE.REQUIRED_CRASH_BOUNDARIES
-                ):
-                    append_fault_evidence(
-                        participants,
-                        seed,
-                        "crash_recoveries",
-                        trial_index,
-                        evidence_record(participants, seed, "crash", boundary),
-                        {
-                            "boundary": boundary,
-                            "process_restarted": True,
-                            "durable_state_reconciled": True,
-                            "converged": True,
-                        },
+                    fault_capture_entries.extend(
+                        json.loads(line)
+                        for line in (
+                            evidence_dir / "fault-observations.jsonl"
+                        ).read_text(encoding="utf-8").splitlines()
                     )
+                fault_payloads[(participants, seed)] = payload
 
         fault_transcript_path = Path("evidence") / "logs" / "fault-control.jsonl"
         fault_transcript_payload = (
@@ -229,6 +174,25 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         fault_capture_digest = hashlib.sha256(fault_capture_payload).hexdigest()
 
         def fault_record(participants: int, seed: int) -> dict[str, Any]:
+            payload = json.loads(json.dumps(fault_payloads[(participants, seed)]))
+            payload.pop("prepare_qc_normalization")
+            for collection in (
+                "loss_trials",
+                "phase_cut_partitions",
+                "crash_recoveries",
+            ):
+                for index, trial in enumerate(payload[collection]):
+                    record_id = (
+                        f"n{participants}:s{seed}:r{seed}:{collection}:{index}"
+                    )
+                    trial.update(
+                        {
+                            "control_transcript_sha256": fault_transcript_digest,
+                            "control_transcript_record": record_id,
+                            "observation_capture_sha256": fault_capture_digest,
+                            "observation_capture_record": record_id,
+                        }
+                    )
             return {
                 "version": 1,
                 "protocol": MODULE.PROTOCOL,
@@ -242,79 +206,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 "quorum": "3-of-4",
                 "mandatory_signed_rs16_da_rbc": True,
                 "authenticated_message_control": True,
-                "committee_validator_restarts": list(range(participants)),
-                "maximum_simultaneously_unavailable_per_committee": 1,
-                "quorum_progress_with_one_unavailable": True,
-                "coordinator_restarted": True,
-                "global_node_restarted": True,
-                "loss_trials": [
-                    {
-                        "phase": phase,
-                        "loss_percent": percentage,
-                        "control_acknowledged": True,
-                        "healed": True,
-                        "converged": True,
-                        "partial_visibility_observed": False,
-                        "control_transcript_sha256": fault_transcript_digest,
-                        "control_transcript_record": evidence_record(
-                            participants, seed, "loss", f"{phase}:{percentage}"
-                        ),
-                        "observation_capture_sha256": fault_capture_digest,
-                        "observation_capture_record": evidence_record(
-                            participants, seed, "loss", f"{phase}:{percentage}"
-                        ),
-                    }
-                    for phase in MODULE.REQUIRED_LOSS_PHASES
-                    for percentage in MODULE.REQUIRED_LOSS_PERCENTAGES
-                ],
-                "phase_cut_partitions": [
-                    {
-                        "cut": cut,
-                        "control_acknowledged": True,
-                        "delayed_delivery": True,
-                        "healed": True,
-                        "converged": True,
-                        "partial_visibility_observed": False,
-                        "control_transcript_sha256": fault_transcript_digest,
-                        "control_transcript_record": evidence_record(
-                            participants, seed, "cut", cut
-                        ),
-                        "observation_capture_sha256": fault_capture_digest,
-                        "observation_capture_record": evidence_record(
-                            participants, seed, "cut", cut
-                        ),
-                    }
-                    for cut in MODULE.REQUIRED_PHASE_CUTS
-                ],
-                "crash_recoveries": [
-                    {
-                        "boundary": boundary,
-                        "process_restarted": True,
-                        "durable_state_reconciled": True,
-                        "converged": True,
-                        "partial_visibility_observed": False,
-                        "control_transcript_sha256": fault_transcript_digest,
-                        "control_transcript_record": evidence_record(
-                            participants, seed, "crash", boundary
-                        ),
-                        "observation_capture_sha256": fault_capture_digest,
-                        "observation_capture_record": evidence_record(
-                            participants, seed, "crash", boundary
-                        ),
-                    }
-                    for boundary in MODULE.REQUIRED_CRASH_BOUNDARIES
-                ],
-                "atomicity": {
-                    "continuous_checks": 100,
-                    "partial_visible_observations": 0,
-                    "partial_spendable_observations": 0,
-                    "aborted_private_state_changes": 0,
-                    "successful_leg_applications": participants,
-                    "each_leg_applied_exactly_once": True,
-                    "invalid_leg_state_byte_identical": True,
-                    "replay_rejected": True,
-                },
-                "all_nodes_converged": True,
+                **payload,
             }
 
         fault_raw_path = Path("evidence") / "real_network_fault_raw.jsonl"
@@ -696,46 +588,14 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 ).encode()
             elif kind == "canary_manifest":
                 path = Path("evidence") / "canaries.json"
+                canary_manifest = RUNNER_MODULE.build_canary_manifest("a" * 40)
+                canary_manifest["canaries"] = [
+                    entry
+                    for entry in canary_manifest["canaries"]
+                    if not entry["name"].endswith("_variant_b")
+                ]
                 payload = (
-                    json.dumps(
-                        {
-                            "version": 1,
-                            "canaries": [
-                                {
-                                    "name": "account_id",
-                                    "kind": "text",
-                                    "value": "APS-SECRET-ACCOUNT",
-                                },
-                                {
-                                    "name": "amount",
-                                    "kind": "integer",
-                                    "value": 987654321,
-                                },
-                                {
-                                    "name": "asset_alias",
-                                    "kind": "text",
-                                    "value": "APS-SECRET-ALIAS",
-                                },
-                                {
-                                    "name": "asset_id",
-                                    "kind": "text",
-                                    "value": "APS-SECRET-ASSET",
-                                },
-                                {
-                                    "name": "capsule",
-                                    "kind": "text",
-                                    "value": "APS-SECRET-CAPSULE",
-                                },
-                                {
-                                    "name": "memo",
-                                    "kind": "text",
-                                    "value": "APS-SECRET-MEMO",
-                                },
-                            ],
-                        },
-                        sort_keys=True,
-                    )
-                    + "\n"
+                    json.dumps(canary_manifest, sort_keys=True) + "\n"
                 ).encode()
             elif kind == "message_count_manifest":
                 path = Path("evidence") / "message_counts_left.json"
@@ -1270,7 +1130,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             ]
 
             with self.assertRaisesRegex(
-                MODULE.EvidenceError, "does not exactly bind the raw fault trial"
+                MODULE.EvidenceError, "nested fault evidence is invalid"
             ):
                 MODULE._validate_fault_trial_evidence_bindings(
                     [raw_path], artifacts, root
@@ -1766,11 +1626,40 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             )
             artifact_path = root / artifact["path"]
             old_binding = {"sha256": artifact["sha256"], "bytes": artifact["bytes"]}
-            payload = b"APS-SECRET-ACCOUNT\n"
+            canary_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "canary_manifest"
+            )
+            canary_manifest = json.loads(
+                (root / canary_artifact["path"]).read_text(encoding="utf-8")
+            )
+            account_canary = next(
+                item["value"]
+                for item in canary_manifest["canaries"]
+                if item["name"] == "account_id"
+            )
+            payload = f"{account_canary}\n".encode()
             artifact_path.write_bytes(payload)
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             artifact["bytes"] = len(payload)
             new_binding = {"sha256": artifact["sha256"], "bytes": artifact["bytes"]}
+
+            formal_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "formal_model_report"
+            )
+            formal_path = root / formal_artifact["path"]
+            formal_report = json.loads(formal_path.read_text(encoding="utf-8"))
+            formal_report["transcript"] = {
+                "path": artifact["path"],
+                **new_binding,
+            }
+            formal_payload = (json.dumps(formal_report, sort_keys=True) + "\n").encode()
+            formal_path.write_bytes(formal_payload)
+            formal_artifact["sha256"] = hashlib.sha256(formal_payload).hexdigest()
+            formal_artifact["bytes"] = len(formal_payload)
 
             leakage_artifact = next(
                 item

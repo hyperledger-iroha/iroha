@@ -89,7 +89,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         ]
     );
     assert_ne!(padded.0.as_ptr(), source_pointer);
-    assert!(padded.0.capacity() >= padded.len());
+    assert_eq!(padded.0.capacity(), padded.len());
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
     drop(padded);
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
@@ -164,7 +164,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
             ]
         );
         assert_ne!(padded.0.as_ptr(), source_pointer);
-        assert!(padded.0.capacity() >= padded.len());
+        assert_eq!(padded.0.capacity(), padded.len());
         assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
         panic!("exercise owner-first scalar padding unwind");
     }));
@@ -191,8 +191,13 @@ fn vector_padding_and_split_clear_replaced_allocations() {
             .unwrap_or_else(|| panic!("missing owner-first padding step {step}"));
         cursor += offset + step.len();
     }
-    assert_eq!(padding.matches("Vec::new()").count(), 1);
-    assert_eq!(padding.matches(".try_reserve_exact(len)").count(), 1);
+    assert_eq!(padding.matches("Vec::new()").count(), 0);
+    assert_eq!(
+        padding
+            .matches("Self(try_exact_capacity_vec_v1(len)?)")
+            .count(),
+        1
+    );
     assert_eq!(padding.matches("padded.0.push(F::ZERO);").count(), 1);
     assert_eq!(
         padding
@@ -216,7 +221,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
     );
     assert_eq!(
         padding
-            .matches("debug_assert_eq!(padded.0.capacity(), allocation_capacity);")
+            .matches("debug_assert_eq!(padded.0.capacity(), len);")
             .count(),
         2
     );
@@ -226,7 +231,9 @@ fn vector_padding_and_split_clear_replaced_allocations() {
             .count(),
         2
     );
-    for forbidden in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.2") {
+    for forbidden in
+        cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.2")
+    {
         assert!(
             !padding.contains(forbidden),
             "owner-first scalar padding path {forbidden}"
@@ -247,7 +254,9 @@ fn vector_padding_and_split_clear_replaced_allocations() {
             .unwrap_or_else(|| panic!("missing scalar-padding prover step {step}"));
         cursor += offset + step.len();
     }
-    for callsite in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.4") {
+    for callsite in
+        cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.4")
+    {
         assert_eq!(prover.matches(callsite).count(), 1);
     }
     assert!(production.contains("vector: impl Iterator<Item = &'a F>"));
@@ -298,11 +307,15 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         assert_eq!(prover.matches(borrowed).count(), 2);
         assert_eq!(prover.matches(copied).count(), 0);
     }
-    for source_drop in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.6") {
+    for source_drop in
+        cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.6")
+    {
         assert_eq!(response_fold.matches(source_drop).count(), 1);
     }
     assert_eq!(prover.matches("tau_x_poly").count(), 0);
-    for forbidden in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.7") {
+    for forbidden in
+        cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.7")
+    {
         assert!(
             !response_fold.contains(forbidden),
             "borrowed private-response fold path {forbidden}"
@@ -322,23 +335,9 @@ fn vector_padding_and_split_clear_replaced_allocations() {
             .unwrap_or_else(|| panic!("missing owner-first split step {step}"));
         cursor += offset + step.len();
     }
-    assert_eq!(split.matches(".try_reserve_exact(half)").count(), 1);
-    assert_eq!(split.matches("right.0.push(F::ZERO);").count(), 1);
     assert_eq!(
         split
-            .matches("debug_assert_eq!(right.0.len(), half);")
-            .count(),
-        2
-    );
-    assert_eq!(
-        split
-            .matches("debug_assert_eq!(right.0.capacity(), allocation_capacity);")
-            .count(),
-        2
-    );
-    assert_eq!(
-        split
-            .matches("debug_assert_eq!(right.0.as_ptr(), allocation_pointer);")
+            .matches("Self(try_exact_filled_vec_v1(half, F::ZERO)?)")
             .count(),
         2
     );
@@ -346,10 +345,23 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         split
             .matches("core::mem::swap(source, destination);")
             .count(),
-        1
+        2
     );
-    assert_eq!(split.matches("source.clear_secret();").count(), 1);
-    for forbidden in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.9") {
+    assert_eq!(split.matches("source.clear_secret();").count(), 2);
+    assert_eq!(split.matches("self.0.truncate(0);").count(), 1);
+    assert_eq!(split.matches("right.0.push(F::ZERO);").count(), 0);
+    assert_eq!(
+        split
+            .matches("debug_assert_eq!(right.0.len(), half);")
+            .count(),
+        0
+    );
+    assert!(!split.contains("try_reserve_exact"));
+    assert!(!split.contains("allocation_capacity"));
+    assert!(!split.contains("allocation_pointer"));
+    for forbidden in
+        cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.9")
+    {
         assert!(
             !split.contains(forbidden),
             "owner-first scalar split path {forbidden}"
@@ -429,24 +441,24 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         TrackingScalar(4),
     ]);
     let source_pointer = values.0.as_ptr();
-    let source_capacity = values.0.capacity();
     let (left, right) = values.split().expect("tracking vector splits evenly");
     assert_eq!(left.0.as_slice(), &[TrackingScalar(1), TrackingScalar(2)]);
     assert_eq!(right.0.as_slice(), &[TrackingScalar(3), TrackingScalar(4)]);
-    assert_eq!(left.0.as_ptr(), source_pointer);
-    assert_eq!(left.0.capacity(), source_capacity);
+    assert_ne!(left.0.as_ptr(), source_pointer);
+    assert_eq!(left.0.capacity(), left.len());
     let right_pointer = right.0.as_ptr();
     let right_capacity = right.0.capacity();
     assert_ne!(right_pointer, source_pointer);
     assert_eq!(right.len(), 2);
-    assert!(right_capacity >= right.len());
+    assert_eq!(right_capacity, right.len());
+    assert_ne!(left.0.as_ptr(), right_pointer);
     assert_eq!(right.0.as_ptr(), right_pointer);
     assert_eq!(right.0.capacity(), right_capacity);
-    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
-    drop(left);
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
-    drop(right);
+    drop(left);
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+    drop(right);
+    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 8);
 
     CLEAR_CALLS.store(0, Ordering::SeqCst);
     assert!(matches!(
@@ -474,11 +486,11 @@ fn vector_padding_and_split_clear_replaced_allocations() {
             right.0.as_slice(),
             &[TrackingScalar(17), TrackingScalar(19)]
         );
-        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 4);
         panic!("exercise owner-first scalar split unwind");
     }));
     assert!(unwind.is_err());
-    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 6);
+    assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 8);
 }
 #[test]
 fn random_vector_clears_success_and_partial_failure() {
@@ -492,7 +504,7 @@ fn random_vector_clears_success_and_partial_failure() {
         .expect("scripted random succeeds");
     assert_eq!(success.requests, 4);
     assert_eq!(values.len(), 4);
-    assert!(values.0.capacity() >= values.len());
+    assert_eq!(values.0.capacity(), values.len());
     // Each decoder slot and now-zero sampled owner is cleared after its
     // value enters the retained vector.
     assert_eq!(CLEAR_CALLS.load(Ordering::SeqCst), 8);
@@ -558,18 +570,19 @@ fn random_vector_clears_success_and_partial_failure() {
         cursor += offset + step.len();
     }
     for (needle, expected) in [
-        (".try_reserve_exact(len)", 1),
+        ("try_exact_capacity_vec_v1(len)?", 1),
         ("result.0.push(F::ZERO);", 1),
         ("let mut sampled = random_scalar::<F, _>(rng)?;", 1),
         ("core::mem::swap(destination, sampled.expose_mut());", 1),
         ("drop(sampled);", 1),
         ("debug_assert_eq!(result.0.len(), len);", 2),
-        ("capacity(), allocation_capacity);", 2),
+        ("capacity(), len);", 2),
         ("as_ptr(), allocation_pointer);", 2),
     ] {
         assert_eq!(random_vector.matches(needle).count(), expected);
     }
-    for forbidden in cleanup_contract_strings("random_vector_clears_success_and_partial_failure.2") {
+    for forbidden in cleanup_contract_strings("random_vector_clears_success_and_partial_failure.2")
+    {
         assert!(
             !random_vector.contains(forbidden),
             "owner-first random-vector path {forbidden}"
@@ -754,7 +767,9 @@ fn vector_commitment_values_rehome_without_copy_or_allocation() {
         values_handoff.contains("core::mem::replace(&mut self.values, ScalarVector(Vec::new()))")
     );
     assert_eq!(values_handoff.matches("Vec::new()").count(), 1);
-    for forbidden in cleanup_contract_strings("vector_commitment_values_rehome_without_copy_or_allocation.1") {
+    for forbidden in
+        cleanup_contract_strings("vector_commitment_values_rehome_without_copy_or_allocation.1")
+    {
         assert!(
             !values_handoff.contains(forbidden),
             "retained value-owner handoff path {forbidden}"
@@ -810,7 +825,9 @@ fn scalar_commitment_opening_source_boundary_stays_private_and_zeroizing() {
         .0;
     assert!(mask_slot_handoff.contains("mask: F::ZERO"));
     assert!(mask_slot_handoff.contains("core::mem::swap(&mut opening.mask, mask)"));
-    for forbidden in cleanup_contract_strings("scalar_commitment_opening_source_boundary_stays_private_and_zeroizing.1") {
+    for forbidden in cleanup_contract_strings(
+        "scalar_commitment_opening_source_boundary_stays_private_and_zeroizing.1",
+    ) {
         assert!(
             !mask_slot_handoff.contains(forbidden),
             "retained vector-opening mask-slot handoff {forbidden}"

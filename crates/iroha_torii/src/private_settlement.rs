@@ -498,6 +498,55 @@ struct PrivateSettlementApiErrorV1 {
     code: String,
 }
 
+#[cfg(feature = "test-network-private-settlement-route-control")]
+const PRIVATE_SETTLEMENT_TEST_NETWORK_STATE_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"iroha:test-network:private-settlement:combined-state-evidence:v1\0";
+
+/// Redacted evidence-only count vector returned solely by an instrumented
+/// test-network validator.
+#[cfg(feature = "test-network-private-settlement-route-control")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+struct PrivateSettlementTestNetworkStateCountsV1 {
+    governance: u64,
+    pools: u64,
+    roots: u64,
+    nullifiers: u64,
+    commitments: u64,
+    encrypted_outputs: u64,
+    replay_markers: u64,
+    receipts: u64,
+    abort_markers: u64,
+    staged_pool_heads: u64,
+    staged_nullifiers: u64,
+    staged_output_commitments: u64,
+    staged_locks: u64,
+}
+
+/// Evidence-only response. It intentionally contains no account, asset,
+/// amount, memo, ciphertext, commitment key, nullifier key, or reservation
+/// owner. The containing route is absent from shipping builds.
+#[cfg(feature = "test-network-private-settlement-route-control")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
+    format_version: u8,
+    height: u64,
+    commitment: Hash,
+    ledger_commitment: Hash,
+    staged_lock_commitment: Hash,
+    counts: PrivateSettlementTestNetworkStateCountsV1,
+}
+
+#[cfg(feature = "test-network-private-settlement-route-control")]
+fn private_settlement_test_network_peer_is_local_v1(
+    app: &SharedAppState,
+    authenticated: &crate::operator_signatures::AuthenticatedOperatorPublicKey,
+) -> bool {
+    app.local_peer_id.as_ref()
+        == Some(&iroha_data_model::peer::PeerId::from(
+            authenticated.0.clone(),
+        ))
+}
+
 fn error_response(status: StatusCode, code: &'static str) -> Response {
     let mut response = JsonBody(PrivateSettlementApiErrorV1 {
         code: code.to_owned(),
@@ -505,6 +554,123 @@ fn error_response(status: StatusCode, code: &'static str) -> Response {
     .into_response();
     *response.status_mut() = status;
     response
+}
+
+/// Return a commitment to public APS maps and staged locks on this exact
+/// validator. This is a non-shipping release-evidence diagnostic, not a
+/// production privacy API.
+#[cfg(feature = "test-network-private-settlement-route-control")]
+pub(crate) async fn handler_test_network_state_commitment(
+    State(app): State<SharedAppState>,
+    Extension(runtime): Extension<PrivateSettlementToriiRuntimeV1>,
+    Extension(authenticated): Extension<crate::operator_signatures::AuthenticatedOperatorPublicKey>,
+) -> Response {
+    if !private_settlement_test_network_peer_is_local_v1(&app, &authenticated) {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "private_settlement_local_validator_required",
+        );
+    }
+    let height = match authoritative_height(&app) {
+        Ok(height) => height,
+        Err(response) => return response,
+    };
+    if active_config(&app, height).is_err() {
+        return private_settlement_unavailable();
+    }
+    let ledger = match app
+        .state
+        .view()
+        .world()
+        .private_settlement_ledger_evidence_v1()
+    {
+        Ok(evidence) => evidence,
+        Err(_) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "private_settlement_state_evidence_unavailable",
+            );
+        }
+    };
+    let staged = match runtime
+        .store()
+        .and_then(|store| store.staged_lock_evidence_v1().map_err(map_store_error))
+    {
+        Ok(evidence) => evidence,
+        Err(response) => return response,
+    };
+    if authoritative_height(&app).ok() != Some(height) {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "private_settlement_state_evidence_retry",
+        );
+    }
+    let commitment = Hash::new_from_chunks(&[
+        PRIVATE_SETTLEMENT_TEST_NETWORK_STATE_EVIDENCE_DOMAIN_V1,
+        &height.to_le_bytes(),
+        ledger.commitment.as_ref(),
+        staged.commitment.as_ref(),
+    ]);
+    let counts = PrivateSettlementTestNetworkStateCountsV1 {
+        governance: ledger.counts.governance,
+        pools: ledger.counts.pools,
+        roots: ledger.counts.roots,
+        nullifiers: ledger.counts.nullifiers,
+        commitments: ledger.counts.commitments,
+        encrypted_outputs: ledger.counts.encrypted_outputs,
+        replay_markers: ledger.counts.replay_markers,
+        receipts: ledger.counts.receipts,
+        abort_markers: ledger.counts.abort_markers,
+        staged_pool_heads: staged.counts.pool_heads,
+        staged_nullifiers: staged.counts.nullifiers,
+        staged_output_commitments: staged.counts.output_commitments,
+        staged_locks: staged.counts.total,
+    };
+    let mut response = JsonBody(PrivateSettlementTestNetworkStateEvidenceResponseV1 {
+        format_version: 1,
+        height,
+        commitment,
+        ledger_commitment: ledger.commitment,
+        staged_lock_commitment: staged.commitment,
+        counts,
+    })
+    .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    response
+}
+
+#[cfg(feature = "test-network-private-settlement-route-control")]
+async fn apply_private_settlement_route_control_v1<T: norito::json::JsonSerialize>(
+    phase: crate::private_settlement_route_control::Phase,
+    bundle_id: Hash,
+    request: &T,
+    authenticated: &VerifiedCanonicalRequest,
+) -> Result<(), Response> {
+    let request_bytes = norito::json::to_vec(request).map_err(|_| {
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "private_settlement_control_invalid",
+        )
+    })?;
+    let identity = authenticated.account.to_string();
+    match crate::private_settlement_route_control::admit(
+        phase,
+        bundle_id,
+        &request_bytes,
+        identity.as_bytes(),
+    )
+    .await
+    {
+        Ok(crate::private_settlement_route_control::Disposition::Pass) => Ok(()),
+        Ok(crate::private_settlement_route_control::Disposition::Drop) => Err(error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "private_settlement_controlled_loss",
+        )),
+        Err(code) => Err(error_response(StatusCode::SERVICE_UNAVAILABLE, code)),
+    }
 }
 
 fn private_settlement_unavailable() -> Response {
@@ -869,6 +1035,17 @@ pub(crate) async fn handler_availability_share(
         return response;
     }
     let bundle_id = request.material.manifest.bundle_id;
+    #[cfg(feature = "test-network-private-settlement-route-control")]
+    if let Err(response) = apply_private_settlement_route_control_v1(
+        crate::private_settlement_route_control::Phase::RestrictedDa,
+        bundle_id,
+        &request,
+        &authenticated,
+    )
+    .await
+    {
+        return response;
+    }
     let payload_digest = request.material.availability_body.payload_digest;
     let leg_ordinal = request.material.statement.leg_ordinal;
     let (outcome, share) = match signer.persist_and_sign(store, request.material, height) {
@@ -923,6 +1100,17 @@ pub(crate) async fn handler_prepare_vote(
         PrivateSettlementPhaseV1::Prepare,
         height,
     ) {
+        return response;
+    }
+    #[cfg(feature = "test-network-private-settlement-route-control")]
+    if let Err(response) = apply_private_settlement_route_control_v1(
+        crate::private_settlement_route_control::Phase::Prepare,
+        request.manifest.bundle_id,
+        &request,
+        &authenticated,
+    )
+    .await
+    {
         return response;
     }
     let state = app.state.view();
@@ -980,6 +1168,17 @@ pub(crate) async fn handler_commit_vote(
     ) {
         return response;
     }
+    #[cfg(feature = "test-network-private-settlement-route-control")]
+    if let Err(response) = apply_private_settlement_route_control_v1(
+        crate::private_settlement_route_control::Phase::Commit,
+        request.barrier.manifest.bundle_id,
+        &request,
+        &authenticated,
+    )
+    .await
+    {
+        return response;
+    }
     let vote = match signer.commit_vote(store, request.payload_digest, &request.barrier, height) {
         Ok(vote) => vote,
         Err(error) => return map_phase_error(error),
@@ -1019,6 +1218,24 @@ pub(crate) async fn handler_phase_certificate(
     let phase = request.certificate.body.phase;
     if let Err(response) =
         validate_phase_deadline(&app, store, request.payload_digest, phase, height)
+    {
+        return response;
+    }
+    #[cfg(feature = "test-network-private-settlement-route-control")]
+    if let Err(response) = apply_private_settlement_route_control_v1(
+        match phase {
+            PrivateSettlementPhaseV1::Prepare => {
+                crate::private_settlement_route_control::Phase::Prepare
+            }
+            PrivateSettlementPhaseV1::Commit => {
+                crate::private_settlement_route_control::Phase::Commit
+            }
+        },
+        request.manifest.bundle_id,
+        &request,
+        &authenticated,
+    )
+    .await
     {
         return response;
     }
@@ -1112,6 +1329,17 @@ pub(crate) async fn handler_leg_upload(
         return response;
     }
     let bundle_id = request.manifest.bundle_id;
+    #[cfg(feature = "test-network-private-settlement-route-control")]
+    if let Err(response) = apply_private_settlement_route_control_v1(
+        crate::private_settlement_route_control::Phase::RestrictedDa,
+        bundle_id,
+        &request,
+        &authenticated,
+    )
+    .await
+    {
+        return response;
+    }
     let payload_digest = request.payload.availability.body.payload_digest;
     let leg_ordinal = request.payload.statement.leg_ordinal;
     let sidecar = PrivateSettlementRestrictedSidecarV1 {

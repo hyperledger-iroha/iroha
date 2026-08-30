@@ -110,6 +110,25 @@ const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_cors_options(true)
 }
 
+const fn test_network_diagnostic_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+    RouteDescriptor::new(
+        id,
+        HttpMethod::Get,
+        path,
+        ApiSurface::Diagnostic,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::ValidatorRosterMember,
+    )
+    .with_authentication(AuthenticationPolicy::IdentityBoundSignature)
+    .with_feature_gate(FeatureGate::Feature(
+        "test-network-private-settlement-route-control",
+    ))
+    .with_projections(RouteProjections::NONE)
+    .with_private_no_store()
+    .with_implicit_head(true)
+}
+
 /// Upload one complete encrypted leg through restricted confidential DA.
 pub const LEG_UPLOAD: RouteDescriptor = account_post(
     "private_settlement.leg.upload",
@@ -175,6 +194,15 @@ pub const BUNDLE_RECEIPT: RouteDescriptor = public_get(
     "private_settlement.bundle.receipt",
     "/v1/nexus/private-settlements/bundles/{bundle_id}/receipt",
 );
+/// Read a domain-separated state commitment on an explicitly instrumented
+/// test-network validator.
+///
+/// This descriptor has no generated projection and cannot be mounted by a
+/// shipping/default feature graph.
+pub const TEST_NETWORK_STATE_COMMITMENT: RouteDescriptor = test_network_diagnostic_get(
+    "private_settlement.test_network.state_commitment",
+    "/v1/nexus/private-settlements/test-network/state-commitment",
+);
 
 /// Complete atomic-private-settlement Torii route family.
 pub const ROUTES: &[RouteDescriptor] = &[
@@ -191,6 +219,7 @@ pub const ROUTES: &[RouteDescriptor] = &[
     BUNDLE_SUBMIT,
     BUNDLE_STATUS,
     BUNDLE_RECEIPT,
+    TEST_NETWORK_STATE_COMMITMENT,
 ];
 
 #[cfg(test)]
@@ -209,11 +238,28 @@ mod tests {
                     EnabledFeatures::new(&["app_api"]),
                 )
                 .len(),
-            ROUTES.len()
+            ROUTES.len() - 1
         );
         assert_eq!(
             catalog
                 .project(CatalogProjection::Sdk, EnabledFeatures::none())
+                .len(),
+            ROUTES.len() - 1
+        );
+        assert_eq!(
+            TEST_NETWORK_STATE_COMMITMENT.projections(),
+            RouteProjections::NONE
+        );
+        assert!(TEST_NETWORK_STATE_COMMITMENT.requires_private_no_store());
+        assert_eq!(
+            catalog
+                .project(
+                    CatalogProjection::Mounted,
+                    EnabledFeatures::new(&[
+                        "app_api",
+                        "test-network-private-settlement-route-control",
+                    ]),
+                )
                 .len(),
             ROUTES.len()
         );

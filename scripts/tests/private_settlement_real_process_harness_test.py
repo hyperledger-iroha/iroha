@@ -87,6 +87,46 @@ def request(
     }
 
 
+def fault_request(participants: int = 3, *, run: int = 0) -> dict[str, Any]:
+    """Build one exact canonical fault-campaign request."""
+
+    result = request(participants, run=run)
+    result["kind"] = "fault"
+    result["payload"] = {
+        "loss_phases": list(MODULE.runner.fault_report.REQUIRED_LOSS_PHASES),
+        "loss_percentages": list(
+            MODULE.runner.fault_report.REQUIRED_LOSS_PERCENTAGES
+        ),
+        "phase_cuts": list(MODULE.runner.fault_report.REQUIRED_PHASE_CUTS),
+        "crash_boundaries": list(
+            MODULE.runner.fault_report.REQUIRED_CRASH_BOUNDARIES
+        ),
+        "committee_validator_restarts": list(range(participants)),
+        "restart_coordinator": True,
+        "restart_global_node": True,
+        "maximum_simultaneously_unavailable_per_committee": 1,
+        "continuous_atomicity_checks": True,
+        "prepare_qc_normalization": {
+            "first_signer_subset": [0, 1, 2],
+            "second_signer_subset": [0, 1, 3],
+            "accept_equivalent_subsets_only_for_identical_body": True,
+            "bind_authority_indices": True,
+            "bind_every_signed_body": True,
+            "reject_changed_certified_body": True,
+        },
+    }
+    result["request_id"] = MODULE.runner.object_digest(
+        {
+            "kind": "fault",
+            "participants": participants,
+            "seed": result["seed"],
+            "run": run,
+            "configuration_sha256": result["configuration_sha256"],
+        }
+    )
+    return result
+
+
 def inventory(participants: int) -> list[dict[str, Any]]:
     identities: list[tuple[str, int | None, int | None]] = [
         ("coordinator", None, None)
@@ -191,16 +231,19 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
             for participants in MODULE.runner.PARTICIPANTS:
                 fixture = request(participants, profile=profile)
                 self.assertEqual(MODULE.validate_request(copy.deepcopy(fixture)), fixture)
+        for participants in MODULE.runner.PARTICIPANTS:
+            fixture = fault_request(participants)
+            self.assertEqual(MODULE.validate_request(copy.deepcopy(fixture)), fixture)
 
     def test_unsupported_kinds_fail_before_execution(self) -> None:
-        fault = request()
-        fault["kind"] = "fault"
-        with self.assertRaisesRegex(MODULE.HarnessError, "benchmark requests"):
-            MODULE.validate_request(fault)
         leakage = request()
         leakage["kind"] = "leakage"
-        with self.assertRaisesRegex(MODULE.HarnessError, "benchmark requests"):
+        with self.assertRaisesRegex(MODULE.HarnessError, "does not yet support leakage"):
             MODULE.validate_request(leakage)
+        unknown = request()
+        unknown["kind"] = "unknown"
+        with self.assertRaisesRegex(MODULE.HarnessError, "benchmark and fault"):
+            MODULE.validate_request(unknown)
 
     def test_each_profile_requires_its_exact_stage_inventory(self) -> None:
         private = request()

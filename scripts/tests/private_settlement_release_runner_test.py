@@ -30,6 +30,20 @@ EXECUTABLE = "d" * 64
 INVOCATION_NONCE = "8" * 64
 
 
+def _iroha_hash_literal(body: str) -> str:
+    uppercase = body.upper()
+    crc = 0xFFFF
+    for byte in f"hash:{uppercase}".encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (
+                ((crc << 1) ^ 0x1021) & 0xFFFF
+                if crc & 0x8000
+                else (crc << 1) & 0xFFFF
+            )
+    return f"hash:{uppercase}#{crc:04X}"
+
+
 def plan() -> dict[str, Any]:
     """Return the response-validation subset of a frozen plan."""
 
@@ -150,6 +164,566 @@ def fault_payload(participants: int = 3) -> dict[str, Any]:
     }
 
 
+def _canonical_occurrence(
+    control_type: str,
+    peer_index: int | None,
+    command: dict[str, Any],
+    acknowledgement: dict[str, Any] | None = None,
+    *,
+    restart: bool = False,
+    before_pid: int = 500,
+    after_pid: int = 501,
+) -> dict[str, Any]:
+    command_bytes = MODULE.canonical_bytes(command)
+    command_sha = MODULE.hashlib.sha256(command_bytes).hexdigest()
+    if acknowledgement is None:
+        acknowledgement = dict(command)
+    elif acknowledgement.pop("_bind_command", False):
+        acknowledgement["command_sha256"] = command_sha
+    acknowledgement_bytes = MODULE.canonical_bytes(acknowledgement)
+    return {
+        "control_type": control_type,
+        "peer_index": peer_index,
+        "command_sha256": command_sha,
+        "command_hex": command_bytes.hex(),
+        "acknowledgement_sha256": MODULE.hashlib.sha256(
+            acknowledgement_bytes
+        ).hexdigest(),
+        "acknowledgement_hex": acknowledgement_bytes.hex(),
+        "before_pid": before_pid if restart else None,
+        "after_pid": after_pid if restart else None,
+    }
+
+
+def _restart_occurrence(
+    control_type: str,
+    peer_index: int,
+    revision: int,
+    operation: str,
+    *,
+    before_pid: int,
+    after_pid: int,
+) -> dict[str, Any]:
+    acknowledgement_operation = (
+        "validator_restarted_after_quorum_progress"
+        if operation == "stop_validator_for_quorum_progress"
+        else operation
+    )
+    return _canonical_occurrence(
+        control_type,
+        peer_index,
+        {
+            "format_version": 1,
+            "revision": revision,
+            "operation": operation,
+            "peer_index": peer_index,
+            "before_pid": before_pid,
+        },
+        {
+            "format_version": 1,
+            "revision": revision,
+            "operation": acknowledgement_operation,
+            "peer_index": peer_index,
+            "before_pid": before_pid,
+            "after_pid": after_pid,
+            "health_observed": True,
+            "_bind_command": True,
+        },
+        restart=True,
+        before_pid=before_pid,
+        after_pid=after_pid,
+    )
+
+
+def _coordinator_restart_occurrence(
+    participants: int,
+    revision: int,
+    bundle_id: str,
+    *,
+    before_pid: int,
+    after_pid: int,
+) -> dict[str, Any]:
+    return _canonical_occurrence(
+        "coordinator_restart",
+        None,
+        {
+            "format_version": 1,
+            "revision": revision,
+            "operation": "recover_prepare_commit",
+            "committee_endpoints": [
+                [f"http://127.0.0.1:{10_000 + dataspace * 4 + peer}" for peer in range(4)]
+                for dataspace in range(participants)
+            ],
+            "manifest": {"bundle_id": _iroha_hash_literal(bundle_id)},
+            "authority_catalog": [{} for _ in range(participants)],
+            "deltas": [{} for _ in range(participants)],
+            "barrier": None,
+        },
+        {
+            "format_version": 1,
+            "revision": revision,
+            "pid": after_pid,
+            "operation": "recover_prepare_commit",
+            "barrier": {},
+            "commit_certificates": [{} for _ in range(participants)],
+            "_bind_command": True,
+        },
+        restart=True,
+        before_pid=before_pid,
+        after_pid=after_pid,
+    )
+
+
+def _route_occurrence(
+    phase: str,
+    action: str,
+    revision: int,
+    *,
+    bundle_id: str,
+    seed: int = 7,
+    drop_first: int,
+    match_limit: int,
+    matched: int,
+    passed: int,
+    dropped: int,
+    held: int,
+    released: int,
+    predecessor: str | None = None,
+) -> dict[str, Any]:
+    command = {
+        "action": action,
+        "bundle_id": bundle_id,
+        "drop_first": drop_first,
+        "format_version": 1,
+        "match_limit": match_limit,
+        "phase": phase,
+        "revision": revision,
+        "seed": seed,
+    }
+    command_bytes = MODULE.canonical_bytes(command)
+    command_sha = MODULE.hashlib.sha256(command_bytes).hexdigest()
+    acknowledgement = {
+        "action": action,
+        "bundle_id": bundle_id,
+        "command_sha256": command_sha,
+        "dropped": dropped,
+        "format_version": 1,
+        "held": held,
+        "matched": matched,
+        "passed": passed,
+        "phase": phase,
+        "predecessor_command_sha256": predecessor,
+        "released": released,
+        "request_digests": [f"{revision * 1000 + index + 1:064x}" for index in range(matched)],
+        "revision": revision,
+        "seed": seed,
+    }
+    acknowledgement_bytes = MODULE.canonical_bytes(acknowledgement)
+    return {
+        "control_type": phase,
+        "peer_index": 0,
+        "command_sha256": command_sha,
+        "command_hex": command_bytes.hex(),
+        "acknowledgement_sha256": MODULE.hashlib.sha256(
+            acknowledgement_bytes
+        ).hexdigest(),
+        "acknowledgement_hex": acknowledgement_bytes.hex(),
+        "before_pid": None,
+        "after_pid": None,
+    }
+
+
+def _consensus_carrier_occurrence(
+    peer_index: int, action: str, revision: int
+) -> dict[str, Any]:
+    drain = action == "heal"
+    rules = (
+        []
+        if drain
+        else [
+            {
+                "action": "hold",
+                "height": 10,
+                "kind": "proposal",
+                "view": 0,
+            }
+        ]
+    )
+    command = {
+        "drain": drain,
+        "queue_capacity": 512 if drain else 256,
+        "release": [],
+        "revision": revision,
+        "rules": rules,
+        "version": 5,
+    }
+    command_bytes = MODULE.canonical_bytes(command)
+    command_sha = MODULE.hashlib.sha256(command_bytes).hexdigest()
+    sequence = peer_index + 1
+    acknowledgement = {
+        "command_digest": _iroha_hash_literal(command_sha),
+        "delivered": [sequence] if drain else [],
+        "dropped": 0,
+        "drain_fence": revision if drain else None,
+        "draining": False,
+        "fatal": False,
+        "held": [] if drain else [{"sequence": sequence}],
+        "held_bytes": 0 if drain else 128,
+        "in_flight": None,
+        "in_flight_bytes": 0,
+        "last_error": None,
+        "overflowed": 0,
+        "queue_capacity": command["queue_capacity"],
+        "rejected_commands": 0,
+        "release_pending": [],
+        "retired": [],
+        "revision": revision,
+        "rules": rules,
+        "version": 5,
+    }
+    acknowledgement_bytes = MODULE.canonical_bytes(acknowledgement)
+    return {
+        "control_type": "consensus_carrier",
+        "peer_index": peer_index,
+        "command_sha256": command_sha,
+        "command_hex": command_bytes.hex(),
+        "acknowledgement_sha256": MODULE.hashlib.sha256(
+            acknowledgement_bytes
+        ).hexdigest(),
+        "acknowledgement_hex": acknowledgement_bytes.hex(),
+        "before_pid": None,
+        "after_pid": None,
+    }
+
+
+def _state_counts(participants: int, *, finalized: bool, staged: bool = False) -> dict[str, int]:
+    counts = {field: 0 for field in MODULE.FAULT_STATE_COUNT_FIELDS}
+    counts.update({"governance": participants, "pools": participants})
+    if finalized:
+        counts.update(
+            {
+                "roots": participants,
+                "nullifiers": participants * 2,
+                "commitments": participants * 3,
+                "encrypted_outputs": participants * 3,
+                "replay_markers": 1,
+                "receipts": 1,
+            }
+        )
+    if staged:
+        counts.update(
+            {
+                "staged_pool_heads": participants,
+                "staged_nullifiers": participants * 2,
+                "staged_output_commitments": participants * 3,
+                "staged_locks": participants,
+            }
+        )
+    return counts
+
+
+def _state_observation(
+    participants: int,
+    peer_index: int,
+    *,
+    label: str,
+    finalized: bool,
+) -> dict[str, Any]:
+    nonfinalized = label == "nonfinalized"
+    ledger = ("4" if finalized else "1") * 64
+    staged = ("3" if nonfinalized else "2") * 64
+    response = {
+        "format_version": 1,
+        "height": 10 + (1 if finalized else 0),
+        "commitment": f"{(peer_index % 9) + 1:064x}",
+        "ledger_commitment": ledger,
+        "staged_lock_commitment": staged,
+        "counts": _state_counts(
+            participants, finalized=finalized, staged=nonfinalized
+        ),
+    }
+    response_bytes = MODULE.canonical_bytes(response)
+    return {
+        "peer_index": peer_index,
+        "response_sha256": MODULE.hashlib.sha256(response_bytes).hexdigest(),
+        "response_hex": response_bytes.hex(),
+        **{field: response[field] for field in ("height", "commitment", "ledger_commitment", "staged_lock_commitment", "counts")},
+    }
+
+
+def write_fault_evidence(
+    evidence_dir: Path,
+    payload: dict[str, Any],
+    *,
+    participants: int = 3,
+    seed: int = 7,
+    run: int = 2,
+) -> None:
+    controls: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
+    revision = 1
+    peer_count = (participants + 1) * MODULE.VALIDATORS_PER_DATASPACE
+    collections = ("loss_trials", "phase_cut_partitions", "crash_recoveries")
+    crash_phases = {
+        "sidecar_fsync": "after_private_settlement_sidecar_fsync",
+        "staged_delta_fsync": "after_private_settlement_staged_delta_fsync",
+        "prepare_qc": "after_private_settlement_prepare_qc_fsync",
+        "commit_qc": "after_private_settlement_commit_qc_fsync",
+        "kura_append": "after_private_settlement_kura_append",
+        "wsv_application": "after_private_settlement_wsv_application",
+        "receipt_publication": "after_private_settlement_receipt_publication",
+    }
+    total_checks = 0
+    for collection in collections:
+        for index, trial in enumerate(payload[collection]):
+            record_id = f"n{participants}:s{seed}:r{run}:{collection}:{index}"
+            bundle_id = MODULE.hashlib.sha256(record_id.encode()).hexdigest()
+            trial_controls: list[dict[str, Any]] = []
+            expected_after_state = (
+                "reverted" if collection == "crash_recoveries" else "finalized"
+            )
+            if collection == "loss_trials":
+                dropped = trial["loss_percent"] // 5
+                trial_controls.append(
+                    _route_occurrence(
+                        trial["phase"],
+                        "loss",
+                        revision,
+                        bundle_id=bundle_id,
+                        seed=seed,
+                        drop_first=dropped,
+                        match_limit=20,
+                        matched=20,
+                        passed=20 - dropped,
+                        dropped=dropped,
+                        held=0,
+                        released=0,
+                    )
+                )
+                revision += 1
+                trial_controls.append(
+                    _route_occurrence(
+                        trial["phase"],
+                        "pass",
+                        revision,
+                        bundle_id=bundle_id,
+                        seed=seed,
+                        drop_first=0,
+                        match_limit=0,
+                        matched=1,
+                        passed=1,
+                        dropped=0,
+                        held=0,
+                        released=0,
+                    )
+                )
+                revision += 1
+            elif collection == "phase_cut_partitions" and trial["cut"] != "carrier_before_global_finality":
+                phase = {
+                    "da_before_availability_qc": "restricted_da",
+                    "prepare_before_complete_barrier": "prepare",
+                    "commit_before_complete_barrier": "commit",
+                }[trial["cut"]]
+                hold = _route_occurrence(
+                    phase,
+                    "hold",
+                    revision,
+                    bundle_id=bundle_id,
+                    seed=seed,
+                    drop_first=0,
+                    match_limit=1,
+                    matched=1,
+                    passed=0,
+                    dropped=0,
+                    held=1,
+                    released=0,
+                )
+                revision += 1
+                trial_controls.append(hold)
+                trial_controls.append(
+                    _route_occurrence(
+                        phase,
+                        "pass",
+                        revision,
+                        bundle_id=bundle_id,
+                        seed=seed,
+                        drop_first=0,
+                        match_limit=0,
+                        matched=1,
+                        passed=0,
+                        dropped=0,
+                        held=1,
+                        released=1,
+                        predecessor=hold["command_sha256"],
+                    )
+                )
+                revision += 1
+            elif collection == "phase_cut_partitions":
+                for carrier_action in ("hold", "heal"):
+                    for peer_index in range(MODULE.GLOBAL_VALIDATORS):
+                        trial_controls.append(
+                            _consensus_carrier_occurrence(
+                                peer_index, carrier_action, revision
+                            )
+                        )
+                        revision += 1
+                for dataspace_ordinal in range(participants):
+                    before_pid = 600 + dataspace_ordinal * 2
+                    trial_controls.append(
+                        _restart_occurrence(
+                            "validator_restart",
+                            4 + dataspace_ordinal * 4,
+                            revision,
+                            "stop_validator_for_quorum_progress",
+                            before_pid=before_pid,
+                            after_pid=before_pid + 1,
+                        )
+                    )
+                    revision += 1
+                trial_controls.append(
+                    _restart_occurrence(
+                        "global_restart",
+                        0,
+                        revision,
+                        "restart_validator",
+                        before_pid=700,
+                        after_pid=701,
+                    )
+                )
+                revision += 1
+                trial_controls.append(
+                    _coordinator_restart_occurrence(
+                        participants,
+                        revision,
+                        bundle_id,
+                        before_pid=702,
+                        after_pid=703,
+                    )
+                )
+                revision += 1
+            else:
+                phase = crash_phases[trial["boundary"]]
+                target_peer = 0 if index in {4, 5} else 4
+                restart_type = (
+                    "global_restart" if index in {4, 5} else "validator_restart"
+                )
+                cut = {
+                    "version": 1,
+                    "revision": revision,
+                    "phase": phase,
+                    "source_id": bundle_id,
+                }
+                trial_controls.append(
+                    _canonical_occurrence("persistence_cut", target_peer, cut)
+                )
+                revision += 1
+                trial_controls.append(
+                    _restart_occurrence(
+                        restart_type,
+                        target_peer,
+                        revision,
+                        "recover_crashed_validator",
+                        before_pid=800 + index * 2,
+                        after_pid=801 + index * 2,
+                    )
+                )
+                revision += 1
+                if index >= 4:
+                    expected_after_state = "finalized"
+            controls.append(
+                {
+                    "record": record_id,
+                    "bundle_id": bundle_id,
+                    "participants": participants,
+                    "seed": seed,
+                    "run": run,
+                    "collection": collection,
+                    "trial_index": index,
+                    "controls": trial_controls,
+                }
+            )
+            snapshots = []
+            for label in ("before", "nonfinalized", "after"):
+                finalized = label == "after" and expected_after_state == "finalized"
+                snapshots.append(
+                    {
+                        "label": label,
+                        "validators": [
+                            _state_observation(
+                                participants,
+                                peer_index,
+                                label=label,
+                                finalized=finalized,
+                            )
+                            for peer_index in range(peer_count)
+                        ],
+                    }
+                )
+            continuous_observations = []
+            for peer_index in range(peer_count):
+                first_response = snapshots[0]["validators"][peer_index]["response_sha256"]
+                middle_response = snapshots[1]["validators"][peer_index]["response_sha256"]
+                last_response = snapshots[2]["validators"][peer_index]["response_sha256"]
+                continuous_observations.append(
+                    {
+                        "peer_index": peer_index,
+                        "check_count": 3,
+                        "first_response_sha256": first_response,
+                        "last_response_sha256": last_response,
+                        "response_chain_sha256": MODULE.hashlib.sha256(
+                            bytes.fromhex(first_response)
+                            + bytes.fromhex(middle_response)
+                            + bytes.fromhex(last_response)
+                        ).hexdigest(),
+                        "baseline_observations": (
+                            2 if expected_after_state == "finalized" else 3
+                        ),
+                        "finalized_observations": (
+                            1 if expected_after_state == "finalized" else 0
+                        ),
+                    }
+                )
+            observations.append(
+                {
+                    "record": record_id,
+                    "bundle_id": bundle_id,
+                    "participants": participants,
+                    "seed": seed,
+                    "run": run,
+                    "collection": collection,
+                    "trial_index": index,
+                    "expected_after_state": expected_after_state,
+                    "continuous_checks": peer_count * 3,
+                    "continuous_observations": continuous_observations,
+                    "partial_visibility_observed": False,
+                    "partial_spendable_observations": 0,
+                    "snapshots": snapshots,
+                }
+            )
+            total_checks += peer_count * 3
+
+    control_path = evidence_dir / MODULE.FAULT_CONTROL_EVIDENCE_FILE
+    observation_path = evidence_dir / MODULE.FAULT_OBSERVATION_EVIDENCE_FILE
+    control_path.write_bytes(b"".join(MODULE.canonical_bytes(row) + b"\n" for row in controls))
+    observation_path.write_bytes(
+        b"".join(MODULE.canonical_bytes(row) + b"\n" for row in observations)
+    )
+    control_sha = MODULE.hashlib.sha256(control_path.read_bytes()).hexdigest()
+    observation_sha = MODULE.hashlib.sha256(observation_path.read_bytes()).hexdigest()
+    payload["atomicity"]["continuous_checks"] = total_checks
+    for collection in collections:
+        for index, trial in enumerate(payload[collection]):
+            record_id = f"n{participants}:s{seed}:r{run}:{collection}:{index}"
+            trial.update(
+                {
+                    "control_transcript_sha256": control_sha,
+                    "control_transcript_record": record_id,
+                    "observation_capture_sha256": observation_sha,
+                    "observation_capture_record": record_id,
+                }
+            )
+
+
 def response(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     """Wrap a job-specific payload in the exact process-harness envelope."""
 
@@ -229,6 +803,17 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 for a, b in zip(left, right)
             )
         )
+        left_by_name = {entry["name"]: entry["value"] for entry in left}
+        right_by_name = {
+            entry["name"].removesuffix("_variant_b"): entry["value"]
+            for entry in right
+        }
+        self.assertEqual(left_by_name["account_id"], MODULE.LEAKAGE_ACCOUNT_LEFT_I105)
+        self.assertEqual(right_by_name["account_id"], MODULE.LEAKAGE_ACCOUNT_RIGHT_I105)
+        self.assertEqual(left_by_name["asset_id"], MODULE.LEAKAGE_ASSET_LEFT)
+        self.assertEqual(right_by_name["asset_id"], MODULE.LEAKAGE_ASSET_RIGHT)
+        self.assertLess(left_by_name["amount"] + 12, 1 << 120)
+        self.assertLess(right_by_name["amount"] + 12, 1 << 120)
 
     def test_process_inventory_must_name_every_real_validator_and_coordinator(
         self,
@@ -271,14 +856,21 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
 
     def test_fault_response_materializes_reporter_valid_bound_evidence(self) -> None:
         job = fault_job()
-        result = response(job, fault_payload())
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            evidence = root / "evidence"
+            publication = root / "publication"
+            evidence.mkdir()
+            publication.mkdir()
+            payload = fault_payload()
+            write_fault_evidence(evidence, payload)
+            result = response(job, payload)
             raw, artifacts = MODULE.materialize_fault_response(
                 result,
                 plan=plan(),
                 job=job,
-                publication_root=root,
+                evidence_dir=evidence,
+                publication_root=publication,
             )
             parsed = MODULE.fault_report.parse_run(raw, "fixture")
             self.assertEqual(parsed[:3], (3, 7, 2))
@@ -287,31 +879,217 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 {"operator_log", "sanitized_capture"},
             )
             for artifact in artifacts:
-                self.assertTrue((root / artifact["path"]).is_file())
+                self.assertTrue((publication / artifact["path"]).is_file())
+
+    def test_fault_continuous_observer_summaries_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary)
+            payload = fault_payload()
+            write_fault_evidence(evidence, payload)
+            rows, _binding = MODULE.read_bound_jsonl_file(
+                evidence / MODULE.FAULT_OBSERVATION_EVIDENCE_FILE,
+                "fault observations",
+            )
+            control_rows, _control_binding = MODULE.read_bound_jsonl_file(
+                evidence / MODULE.FAULT_CONTROL_EVIDENCE_FILE,
+                "fault controls",
+            )
+            too_short = copy.deepcopy(rows)
+            too_short[0]["continuous_observations"][0]["check_count"] = 2
+            with self.assertRaisesRegex(MODULE.RunnerError, "lacks a live polling"):
+                MODULE.validate_fault_observation_records(
+                    too_short, participants=3, seed=7, run=2
+                )
+            unanchored = copy.deepcopy(rows)
+            unanchored[0]["continuous_observations"][0][
+                "first_response_sha256"
+            ] = "f" * 64
+            with self.assertRaisesRegex(MODULE.RunnerError, "exemplar endpoints"):
+                MODULE.validate_fault_observation_records(
+                    unanchored, participants=3, seed=7, run=2
+                )
+            unclassified = copy.deepcopy(rows)
+            unclassified[0]["continuous_observations"][0][
+                "baseline_observations"
+            ] -= 1
+            with self.assertRaisesRegex(MODULE.RunnerError, "unclassified observation"):
+                MODULE.validate_fault_observation_records(
+                    unclassified, participants=3, seed=7, run=2
+                )
+            reused_bundle = copy.deepcopy(rows)
+            reused_bundle[1]["bundle_id"] = reused_bundle[0]["bundle_id"]
+            with self.assertRaisesRegex(MODULE.RunnerError, "reuses an APS bundle"):
+                MODULE.validate_fault_observation_records(
+                    reused_bundle, participants=3, seed=7, run=2
+                )
+            substituted_control_bundle = copy.deepcopy(control_rows)
+            substituted_control_bundle[0]["bundle_id"] = "e" * 64
+            with self.assertRaisesRegex(MODULE.RunnerError, "binds another APS bundle"):
+                MODULE.validate_fault_control_records(
+                    substituted_control_bundle, participants=3, seed=7, run=2
+                )
+            substituted_restart = copy.deepcopy(control_rows)
+            crash_restart = next(
+                control
+                for row in substituted_restart
+                if row["collection"] == "crash_recoveries"
+                for control in row["controls"]
+                if control["control_type"] == "validator_restart"
+            )
+            crash_restart["before_pid"] += 10
+            with self.assertRaisesRegex(MODULE.RunnerError, "restart acknowledgement"):
+                MODULE.validate_fault_control_records(
+                    substituted_restart, participants=3, seed=7, run=2
+                )
+
+    def test_fault_restart_topology_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary)
+            payload = fault_payload()
+            write_fault_evidence(evidence, payload)
+            control_rows, _binding = MODULE.read_bound_jsonl_file(
+                evidence / MODULE.FAULT_CONTROL_EVIDENCE_FILE,
+                "fault controls",
+            )
+            by_record = {row["record"]: row for row in control_rows}
+
+            carrier = copy.deepcopy(
+                by_record["n3:s7:r2:phase_cut_partitions:3"]
+            )
+            carrier["controls"] = [
+                control
+                for control in carrier["controls"]
+                if not (
+                    control["control_type"] == "validator_restart"
+                    and control["peer_index"] == 8
+                )
+            ]
+            with self.assertRaisesRegex(MODULE.RunnerError, "restart topology"):
+                MODULE.validate_fault_trial_control_semantics(
+                    carrier,
+                    collection="phase_cut_partitions",
+                    trial=payload["phase_cut_partitions"][3],
+                    label="carrier",
+                )
+
+            duplicate_transition = copy.deepcopy(
+                by_record["n3:s7:r2:phase_cut_partitions:3"]
+            )
+            participant_restarts = [
+                control
+                for control in duplicate_transition["controls"]
+                if control["control_type"] == "validator_restart"
+            ]
+            participant_restarts[1]["before_pid"] = participant_restarts[0][
+                "before_pid"
+            ]
+            participant_restarts[1]["after_pid"] = participant_restarts[0][
+                "after_pid"
+            ]
+            with self.assertRaisesRegex(MODULE.RunnerError, "restart topology"):
+                MODULE.validate_fault_trial_control_semantics(
+                    duplicate_transition,
+                    collection="phase_cut_partitions",
+                    trial=payload["phase_cut_partitions"][3],
+                    label="carrier",
+                )
+
+            empty_hold = copy.deepcopy(
+                by_record["n3:s7:r2:phase_cut_partitions:3"]
+            )
+            hold_control = next(
+                control
+                for control in empty_hold["controls"]
+                if control["control_type"] == "consensus_carrier"
+            )
+            hold_ack = MODULE.strict_json_loads(
+                bytes.fromhex(hold_control["acknowledgement_hex"]).decode(),
+                "hold acknowledgement",
+            )
+            hold_ack["held"] = []
+            hold_ack["held_bytes"] = 0
+            hold_ack_bytes = MODULE.canonical_bytes(hold_ack)
+            hold_control["acknowledgement_hex"] = hold_ack_bytes.hex()
+            hold_control["acknowledgement_sha256"] = MODULE.hashlib.sha256(
+                hold_ack_bytes
+            ).hexdigest()
+            with self.assertRaisesRegex(MODULE.RunnerError, "active carrier Hold"):
+                MODULE.validate_fault_trial_control_semantics(
+                    empty_hold,
+                    collection="phase_cut_partitions",
+                    trial=payload["phase_cut_partitions"][3],
+                    label="carrier",
+                )
+
+            crash = copy.deepcopy(by_record["n3:s7:r2:crash_recoveries:0"])
+            restart = next(
+                control
+                for control in crash["controls"]
+                if control["control_type"] == "validator_restart"
+            )
+            restart["peer_index"] = 5
+            with self.assertRaisesRegex(MODULE.RunnerError, "persistence cut"):
+                MODULE.validate_fault_trial_control_semantics(
+                    crash,
+                    collection="crash_recoveries",
+                    trial=payload["crash_recoveries"][0],
+                    label="crash",
+                )
+
+            wrong_receipt_target = copy.deepcopy(
+                by_record["n3:s7:r2:crash_recoveries:6"]
+            )
+            for control in wrong_receipt_target["controls"]:
+                control["peer_index"] = 0
+                if control["control_type"] == "validator_restart":
+                    control["control_type"] = "global_restart"
+            with self.assertRaisesRegex(MODULE.RunnerError, "persistence cut"):
+                MODULE.validate_fault_trial_control_semantics(
+                    wrong_receipt_target,
+                    collection="crash_recoveries",
+                    trial=payload["crash_recoveries"][6],
+                    label="receipt",
+                )
 
     def test_any_missing_control_acknowledgement_fails_closed(self) -> None:
         job = fault_job()
-        result = response(job, fault_payload())
-        result["payload"]["loss_trials"][0]["control_acknowledged"] = False
         with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evidence = root / "evidence"
+            publication = root / "publication"
+            evidence.mkdir()
+            publication.mkdir()
+            payload = fault_payload()
+            write_fault_evidence(evidence, payload)
+            result = response(job, payload)
+            result["payload"]["loss_trials"][0]["control_acknowledged"] = False
             with self.assertRaisesRegex(MODULE.RunnerError, "fault harness result"):
                 MODULE.materialize_fault_response(
                     result,
                     plan=plan(),
                     job=job,
-                    publication_root=Path(temporary),
+                    evidence_dir=evidence,
+                    publication_root=publication,
                 )
-        result = response(job, fault_payload())
-        result["payload"]["prepare_qc_normalization"][
-            "second_normalized_barrier_sha256"
-        ] = "5" * 64
         with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evidence = root / "evidence"
+            publication = root / "publication"
+            evidence.mkdir()
+            publication.mkdir()
+            payload = fault_payload()
+            write_fault_evidence(evidence, payload)
+            result = response(job, payload)
+            result["payload"]["prepare_qc_normalization"][
+                "second_normalized_barrier_sha256"
+            ] = "5" * 64
             with self.assertRaisesRegex(MODULE.RunnerError, "quorum-equivalent"):
                 MODULE.materialize_fault_response(
                     result,
                     plan=plan(),
                     job=job,
-                    publication_root=Path(temporary),
+                    evidence_dir=evidence,
+                    publication_root=publication,
                 )
 
     def test_benchmark_requires_positive_real_measurements_and_atomic_finality(
