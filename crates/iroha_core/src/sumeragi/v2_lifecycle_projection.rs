@@ -2273,7 +2273,7 @@ fn project_inherited_body_stage(
     {
         return Err(AdapterEffectAdmissionError::InvalidCarrier);
     }
-    validate_tag_for_round(context, tag, inherited.round())?;
+    validate_inherited_body_tag(context, tag, inherited.round(), inherited.phase())?;
     Ok(ProjectedShape {
         key: lifecycle_key(
             context,
@@ -2299,7 +2299,7 @@ fn project_apply(
     if certificate.phase != wire::GlobalPhase::Commit || certificate.subject != subject {
         return Err(AdapterEffectAdmissionError::InvalidCarrier);
     }
-    validate_tag_for_round(context, tag, certificate.round)?;
+    validate_decision_tag(context, tag, certificate.round)?;
     Ok(ProjectedShape {
         key: lifecycle_key(
             context,
@@ -2506,6 +2506,40 @@ fn validate_tag_for_round(
 ) -> Result<(), AdapterEffectAdmissionError> {
     validate_round(context, round)?;
     if tag.height() != context.height || tag.view() < round.view {
+        return Err(AdapterEffectAdmissionError::InvalidCarrier);
+    }
+    Ok(())
+}
+/// Validate the reducer owner of one inherited body stage.
+///
+/// A CommitQC may decide a future view before the local reducer installs that
+/// view, so its exact Store/Validate continuation remains owned by the current
+/// same-height tag. Every non-Decision body carrier retains the ordinary
+/// monotone tag/round requirement.
+fn validate_inherited_body_tag(
+    context: &wire::HeightContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    round: wire::ConsensusRound,
+    phase: Option<wire::GlobalPhase>,
+) -> Result<(), AdapterEffectAdmissionError> {
+    if phase == Some(wire::GlobalPhase::Commit) {
+        validate_decision_tag(context, tag, round)
+    } else {
+        validate_tag_for_round(context, tag, round)
+    }
+}
+/// Validate the current reducer owner of an authenticated Decision.
+///
+/// The full CommitQC is verified by the closed replay-authority join (or by
+/// `project_apply`) before a candidate can commit. This helper relaxes only
+/// view ordering; height and round context remain exact.
+fn validate_decision_tag(
+    context: &wire::HeightContext,
+    tag: crate::sumeragi::v2_core::EventTag,
+    round: wire::ConsensusRound,
+) -> Result<(), AdapterEffectAdmissionError> {
+    validate_round(context, round)?;
+    if tag.height() != context.height {
         return Err(AdapterEffectAdmissionError::InvalidCarrier);
     }
     Ok(())

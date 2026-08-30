@@ -807,14 +807,16 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         launch,
         &[
             ".body_store\n            .take()",
+            ".replayed_decision_key()",
+            ".project_recovered_durable_validate_retry_census(&self.coordinator, replayed_decision)",
             "V2EffectExecutor::open_with_body_store(",
             "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
             "executor\n                .install_authenticated_genesis_body(authenticated_genesis)",
-            ".recovered_published_validate_retry_markers()",
-            ".install_recovered_published_lifecycle_validate_retry_marker(",
             "ProductionV2Services::start_with_apply_service(",
         ],
     );
+    assert!(!launch.contains(".recovered_published_validate_retry_markers()"));
+    assert!(!launch.contains(".install_recovered_published_lifecycle_validate_retry_marker("));
     let worker = source_token_position(launch, "ProductionV2Services::start_with_apply_service(");
     assert!(worker < identity && identity < complete);
     assert_source_tokens_in_order(
@@ -1378,8 +1380,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "if rollover_ready",
             "close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)",
             "let drained_terminal_ingress = activated.with_runner_runtime(\n                &mut active_runner,\n                |_owner, executor, services, _local_proposal| {\n                    let drained = drain_decided_lane_recovery_ingress(",
-            "if drained_terminal_ingress",
-            "continue;",
+            "if drained_terminal_ingress {\n                continue;\n            }",
             "ensure_closed_drained_cut()",
             "finalize_lifecycle_height(",
         ],

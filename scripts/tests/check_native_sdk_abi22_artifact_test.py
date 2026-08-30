@@ -18,6 +18,27 @@ from scripts import check_native_sdk_abi22_artifact as checker
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_checker_loads_under_exact_isolated_ci_invocation() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(REPO_ROOT / "scripts/check_native_sdk_abi22_artifact.py"),
+            "--help",
+        ],
+        cwd=REPO_ROOT,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={"PATH": os.environ.get("PATH", "")},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage: check_native_sdk_abi22_artifact.py" in result.stdout
+    assert "--evidence-dir" in result.stdout
+
+
 def _write_fake_cargo(path: Path, source: str) -> None:
     path.write_text("#!/usr/bin/env python3\n" + source, encoding="utf-8")
     path.chmod(0o755)

@@ -57,6 +57,7 @@ class OfflineCashPublicApiSurfaceV1Test {
             "class OfflineCashPaymentV1",
             "class OfflineCashAcknowledgementV1",
             "class OfflineCashReleaseStatusV1",
+            "class OfflineCashVerificationSessionV1",
             "class OfflineCashWalletSessionV1",
             "object OfflineCashPeerAdapterV1",
         )) {
@@ -65,6 +66,59 @@ class OfflineCashPublicApiSurfaceV1Test {
         assertEquals("kgm2:", OfflineCashPeerAdapterV1.TEXT_PREFIX)
         assertFalse(source.contains("PKK2"))
         assertFalse(source.contains("PKKQ1"))
+    }
+
+    @Test
+    fun `verifier and wallet facades are truthfully separated`() {
+        val source = repositoryRoot().resolve(
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashV1.kt",
+        ).toFile().readText(Charsets.UTF_8)
+        val wallet = source.substringAfter("class OfflineCashWalletSessionV1 private constructor() {")
+            .substringBefore("/** Strict canonical `kgm2:` peer transport adapter")
+
+        assertTrue(wallet.contains("OfflineCashWalletSessionErrorV1.UNAVAILABLE"))
+        for (forbidden in listOf("ByteArray", "Long", "System.currentTimeMillis", "nativeHandle")) {
+            assertFalse(wallet.contains(forbidden), "wallet facade exposes $forbidden")
+        }
+        assertTrue(source.contains("class OfflineCashVerificationSessionV1"))
+        assertTrue(source.contains("nativeVerificationSession"))
+        for (method in listOf(
+            "nativeWalletRuntimeSessionOpenV1",
+            "nativeWalletRuntimeSessionStatusV1",
+            "nativeWalletRuntimeSessionAttemptV1",
+            "nativeWalletRuntimeSessionCloseV1",
+        )) {
+            assertTrue(source.contains(method), "missing fail-closed JNI declaration $method")
+        }
+        assertFalse(source.contains("nativeWalletSession"))
+    }
+
+    @Test
+    fun `wallet runtime C vocabulary matches public Kotlin codes`() {
+        val header = repositoryRoot()
+            .resolve("crates/connect_norito_bridge/include/connect_norito_bridge.h")
+            .toFile()
+            .readText(Charsets.UTF_8)
+
+        assertTrue(
+            header.contains("CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATUS_UNAVAILABLE_V1 = 0"),
+        )
+        for (state in OfflineCashWalletSessionStateV1.entries) {
+            assertTrue(
+                header.contains(
+                    "CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_${state.name}_V1 = ${state.code}",
+                ),
+                "missing C wallet-runtime state code ${state.name}=${state.code}",
+            )
+        }
+        for (action in OfflineCashWalletSessionActionV1.entries) {
+            assertTrue(
+                header.contains(
+                    "CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_${action.name}_V1 = ${action.code}",
+                ),
+                "missing C wallet-runtime action code ${action.name}=${action.code}",
+            )
+        }
     }
 
     @Test

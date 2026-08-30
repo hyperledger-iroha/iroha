@@ -22,7 +22,7 @@ use iroha::{
     crypto::HashOf,
     data_model::{
         Level, ValidationFail,
-        block::{BlockHeader, SignedBlock},
+        block::BlockHeader,
         isi::{
             Grant, InstructionBox, Log, SetParameter,
             error::{InstructionExecutionError, InvalidParameterError},
@@ -35,7 +35,7 @@ use iroha::{
         metadata::Metadata,
         parameter::{Parameter, TransactionParameter},
         permission::Permission,
-        prelude::{Name, QueryBuilderExt},
+        prelude::Name,
         privacy::{
             IrohaZkX509StarkP256StatementV1, PrivacyActiveLifecycleV1,
             PrivacyCapabilityActivationStateV1, PrivacyCapabilityReadinessV1,
@@ -44,10 +44,7 @@ use iroha::{
             PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
             PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementV1,
         },
-        query::{
-            CommittedTransaction, block::prelude::FindBlocks,
-            transaction::prelude::FindTransactions,
-        },
+        query::CommittedTransaction,
         transaction::{
             FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
             TransactionResult, error::TransactionRejectionReason,
@@ -201,16 +198,31 @@ fn authenticated_network_prover_timeout(
     Ok(proof_timeout)
 }
 fn latest_committed_block_timestamp_ms(client: &Client) -> Result<u64> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query trusted block timestamp for native ZK-X509 action")?;
-    let latest = blocks
-        .iter()
-        .max_by_key(|block| block.header().height().get())
+    let height = client
+        .get_status()
+        .wrap_err("query committed height for native ZK-X509 action")?
+        .blocks;
+    let height = NonZeroU64::new(height)
         .ok_or_else(|| eyre!("native ZK-X509 action requires a committed genesis block"))?;
-    u64::try_from(latest.header().creation_time().as_millis())
-        .map_err(|_| eyre!("trusted block timestamp does not fit u64 milliseconds"))
+    let (header, _) = standalone_verified_block_header(client, height)
+        .wrap_err("query standalone-verified block timestamp for native ZK-X509 action")?;
+    u64::try_from(header.creation_time().as_millis())
+        .map_err(|_| eyre!("standalone-verified block timestamp does not fit u64 milliseconds"))
+}
+fn standalone_verified_block_header(
+    client: &Client,
+    height: NonZeroU64,
+) -> Result<(BlockHeader, HashOf<BlockHeader>)> {
+    let (proof, verified_hash) = client
+        .get_bridge_finality_anchor(height, client.network_id)
+        .wrap_err_with(|| {
+            format!("query bounded standalone-verified bridge-finality candidate at {height}")
+        })?;
+    ensure!(
+        proof.block_header.height() == height && proof.block_header.hash() == verified_hash,
+        "standalone bridge-finality candidate returned a different height or block hash"
+    );
+    Ok((proof.block_header, verified_hash))
 }
 fn require_live_x509_submission_window(
     client: &Client,
@@ -269,20 +281,22 @@ fn single_zk_x509_proof_bytes<'a>(
     }
 }
 fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query committed blocks for canonical ZK-X509 genesis binding")?;
-    let genesis = blocks
-        .iter()
-        .filter(|block| block.header().prev_block_hash().is_none())
-        .collect::<Vec<_>>();
+    let genesis_height = NonZeroU64::new(1).expect("genesis height is non-zero");
+    let (header, verified_hash) = standalone_verified_block_header(client, genesis_height)
+        .wrap_err("query standalone-verified bridge-finality genesis candidate")?;
     ensure!(
-        genesis.len() == 1,
-        "FindBlocks must contain exactly one canonical genesis block, got {}",
-        genesis.len()
+        header.height() == genesis_height,
+        "bridge-finality genesis candidate must be at height one"
     );
-    let hash = *genesis[0].header().hash().as_ref();
+    ensure!(
+        header.prev_block_hash().is_none(),
+        "bridge-finality genesis candidate must not have a parent"
+    );
+    let hash = *verified_hash.as_ref();
+    ensure!(
+        hash == *client.network_id.as_bytes(),
+        "standalone-verified height-one block hash must equal the client NetworkId"
+    );
     ensure!(hash != [0; 32], "canonical genesis hash must be non-zero");
     Ok(hash)
 }
@@ -309,44 +323,49 @@ struct TipObservation {
     contains_transaction: bool,
 }
 fn query_tip(client: &Client, transaction: Option<&SignedTransaction>) -> Result<TipObservation> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err_with(|| format!("query committed blocks from {}", client.torii_url))?;
-    let tip = blocks
-        .iter()
-        .max_by_key(|block| block.header().height().get())
+    let height = client
+        .get_status()
+        .wrap_err_with(|| format!("query committed height from {}", client.torii_url))?
+        .blocks;
+    let height = NonZeroU64::new(height)
         .ok_or_else(|| eyre!("{} returned an empty committed chain", client.torii_url))?;
+    let (tip, _) = standalone_verified_block_header(client, height).wrap_err_with(|| {
+        format!(
+            "query standalone-verified committed-tip candidate from {}",
+            client.torii_url
+        )
+    })?;
     let contains_transaction = if let Some(transaction) = transaction {
-        let expected = transaction.hash_as_entrypoint();
-        let matches = tip
-            .entrypoint_hashes()
-            .filter(|observed| observed == &expected)
-            .count();
-        ensure!(
-            matches <= 1,
-            "{} duplicated signed transaction {} in its committed tip",
-            client.torii_url,
-            transaction.hash()
-        );
-        if matches == 1 {
+        if let Some((carrier_height, committed)) =
+            exact_committed_transaction_with_height(client, transaction)?
+        {
+            let is_tip = carrier_height == height;
+            if is_tip {
+                ensure!(
+                    committed.block_hash() == &tip.hash(),
+                    "{} exact transaction carrier hash differs from its committed-tip candidate",
+                    client.torii_url
+                );
+            }
             ensure!(
-                !tip.is_empty() && tip.external_entrypoint_count() > 0,
-                "{} exposed signed transaction {} through an empty or non-external tip",
+                carrier_height.get() <= height.get(),
+                "{} exposed signed transaction {} above its committed-tip candidate",
                 client.torii_url,
                 transaction.hash()
             );
+            is_tip
+        } else {
+            false
         }
-        matches == 1
     } else {
         false
     };
     Ok(TipObservation {
         block: ExactCommittedBlock {
-            height: tip.header().height().get(),
+            height: tip.height().get(),
             hash: tip.hash(),
-            parent_hash: tip.header().prev_block_hash(),
-            creation_time_ms: u64::try_from(tip.header().creation_time().as_millis())
+            parent_hash: tip.prev_block_hash(),
+            creation_time_ms: u64::try_from(tip.creation_time().as_millis())
                 .map_err(|_| eyre!("{} tip timestamp does not fit u64", client.torii_url))?,
         },
         contains_transaction,
@@ -545,24 +564,51 @@ fn exact_committed_transaction(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<Option<CommittedTransaction>> {
+    Ok(
+        exact_committed_transaction_with_height(client, transaction)?
+            .map(|(_, committed)| committed),
+    )
+}
+fn exact_committed_transaction_with_height(
+    client: &Client,
+    transaction: &SignedTransaction,
+) -> Result<Option<(NonZeroU64, CommittedTransaction)>> {
+    let signed_hash = transaction.hash();
+    let Some(status) = client
+        .get_transaction_status_response_local(signed_hash)
+        .wrap_err("query exact transaction status")?
+    else {
+        return Ok(None);
+    };
+    ensure!(
+        status.hash == signed_hash.to_string() && status.scope == "local",
+        "peer-local pipeline status does not bind the requested signed transaction"
+    );
+    if status.resolved_from != "state" {
+        return Ok(None);
+    }
+    let height = status
+        .status
+        .block_height
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| eyre!("state-resolved transaction status omitted a non-zero height"))?;
+    let status_success = match status.status.kind.as_str() {
+        "Applied" => true,
+        "Rejected" => false,
+        kind => {
+            return Err(eyre!(
+                "state-resolved transaction has unexpected status `{kind}`"
+            ));
+        }
+    };
     let expected_hash = transaction.hash_as_entrypoint();
     let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
     let expected_entrypoint_bytes = norito::encode_canonical(&expected_entrypoint)
         .wrap_err("encode expected finalized transaction entrypoint")?;
-    let transactions = client
-        .query(FindTransactions::new())
-        .execute_all()
-        .wrap_err("query finalized transactions")?;
-    let mut matching = transactions
-        .iter()
-        .filter(|committed| committed.entrypoint_hash() == &expected_hash);
-    let Some(committed) = matching.next() else {
-        return Ok(None);
-    };
-    ensure!(
-        matching.next().is_none(),
-        "finalized transaction query returned the same entrypoint hash more than once"
-    );
+    let details = client
+        .get_transaction_details(expected_hash)
+        .wrap_err("query exact finalized transaction details")?;
+    let committed = details.transaction;
     ensure!(
         committed.entrypoint() == &expected_entrypoint
             && norito::encode_canonical(committed.entrypoint())
@@ -574,25 +620,14 @@ fn exact_committed_transaction(
         committed.result_hash() == &committed.result().hash(),
         "finalized transaction result hash differs from its full typed result"
     );
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
+    ensure!(
+        committed.result().is_ok() == status_success,
+        "pipeline status and exact committed result disagree"
+    );
+    client
+        .get_canonical_executed_block_wire(height, &committed)
         .wrap_err("query exact finalized transaction carrier block")?;
-    let mut carriers = blocks
-        .iter()
-        .filter(|block| block.hash() == *committed.block_hash());
-    let carrier: &SignedBlock = carriers
-        .next()
-        .ok_or_else(|| eyre!("exact finalized transaction carrier block is absent"))?;
-    ensure!(
-        carriers.next().is_none(),
-        "finalized block query returned the exact carrier hash more than once"
-    );
-    ensure!(
-        committed.verify_inclusion_in_block(carrier),
-        "finalized transaction entrypoint/result proofs do not match its exact carrier block"
-    );
-    Ok(Some(committed.clone()))
+    Ok(Some((height, committed)))
 }
 fn exact_transaction_result(
     client: &Client,
@@ -1003,7 +1038,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
-        .with_permissioned_consensus()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write(["zk", "stark", "enabled"], true)

@@ -1,25 +1,23 @@
-//! Taira-shaped local-node fail-closed coverage for the disabled ZK-ACE
-//! privacy-transfer candidate.
+//! Taira-shaped local-node capability and native-builder coverage for ZK-ACE.
 #![cfg(feature = "zk-stark")]
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
     data_model::{
+        asset::AssetBalanceScope,
         metadata::Metadata,
-        prelude::{AssetDefinitionId, DomainId, QueryBuilderExt},
+        prelude::{AssetDefinitionId, DomainId},
         privacy::{
             PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyCompiledProfileResultV1,
-            PrivacyCompiledProfileUnavailableReasonV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
+            PrivacyCompiledProfileSnapshotV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
             PrivacyProtocolIdV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
         },
-        query::block::prelude::FindBlocks,
         transaction::FeePaymentIntent,
     },
 };
 use iroha_core::privacy_profiles::{
-    CompiledPrivacyProfileErrorV1, compiled_privacy_profile_snapshot_result_v1,
-    compiled_privacy_profile_v1,
+    compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
@@ -28,11 +26,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use zk_ace_prover::{
-    ZkAcePrivacyActionBuildErrorV1, ZkAcePrivacyActionTransactionContextV1, ZkAcePrivacyTransferV1,
-    ZkAcePrivacyWitnessV1, build_signed_zk_ace_privacy_transfer_v1,
+    ZkAcePrivacyActionTransactionContextV1, ZkAcePrivacyTransferV1, ZkAcePrivacyWitnessV1,
+    build_signed_zk_ace_privacy_transfer_v1,
 };
 
-const TEST_NAME: &str = "zk_ace_privacy_transfer_fails_closed_taira_localnet";
+const TEST_NAME: &str = "zk_ace_privacy_transfer_builds_for_taira_localnet";
 const PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
 
 fn no_fee() -> FeePaymentIntent {
@@ -62,20 +60,10 @@ fn asset_definition_id() -> AssetDefinitionId {
 }
 
 fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query canonical genesis block")?;
-    let genesis = blocks
-        .iter()
-        .filter(|block| block.header().prev_block_hash().is_none())
-        .collect::<Vec<_>>();
-    ensure!(
-        genesis.len() == 1,
-        "expected exactly one genesis block, got {}",
-        genesis.len()
-    );
-    let hash = *genesis[0].header().hash().as_ref();
+    // NetworkId is the exact canonical genesis-header hash, not an operator label. Reading the
+    // typed client identity avoids the retired unbounded FindBlocks path while preserving the
+    // same lineage binding used by transaction validation.
+    let hash = *client.network_id.as_bytes();
     ensure!(hash != [0; 32], "canonical genesis hash is zero");
     Ok(hash)
 }
@@ -103,29 +91,26 @@ fn policy(witness: &ZkAcePrivacyWitnessV1) -> PrivacyZkAcePolicyRecordV1 {
 }
 
 #[test]
-fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
+fn zk_ace_privacy_transfer_builds_for_taira_localnet() -> Result<()> {
     require_test_network_feature("zk-stark")?;
     init_instruction_registry();
 
-    ensure!(
-        compiled_privacy_profile_v1(PROTOCOL)
-            == Err(CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                protocol_id: PROTOCOL,
-            }),
-        "ZK-ACE unexpectedly became governance-available"
-    );
+    let compiled = compiled_privacy_profile_v1(PROTOCOL)
+        .map_err(|error| eyre!("load available ZK-ACE compiled profile: {error:?}"))?;
+    let compiled_snapshot = PrivacyCompiledProfileSnapshotV1::from(compiled);
     ensure!(
         compiled_privacy_profile_snapshot_result_v1(PROTOCOL)
-            == PrivacyCompiledProfileResultV1::Unavailable(
-                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
-            ),
-        "local ZK-ACE capability result is not the exact fail-closed status"
+            == PrivacyCompiledProfileResultV1::Available(compiled_snapshot),
+        "local ZK-ACE capability result is not the exact available profile"
     );
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_permissioned_consensus()
+        // Canonical Taira is a four-validator NPoS network. Permissioned consensus suppresses
+        // the test builder's stake-validator genesis bootstrap while the public lane remains
+        // stake-elected, so routed reads correctly fail closed with an empty authority pool.
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);
         });
@@ -138,34 +123,36 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
 
     let row = client
         .get_privacy_capabilities()
-        .wrap_err("query fail-closed ZK-ACE capability")?
+        .wrap_err("query available ZK-ACE capability")?
         .protocols
         .into_iter()
         .find(|row| row.protocol_id == PROTOCOL)
         .ok_or_else(|| eyre!("ZK-ACE capability row missing"))?;
     ensure!(
-        row.compiled_profile
-            == PrivacyCompiledProfileResultV1::Unavailable(
-                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
-            ),
-        "network exposed an unexpected ZK-ACE compiled profile: {:?}",
+        row.compiled_profile == PrivacyCompiledProfileResultV1::Available(compiled_snapshot),
+        "network exposed a different ZK-ACE compiled profile: {:?}",
         row.compiled_profile
     );
     ensure!(
         row.activation.is_none(),
-        "unavailable ZK-ACE unexpectedly has an activation: {:?}",
+        "fresh ZK-ACE localnet unexpectedly has an activation: {:?}",
         row.activation
     );
 
     let witness = witness(0x11);
-    let transfer =
-        ZkAcePrivacyTransferV1::try_new(policy(&witness), ALICE_ID.clone(), BOB_ID.clone(), 19)
-            .wrap_err("construct governed ZK-ACE transfer")?;
+    let transfer = ZkAcePrivacyTransferV1::try_new(
+        policy(&witness),
+        ALICE_ID.clone(),
+        BOB_ID.clone(),
+        AssetBalanceScope::Global,
+        19,
+    )
+    .wrap_err("construct governed ZK-ACE transfer")?;
     let creation_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock before Unix epoch")?;
     let genesis_hash = canonical_genesis_hash(&client)?;
-    let build_error = match build_signed_zk_ace_privacy_transfer_v1(
+    let signed = build_signed_zk_ace_privacy_transfer_v1(
         ZkAcePrivacyActionTransactionContextV1 {
             network_id: client.network_id,
             authority: ALICE_ID.clone(),
@@ -179,20 +166,20 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
         witness,
         genesis_hash,
         ALICE_KEYPAIR.private_key(),
-    ) {
-        Ok(_) => {
-            return Err(eyre!(
-                "disabled ZK-ACE production builder admitted a transfer"
-            ));
-        }
-        Err(error) => error,
-    };
+    )
+    .wrap_err("build signed native ZK-ACE transfer")?;
     ensure!(
-        matches!(
-            &build_error,
-            ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable
-        ),
-        "ZK-ACE builder rejected for the wrong reason: {build_error:?}"
+        signed.transaction_hash() != [0; 32]
+            && signed.transaction_intent_digest() != [0; 32]
+            && signed.statement_digest() != [0; 32]
+            && signed.proof_envelope_hash() != [0; 32]
+            && signed.statement_bytes() > 0
+            && signed.proof_bytes() > 0
+            && signed.encoded_proof_envelope_bytes() > 0
+            && signed.effect().amount == 19
+            && signed.effect().source == ALICE_ID.clone()
+            && signed.effect().destination == BOB_ID.clone(),
+        "signed ZK-ACE builder output is incomplete or bound to the wrong effect"
     );
     Ok(())
 }

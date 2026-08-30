@@ -18,6 +18,7 @@ public final class TransportRequest {
   private final byte[] body;
   private final Duration timeout;
   private final Long maximumResponseBytes;
+  private final boolean allowAmbientCredentials;
   private final RequestReplayPolicy replayPolicy;
 
   private TransportRequest(
@@ -26,7 +27,8 @@ public final class TransportRequest {
       final Map<String, List<String>> headers,
       final byte[] body,
       final Duration timeout,
-      final Long maximumResponseBytes) {
+      final Long maximumResponseBytes,
+      final boolean allowAmbientCredentials) {
     this.method = Objects.requireNonNull(method, "method");
     this.uri = Objects.requireNonNull(uri, "uri");
     this.headers = Collections.unmodifiableMap(headers);
@@ -36,6 +38,7 @@ public final class TransportRequest {
       BoundedResponseBodyReader.validateMaximum(maximumResponseBytes.longValue());
     }
     this.maximumResponseBytes = maximumResponseBytes;
+    this.allowAmbientCredentials = allowAmbientCredentials;
     this.replayPolicy = deriveReplayPolicy(method, headers, this.body);
   }
 
@@ -65,6 +68,11 @@ public final class TransportRequest {
     return maximumResponseBytes;
   }
 
+  /** Whether the executor may consult ambient cookie or origin/proxy authentication sources. */
+  public boolean allowAmbientCredentials() {
+    return allowAmbientCredentials;
+  }
+
   /** Replay policy derived from the immutable request method, headers, and body. */
   public RequestReplayPolicy replayPolicy() {
     return replayPolicy;
@@ -82,6 +90,7 @@ public final class TransportRequest {
     private byte[] body = new byte[0];
     private Duration timeout = null;
     private Long maximumResponseBytes = null;
+    private boolean allowAmbientCredentials = true;
 
     public Builder setMethod(final String method) {
       this.method = Objects.requireNonNull(method, "method");
@@ -139,9 +148,21 @@ public final class TransportRequest {
       return this;
     }
 
+    /** Controls whether the executor may inherit ambient credential sources. */
+    public Builder setAllowAmbientCredentials(final boolean allowAmbientCredentials) {
+      this.allowAmbientCredentials = allowAmbientCredentials;
+      return this;
+    }
+
     public TransportRequest build() {
       return new TransportRequest(
-          method, uri, copyHeaders(headers), body, timeout, maximumResponseBytes);
+          method,
+          uri,
+          copyHeaders(headers),
+          body,
+          timeout,
+          maximumResponseBytes,
+          allowAmbientCredentials);
     }
 
     private static Map<String, List<String>> copyHeaders(final Map<String, List<String>> source) {

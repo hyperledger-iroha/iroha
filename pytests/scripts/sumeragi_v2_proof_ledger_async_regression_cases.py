@@ -1777,10 +1777,9 @@ def test_lifecycle_decision_apply_corridor_semantics_survive_effect_item_reseal(
         ),
         (
             "retain_effect_batch_at_frontier",
-            "self.published_lifecycle_validate_retry_markers = "
-            "retained_published_validate_retry_markers;",
-            "let _ = retained_published_validate_retry_markers;",
-            "atomically commit both retry-owner maps",
+            "for (key, marker) in published_validate_retry_marker_updates {",
+            "for (key, marker) in published_validate_retry_marker_updates.into_iter().take(0) {",
+            "publish only touched keys after complete preflight",
         ),
         (
             "ready_to_finish",

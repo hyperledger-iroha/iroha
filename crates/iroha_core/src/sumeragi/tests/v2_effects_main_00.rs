@@ -183,6 +183,7 @@ struct FakeRuntime {
     retain_body_available_effect_ownership: bool,
     live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
+    reject_foreign_cross_authority_terminal_owner: bool,
     terminal_body_candidate_commits: usize,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: Option<usize>,
@@ -510,6 +511,9 @@ impl EffectRuntime for FakeRuntime {
         }
         self.scheduler_ownership_ready = false;
         Ok(())
+    }
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        false
     }
     fn authoritative_tag(&self) -> Option<EventTag> {
         self.round_tag
@@ -942,9 +946,25 @@ impl EffectRuntime for FakeRuntime {
         let identity = ownership.candidate_semantic_identity().ok_or_else(|| {
             "fake runtime terminal query omitted the candidate identity".to_owned()
         })?;
-        let Some(incumbent) = self.terminal_body_candidate_owners.get(&identity) else {
+        let exact_incumbent = self.terminal_body_candidate_owners.get(&identity);
+        let cross_authority_incumbent = exact_incumbent.is_none().then(|| {
+            self.terminal_body_candidate_owners
+                .values()
+                .find(|incumbent| {
+                    incumbent
+                        .adopt_incumbent_body_stage_for_retry_or_authority(ownership, effect)
+                        .is_ok()
+                })
+        });
+        let Some(incumbent) = exact_incumbent.or(cross_authority_incumbent.flatten()) else {
             return Ok(None);
         };
+        if self.reject_foreign_cross_authority_terminal_owner
+            && exact_incumbent.is_none()
+            && incumbent.owner() != ownership.owner()
+        {
+            return Err("coalesced body completion changed its exact lifecycle owner".to_owned());
+        }
         incumbent
             .adopt_incumbent_body_stage_for_retry_or_authority(ownership, effect)
             .map(Some)

@@ -17,7 +17,9 @@ import org.hyperledger.iroha.android.client.HttpTransportExecutor;
  * {@link HttpTransportExecutor} implementation backed by {@link HttpURLConnection}.
  *
  * <p>This executor avoids {@code java.net.http} so it can serve JVM and Android targets with the
- * same canonical implementation.
+ * same canonical implementation. It deliberately rejects credential-free requests: the JVM and
+ * Android URLConnection stacks expose process-wide authentication caches that cannot be disabled
+ * or inspected portably on an individual connection.
  */
 public final class UrlConnectionTransportExecutor
     implements HttpTransportExecutor, StreamingTransportExecutor {
@@ -73,6 +75,13 @@ public final class UrlConnectionTransportExecutor
   }
 
   private TransportResponse executeSync(final TransportRequest request) {
+    if (!request.allowAmbientCredentials()) {
+      throw credentialFreeUnsupported();
+    }
+    return executeSyncInternal(request);
+  }
+
+  private TransportResponse executeSyncInternal(final TransportRequest request) {
     HttpURLConnection connection = null;
     try {
       connection = openConnection(request);
@@ -94,6 +103,13 @@ public final class UrlConnectionTransportExecutor
   }
 
   private TransportStreamResponse openStreamSync(final TransportRequest request) {
+    if (!request.allowAmbientCredentials()) {
+      throw credentialFreeUnsupported();
+    }
+    return openStreamSyncInternal(request);
+  }
+
+  private TransportStreamResponse openStreamSyncInternal(final TransportRequest request) {
     HttpURLConnection connection = null;
     try {
       connection = openConnection(request);
@@ -238,5 +254,11 @@ public final class UrlConnectionTransportExecutor
       return Integer.MAX_VALUE;
     }
     return Math.max(0, (int) millis);
+  }
+
+  private static IllegalStateException credentialFreeUnsupported() {
+    return new IllegalStateException(
+        "credential-free requests are unsupported by URLConnection because process-wide "
+            + "authentication caches cannot be isolated");
   }
 }

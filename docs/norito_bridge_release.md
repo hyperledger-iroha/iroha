@@ -42,7 +42,7 @@ that workflow for local release verification.
    directories outside the repository and invoke the helper:
 
    ```bash
-   export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
+   export CARGO_TARGET_DIR=/release/apple-a-cargo
    mkdir -p "$CARGO_TARGET_DIR"
    export CARGO_BUILD_JOBS=1
    export CARGO_INCREMENTAL=0
@@ -52,9 +52,9 @@ that workflow for local release verification.
    export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
    export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
    export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
-   export NORITO_BRIDGE_OUT_DIR=/absolute/cache/iroha-apple-artifacts
-   export NORITO_BRIDGE_BUILD_DIR=/absolute/cache/iroha-apple-build
-   export NORITO_BRIDGE_ARCHIVE_OUTPUT=/absolute/cache/NoritoBridge.xcframework.zip
+   export NORITO_BRIDGE_OUT_DIR=/release/apple-a-artifacts
+   export NORITO_BRIDGE_BUILD_DIR=/release/apple-a-build
+   export NORITO_BRIDGE_ARCHIVE_OUTPUT=/release/apple-a-archive/NoritoBridge.xcframework.zip
    mkdir -p \
      "$NORITO_BRIDGE_OUT_DIR" \
      "$NORITO_BRIDGE_BUILD_DIR" \

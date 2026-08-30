@@ -531,6 +531,63 @@ impl RuntimeEffectOwnership {
 }
 
 impl PendingRuntimeEffectBinding {
+    /// Project one strictly later reducer consumer for the same immutable Store.
+    ///
+    /// Persistence remains owned by the original physical task while a
+    /// protected body crosses `EnterView`.  The later reducer incarnation may
+    /// retain or monotonically strengthen the body-stage authority, but it may
+    /// not change the causal lifecycle key, body coordinates, or commitment.
+    pub(in crate::sumeragi) fn project_store_consumer_rebind(
+        &self,
+        previous: &AdapterEffect,
+        successor: &AdapterEffect,
+        successor_pending: &Self,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::StoreBody {
+                tag: previous_tag,
+                round: previous_round,
+                subject: previous_subject,
+            },
+            AdapterEffect::StoreBody {
+                tag: successor_tag,
+                round: successor_round,
+                subject: successor_subject,
+            },
+        ) = (previous, successor)
+        else {
+            return None;
+        };
+        if !self.validate_exact(previous)
+            || !successor_pending.validate_exact(successor)
+            || !successor_tag.strictly_advances(*previous_tag)
+            || previous_round != successor_round
+            || previous_subject != successor_subject
+        {
+            return None;
+        }
+        let predecessor_statement = self.candidate_statement?;
+        let successor_statement = successor_pending.candidate_statement?;
+        if !matches!(
+            predecessor_statement.body_stage_authority_relation_to(successor_statement)?,
+            RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Upgrade
+        ) {
+            return None;
+        }
+        let candidate =
+            production_adapter_effect_candidate_binding(successor, Some(&successor_statement))
+                .ok()??;
+        if candidate.kind != RUNTIME_CANDIDATE_KIND_STORE_BODY
+            || candidate.statement != Some(successor_statement)
+        {
+            return None;
+        }
+        let projected =
+            Self::from_effect_candidate(self.causal_lifecycle_key, successor, Some(&candidate));
+        (projected.validate_exact(successor) && &projected == successor_pending)
+            .then_some(projected)
+    }
+
     /// Project one strictly later consumer tag for the same immutable Fetch.
     pub(in crate::sumeragi) fn project_fetch_consumer_rebind(
         &self,

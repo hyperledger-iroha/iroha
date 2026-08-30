@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-validator governance lifecycle coverage for the complete canonical
 //! first-release exact-12 privacy registry. Ten executable profiles retain
-//! positive governance coverage; ZK-ACE and ZK-AMS remain explicitly
+//! positive governance coverage; ZK-X509 and ZK-AMS remain explicitly
 //! unavailable and fail closed on every validator.
 //!
 //! This scenario deliberately does not construct privacy proofs. The isolated
@@ -26,6 +26,7 @@ use iroha_core::{
         CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
         compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
         zk_ams_release_candidate_profile_material_v1,
+        zk_x509_release_candidate_profile_material_v1,
     },
 };
 use iroha_data_model::{
@@ -36,21 +37,17 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     permission::Permission,
-    prelude::QueryBuilderExt,
     privacy::{
         PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
-        PrivacyCompiledProfileUnavailableReasonV1, PrivacyEngineIdV1,
-        PrivacyExact12CapabilityManifestV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1,
-        PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        privacy_exact12_fixture_bundle_v1,
+        PrivacyCompiledProfileUnavailableReasonV1, PrivacyExact12CapabilityManifestV1,
+        PrivacyProofEnvelopeV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, privacy_exact12_fixture_bundle_v1,
     },
-    query::transaction::prelude::FindTransactions,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-use std::time::Duration;
+use std::{num::NonZeroU64, time::Duration};
 use tokio::time::{Instant, sleep, timeout};
 const TEST_NAME: &str =
     "canonical_exact12_governance_survives_four_peer_activation_replay_and_restart";
@@ -62,8 +59,8 @@ const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(300);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
-const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
-const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 2] = [ZK_ACE_PROTOCOL, ZK_AMS_PROTOCOL];
+const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V0;
+const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 2] = [ZK_AMS_PROTOCOL, ZK_X509_PROTOCOL];
 #[derive(Clone, Copy)]
 struct ExpectedProtocolState {
     protocol_id: PrivacyProtocolIdV1,
@@ -429,24 +426,53 @@ fn exact_applied_transaction_visible(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<bool> {
-    let expected_hash = transaction.hash_as_entrypoint();
-    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let transactions = client
-        .query(FindTransactions::new())
-        .execute_all()
-        .wrap_err("query finalized transactions")?;
-    let Some(committed) = transactions
-        .iter()
-        .find(|committed| committed.entrypoint_hash() == &expected_hash)
+    let signed_hash = transaction.hash();
+    let Some(status) = client
+        .get_transaction_status_response_local(signed_hash)
+        .wrap_err("query exact transaction status")?
     else {
         return Ok(false);
     };
+    ensure!(
+        status.hash == signed_hash.to_string() && status.scope == "local",
+        "peer-local pipeline status does not bind the requested signed transaction"
+    );
+    if status.resolved_from != "state" {
+        return Ok(false);
+    }
+    let height = status
+        .status
+        .block_height
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| eyre!("state-resolved transaction status omitted a non-zero height"))?;
+    let status_applied = match status.status.kind.as_str() {
+        "Applied" => true,
+        "Rejected" => false,
+        kind => {
+            return Err(eyre!(
+                "state-resolved transaction has unexpected status `{kind}`"
+            ));
+        }
+    };
+    let expected_hash = transaction.hash_as_entrypoint();
+    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
+    let details = client
+        .get_transaction_details(expected_hash)
+        .wrap_err("query exact finalized transaction details")?;
+    let committed = &details.transaction;
     ensure!(
         committed.entrypoint() == &expected_entrypoint,
         "entrypoint hash matched different transaction bytes"
     );
     ensure!(
-        committed.result().0.is_ok(),
+        committed.result().is_ok() == status_applied,
+        "pipeline status and exact committed result disagree"
+    );
+    client
+        .get_canonical_executed_block_wire(height, committed)
+        .wrap_err("authenticate exact finalized transaction carrier")?;
+    ensure!(
+        committed.result().is_ok(),
         "exact-12 catch-up sentinel is visible but finalized as rejected"
     );
     Ok(true)
@@ -575,7 +601,7 @@ async fn wait_for_identical_unreleased_profiles(
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> {
+async fn zk_x509_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> {
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
     for protocol_id in UNAVAILABLE_PROTOCOLS {
@@ -596,23 +622,17 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
     }
     let zk_ams_candidate = zk_ams_release_candidate_profile_material_v1()
         .wrap_err("derive deterministic but non-activatable ZK-AMS candidate profile")?;
-    let mut zk_ace_candidate = compiled_available_profiles()?
-        .into_iter()
-        .next()
-        .ok_or_else(|| eyre!("exact-12 registry contains no executable control profile"))?;
-    zk_ace_candidate.protocol_id = ZK_ACE_PROTOCOL;
-    zk_ace_candidate.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
-    zk_ace_candidate.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri;
-    zk_ace_candidate.protocol_limits = PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0;
+    let zk_x509_candidate = zk_x509_release_candidate_profile_material_v1()
+        .wrap_err("derive deterministic but non-activatable ZK-X509 candidate profile")?;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
-        .with_permissioned_consensus()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);
         });
-    let context = stringify!(zk_ace_and_zk_ams_fail_closed_across_four_peer_restart);
+    let context = stringify!(zk_x509_and_zk_ams_fail_closed_across_four_peer_restart);
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
@@ -634,7 +654,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
         wait_for_identical_unreleased_profiles(
             &all_clients,
             initial_height,
-            "ZK-ACE and ZK-AMS must begin unavailable and unregistered",
+            "ZK-X509 and ZK-AMS must begin unavailable and unregistered",
         )
         .await?;
         let grant = instruction_transaction(
@@ -652,7 +672,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
             "unavailable-profile governance grant convergence",
         )
         .await?;
-        for candidate in [zk_ace_candidate, zk_ams_candidate] {
+        for candidate in [zk_x509_candidate, zk_ams_candidate] {
             let proposal_height = next_incoming_height(&client)?;
             let activation_height = proposal_height
                 .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
@@ -782,7 +802,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
         wait_for_identical_unreleased_profiles(
             &all_clients,
             final_height,
-            "ZK-ACE and ZK-AMS closed status must survive validator restart",
+            "ZK-X509 and ZK-AMS closed status must survive validator restart",
         )
         .await?;
         let restarted_client = bounded_client(restart_peer.client());
@@ -805,7 +825,7 @@ async fn zk_ace_and_zk_ams_fail_closed_across_four_peer_restart() -> Result<()> 
             );
         }
         println!(
-            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_activation_network::zk_ace_and_zk_ams_fail_closed_across_four_peer_restart:passed"
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_activation_network::zk_x509_and_zk_ams_fail_closed_across_four_peer_restart:passed"
         );
         Ok(())
     }
@@ -823,7 +843,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
-        .with_permissioned_consensus()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer.write(["zk", "stark", "enabled"], true);
         });
@@ -850,7 +870,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             &all_clients,
             initial_height,
             &absent,
-            "available profiles must begin inactive while ZK-ACE and ZK-AMS remain unavailable",
+            "available profiles must begin inactive while ZK-X509 and ZK-AMS remain unavailable",
         )
         .await?;
         let immutable_consensus_policy = initial_snapshots[0].consensus_policy;

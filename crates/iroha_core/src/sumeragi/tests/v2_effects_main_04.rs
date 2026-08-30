@@ -636,6 +636,7 @@ fn failed_view_cleanup_keeps_stale_fetch_and_requires_restart() {
         .expect("admit prior-view body recovery");
     let before = executor.body_ownership_projection();
     services.fail_on = Some("cancel-fetch");
+    executor.runtime.round_tag = Some(tag(1));
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -693,6 +694,7 @@ fn view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation() {
         .expect("certified request index");
     assert!(executor.outstanding_requests.cancel(request_hash));
     let before = executor.body_ownership_projection();
+    executor.runtime.round_tag = Some(tag(1));
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -702,7 +704,8 @@ fn view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation() {
             }],
             &mut services,
         ),
-        Err(EffectExecutorError::Contract(_))
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("is unsolicited or replayed")
     ));
     assert_eq!(executor.body_ownership_projection(), before);
     assert_eq!(executor.protected_lock, None);
@@ -755,6 +758,7 @@ fn view_cleanup_second_cancellation_failure_commits_no_fetch_retirement() {
     let first_work_id = services.fetch_tasks[0].id();
     let before = executor.body_ownership_projection();
     services.fail_on_call = Some(("cancel-fetch", 2));
+    executor.runtime.round_tag = Some(tag(1));
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {

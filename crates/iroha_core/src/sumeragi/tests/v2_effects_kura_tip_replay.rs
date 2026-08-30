@@ -880,6 +880,160 @@ fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
     );
     assert!(executor.authenticated_genesis_replay.is_empty());
 }
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn enter_view_preserves_inflight_authenticated_genesis_store_for_prepare_validate() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    executor.runtime.retain_body_available_effect_ownership = true;
+    let mut services = fixture.services();
+    executor
+        .install_authenticated_genesis_body_for_test(&fixture.block)
+        .expect("retain authenticated staged genesis");
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let original_tag = tag(0);
+    let next_tag = tag(1);
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let initial_fetch = AdapterEffect::FetchBody {
+        tag: original_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare.clone()),
+    };
+    let initial_fetch_ownership = bound_test_effect_ownership(&initial_fetch, original_tag, 9_060);
+    executor.runtime.exact_effect_ownership =
+        Some((initial_fetch.clone(), initial_fetch_ownership));
+    executor
+        .consume_effects(vec![initial_fetch], &mut services)
+        .expect("publish authenticated genesis as the certified body");
+    assert!(services.fetch_tasks.is_empty());
+    assert!(matches!(
+        executor.runtime.completions.last(),
+        Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
+            if *completion_tag == original_tag && manifest == &fixture.manifest
+    ));
+
+    let initial_store = AdapterEffect::StoreBody {
+        tag: original_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    executor
+        .consume_effects(vec![initial_store], &mut services)
+        .expect("start the replay-authorized authenticated-genesis store");
+    let store_task = services.store_tasks[0].clone();
+    let store_id = store_task.id();
+    services.inflight_stores.insert(store_id);
+    assert!(matches!(
+        executor.authenticated_genesis_replay.get(&key),
+        Some(AuthenticatedGenesisReplayStageV1::Store { work_id, .. })
+            if *work_id == store_id
+    ));
+
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(next_tag);
+    executor.runtime.locked_body = Some(key);
+    executor
+        .install_view(
+            next_tag,
+            timeout,
+            Some(prepare.clone()),
+            &mut services,
+        )
+        .expect("preserve the protected authenticated-genesis Store across EnterView");
+    assert!(services.cancelled_stores.is_empty());
+    assert_eq!(executor.pending_stores.len(), 1);
+    assert!(executor.pending_stores[&store_id].consumer.is_none());
+    assert!(!executor.body_pipeline_owners.contains_key(&key));
+    assert!(matches!(
+        executor.authenticated_genesis_replay.get(&key),
+        Some(AuthenticatedGenesisReplayStageV1::Store { work_id, .. })
+            if *work_id == store_id
+    ));
+
+    let current_fetch = AdapterEffect::FetchBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare.clone()),
+    };
+    let current_fetch_ownership = bound_test_effect_ownership(&current_fetch, next_tag, 9_061);
+    executor.runtime.exact_effect_ownership =
+        Some((current_fetch.clone(), current_fetch_ownership));
+    executor
+        .consume_effects(vec![current_fetch], &mut services)
+        .expect("adopt the protected authenticated-genesis Store in the new view");
+    assert!(services.fetch_tasks.is_empty());
+    assert!(matches!(
+        executor.runtime.completions.last(),
+        Some(RuntimeCompletion::BodyAvailable(completion_tag, manifest))
+            if *completion_tag == next_tag && manifest == &fixture.manifest
+    ));
+
+    let current_store = AdapterEffect::StoreBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    executor
+        .consume_effects(vec![current_store], &mut services)
+        .expect("rebind the immutable authenticated-genesis Store to its new consumer");
+    assert_eq!(services.store_tasks.len(), 1);
+    let current_store_ownership = match &executor.pending_stores[&store_id].consumer {
+        Some(StoreConsumer::Reducer { tag, ownership }) if *tag == next_tag => ownership.clone(),
+        consumer => panic!("expected one rebound genesis Store consumer, got {consumer:?}"),
+    };
+
+    let completion = services.execute_store(store_id);
+    assert_eq!(completion.tag(), original_tag);
+    assert_eq!(
+        executor
+            .complete_body_store(completion, &mut services)
+            .expect("route the immutable genesis Store completion to the new consumer"),
+        CompletionDisposition::Accepted
+    );
+    assert!(matches!(
+        executor.authenticated_genesis_replay.get(&key),
+        Some(AuthenticatedGenesisReplayStageV1::Stored { .. })
+    ));
+    assert!(matches!(
+        executor.runtime.completions.last(),
+        Some(RuntimeCompletion::BodyStored(completion_tag, round, subject, _))
+            if *completion_tag == next_tag
+                && *round == fixture.manifest.round
+                && *subject == fixture.manifest.subject
+    ));
+
+    let validate = AdapterEffect::ValidateBody {
+        tag: next_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let validate_ownership = current_store_ownership
+        .rebind_as_inherited_adapter_effect(&validate)
+        .expect("carry the rebound genesis Store root into Validate");
+    executor.runtime.durable_body_authority_certificate = Some(prepare);
+    executor.runtime.exact_effect_ownership = Some((validate.clone(), validate_ownership));
+    executor
+        .consume_effects(vec![validate], &mut services)
+        .expect("admit authenticated-genesis Validate after the protected view change");
+    assert!(executor.authenticated_genesis_replay.is_empty());
+    assert!(
+        executor
+            .pending_durable_validate_admissions
+            .contains_key(&key)
+    );
+    assert!(executor.durable_validate_retry_seals.contains_key(&key));
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
 #[test]
 fn authenticated_genesis_cache_does_not_satisfy_a_different_subject() {
     let fixture = Fixture::new();

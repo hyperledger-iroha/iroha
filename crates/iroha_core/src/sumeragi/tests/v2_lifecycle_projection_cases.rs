@@ -2673,3 +2673,32 @@ fn bound_but_drifted_carriers_fail_closed_without_records() {
     ));
     assert!(coordinator.records.is_empty());
 }
+
+#[test]
+fn lagging_prepare_inherited_body_tag_remains_invalid_carrier() {
+    let fixture = Fixture::new();
+    let future_round = wire::ConsensusRound {
+        view: fixture.round.view + 1,
+        ..fixture.round
+    };
+
+    assert!(matches!(
+        validate_inherited_body_tag(
+            &fixture.context,
+            fixture.tag,
+            future_round,
+            Some(wire::GlobalPhase::Prepare),
+        ),
+        Err(AdapterEffectAdmissionError::InvalidCarrier)
+    ));
+    assert!(
+        validate_inherited_body_tag(
+            &fixture.context,
+            fixture.tag,
+            future_round,
+            Some(wire::GlobalPhase::Commit),
+        )
+        .is_ok(),
+        "only the authenticated Decision phase may retain a lagging current owner"
+    );
+}

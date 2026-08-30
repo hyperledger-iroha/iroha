@@ -1,0 +1,61 @@
+name: Taira reset17 authenticated corridor
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/pr_taira_reset17.yml"
+      - "ops/taira/reset17/**"
+      - "scripts/taira_fd198_supervisor.py"
+      - "scripts/tests/taira_fd198_supervisor_test.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pr_taira_reset17.yml"
+      - "ops/taira/reset17/**"
+      - "scripts/taira_fd198_supervisor.py"
+      - "scripts/tests/taira_fd198_supervisor_test.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reset17-controller:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - id: reset17-python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          update-environment: false
+      - name: Bind isolated Python 3.12
+        env:
+          SETUP_PYTHON_PATH: ${{ steps.reset17-python.outputs.python-path }}
+        run: |
+          reset17_python="$($SETUP_PYTHON_PATH -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$($reset17_python -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "RESET17_PYTHON=$reset17_python" >> "$GITHUB_ENV"
+      - name: Compile reset17 sources
+        run: >-
+          "$RESET17_PYTHON" -I -B -m py_compile
+          ops/taira/reset17/testnet_reset17_authenticated_reset.py
+          ops/taira/reset17/testnet_reset17_authenticated_reset_test.py
+          ops/taira/reset17/prepare_reset17_candidate.py
+          ops/taira/reset17/prepare_reset17_candidate_test.py
+          scripts/taira_fd198_supervisor.py
+          scripts/tests/taira_fd198_supervisor_test.py
+      - name: Exercise FD198 supervisor
+        run: >-
+          "$RESET17_PYTHON" -I -B
+          scripts/tests/taira_fd198_supervisor_test.py -v
+      - name: Exercise authenticated reset17 controller
+        run: >-
+          "$RESET17_PYTHON" -I -B
+          ops/taira/reset17/testnet_reset17_authenticated_reset_test.py -v
+      - name: Exercise sealed candidate renderer
+        run: >-
+          "$RESET17_PYTHON" -I -B
+          ops/taira/reset17/prepare_reset17_candidate_test.py -v

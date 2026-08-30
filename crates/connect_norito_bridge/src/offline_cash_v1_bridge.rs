@@ -1,4 +1,4 @@
-//! Authenticated Offline Cash V1 artifact and opaque-session registries.
+//! Authenticated Offline Cash V1 artifact and opaque verification-session registries.
 //!
 //! This module is deliberately separate from the older Kagemusha V4 artifact
 //! registry. Offline Cash V1 has its own threshold-authenticated 34-role
@@ -43,20 +43,21 @@ use super::{
 
 const ARTIFACT_COUNT: usize = OfflineCashArtifactRoleV1::ALL.len();
 const ARTIFACT_HANDLE_NAMESPACE: u64 = 0x4f31_0000_0000_0000;
-const SESSION_HANDLE_NAMESPACE: u64 = 0x4f32_0000_0000_0000;
+const VERIFICATION_SESSION_HANDLE_NAMESPACE: u64 = 0x4f32_0000_0000_0000;
 const HANDLE_COUNTER_MASK: u64 = 0x0000_ffff_ffff_ffff;
 const MAX_ARTIFACT_CHUNK_BYTES: usize = 1024 * 1024;
 const MAX_ARTIFACT_INGESTS: usize = ARTIFACT_COUNT * 2;
 const VALIDATION_RECEIPT_MAX_BYTES: usize = 1024 * 1024;
-const MAX_WALLET_SESSIONS: usize = 1024;
+const MAX_VERIFICATION_SESSIONS: usize = 1024;
 const NETWORK_ID_LITERAL_BYTES: usize = 64;
 const ASSET_DEFINITION_ID_LITERAL_MAX_BYTES: usize = 64;
 
 static ARTIFACT_HANDLES: AtomicU64 = AtomicU64::new(1);
-static SESSION_HANDLES: AtomicU64 = AtomicU64::new(1);
+static VERIFICATION_SESSION_HANDLES: AtomicU64 = AtomicU64::new(1);
 static ARTIFACTS: OnceLock<Mutex<HashMap<u64, Arc<Mutex<ArtifactIngest>>>>> = OnceLock::new();
 static INSTALLED: OnceLock<Mutex<Option<Arc<InstalledRelease>>>> = OnceLock::new();
-static SESSIONS: OnceLock<Mutex<HashMap<u64, Arc<Mutex<WalletSession>>>>> = OnceLock::new();
+static VERIFICATION_SESSIONS: OnceLock<Mutex<HashMap<u64, Arc<Mutex<VerificationSession>>>>> =
+    OnceLock::new();
 
 struct ArtifactIngest {
     manifest: OfflineCashReleaseManifestV1,
@@ -72,7 +73,11 @@ struct InstalledRelease {
     verifier: OfflineCashVerifierV1,
 }
 
-struct WalletSession {
+/// Process-local verifier receipt retention only.
+///
+/// This value does not own secure-device state, durable wallet state, a
+/// balance, or payment-publication authority.
+struct VerificationSession {
     installed: Arc<InstalledRelease>,
     request: OfflineCashPaymentRequestV1,
     payment: Option<OfflineCashPaymentV1>,
@@ -88,15 +93,15 @@ fn installed() -> &'static Mutex<Option<Arc<InstalledRelease>>> {
     INSTALLED.get_or_init(|| Mutex::new(None))
 }
 
-fn sessions() -> &'static Mutex<HashMap<u64, Arc<Mutex<WalletSession>>>> {
-    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+fn verification_sessions() -> &'static Mutex<HashMap<u64, Arc<Mutex<VerificationSession>>>> {
+    VERIFICATION_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn artifact_error<T>() -> BridgeResult<T> {
     Err(BridgeError::OfflineCashArtifact)
 }
 
-fn session_error<T>() -> BridgeResult<T> {
+fn verification_session_error<T>() -> BridgeResult<T> {
     Err(BridgeError::OfflineCashSession)
 }
 
@@ -148,7 +153,7 @@ unsafe fn read_bounded(
     unsafe { read_bounded_with_error(pointer, length, maximum, BridgeError::OfflineCashArtifact) }
 }
 
-unsafe fn read_session_bounded(
+unsafe fn read_verification_session_bounded(
     pointer: *const c_uchar,
     length: c_ulong,
     maximum: usize,
@@ -167,16 +172,16 @@ unsafe fn read_digest(pointer: *const c_uchar, length: c_ulong) -> BridgeResult<
     Ok(digest)
 }
 
-pub(super) unsafe fn read_session_digest(
+pub(super) unsafe fn read_verification_session_digest(
     pointer: *const c_uchar,
     length: c_ulong,
 ) -> BridgeResult<[u8; 32]> {
-    let bytes = unsafe { read_session_bounded(pointer, length, 32) }?;
+    let bytes = unsafe { read_verification_session_bounded(pointer, length, 32) }?;
     let digest: [u8; 32] = bytes
         .try_into()
         .map_err(|_| BridgeError::OfflineCashSession)?;
     if digest == [0; 32] {
-        return session_error();
+        return verification_session_error();
     }
     Ok(digest)
 }
@@ -243,7 +248,7 @@ pub(super) fn verify_payment_once(
     if current.verifier.manifest_digest() != expected_manifest_digest
         || current.verifier.release_id() != request.release_id
     {
-        return session_error();
+        return verification_session_error();
     }
     let request = request.clone();
     let payment = payment.clone();
@@ -260,11 +265,11 @@ pub(super) fn verify_payment_once(
     )
 }
 
-fn session_arc(handle: u64) -> BridgeResult<Arc<Mutex<WalletSession>>> {
-    if !is_handle(handle, SESSION_HANDLE_NAMESPACE) {
-        return session_error();
+fn verification_session_arc(handle: u64) -> BridgeResult<Arc<Mutex<VerificationSession>>> {
+    if !is_handle(handle, VERIFICATION_SESSION_HANDLE_NAMESPACE) {
+        return verification_session_error();
     }
-    sessions()
+    verification_sessions()
         .lock()
         .map_err(|_| BridgeError::OfflineCashSession)?
         .get(&handle)
@@ -272,7 +277,7 @@ fn session_arc(handle: u64) -> BridgeResult<Arc<Mutex<WalletSession>>> {
         .ok_or(BridgeError::OfflineCashSession)
 }
 
-fn open_session(
+fn open_verification_session(
     request: OfflineCashPaymentRequestV1,
     expected_release_id: [u8; 32],
     expected_manifest_digest: [u8; 32],
@@ -285,26 +290,26 @@ fn open_session(
         || current.verifier.manifest_digest() != expected_manifest_digest
         || request.release_id != expected_release_id
     {
-        return session_error();
+        return verification_session_error();
     }
-    let mut registry = sessions()
+    let mut registry = verification_sessions()
         .lock()
         .map_err(|_| BridgeError::OfflineCashSession)?;
     if !is_current(&current)? {
-        return session_error();
+        return verification_session_error();
     }
-    if registry.len() >= MAX_WALLET_SESSIONS {
-        return session_error();
+    if registry.len() >= MAX_VERIFICATION_SESSIONS {
+        return verification_session_error();
     }
     let handle = allocate_handle(
-        &SESSION_HANDLES,
-        SESSION_HANDLE_NAMESPACE,
+        &VERIFICATION_SESSION_HANDLES,
+        VERIFICATION_SESSION_HANDLE_NAMESPACE,
         |candidate| registry.contains_key(&candidate),
         BridgeError::OfflineCashSession,
     )?;
     registry.insert(
         handle,
-        Arc::new(Mutex::new(WalletSession {
+        Arc::new(Mutex::new(VerificationSession {
             installed: current,
             request,
             payment: None,
@@ -315,22 +320,22 @@ fn open_session(
     Ok(handle)
 }
 
-fn accept_session_payment(
+fn verify_verification_session_payment(
     handle: u64,
     payment: OfflineCashPaymentV1,
     now_ms: u64,
 ) -> BridgeResult<Vec<u8>> {
-    let session = session_arc(handle)?;
+    let verification_session = verification_session_arc(handle)?;
     let (current, request) = {
-        let state = session
+        let state = verification_session
             .lock()
             .map_err(|_| BridgeError::OfflineCashSession)?;
         if !is_current(&state.installed)? || state.acknowledgement.is_some() {
-            return session_error();
+            return verification_session_error();
         }
         if let Some(existing) = state.payment.as_ref() {
             if existing != &payment || state.receipt.is_none() {
-                return session_error();
+                return verification_session_error();
             }
             return norito::encode_canonical(existing).map_err(|_| BridgeError::OfflineCashSession);
         }
@@ -349,37 +354,37 @@ fn accept_session_payment(
     )?;
     let canonical =
         norito::encode_canonical(&payment).map_err(|_| BridgeError::OfflineCashSession)?;
-    let mut state = session
+    let mut state = verification_session
         .lock()
         .map_err(|_| BridgeError::OfflineCashSession)?;
     if !is_current(&state.installed)? || state.acknowledgement.is_some() {
-        return session_error();
+        return verification_session_error();
     }
     if let Some(existing) = state.payment.as_ref() {
         if existing == &payment && state.receipt.is_some() {
             return Ok(canonical);
         }
-        return session_error();
+        return verification_session_error();
     }
     state.payment = Some(payment);
     state.receipt = Some(receipt);
     Ok(canonical)
 }
 
-fn accept_session_acknowledgement(
+fn verify_verification_session_acknowledgement(
     handle: u64,
     acknowledgement: OfflineCashAcknowledgementV1,
 ) -> BridgeResult<Vec<u8>> {
-    let session = session_arc(handle)?;
-    let mut state = session
+    let verification_session = verification_session_arc(handle)?;
+    let mut state = verification_session
         .lock()
         .map_err(|_| BridgeError::OfflineCashSession)?;
     if !is_current(&state.installed)? {
-        return session_error();
+        return verification_session_error();
     }
     if let Some(existing) = state.acknowledgement.as_ref() {
         if existing != &acknowledgement {
-            return session_error();
+            return verification_session_error();
         }
         return norito::encode_canonical(existing).map_err(|_| BridgeError::OfflineCashSession);
     }
@@ -397,7 +402,7 @@ fn accept_session_acknowledgement(
         .verify_acknowledgement(&state.request, payment, &acknowledgement, receipt)
         .map_err(|_| BridgeError::OfflineCashSession)?;
     if !is_current(&state.installed)? {
-        return session_error();
+        return verification_session_error();
     }
     let canonical =
         norito::encode_canonical(&acknowledgement).map_err(|_| BridgeError::OfflineCashSession)?;
@@ -405,7 +410,7 @@ fn accept_session_acknowledgement(
     Ok(canonical)
 }
 
-fn decode_exact_session_context(
+fn decode_exact_verification_session_context(
     expected_network_id: &[u8],
     expected_asset_definition_id: &[u8],
 ) -> BridgeResult<(NetworkId, AssetDefinitionId)> {
@@ -415,7 +420,7 @@ fn decode_exact_session_context(
         .parse::<NetworkId>()
         .map_err(|_| BridgeError::OfflineCashSession)?;
     if network_id.to_string() != network_literal {
-        return session_error();
+        return verification_session_error();
     }
     let asset_literal = core::str::from_utf8(expected_asset_definition_id)
         .map_err(|_| BridgeError::OfflineCashSession)?;
@@ -423,12 +428,12 @@ fn decode_exact_session_context(
         .parse::<AssetDefinitionId>()
         .map_err(|_| BridgeError::OfflineCashSession)?;
     if asset_definition_id.to_string() != asset_literal {
-        return session_error();
+        return verification_session_error();
     }
     Ok((network_id, asset_definition_id))
 }
 
-pub(crate) fn open_session_canonical_bound(
+pub(crate) fn open_verification_session_canonical_bound(
     request: &[u8],
     expected_release_id: [u8; 32],
     expected_manifest_digest: [u8; 32],
@@ -438,14 +443,17 @@ pub(crate) fn open_session_canonical_bound(
     let request = OfflineCashPaymentRequestV1::decode_canonical_exact(request)
         .map_err(|_| BridgeError::OfflineCashSession)?;
     let (expected_network_id, expected_asset_definition_id) =
-        decode_exact_session_context(expected_network_id, expected_asset_definition_id)?;
+        decode_exact_verification_session_context(
+            expected_network_id,
+            expected_asset_definition_id,
+        )?;
     if request.network_id != expected_network_id || request.asset != expected_asset_definition_id {
-        return session_error();
+        return verification_session_error();
     }
-    open_session(request, expected_release_id, expected_manifest_digest)
+    open_verification_session(request, expected_release_id, expected_manifest_digest)
 }
 
-pub(crate) fn accept_session_payment_canonical(
+pub(crate) fn verify_verification_session_payment_canonical(
     handle: u64,
     payment: &[u8],
     observed_now_ms: u64,
@@ -454,31 +462,31 @@ pub(crate) fn accept_session_payment_canonical(
         || payment.is_empty()
         || payment.len() > OFFLINE_CASH_PAYMENT_MAX_BYTES_V1
     {
-        return session_error();
+        return verification_session_error();
     }
-    let session = session_arc(handle)?;
-    let request = session
+    let verification_session = verification_session_arc(handle)?;
+    let request = verification_session
         .lock()
         .map_err(|_| BridgeError::OfflineCashSession)?
         .request
         .clone();
     let payment = OfflineCashPaymentV1::decode_canonical_exact_against(payment, &request)
         .map_err(|_| BridgeError::OfflineCashSession)?;
-    accept_session_payment(handle, payment, observed_now_ms)
+    verify_verification_session_payment(handle, payment, observed_now_ms)
 }
 
-pub(crate) fn accept_session_acknowledgement_canonical(
+pub(crate) fn verify_verification_session_acknowledgement_canonical(
     handle: u64,
     acknowledgement: &[u8],
 ) -> BridgeResult<Vec<u8>> {
     if acknowledgement.is_empty()
         || acknowledgement.len() > OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1
     {
-        return session_error();
+        return verification_session_error();
     }
-    let session = session_arc(handle)?;
+    let verification_session = verification_session_arc(handle)?;
     let (request, payment) = {
-        let state = session
+        let state = verification_session
             .lock()
             .map_err(|_| BridgeError::OfflineCashSession)?;
         (
@@ -495,16 +503,16 @@ pub(crate) fn accept_session_acknowledgement_canonical(
         &payment,
     )
     .map_err(|_| BridgeError::OfflineCashSession)?;
-    accept_session_acknowledgement(handle, acknowledgement)
+    verify_verification_session_acknowledgement(handle, acknowledgement)
 }
 
-pub(crate) fn session_state_code(handle: u64) -> BridgeResult<u8> {
-    let session = session_arc(handle)?;
-    let state = session
+pub(crate) fn verification_session_state_code(handle: u64) -> BridgeResult<u8> {
+    let verification_session = verification_session_arc(handle)?;
+    let state = verification_session
         .lock()
         .map_err(|_| BridgeError::OfflineCashSession)?;
     if !is_current(&state.installed)? {
-        return session_error();
+        return verification_session_error();
     }
     Ok(if state.acknowledgement.is_some() {
         3
@@ -515,11 +523,11 @@ pub(crate) fn session_state_code(handle: u64) -> BridgeResult<u8> {
     })
 }
 
-pub(crate) fn close_session(handle: u64) -> BridgeResult<()> {
-    if !is_handle(handle, SESSION_HANDLE_NAMESPACE) {
-        return session_error();
+pub(crate) fn close_verification_session(handle: u64) -> BridgeResult<()> {
+    if !is_handle(handle, VERIFICATION_SESSION_HANDLE_NAMESPACE) {
+        return verification_session_error();
     }
-    sessions()
+    verification_sessions()
         .lock()
         .map_err(|_| BridgeError::OfflineCashSession)?
         .remove(&handle)
@@ -861,17 +869,18 @@ pub unsafe extern "C" fn connect_norito_offline_cash_artifact_set_install_v1(
                 return artifact_error();
             }
         }
-        // Publish while excluding new session insertion, then discard every
-        // receipt pinned to the replaced release. `open_session` rechecks the
-        // current Arc after taking the session-registry lock, so a caller that
+        // Publish while excluding new verification-session insertion, then
+        // discard every verifier receipt pinned to the replaced release.
+        // `open_verification_session` rechecks the current Arc after taking the
+        // verification-session registry lock, so a caller that
         // raced this rotation cannot insert a stale handle afterward.
-        let mut session_registry = sessions()
+        let mut verification_session_registry = verification_sessions()
             .lock()
             .map_err(|_| BridgeError::OfflineCashArtifact)?;
         *installed()
             .lock()
             .map_err(|_| BridgeError::OfflineCashArtifact)? = Some(candidate);
-        session_registry.clear();
+        verification_session_registry.clear();
         Ok(())
     })();
     bridge_result_to_code(result)
@@ -890,7 +899,7 @@ pub unsafe extern "C" fn connect_norito_offline_cash_artifact_set_uninstall_v1(
             unsafe { read_digest(expected_release_id_ptr, expected_release_id_len) }?;
         let expected_manifest_digest =
             unsafe { read_digest(expected_manifest_digest_ptr, expected_manifest_digest_len) }?;
-        let mut session_registry = sessions()
+        let mut verification_session_registry = verification_sessions()
             .lock()
             .map_err(|_| BridgeError::OfflineCashArtifact)?;
         let mut active = installed()
@@ -905,7 +914,7 @@ pub unsafe extern "C" fn connect_norito_offline_cash_artifact_set_uninstall_v1(
             }
             Some(_) => {
                 *active = None;
-                session_registry.clear();
+                verification_session_registry.clear();
             }
             None => {}
         }
@@ -914,9 +923,10 @@ pub unsafe extern "C" fn connect_norito_offline_cash_artifact_set_uninstall_v1(
     bridge_result_to_code(result)
 }
 
-/// Legacy unbound session open. It remains exported for ABI safety but cannot authorize a session.
+/// Unbound verification-session open is unavailable because exact network and
+/// asset context is mandatory.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_open_v1(
+pub unsafe extern "C" fn connect_norito_offline_cash_verification_session_open_v1(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
     expected_release_id_ptr: *const c_uchar,
@@ -936,12 +946,16 @@ pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_open_v1(
         expected_manifest_digest_ptr,
         expected_manifest_digest_len,
     );
-    bridge_result_to_code(session_error::<()>())
+    bridge_result_to_code(verification_session_error::<()>())
 }
 
-/// Create one opaque receiver session bound to exact app-selected network and asset identities.
+/// Create one opaque verifier-only receiver session bound to exact
+/// app-selected network and asset identities.
+///
+/// The returned handle retains proof-verification receipts in this process. It
+/// is not a wallet-runtime handle and cannot authorize device or monetary state.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_open_bound_v1(
+pub unsafe extern "C" fn connect_norito_offline_cash_verification_session_open_bound_v1(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
     expected_release_id_ptr: *const c_uchar,
@@ -962,35 +976,39 @@ pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_open_bound_v
             return Err(BridgeError::NullPtr);
         }
         let request = unsafe {
-            read_session_bounded(
+            read_verification_session_bounded(
                 request_ptr,
                 request_len,
                 iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
-        let expected_release_id =
-            unsafe { read_session_digest(expected_release_id_ptr, expected_release_id_len) }?;
+        let expected_release_id = unsafe {
+            read_verification_session_digest(expected_release_id_ptr, expected_release_id_len)
+        }?;
         let expected_manifest_digest = unsafe {
-            read_session_digest(expected_manifest_digest_ptr, expected_manifest_digest_len)
+            read_verification_session_digest(
+                expected_manifest_digest_ptr,
+                expected_manifest_digest_len,
+            )
         }?;
         let expected_network_id = unsafe {
-            read_session_bounded(
+            read_verification_session_bounded(
                 expected_network_id_ptr,
                 expected_network_id_len,
                 NETWORK_ID_LITERAL_BYTES,
             )
         }?;
         if expected_network_id.len() != NETWORK_ID_LITERAL_BYTES {
-            return session_error();
+            return verification_session_error();
         }
         let expected_asset_definition_id = unsafe {
-            read_session_bounded(
+            read_verification_session_bounded(
                 expected_asset_definition_id_ptr,
                 expected_asset_definition_id_len,
                 ASSET_DEFINITION_ID_LITERAL_MAX_BYTES,
             )
         }?;
-        let handle = open_session_canonical_bound(
+        let handle = open_verification_session_canonical_bound(
             &request,
             expected_release_id,
             expected_manifest_digest,
@@ -1003,9 +1021,10 @@ pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_open_bound_v
     bridge_result_to_code(result)
 }
 
-/// Verify both parity proofs and commit their move-only receipt to an opaque session.
+/// Verify both parity proofs and retain their move-only receipt in the
+/// verifier-only process session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_accept_payment_v1(
+pub unsafe extern "C" fn connect_norito_offline_cash_verification_session_verify_payment_v1(
     handle: u64,
     payment_ptr: *const c_uchar,
     payment_len: c_ulong,
@@ -1016,9 +1035,14 @@ pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_accept_payme
     clear_bridge_output(out_ptr, out_len);
     let result = (|| {
         let payment = unsafe {
-            read_session_bounded(payment_ptr, payment_len, OFFLINE_CASH_PAYMENT_MAX_BYTES_V1)
+            read_verification_session_bounded(
+                payment_ptr,
+                payment_len,
+                OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+            )
         }?;
-        let canonical = accept_session_payment_canonical(handle, &payment, observed_now_ms)?;
+        let canonical =
+            verify_verification_session_payment_canonical(handle, &payment, observed_now_ms)?;
         unsafe {
             publish_offline_cash_output_v1(
                 out_ptr,
@@ -1031,9 +1055,9 @@ pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_accept_payme
     bridge_result_to_code(result)
 }
 
-/// Validate an acknowledgement against the exact retained paired-proof receipt.
+/// Verify an acknowledgement against the exact retained paired-proof receipt.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1(
+pub unsafe extern "C" fn connect_norito_offline_cash_verification_session_verify_acknowledgement_v1(
     handle: u64,
     acknowledgement_ptr: *const c_uchar,
     acknowledgement_len: c_ulong,
@@ -1043,13 +1067,14 @@ pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_accept_ackno
     clear_bridge_output(out_ptr, out_len);
     let result = (|| {
         let acknowledgement = unsafe {
-            read_session_bounded(
+            read_verification_session_bounded(
                 acknowledgement_ptr,
                 acknowledgement_len,
                 OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
             )
         }?;
-        let canonical = accept_session_acknowledgement_canonical(handle, &acknowledgement)?;
+        let canonical =
+            verify_verification_session_acknowledgement_canonical(handle, &acknowledgement)?;
         unsafe {
             publish_offline_cash_output_v1(
                 out_ptr,
@@ -1062,9 +1087,10 @@ pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_accept_ackno
     bridge_result_to_code(result)
 }
 
-/// Return the exact monotonic state code: request `1`, payment `2`, acknowledgement `3`.
+/// Return the exact monotonic verification state code: request verified `1`,
+/// payment verified `2`, acknowledgement verified `3`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_state_v1(
+pub unsafe extern "C" fn connect_norito_offline_cash_verification_session_state_v1(
     handle: u64,
     out_state: *mut u8,
 ) -> c_int {
@@ -1075,18 +1101,222 @@ pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_state_v1(
         if out_state.is_null() {
             return Err(BridgeError::NullPtr);
         }
-        let code = session_state_code(handle)?;
+        let code = verification_session_state_code(handle)?;
         unsafe { *out_state = code };
         Ok(())
     })();
     bridge_result_to_code(result)
 }
 
-/// Destroy one opaque session. Repeating close is deliberately rejected.
+/// Destroy one opaque verification session. Repeating close is deliberately rejected.
+#[unsafe(no_mangle)]
+pub extern "C" fn connect_norito_offline_cash_verification_session_close_v1(handle: u64) -> c_int {
+    let result = close_verification_session(handle);
+    bridge_result_to_code(result)
+}
+
+// The wallet-runtime session ABI below is intentionally disjoint from the
+// verifier-session registry. ABI22 has no reviewed production secure-device
+// backend, so it can report only the inert unavailable sentinel and can never
+// issue a handle or accept an action.
+
+/// Attempt to open the production wallet runtime.
+///
+/// ABI22 always clears `out_handle` to zero and returns the Offline Cash
+/// session error. A future backend must use a new reviewed implementation gate;
+/// symbol presence alone cannot enable this function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_wallet_runtime_session_open_v1(
+    out_handle: *mut u64,
+) -> c_int {
+    if !out_handle.is_null() {
+        unsafe { *out_handle = 0 };
+    }
+    if out_handle.is_null() {
+        return BridgeError::NullPtr.code();
+    }
+    BridgeError::OfflineCashSession.code()
+}
+
+/// Report the inert wallet-runtime sentinel.
+///
+/// Success initializes both outputs to the only ABI22 values: status
+/// unavailable `0` and state unavailable `0`. No handle is created.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_wallet_runtime_session_status_v1(
+    out_status: *mut u8,
+    out_state: *mut u8,
+) -> c_int {
+    if !out_status.is_null() {
+        unsafe { *out_status = 0 };
+    }
+    if !out_state.is_null() {
+        unsafe { *out_state = 0 };
+    }
+    if out_status.is_null() || out_state.is_null() {
+        return BridgeError::NullPtr.code();
+    }
+    0
+}
+
+/// Reject every wallet-runtime action without consulting verifier state.
+#[unsafe(no_mangle)]
+pub extern "C" fn connect_norito_offline_cash_wallet_runtime_session_attempt_v1(
+    handle: u64,
+    action: u8,
+) -> c_int {
+    let _ = (handle, action);
+    BridgeError::OfflineCashSession.code()
+}
+
+/// Reject close because ABI22 can never create a wallet-runtime handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn connect_norito_offline_cash_wallet_runtime_session_close_v1(
+    handle: u64,
+) -> c_int {
+    let _ = handle;
+    BridgeError::OfflineCashSession.code()
+}
+
+// The `wallet_session` exports below are ABI22 compatibility aliases only.
+// They never represented a durable wallet runtime. New callers must use the
+// truthful `verification_session` namespace above.
+
+/// Deprecated verifier-session ABI alias; use
+/// [`connect_norito_offline_cash_verification_session_open_v1`].
+#[deprecated(
+    note = "verifier-only ABI alias; use connect_norito_offline_cash_verification_session_open_v1"
+)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_open_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    expected_release_id_ptr: *const c_uchar,
+    expected_release_id_len: c_ulong,
+    expected_manifest_digest_ptr: *const c_uchar,
+    expected_manifest_digest_len: c_ulong,
+    out_handle: *mut u64,
+) -> c_int {
+    unsafe {
+        connect_norito_offline_cash_verification_session_open_v1(
+            request_ptr,
+            request_len,
+            expected_release_id_ptr,
+            expected_release_id_len,
+            expected_manifest_digest_ptr,
+            expected_manifest_digest_len,
+            out_handle,
+        )
+    }
+}
+
+/// Deprecated verifier-session ABI alias; use
+/// [`connect_norito_offline_cash_verification_session_open_bound_v1`].
+#[deprecated(
+    note = "verifier-only ABI alias; use connect_norito_offline_cash_verification_session_open_bound_v1"
+)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_open_bound_v1(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    expected_release_id_ptr: *const c_uchar,
+    expected_release_id_len: c_ulong,
+    expected_manifest_digest_ptr: *const c_uchar,
+    expected_manifest_digest_len: c_ulong,
+    expected_network_id_ptr: *const c_uchar,
+    expected_network_id_len: c_ulong,
+    expected_asset_definition_id_ptr: *const c_uchar,
+    expected_asset_definition_id_len: c_ulong,
+    out_handle: *mut u64,
+) -> c_int {
+    unsafe {
+        connect_norito_offline_cash_verification_session_open_bound_v1(
+            request_ptr,
+            request_len,
+            expected_release_id_ptr,
+            expected_release_id_len,
+            expected_manifest_digest_ptr,
+            expected_manifest_digest_len,
+            expected_network_id_ptr,
+            expected_network_id_len,
+            expected_asset_definition_id_ptr,
+            expected_asset_definition_id_len,
+            out_handle,
+        )
+    }
+}
+
+/// Deprecated verifier-session ABI alias; use
+/// [`connect_norito_offline_cash_verification_session_verify_payment_v1`].
+#[deprecated(
+    note = "verifier-only ABI alias; use connect_norito_offline_cash_verification_session_verify_payment_v1"
+)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_accept_payment_v1(
+    handle: u64,
+    payment_ptr: *const c_uchar,
+    payment_len: c_ulong,
+    observed_now_ms: u64,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    unsafe {
+        connect_norito_offline_cash_verification_session_verify_payment_v1(
+            handle,
+            payment_ptr,
+            payment_len,
+            observed_now_ms,
+            out_ptr,
+            out_len,
+        )
+    }
+}
+
+/// Deprecated verifier-session ABI alias; use
+/// [`connect_norito_offline_cash_verification_session_verify_acknowledgement_v1`].
+#[deprecated(
+    note = "verifier-only ABI alias; use connect_norito_offline_cash_verification_session_verify_acknowledgement_v1"
+)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1(
+    handle: u64,
+    acknowledgement_ptr: *const c_uchar,
+    acknowledgement_len: c_ulong,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> c_int {
+    unsafe {
+        connect_norito_offline_cash_verification_session_verify_acknowledgement_v1(
+            handle,
+            acknowledgement_ptr,
+            acknowledgement_len,
+            out_ptr,
+            out_len,
+        )
+    }
+}
+
+/// Deprecated verifier-session ABI alias; use
+/// [`connect_norito_offline_cash_verification_session_state_v1`].
+#[deprecated(
+    note = "verifier-only ABI alias; use connect_norito_offline_cash_verification_session_state_v1"
+)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_cash_wallet_session_state_v1(
+    handle: u64,
+    out_state: *mut u8,
+) -> c_int {
+    unsafe { connect_norito_offline_cash_verification_session_state_v1(handle, out_state) }
+}
+
+/// Deprecated verifier-session ABI alias; use
+/// [`connect_norito_offline_cash_verification_session_close_v1`].
+#[deprecated(
+    note = "verifier-only ABI alias; use connect_norito_offline_cash_verification_session_close_v1"
+)]
 #[unsafe(no_mangle)]
 pub extern "C" fn connect_norito_offline_cash_wallet_session_close_v1(handle: u64) -> c_int {
-    let result = close_session(handle);
-    bridge_result_to_code(result)
+    connect_norito_offline_cash_verification_session_close_v1(handle)
 }
 
 #[cfg(test)]
@@ -1159,7 +1389,7 @@ mod tests {
     }
 
     #[test]
-    fn session_context_accepts_only_exact_canonical_network_and_asset_literals() {
+    fn verification_session_context_accepts_only_exact_canonical_network_and_asset_literals() {
         let network_literal = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
         let mut asset_bytes = [0_u8; 16];
         asset_bytes[6] = 0x40;
@@ -1167,21 +1397,23 @@ mod tests {
         let asset = AssetDefinitionId::from_uuid_bytes(asset_bytes).expect("canonical UUIDv4");
         let asset_literal = asset.to_string();
 
-        let (network, decoded_asset) =
-            decode_exact_session_context(network_literal.as_bytes(), asset_literal.as_bytes())
-                .expect("exact canonical context");
+        let (network, decoded_asset) = decode_exact_verification_session_context(
+            network_literal.as_bytes(),
+            asset_literal.as_bytes(),
+        )
+        .expect("exact canonical context");
         assert_eq!(network.to_string(), network_literal);
         assert_eq!(decoded_asset, asset);
 
         assert!(
-            decode_exact_session_context(
+            decode_exact_verification_session_context(
                 network_literal.to_uppercase().as_bytes(),
                 asset_literal.as_bytes(),
             )
             .is_err()
         );
         assert!(
-            decode_exact_session_context(
+            decode_exact_verification_session_context(
                 network_literal.as_bytes(),
                 format!(" {asset_literal}").as_bytes(),
             )

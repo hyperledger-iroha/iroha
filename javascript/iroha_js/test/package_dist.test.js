@@ -260,6 +260,17 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
   }
 });
 
+test("package dist exposes strict active verifying-key discovery on Node and browser clients", () => {
+  assert.equal(
+    typeof packageExports.ToriiClient.prototype.listActiveVerifyingKeyIds,
+    "function",
+  );
+  assert.equal(
+    typeof packageExports.ToriiBrowserClient.prototype.listActiveVerifyingKeyIds,
+    "function",
+  );
+});
+
 test("package dist does not expose Private Kaigi fee proof synthesis", () => {
   for (const [surface, exports] of [
     ["root", packageExports],
@@ -396,7 +407,16 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./torii",
     "./torii-browser",
     "./transaction-codec",
+    "./verifier-backend-registry",
   ]);
+});
+
+test("package publishes the browser-safe verifier registry capability model", () => {
+  assert.deepEqual(packageJson.exports["./verifier-backend-registry"], {
+    browser: "./dist/verifierBackendRegistry.js",
+    import: "./dist/verifierBackendRegistry.js",
+    types: "./verifier-backend-registry.d.ts",
+  });
 });
 
 test("package publishes the typed Sumeragi parser through its lazy subpath", () => {
@@ -948,6 +968,10 @@ test("package declarations expose legacy inspection metadata without retired pri
     new URL("../privacy-capabilities.d.ts", import.meta.url),
     "utf8",
   );
+  const verifierRegistryDeclarations = readFileSync(
+    new URL("../verifier-backend-registry.d.ts", import.meta.url),
+    "utf8",
+  );
 
   for (const retiredPattern of [
     /\bexport function privacyCapabilitiesV1\s*\(/u,
@@ -991,11 +1015,19 @@ test("package declarations expose legacy inspection metadata without retired pri
   );
   assert.match(
     rootDeclarations,
-    /export type OpenVerifyBackendTag = "halo2-ipa-pasta" \| "stark";/u,
+    /export type OpenVerifyBackendTag =\s*import\("\.\/verifier-backend-registry\.js"\)\.OpenVerifyBackendTagV1;/u,
   );
   assert.match(
     rootDeclarations,
-    /export type ToriiVerifierBackendLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-roster-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/ivm-execution-v1"\s*\| "halo2\/pasta\/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri"\s*\| "stark\/fri\/sha256-goldilocks"\s*\| "stark\/fri\/poseidon2-goldilocks"\s*\| "stark\/fri\/sha256_goldilocks\.v1";/u,
+    /export type ToriiVerifierBackendLabelV1 =\s*import\("\.\/verifier-backend-registry\.js"\)\.VerifierBackendRegistryLabelV1;/u,
+  );
+  assert.match(
+    verifierRegistryDeclarations,
+    /export type OpenVerifyBackendTagV1 = "halo2-ipa-pasta" \| "stark";/u,
+  );
+  assert.match(
+    verifierRegistryDeclarations,
+    /export type VerifierBackendRegistryLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-roster-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/ivm-execution-v1"\s*\| "halo2\/pasta\/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri"\s*\| "stark\/fri\/sha256-goldilocks"\s*\| "stark\/fri\/poseidon2-goldilocks"\s*\| "stark\/fri\/sha256_goldilocks\.v1";/u,
   );
 });
 

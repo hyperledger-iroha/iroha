@@ -10,6 +10,9 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -17,6 +20,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPOutputStream;
+import okhttp3.Cookie;
+import okhttp3.CookieJar;
 import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -28,6 +33,163 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.junit.Test;
 
 public final class OkHttpTransportExecutorTests {
+
+  @Test
+  public void credentialFreeRequestUsesCleanClientWithoutCookiesOrAuthenticators()
+      throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(
+          new MockResponse()
+              .setResponseCode(401)
+              .setHeader("WWW-Authenticate", "Basic realm=ambient"));
+      server.start();
+      final OkHttpClient ambientClient =
+          new OkHttpClient.Builder()
+              .cookieJar(
+                  new CookieJar() {
+                    @Override
+                    public void saveFromResponse(
+                        final okhttp3.HttpUrl url, final List<Cookie> cookies) {}
+
+                    @Override
+                    public List<Cookie> loadForRequest(final okhttp3.HttpUrl url) {
+                      final Cookie cookie = Cookie.parse(url, "ambient-session=must-not-leak");
+                      return cookie == null ? List.of() : List.of(cookie);
+                    }
+                  })
+              .authenticator(
+                  (route, response) ->
+                      response.request().newBuilder()
+                          .header("Authorization", "Basic must-not-leak")
+                          .build())
+              .proxyAuthenticator(
+                  (route, response) ->
+                      response.request().newBuilder()
+                          .header("Proxy-Authorization", "Basic must-not-leak")
+                          .build())
+              .addInterceptor(
+                  chain ->
+                      chain.proceed(
+                          chain.request().newBuilder()
+                              .header("Authorization", "Bearer interceptor-must-not-leak")
+                              .build()))
+              .build();
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(server.url("/v1/zk/vk").uri())
+              .setAllowAmbientCredentials(false)
+              .build();
+
+      final TransportResponse response =
+          new OkHttpTransportExecutor(ambientClient)
+              .execute(request)
+              .get(5, TimeUnit.SECONDS);
+
+      assertEquals(401, response.statusCode());
+      final okhttp3.mockwebserver.RecordedRequest received =
+          server.takeRequest(5, TimeUnit.SECONDS);
+      assertNotNull(received);
+      assertEquals(null, received.getHeader("Authorization"));
+      assertEquals(null, received.getHeader("Proxy-Authorization"));
+      assertEquals(null, received.getHeader("Cookie"));
+      assertEquals("credential-free request must not retry a 401 challenge", 1, server.getRequestCount());
+    }
+  }
+
+  @Test
+  public void credentialFreeRequestBypassesInjectedProxy() throws Exception {
+    try (MockWebServer destination = new MockWebServer(); MockWebServer proxy = new MockWebServer()) {
+      destination.enqueue(new MockResponse().setResponseCode(200));
+      proxy.enqueue(new MockResponse().setResponseCode(502));
+      destination.start();
+      proxy.start();
+      final OkHttpClient ambientClient =
+          new OkHttpClient.Builder()
+              .proxy(
+                  new Proxy(
+                      Proxy.Type.HTTP,
+                      new InetSocketAddress("127.0.0.1", proxy.getPort())))
+              .build();
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(destination.url("/v1/zk/vk").uri())
+              .setAllowAmbientCredentials(false)
+              .build();
+
+      final TransportResponse response =
+          new OkHttpTransportExecutor(ambientClient)
+              .execute(request)
+              .get(5, TimeUnit.SECONDS);
+
+      assertEquals(200, response.statusCode());
+      assertEquals(1, destination.getRequestCount());
+      assertEquals(0, proxy.getRequestCount());
+    }
+  }
+
+  @Test
+  public void credentialFreeRequestDoesNotFollowRedirects() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.start();
+      server.enqueue(
+          new MockResponse()
+              .setResponseCode(302)
+              .setHeader("Location", server.url("/redirected")));
+      server.enqueue(new MockResponse().setResponseCode(200));
+      final OkHttpClient ambientClient =
+          new OkHttpClient.Builder().followRedirects(true).followSslRedirects(true).build();
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(server.url("/v1/zk/vk").uri())
+              .setAllowAmbientCredentials(false)
+              .build();
+
+      final TransportResponse response =
+          new OkHttpTransportExecutor(ambientClient)
+              .execute(request)
+              .get(5, TimeUnit.SECONDS);
+
+      assertEquals(302, response.statusCode());
+      assertEquals(1, server.getRequestCount());
+    }
+  }
+
+  @Test
+  public void credentialFreeStreamingAndUriUserInfoFailBeforeDispatch() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.start();
+      final OkHttpTransportExecutor executor =
+          new OkHttpTransportExecutor(new OkHttpClient());
+      final TransportRequest streaming =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(server.url("/stream").uri())
+              .setAllowAmbientCredentials(false)
+              .build();
+      assertThrows(IllegalArgumentException.class, () -> executor.openStream(streaming));
+
+      final URI endpoint = server.url("/v1/zk/vk").uri();
+      final TransportRequest userInfo =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(
+                  new URI(
+                      endpoint.getScheme(),
+                      "ambient:must-not-leak",
+                      endpoint.getHost(),
+                      endpoint.getPort(),
+                      endpoint.getPath(),
+                      null,
+                      null))
+              .setAllowAmbientCredentials(false)
+              .build();
+      assertThrows(IllegalArgumentException.class, () -> executor.execute(userInfo));
+      assertEquals(0, server.getRequestCount());
+    }
+  }
 
   @Test
   public void executesRequestAndMapsResponse() throws Exception {

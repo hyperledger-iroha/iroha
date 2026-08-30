@@ -66,10 +66,7 @@ use iroha_data_model::{
         ZK_AMS_PHC_VERSION_V1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
         zk_ams_registry_record_digest_v1,
     },
-    query::{
-        account::prelude::FindAccounts, block::prelude::FindBlocks,
-        transaction::prelude::FindTransactions,
-    },
+    query::account::prelude::FindAccounts,
     transaction::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
         TransactionPayload,
@@ -84,7 +81,7 @@ use p256::ecdsa::{
 use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 use sha2::{Digest, Sha256};
 use std::{
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
@@ -260,20 +257,27 @@ fn assert_exact_protocol_row(
     Ok(())
 }
 fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query committed blocks for canonical genesis binding")?;
-    let genesis = blocks
-        .iter()
-        .filter(|block| block.header().prev_block_hash().is_none())
-        .collect::<Vec<_>>();
+    let genesis_height = NonZeroU64::new(1).expect("genesis height is non-zero");
+    let (proof, verified_hash) = client
+        .get_bridge_finality_anchor(genesis_height, client.network_id)
+        .wrap_err("query bounded standalone-verified bridge-finality genesis candidate")?;
     ensure!(
-        genesis.len() == 1,
-        "FindBlocks must contain exactly one canonical genesis block, got {}",
-        genesis.len()
+        proof.block_header.height() == genesis_height,
+        "bridge-finality genesis candidate must be at height one"
     );
-    let hash = *genesis[0].header().hash().as_ref();
+    ensure!(
+        proof.block_header.prev_block_hash().is_none(),
+        "bridge-finality genesis candidate must not have a parent"
+    );
+    ensure!(
+        proof.block_header.hash() == verified_hash,
+        "standalone-verified genesis hash differs from its block header"
+    );
+    let hash = *verified_hash.as_ref();
+    ensure!(
+        hash == *client.network_id.as_bytes(),
+        "standalone-verified height-one block hash must equal the client NetworkId"
+    );
     ensure!(hash != [0; 32], "canonical genesis hash must be non-zero");
     Ok(hash)
 }
@@ -434,24 +438,53 @@ fn exact_applied_transaction_visible(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<bool> {
-    let expected_hash = transaction.hash_as_entrypoint();
-    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let transactions = client
-        .query(FindTransactions::new())
-        .execute_all()
-        .wrap_err("query finalized transactions")?;
-    let Some(committed) = transactions
-        .iter()
-        .find(|committed| committed.entrypoint_hash() == &expected_hash)
+    let signed_hash = transaction.hash();
+    let Some(status) = client
+        .get_transaction_status_response_local(signed_hash)
+        .wrap_err("query exact transaction status")?
     else {
         return Ok(false);
     };
+    ensure!(
+        status.hash == signed_hash.to_string() && status.scope == "local",
+        "peer-local pipeline status does not bind the requested signed transaction"
+    );
+    if status.resolved_from != "state" {
+        return Ok(false);
+    }
+    let height = status
+        .status
+        .block_height
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| eyre!("state-resolved transaction status omitted a non-zero height"))?;
+    let status_applied = match status.status.kind.as_str() {
+        "Applied" => true,
+        "Rejected" => false,
+        kind => {
+            return Err(eyre!(
+                "state-resolved transaction has unexpected status `{kind}`"
+            ));
+        }
+    };
+    let expected_hash = transaction.hash_as_entrypoint();
+    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
+    let details = client
+        .get_transaction_details(expected_hash)
+        .wrap_err("query exact finalized transaction details")?;
+    let committed = &details.transaction;
     ensure!(
         committed.entrypoint() == &expected_entrypoint,
         "entrypoint hash matched different transaction bytes"
     );
     ensure!(
-        committed.result().0.is_ok(),
+        committed.result().is_ok() == status_applied,
+        "pipeline status and exact committed result disagree"
+    );
+    client
+        .get_canonical_executed_block_wire(height, committed)
+        .wrap_err("authenticate exact finalized transaction carrier")?;
+    ensure!(
+        committed.result().is_ok(),
         "canonical privacy transaction is visible but finalized as rejected"
     );
     Ok(true)
@@ -1429,7 +1462,7 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
-        .with_permissioned_consensus();
+        .with_npos_consensus();
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
@@ -2040,7 +2073,7 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
-        .with_permissioned_consensus();
+        .with_npos_consensus();
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };

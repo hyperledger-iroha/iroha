@@ -241,6 +241,38 @@ impl AuthenticatedGenesisStoreReplayEvidenceV1 {
     pub(super) fn exactly_matches_origin_fetch(&self, effect: &AdapterEffect) -> bool {
         &certified_fetch_effect_from_coordinates(&self.coordinates) == effect
     }
+    /// Recheck the same certified local-genesis Fetch under a strictly later
+    /// reducer incarnation without changing any body or quorum coordinates.
+    pub(super) fn exactly_matches_rebound_origin_fetch(&self, effect: &AdapterEffect) -> bool {
+        let original = certified_fetch_effect_from_coordinates(&self.coordinates);
+        let (
+            AdapterEffect::FetchBody {
+                tag: original_tag,
+                round: original_round,
+                subject: original_subject,
+                manifest: original_manifest,
+                certified_sources: original_sources,
+                certificate: original_certificate,
+            },
+            AdapterEffect::FetchBody {
+                tag: rebound_tag,
+                round: rebound_round,
+                subject: rebound_subject,
+                manifest: rebound_manifest,
+                certified_sources: rebound_sources,
+                certificate: rebound_certificate,
+            },
+        ) = (&original, effect)
+        else {
+            return false;
+        };
+        rebound_tag.strictly_advances(*original_tag)
+            && original_round == rebound_round
+            && original_subject == rebound_subject
+            && original_manifest == rebound_manifest
+            && original_sources == rebound_sources
+            && original_certificate == rebound_certificate
+    }
     /// Recheck the exact Store together with its inherited runtime owner.
     pub(super) fn exactly_matches_store_pending(
         &self,
@@ -295,14 +327,17 @@ impl AuthenticatedGenesisStoredReplayEvidenceV1 {
         receipt: &DurableBodyReceipt,
         validate_effect: &AdapterEffect,
         validate_pending: &PendingRuntimeEffectBinding,
+        authority_certificate: Option<&wire::QuorumCertificate>,
     ) -> bool {
         self.exactly_matches_store_pending(store_effect, receipt, store_pending)
-            && certified_body_stage_matches(
-                &self.family,
-                validate_effect,
-                receipt,
-                LifecycleStageKind::ValidateBody,
-            )
+            && self
+                .project_validate_family(
+                    validate_effect,
+                    validate_pending,
+                    receipt,
+                    authority_certificate,
+                )
+                .is_some()
             && store_pending
                 .project_store_validate_successor_with_authority_refinement(
                     store_effect,
@@ -321,6 +356,7 @@ impl AuthenticatedGenesisStoredReplayEvidenceV1 {
         receipt: &DurableBodyReceipt,
         validate_effect: &AdapterEffect,
         validate_pending: &PendingRuntimeEffectBinding,
+        authority_certificate: Option<&wire::QuorumCertificate>,
     ) -> Result<LocalValidateReplayEvidenceV1, Self> {
         if !self.exactly_projects_validate(
             store_effect,
@@ -328,9 +364,18 @@ impl AuthenticatedGenesisStoredReplayEvidenceV1 {
             receipt,
             validate_effect,
             validate_pending,
+            authority_certificate,
         ) {
             return Err(self);
         }
+        let family = self
+            .project_validate_family(
+                validate_effect,
+                validate_pending,
+                receipt,
+                authority_certificate,
+            )
+            .expect("an exact authenticated-genesis Store has one certified Validate family");
         let projected = store_pending
             .project_store_validate_successor_with_authority_refinement(
                 store_effect,
@@ -339,9 +384,57 @@ impl AuthenticatedGenesisStoredReplayEvidenceV1 {
             )
             .expect("an exact authenticated-genesis Store has one Validate successor");
         Ok(LocalValidateReplayEvidenceV1 {
-            family: LocalValidateReplayFamilyV1::AuthenticatedGenesis(self.family),
+            family: LocalValidateReplayFamilyV1::AuthenticatedGenesis(family),
             validate_pending: Arc::new(projected),
         })
+    }
+
+    /// Rebuild the restart-stable Validate family under exactly the authority
+    /// carried by its runtime successor.
+    ///
+    /// An unchanged Prepare/Commit statement retains the already authenticated
+    /// Store certificate. A monotone Prepare-to-Commit transition must supply
+    /// the complete current QC; the process-local candidate statement alone
+    /// can never become durable replay authority.
+    fn project_validate_family(
+        &self,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+        authority_certificate: Option<&wire::QuorumCertificate>,
+    ) -> Option<CertifiedBodyPipelineReplayFamilyV1> {
+        let store_statement = self.store_pending.candidate_statement()?;
+        let validate_statement = validate_pending.candidate_statement()?;
+        let coordinates = exact_family_coordinates(&self.family)?;
+        if !certificate_exactly_matches_body_statement(&coordinates.certificate, store_statement) {
+            return None;
+        }
+        let replacement_certificate = match store_statement
+            .body_stage_authority_relation_to(validate_statement)?
+        {
+            RuntimeFetchAuthorityRelation::Same => {
+                if authority_certificate
+                    .is_some_and(|certificate| certificate != &coordinates.certificate)
+                {
+                    return None;
+                }
+                None
+            }
+            RuntimeFetchAuthorityRelation::Upgrade => {
+                let certificate = authority_certificate?;
+                Some(
+                    certificate_exactly_matches_body_statement(certificate, validate_statement)
+                        .then_some(certificate)?,
+                )
+            }
+            RuntimeFetchAuthorityRelation::Stale => return None,
+        };
+        project_certified_body_validate_family(
+            &self.family,
+            validate_effect,
+            receipt,
+            replacement_certificate,
+        )
     }
 }
 
@@ -2576,6 +2669,70 @@ fn certified_body_stage_matches(
     exact_effect
         && certified_body_pipeline_family(&coordinates, receipt)
             .is_some_and(|expected| expected == *family && family.is_exact_for_stage(stage))
+}
+/// Rebuild an authenticated certified body family at the sole same-body
+/// Validate successor tag.
+///
+/// The durable Store family remains sealed to the tag which launched the
+/// physical write. A later reducer incarnation may consume that one write,
+/// but its restart-stable Validate authority must name the current tag rather
+/// than silently retaining the stale Store origin. Reconstructing the family
+/// from the original certified coordinates keeps the certificate, manifest,
+/// ordered sources, and body frame exact while allowing only equality or a
+/// strict same-height tag advance.
+fn project_certified_body_validate_family(
+    family: &CertifiedBodyPipelineReplayFamilyV1,
+    effect: &AdapterEffect,
+    receipt: &DurableBodyReceipt,
+    replacement_certificate: Option<&wire::QuorumCertificate>,
+) -> Option<CertifiedBodyPipelineReplayFamilyV1> {
+    let mut coordinates = exact_family_coordinates(family)?;
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = effect
+    else {
+        return None;
+    };
+    let source_tag = EventTag::new(
+        coordinates.tag.height,
+        coordinates.tag.view,
+        crate::sumeragi::v2_core::Generation::new(coordinates.tag.generation),
+    );
+    if tag.height() != source_tag.height()
+        || (*tag != source_tag && !tag.strictly_advances(source_tag))
+        || *round != coordinates.manifest.round
+        || *subject != coordinates.manifest.subject
+        || certified_body_pipeline_family(&coordinates, receipt).as_ref() != Some(family)
+    {
+        return None;
+    }
+    if let Some(certificate) = replacement_certificate {
+        if certificate.round.context_id != coordinates.certificate.round.context_id
+            || certificate.round.height != coordinates.certificate.round.height
+            || certificate.proposal_round != coordinates.manifest.round
+            || certificate.subject != coordinates.manifest.subject
+        {
+            return None;
+        }
+        coordinates.certificate = certificate.clone();
+    }
+    coordinates.tag = ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get());
+    let projected = certified_body_pipeline_family(&coordinates, receipt)?;
+    projected
+        .is_exact_for_stage(LifecycleStageKind::ValidateBody)
+        .then_some(projected)
+}
+fn certificate_exactly_matches_body_statement(
+    certificate: &wire::QuorumCertificate,
+    statement: RuntimeCandidateSemanticStatement,
+) -> bool {
+    statement.phase() == Some(certificate.phase)
+        && statement.round() == certificate.round
+        && statement.proposal_round() == certificate.proposal_round
+        && statement.subject() == Some(certificate.subject)
+        && statement.execution_commitment() == Some(certificate.execution_commitment)
 }
 fn exact_live_wal_replay_projection(
     wal_identity: &LiveWalFrameIdentity,

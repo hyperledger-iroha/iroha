@@ -1,7 +1,10 @@
 use super::{ensure_npos_parameters, generate::ConsensusModeArg, require_v2_wire_protocol_only};
 use crate::{
     Outcome, RunArgs,
-    genesis::{PUBLIC_XOR_ALIAS, public_xor_profile_for_chain_id},
+    genesis::{
+        PUBLIC_XOR_ALIAS, public_xor_profile_for_chain_id,
+        validate_taira_digital_kina_base_prerequisite,
+    },
     tui,
 };
 use clap::Parser;
@@ -411,6 +414,9 @@ fn configured_npos_bootstrap_stake_asset_id(
             return Err(eyre!(
                 "public NPoS bootstrap for {profile:?} resolved stake asset `{stake_asset_id}`, but `{PUBLIC_XOR_ALIAS}` is bound to `{public_xor_asset_id}`; public stake asset must match the canonical XOR binding"
             ));
+        }
+        if profile == crate::genesis::GenesisProfile::Iroha3Taira {
+            validate_taira_digital_kina_base_prerequisite(manifest)?;
         }
     }
     Ok(stake_asset_id)
@@ -920,6 +926,15 @@ fn staged_default_nexus(
 ) -> Result<actual::Nexus, color_eyre::eyre::Error> {
     let discriminant = genesis.chain_discriminant();
     let mut nexus = actual::Nexus::default();
+    if let Some(profile) = public_xor_profile_for_manifest(genesis) {
+        let alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
+        let asset_definition_id = resolve_asset_definition_alias(genesis, &alias)?.ok_or_else(|| {
+            eyre!(
+                "default staged Nexus for {profile:?} requires `{PUBLIC_XOR_ALIAS}` to be bound in genesis"
+            )
+        })?;
+        nexus.staking.stake_asset_id = asset_definition_id.to_string();
+    }
     nexus.staking.stake_escrow_account_id = staged_default_account_literal(
         &nexus.staking.stake_escrow_account_id,
         discriminant,
@@ -1749,6 +1764,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         }
     }
     #[test]
+    fn checked_in_taira_genesis_template_is_current() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert_checked_in_genesis_template_is_current(
+            &root,
+            "configs/soranexus/taira/genesis.json",
+        );
+    }
+    #[test]
     fn checked_in_unsigned_templates_use_canonical_nexus_amx_projection() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let fixtures = [
@@ -1796,6 +1819,23 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "{genesis_path} must carry the config-only projection; a deployable signer rebinds it after the final roster and operator-supplied public XOR identity are present"
             );
         }
+    }
+    #[test]
+    fn checked_in_taira_unsigned_template_uses_canonical_nexus_amx_projection() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let genesis_path = "configs/soranexus/taira/genesis.json";
+        let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
+            .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
+        let config = checked_in_config(&root.join("configs/soranexus/taira/config.toml"));
+        let expected =
+            actual::sumeragi_v2_nexus_amx_context_hash(&config.nexus, &config.pipeline, &[], &[]);
+        assert_eq!(
+            manifest
+                .sumeragi_v2_context_parameters()
+                .nexus_amx_context_hash,
+            <[u8; 32]>::from(expected),
+            "{genesis_path} must carry the config-only projection"
+        );
     }
     #[test]
     fn checked_in_taira_source_template_requires_runtime_signer_rendering() {
@@ -3831,10 +3871,17 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let alias: AssetDefinitionAlias = crate::genesis::PUBLIC_XOR_ALIAS
             .parse()
             .expect("valid alias");
+        let public_xor_domain =
+            DomainId::parse_fully_qualified(crate::genesis::profile::PUBLIC_XOR_DOMAIN)
+                .expect("valid public XOR domain");
+        let digital_kina_domain =
+            DomainId::parse_fully_qualified(crate::genesis::profile::TAIRA_DIGITAL_KINA_DOMAIN)
+                .expect("valid Digital Kina domain");
         let manifest = GenesisBuilder::new_without_executor(
             crate::genesis::profile_defaults(crate::genesis::GenesisProfile::Iroha3Taira).chain_id,
             PathBuf::from("."),
         )
+        .append_instruction(Register::domain(Domain::new(public_xor_domain)))
         .append_instruction(Register::asset_definition(
             AssetDefinition::new(
                 asset_definition_id.clone(),
@@ -3850,6 +3897,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             alias,
             None,
         ))
+        .append_instruction(Register::domain(Domain::new(digital_kina_domain)))
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))

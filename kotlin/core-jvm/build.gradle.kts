@@ -23,8 +23,10 @@ dependencies {
     implementation(libs.zstd.jni)
     implementation(libs.bcprov)
     implementation(libs.serialization.json)
+    implementation(libs.okhttp)
     testImplementation(kotlin("test"))
     testImplementation(libs.junit.params)
+    testImplementation(libs.okhttp.mockwebserver)
 }
 
 java {

@@ -104,7 +104,7 @@ class OfflineCashAcknowledgementV1(
     }
 }
 
-/** Authenticated native release identity required before an Offline Cash V1 session can exist. */
+/** Authenticated native release identity required before a verification session can exist. */
 class OfflineCashReleaseStatusV1 internal constructor(
     val available: Boolean,
     val nativeBridgeAbiVersion: Int?,
@@ -141,14 +141,14 @@ class OfflineCashReleaseStatusV1 internal constructor(
     }
 }
 
-enum class OfflineCashWalletSessionStateV1 {
+enum class OfflineCashVerificationSessionStateV1 {
     UNAVAILABLE,
-    RECEIVE_REQUEST_READY,
+    REQUEST_VERIFIED,
     PAYMENT_VERIFIED,
     ACKNOWLEDGEMENT_VERIFIED,
 }
 
-enum class OfflineCashWalletSessionEventV1 {
+enum class OfflineCashVerificationSessionEventV1 {
     PAYMENT_VERIFIED,
     PAYMENT_VERIFICATION_REPLAY,
     ACKNOWLEDGEMENT_VERIFIED,
@@ -167,7 +167,7 @@ enum class OfflineCashWalletSessionEventV1 {
  * joined to a qualifying device backend may authorize those effects. There is deliberately no
  * production bypass or app-owned emulator constructor.
  */
-class OfflineCashWalletSessionV1(
+class OfflineCashVerificationSessionV1(
     val request: OfflineCashPaymentRequestV1,
     expectedReleaseId: ByteArray,
     expectedArtifactManifestSHA256: ByteArray,
@@ -210,7 +210,7 @@ class OfflineCashWalletSessionV1(
         val networkIdBytes = expectedNetworkIdLiteral.toByteArray(StandardCharsets.UTF_8)
         val assetDefinitionIdBytes = expectedAssetDefinitionId.toByteArray(StandardCharsets.UTF_8)
         nativeHandle = try {
-            OfflineCashNativeV1.walletSessionOpenBound(
+            OfflineCashNativeV1.verificationSessionOpenBound(
                 request.encodeCanonical(),
                 releaseId,
                 artifactManifest,
@@ -221,22 +221,24 @@ class OfflineCashWalletSessionV1(
             networkIdBytes.fill(0)
             assetDefinitionIdBytes.fill(0)
         }
-        check(nativeHandle > 0) { "native Offline Cash V1 session did not return a handle" }
+        check(nativeHandle > 0) {
+            "native Offline Cash V1 verification session did not return a handle"
+        }
     }
 
-    val state: OfflineCashWalletSessionStateV1
+    val state: OfflineCashVerificationSessionStateV1
         @Synchronized get() {
-            if (nativeHandle == 0L) return OfflineCashWalletSessionStateV1.UNAVAILABLE
-            return runCatching { OfflineCashNativeV1.walletSessionState(nativeHandle) }
+            if (nativeHandle == 0L) return OfflineCashVerificationSessionStateV1.UNAVAILABLE
+            return runCatching { OfflineCashNativeV1.verificationSessionState(nativeHandle) }
                 .map { state ->
                     when (state) {
-                        1 -> OfflineCashWalletSessionStateV1.RECEIVE_REQUEST_READY
-                        2 -> OfflineCashWalletSessionStateV1.PAYMENT_VERIFIED
-                        3 -> OfflineCashWalletSessionStateV1.ACKNOWLEDGEMENT_VERIFIED
-                        else -> OfflineCashWalletSessionStateV1.UNAVAILABLE
+                        1 -> OfflineCashVerificationSessionStateV1.REQUEST_VERIFIED
+                        2 -> OfflineCashVerificationSessionStateV1.PAYMENT_VERIFIED
+                        3 -> OfflineCashVerificationSessionStateV1.ACKNOWLEDGEMENT_VERIFIED
+                        else -> OfflineCashVerificationSessionStateV1.UNAVAILABLE
                     }
                 }
-                .getOrDefault(OfflineCashWalletSessionStateV1.UNAVAILABLE)
+                .getOrDefault(OfflineCashVerificationSessionStateV1.UNAVAILABLE)
         }
 
     fun expectedReleaseId(): ByteArray = releaseId.copyOf()
@@ -244,58 +246,131 @@ class OfflineCashWalletSessionV1(
     fun expectedArtifactManifestSHA256(): ByteArray = artifactManifest.copyOf()
 
     @Synchronized
-    fun payment(): OfflineCashPaymentV1? = verifiedPayment
+    fun validatedPayment(): OfflineCashPaymentV1? = verifiedPayment
 
     @Synchronized
-    fun acknowledgement(): OfflineCashAcknowledgementV1? = verifiedAcknowledgement
+    fun validatedAcknowledgement(): OfflineCashAcknowledgementV1? = verifiedAcknowledgement
 
     @Synchronized
-    fun acceptPayment(canonicalNorito: ByteArray): OfflineCashWalletSessionEventV1 {
-        check(nativeHandle != 0L) { "Offline Cash V1 session is closed" }
+    fun verifyPayment(canonicalNorito: ByteArray): OfflineCashVerificationSessionEventV1 {
+        check(nativeHandle != 0L) { "Offline Cash V1 verification session is closed" }
         val observedNowMilliseconds = System.currentTimeMillis()
         check(observedNowMilliseconds > 0) { "system time precedes the Unix epoch" }
-        val sessionCanonical = OfflineCashNativeV1.walletSessionAcceptPayment(
+        val verificationCanonical = OfflineCashNativeV1.verificationSessionVerifyPayment(
             nativeHandle,
             canonicalNorito,
             observedNowMilliseconds,
         )
-        val candidate = OfflineCashPaymentV1(request, sessionCanonical)
+        val candidate = OfflineCashPaymentV1(request, verificationCanonical)
         verifiedPayment?.let { existing ->
             if (existing == candidate) {
-                return OfflineCashWalletSessionEventV1.PAYMENT_VERIFICATION_REPLAY
+                return OfflineCashVerificationSessionEventV1.PAYMENT_VERIFICATION_REPLAY
             }
             throw IllegalArgumentException("conflicting Offline Cash V1 payment")
         }
         check(verifiedAcknowledgement == null) { "payment cannot follow acknowledgement" }
         verifiedPayment = candidate
-        return OfflineCashWalletSessionEventV1.PAYMENT_VERIFIED
+        return OfflineCashVerificationSessionEventV1.PAYMENT_VERIFIED
     }
 
     @Synchronized
-    fun acceptAcknowledgement(canonicalNorito: ByteArray): OfflineCashWalletSessionEventV1 {
-        check(nativeHandle != 0L) { "Offline Cash V1 session is closed" }
+    fun verifyAcknowledgement(
+        canonicalNorito: ByteArray,
+    ): OfflineCashVerificationSessionEventV1 {
+        check(nativeHandle != 0L) { "Offline Cash V1 verification session is closed" }
         val payment = checkNotNull(verifiedPayment) { "acknowledgement requires a payment" }
-        val sessionCanonical = OfflineCashNativeV1.walletSessionAcceptAcknowledgement(
+        val verificationCanonical = OfflineCashNativeV1.verificationSessionVerifyAcknowledgement(
             nativeHandle,
             canonicalNorito,
         )
-        val candidate = OfflineCashAcknowledgementV1(request, payment, sessionCanonical)
+        val candidate = OfflineCashAcknowledgementV1(request, payment, verificationCanonical)
         verifiedAcknowledgement?.let { existing ->
             if (existing == candidate) {
-                return OfflineCashWalletSessionEventV1.ACKNOWLEDGEMENT_VERIFICATION_REPLAY
+                return OfflineCashVerificationSessionEventV1.ACKNOWLEDGEMENT_VERIFICATION_REPLAY
             }
             throw IllegalArgumentException("conflicting Offline Cash V1 acknowledgement")
         }
         verifiedAcknowledgement = candidate
-        return OfflineCashWalletSessionEventV1.ACKNOWLEDGEMENT_VERIFIED
+        return OfflineCashVerificationSessionEventV1.ACKNOWLEDGEMENT_VERIFIED
     }
 
     @Synchronized
     override fun close() {
         val handle = nativeHandle
         if (handle == 0L) return
-        OfflineCashNativeV1.walletSessionClose(handle)
+        OfflineCashNativeV1.verificationSessionClose(handle)
         nativeHandle = 0
+    }
+}
+
+/** Stable product state of the fail-closed Offline Cash V1 wallet facade. */
+enum class OfflineCashWalletSessionStateV1(val code: Int) {
+    UNAVAILABLE(0),
+    SETUP_REQUIRED(1),
+    EMPTY(2),
+    TOP_UP_PENDING(3),
+    AVAILABLE(4),
+    RECEIVE_REQUEST_READY(5),
+    SEND_PREPARING(6),
+    PAYMENT_COMMITTED(7),
+    AWAITING_ACKNOWLEDGEMENT(8),
+    RECEIVED(9),
+    REDEEM_PENDING(10),
+    RECOVERY_REQUIRED(11),
+    ERROR(12),
+}
+
+enum class OfflineCashWalletSessionStatusV1(val code: Int) {
+    UNAVAILABLE(0),
+}
+
+/** High-level action vocabulary only; codes carry no device or monetary authority. */
+enum class OfflineCashWalletSessionActionV1(val code: Int) {
+    SET_UP(0),
+    TOP_UP(1),
+    CREATE_RECEIVE_REQUEST(2),
+    PREPARE_SEND(3),
+    COMMIT_PAYMENT(4),
+    RECORD_ACKNOWLEDGEMENT_EVIDENCE(5),
+    RECEIVE_PAYMENT(6),
+    REDEEM(7),
+    RECOVER(8),
+}
+
+enum class OfflineCashWalletSessionErrorV1 {
+    UNAVAILABLE,
+}
+
+class OfflineCashWalletSessionExceptionV1(
+    val reason: OfflineCashWalletSessionErrorV1,
+) : IllegalStateException("production Offline Cash V1 wallet runtime is unavailable")
+
+/**
+ * Opaque fail-closed product facade for one Offline Cash V1 wallet session.
+ *
+ * This shell exposes no bytes, native handle, caller clock, emulator constructor, balance,
+ * device owner, or state-transition owner. A reviewed secure backend must be integrated before
+ * [open] or any action can succeed. Proof verification is exposed separately through
+ * [OfflineCashVerificationSessionV1].
+ */
+class OfflineCashWalletSessionV1 private constructor() {
+    val status: OfflineCashWalletSessionStatusV1
+        get() = OfflineCashWalletSessionStatusV1.UNAVAILABLE
+
+    val state: OfflineCashWalletSessionStateV1
+        get() = OfflineCashWalletSessionStateV1.UNAVAILABLE
+
+    fun attempt(@Suppress("UNUSED_PARAMETER") action: OfflineCashWalletSessionActionV1): Nothing {
+        throw OfflineCashWalletSessionExceptionV1(OfflineCashWalletSessionErrorV1.UNAVAILABLE)
+    }
+
+    companion object {
+        @JvmStatic
+        fun unavailable(): OfflineCashWalletSessionV1 = OfflineCashWalletSessionV1()
+
+        @JvmStatic
+        fun open(): OfflineCashWalletSessionV1 =
+            throw OfflineCashWalletSessionExceptionV1(OfflineCashWalletSessionErrorV1.UNAVAILABLE)
     }
 }
 
@@ -432,7 +507,7 @@ internal object OfflineCashNativeV1 {
         return nativeCanonicalizeAcknowledgementV1(request, payment, acknowledgement)
     }
 
-    fun walletSessionOpenBound(
+    fun verificationSessionOpenBound(
         request: ByteArray,
         expectedReleaseId: ByteArray,
         expectedArtifactManifestSHA256: ByteArray,
@@ -440,7 +515,7 @@ internal object OfflineCashNativeV1 {
         expectedAssetDefinitionId: ByteArray,
     ): Long {
         requireLoaded()
-        return nativeWalletSessionOpenBoundV1(
+        return nativeVerificationSessionOpenBoundV1(
             request,
             expectedReleaseId,
             expectedArtifactManifestSHA256,
@@ -449,31 +524,31 @@ internal object OfflineCashNativeV1 {
         )
     }
 
-    fun walletSessionAcceptPayment(
+    fun verificationSessionVerifyPayment(
         handle: Long,
         payment: ByteArray,
         observedNowMilliseconds: Long,
     ): ByteArray {
         requireLoaded()
-        return nativeWalletSessionAcceptPaymentV1(handle, payment, observedNowMilliseconds)
+        return nativeVerificationSessionVerifyPaymentV1(handle, payment, observedNowMilliseconds)
     }
 
-    fun walletSessionAcceptAcknowledgement(
+    fun verificationSessionVerifyAcknowledgement(
         handle: Long,
         acknowledgement: ByteArray,
     ): ByteArray {
         requireLoaded()
-        return nativeWalletSessionAcceptAcknowledgementV1(handle, acknowledgement)
+        return nativeVerificationSessionVerifyAcknowledgementV1(handle, acknowledgement)
     }
 
-    fun walletSessionState(handle: Long): Int {
+    fun verificationSessionState(handle: Long): Int {
         requireLoaded()
-        return nativeWalletSessionStateV1(handle)
+        return nativeVerificationSessionStateV1(handle)
     }
 
-    fun walletSessionClose(handle: Long) {
+    fun verificationSessionClose(handle: Long) {
         requireLoaded()
-        nativeWalletSessionCloseV1(handle)
+        nativeVerificationSessionCloseV1(handle)
     }
 
     fun artifactBegin(manifest: ByteArray, role: Int): Long {
@@ -648,29 +723,36 @@ internal object OfflineCashNativeV1 {
         text: ByteArray,
     ): ByteArray
     @JvmStatic private external fun nativeReleaseProbeV1(): Array<ByteArray>
-    @JvmStatic private external fun nativeWalletSessionOpenV1(
+    @JvmStatic private external fun nativeVerificationSessionOpenV1(
         request: ByteArray,
         expectedReleaseId: ByteArray,
         expectedArtifactManifestSHA256: ByteArray,
     ): Long
-    @JvmStatic private external fun nativeWalletSessionOpenBoundV1(
+    @JvmStatic private external fun nativeVerificationSessionOpenBoundV1(
         request: ByteArray,
         expectedReleaseId: ByteArray,
         expectedArtifactManifestSHA256: ByteArray,
         expectedNetworkId: ByteArray,
         expectedAssetDefinitionId: ByteArray,
     ): Long
-    @JvmStatic private external fun nativeWalletSessionAcceptPaymentV1(
+    @JvmStatic private external fun nativeVerificationSessionVerifyPaymentV1(
         handle: Long,
         payment: ByteArray,
         observedNowMilliseconds: Long,
     ): ByteArray
-    @JvmStatic private external fun nativeWalletSessionAcceptAcknowledgementV1(
+    @JvmStatic private external fun nativeVerificationSessionVerifyAcknowledgementV1(
         handle: Long,
         acknowledgement: ByteArray,
     ): ByteArray
-    @JvmStatic private external fun nativeWalletSessionStateV1(handle: Long): Int
-    @JvmStatic private external fun nativeWalletSessionCloseV1(handle: Long)
+    @JvmStatic private external fun nativeVerificationSessionStateV1(handle: Long): Int
+    @JvmStatic private external fun nativeVerificationSessionCloseV1(handle: Long)
+    // Disjoint fail-closed product shell. ABI22 exports these symbols for
+    // explicit status/ABI honesty, but no SDK path may retain the zero handle
+    // or treat symbol presence as production enablement.
+    @JvmStatic private external fun nativeWalletRuntimeSessionOpenV1(): Long
+    @JvmStatic private external fun nativeWalletRuntimeSessionStatusV1(): ByteArray
+    @JvmStatic private external fun nativeWalletRuntimeSessionAttemptV1(handle: Long, action: Int)
+    @JvmStatic private external fun nativeWalletRuntimeSessionCloseV1(handle: Long)
     @JvmStatic private external fun nativeArtifactBeginV1(manifest: ByteArray, role: Int): Long
     @JvmStatic private external fun nativeArtifactWriteV1(handle: Long, chunk: ByteArray)
     @JvmStatic private external fun nativeArtifactFinalizeV1(handle: Long)

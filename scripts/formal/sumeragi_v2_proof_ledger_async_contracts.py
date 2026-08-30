@@ -4696,8 +4696,14 @@ def _chain_epoch_refinement_shard_contract(
     # dependency check proves that no shard relies on a declaration hidden in
     # a later physical root, which would make the textual partition invalid as
     # a sequential EXTENDS chain even though concatenation still matched.
+    if len(CHAIN_EPOCH_REFINEMENT_SHARDS) != len(shard_identifiers):
+        raise ValueError(
+            "chain/epoch refinement shard identifier inventory length changed"
+        )
+    # Exact lengths were checked above; plain zip keeps this verifier
+    # compatible with the repository's Python 3.9 floor.
     for index, (module, symbols) in enumerate(
-        zip(CHAIN_EPOCH_REFINEMENT_SHARDS, shard_identifiers, strict=True)
+        zip(CHAIN_EPOCH_REFINEMENT_SHARDS, shard_identifiers)
     ):
         for symbol in sorted(symbols):
             provider_index = provider_indices.get(symbol)
@@ -4718,10 +4724,16 @@ def _chain_epoch_refinement_source(formal_dir: Path) -> str:
         for module in CHAIN_EPOCH_REFINEMENT_SHARDS
     ]
     if all(path.is_file() for path in shard_paths):
+        if len(CHAIN_EPOCH_REFINEMENT_SHARDS) != len(shard_paths):
+            raise ValueError(
+                "chain/epoch refinement shard path inventory length changed"
+            )
+        # Exact lengths were checked above; plain zip keeps this verifier
+        # compatible with the repository's Python 3.9 floor.
         sources = {
             module: path.read_text(encoding="utf-8")
             for module, path in zip(
-                CHAIN_EPOCH_REFINEMENT_SHARDS, shard_paths, strict=True
+                CHAIN_EPOCH_REFINEMENT_SHARDS, shard_paths
             )
         }
         bodies, errors = _chain_epoch_refinement_shard_bodies(sources)

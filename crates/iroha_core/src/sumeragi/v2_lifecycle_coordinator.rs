@@ -249,6 +249,15 @@ pub(crate) use schema::{
     ProducerTurnAdmission, ReadyEvent, SchedulerEpisodeUniverse, SchedulerInputs, SchedulerRank,
     TerminalOutcome, TurnLease, TurnOutcome, TurnPlan, WaitSource, WaitToken,
 };
+
+/// Construct one exact wait token for tests outside the lifecycle coordinator module.
+#[cfg(test)]
+pub(in crate::sumeragi) const fn wait_token_for_test(
+    source: schema::WaitSource,
+    observed_generation: u64,
+) -> schema::WaitToken {
+    schema::WaitToken::new(source, observed_generation)
+}
 use schema::{
     CapacityAdmissionWait, CapacityGeometry, DurablePayloadReference, DurableRecordMetadata,
     DurableServeNegativeOutcome, LeaseCapacityReservation, RecoveredLifecycleRecord,
@@ -303,6 +312,7 @@ pub(in crate::sumeragi) use wal_recovery::{
 };
 pub(in crate::sumeragi) use work_registry::ClaimedCertifiedServeDispatchV1;
 pub(in crate::sumeragi) use work_registry::PreparedCertifiedFetchAdmissionV1;
+pub(in crate::sumeragi) use work_registry::RecoveredDurableValidateRetryCensusV1;
 #[cfg(test)]
 pub(in crate::sumeragi) use work_registry::RecoveredLifecycleSignClassV1;
 pub(in crate::sumeragi) use work_registry::{
@@ -313,9 +323,8 @@ pub(in crate::sumeragi) use work_registry::{
     PreparedRecoveredDecisionFetchDispatchV1, PreparedRecoveredLifecycleSignDispatch,
     ReadyValidateApplyPredecessorAuthority, ReadyValidateSignPredecessorAuthority,
     RecoveredDecisionApplyRegistryProjectionPermit, RecoveredDecisionFetchDispatchIdentityV1,
-    RecoveredDecisionFetchDispatchKeyV1, RecoveredDurableValidateRetryCensusV1,
-    RecoveredDurableValidateRetryOwnerV1, RecoveredLifecycleSignDispatchIdentityV1,
-    RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredDecisionFetchDispatchKeyV1, RecoveredDurableValidateRetryOwnerV1,
+    RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
 };
 #[allow(unused_imports, reason = "reviewed recovered-WAL registry namespace")]
 pub(crate) use work_registry::{

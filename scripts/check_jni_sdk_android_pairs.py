@@ -16,9 +16,9 @@ SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
 MACRO_NAME = "jni_sdk_android_pairs"
 EXPECTED_MACRO_DIGEST = "75234f8e3dfcdaa54347f628fd7fb7118de18003baed0e3c37750cd283db2468"
-EXPECTED_ABI_DIGEST = "8cb01531db3ac3cf6796bc18779d7e73ace6947b38d2b30bc3ff4ce9b3841f54"
+EXPECTED_ABI_DIGEST = "3c777489e4c44f4420c2a1e134c898b3636fe4a2334f6f70c8aa9f05c244871b"
 EXPECTED_ATTRIBUTE_DIGEST = (
-    "36c5c95a0c31ecf9c82f6c6d837db0e7783fb3eacb002a10cb775e65157d7227"
+    "b8ed32f49e2bfc48f9a3c0ebc156a348bc88c3c86fc9165776f9530afec27932"
 )
 
 EXPECTED_METHODS = {
@@ -82,6 +82,8 @@ EXPECTED_METHODS = {
         "nativePeerEncodeAcknowledgementV1",
         "nativePeerDecodeAcknowledgementV1",
         "nativeReleaseProbeV1",
+        "nativeVerificationSessionOpenV1",
+        "nativeVerificationSessionOpenBoundV1",
         "nativeWalletSessionOpenV1",
         "nativeWalletSessionOpenBoundV1",
         "nativeArtifactBeginV1",
@@ -90,6 +92,14 @@ EXPECTED_METHODS = {
         "nativeArtifactCancelV1",
         "nativeArtifactSetInstallV1",
         "nativeArtifactSetUninstallV1",
+        "nativeVerificationSessionVerifyPaymentV1",
+        "nativeVerificationSessionVerifyAcknowledgementV1",
+        "nativeVerificationSessionStateV1",
+        "nativeVerificationSessionCloseV1",
+        "nativeWalletRuntimeSessionOpenV1",
+        "nativeWalletRuntimeSessionStatusV1",
+        "nativeWalletRuntimeSessionAttemptV1",
+        "nativeWalletRuntimeSessionCloseV1",
         "nativeWalletSessionAcceptPaymentV1",
         "nativeWalletSessionAcceptAcknowledgementV1",
         "nativeWalletSessionStateV1",

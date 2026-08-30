@@ -424,20 +424,20 @@ Legacy Kagemusha recursive-spend, scaled-amount, attestation-registration, and
 PKK2/PKKQ1 transport classes remain package-private so the SDK can preserve its
 internal ABI22 implementation. They are not Java product APIs. Applications use
 the transitive Kotlin Offline Cash V1 facade for typed requests, payments,
-acknowledgements, `kgm2:` transport, wallet sessions, artifact installation, and
-device lifecycle discovery.
+acknowledgements, `kgm2:` transport, artifact installation, verifier sessions,
+the fail-closed wallet facade, and device lifecycle status.
 
 The clean Offline Cash V1 state machine has a stronger device boundary than a
 single-use KeyMint signing key: one rollback-resistant intent slot, an exact-next
 counter, trusted time, authenticated terminal recovery, and an authenticated
-staged-payment outbox must all be present. Use
-`OfflineCashDeviceLifecycleBridgeV1.production()` to discover the default Kotlin
-implementation through the Java facade. Missing native support or any partial
-capability returns `ONLINE_ONLY`; there is no TEE, KeyMint-only, or software
-fallback. Only the bounded V1 command frame is accepted, so old V4/V5 payloads
-cannot be selected through this API.
+staged-payment outbox must all be present.
+`OfflineCashDeviceLifecycleBridgeV1.production()` is hard-disabled to
+`ONLINE_ONLY` until a separately reviewed compile-time backend gate exists;
+optional JNI symbols or a structural capability frame cannot enable it. The
+bounded V1 codec and endpoint injection remain test-only, with no TEE,
+KeyMint-only, dynamic-symbol, or software fallback.
 See [`specs/offline_cash_device_bridge_v1.md`](../../specs/offline_cash_device_bridge_v1.md)
-for exact frame offsets, feature bits, and optional native entry points.
+for exact frame offsets, feature bits, and reserved future native entry points.
 
 Artifact installation requires the canonical candidate-bound promotion record through
 `ReleaseAuthentication`, in addition to the trusted policy, attestation, runner-signed
@@ -631,7 +631,15 @@ client.recordSubscriptionUsage(
 ## Verifying key registry
 
 `HttpClientTransport` wraps Torii's `/v1/zk/vk/register` and
-`/v1/zk/vk/update` routes. The helpers validate production verifier backends,
+`/v1/zk/vk/update` routes. `listActiveVerifyingKeyIds()` performs a fixed,
+bounded `GET /v1/zk/vk?status=Active&ids_only=true&limit=1000&order=asc`,
+strictly rejects duplicate, unknown, non-canonical, or out-of-order rows, and
+exposes each exact verifier label's low-level engine through
+`VerifyingKeyId.engine()`. SDK-owned Android and JVM executors enforce the
+credential-free public-read policy or fail before network dispatch;
+URLConnection cannot isolate process-wide authentication caches and therefore
+rejects this policy. Caller-supplied executors remain an explicit transport and
+TLS trust boundary. The mutation helpers validate production verifier backends,
 registry fields, height ranges, and inline verifier-key commitments before
 sending the request. Neither request accepts or transmits a private key. Torii
 returns HTTP 200 with an unsigned transaction draft. SDK `Signer`
@@ -659,6 +667,7 @@ ClientConfig config =
         // Configure the Torii endpoint and other client policy here.
         .build();
 HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+List<VerifyingKeyId> activeVerifiers = transport.listActiveVerifyingKeyIds().join();
 byte[] vkBytes = new byte[] {1, 2, 3};
 
 VerifyingKeyTransactionDraft registerDraft =

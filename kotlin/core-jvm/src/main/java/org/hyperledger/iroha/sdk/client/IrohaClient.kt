@@ -30,6 +30,17 @@ import org.hyperledger.iroha.sdk.tx.SignedTransaction
 /** High-level client for interacting with Iroha nodes. */
 interface IrohaClient {
 
+    /** Lists the exact active verifying-key ids from Torii's bounded registry projection. */
+    fun listActiveVerifyingKeyIds(): CompletableFuture<List<VerifyingKeyId>> {
+        val future = CompletableFuture<List<VerifyingKeyId>>()
+        future.completeExceptionally(
+            IllegalStateException(
+                "listActiveVerifyingKeyIds requires a concrete IrohaClient implementation",
+            ),
+        )
+        return future
+    }
+
     /**
      * Submits a signed transaction to the node.
      *

@@ -3,7 +3,18 @@ use clap::ValueEnum;
 use color_eyre::eyre::{Result, eyre};
 use core::num::NonZeroU64;
 use iroha_crypto::Hash;
-use iroha_data_model::{asset::AssetDefinitionId, prelude::ChainId};
+use iroha_data_model::{
+    asset::{
+        Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
+        AssetId, NewAssetDefinition,
+    },
+    domain::DomainId,
+    isi::{Mint, MintBox, Register, asset_alias::SetAssetDefinitionAlias},
+    nexus::DataSpaceId,
+    prelude::{AssetDefinition, ChainId, Domain, NumericSpec},
+};
+use iroha_genesis::RawGenesisTransaction;
+use iroha_primitives::numeric::Quantity;
 /// Canonical I105 discriminant for the public Taira testnet.
 pub const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 /// Canonical I105 discriminant for the public Nexus mainnet.
@@ -16,9 +27,29 @@ pub const TAIRA_XOR_SCALE: u32 = 9;
 pub const PUBLIC_XOR_ALIAS: &str = "xor#universal";
 /// Public XOR domain registered in public-profile genesis manifests.
 pub const PUBLIC_XOR_DOMAIN: &str = "universal.universal";
+/// Canonical opaque Digital Kina asset-definition id for the public Taira BPNG profile.
+pub const TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID: &str = "839FV3NJC8NfgWQvghXU2hEFQm9a";
+/// Exact Digital Kina alias exposed by public Taira.
+pub const TAIRA_DIGITAL_KINA_ALIAS: &str = "kina#bpng";
+/// Immutable owning domain used to derive the public Taira Digital Kina id.
+pub const TAIRA_DIGITAL_KINA_DOMAIN: &str = "bpng.bpng";
+/// Human-readable asset name bound to [`TAIRA_DIGITAL_KINA_ALIAS`].
+pub const TAIRA_DIGITAL_KINA_NAME: &str = "kina";
+/// Canonical decimal scale for Digital Kina quantities.
+pub const TAIRA_DIGITAL_KINA_SCALE: u32 = 2;
+/// Physical BPNG dataspace that owns Digital Kina balance buckets on public Taira.
+pub const TAIRA_DIGITAL_KINA_DATASPACE_ID: u64 = 10;
+/// Retired spellings that must never be accepted as the canonical Digital Kina alias.
+pub const RETIRED_TAIRA_DIGITAL_KINA_ALIASES: &[&str] = &[
+    "digital_kina#bpng",
+    "digital-kina#bpng",
+    "pgk#bpng",
+    "kina#dpn",
+];
 const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
 const PK2_NEXUS_CHAIN_ID: &str = "cbdc16";
+
 /// Profile presets for `kagami genesis`/`kagami verify`.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)] // Keep network names explicit.
@@ -105,6 +136,338 @@ pub fn public_xor_profile_for_chain_id(chain_id: &str) -> Option<GenesisProfile>
         }
         _ => None,
     }
+}
+
+type TairaDigitalKinaIdentity = (AssetDefinitionId, AssetDefinitionAlias, DomainId);
+
+fn canonical_taira_digital_kina_identity() -> Result<TairaDigitalKinaIdentity> {
+    let expected_id =
+        AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+            .map_err(|err| eyre!("built-in Taira Digital Kina id is invalid: {err}"))?;
+    let expected_alias: AssetDefinitionAlias = TAIRA_DIGITAL_KINA_ALIAS.parse()?;
+    let expected_domain = DomainId::parse_fully_qualified(TAIRA_DIGITAL_KINA_DOMAIN)?;
+    let derived_id = AssetDefinitionId::derive_from_components(
+        expected_domain.clone(),
+        TAIRA_DIGITAL_KINA_NAME.parse()?,
+    );
+    if derived_id != expected_id {
+        return Err(eyre!(
+            "built-in Taira Digital Kina id `{expected_id}` does not match the canonical `{TAIRA_DIGITAL_KINA_DOMAIN}`/`{TAIRA_DIGITAL_KINA_NAME}` derivation `{derived_id}`"
+        ));
+    }
+    Ok((expected_id, expected_alias, expected_domain))
+}
+
+fn validate_taira_digital_kina_definition(
+    definition: &NewAssetDefinition,
+    expected_id: &AssetDefinitionId,
+    expected_alias: &AssetDefinitionAlias,
+    expected_domain: &DomainId,
+) -> Result<()> {
+    if let Some(alias) = definition.alias.as_ref()
+        && RETIRED_TAIRA_DIGITAL_KINA_ALIASES.contains(&alias.as_ref())
+    {
+        return Err(eyre!(
+            "retired Taira Digital Kina alias `{alias}` is forbidden; use `{TAIRA_DIGITAL_KINA_ALIAS}`"
+        ));
+    }
+    if definition.alias.as_ref() == Some(expected_alias) && &definition.id != expected_id {
+        return Err(eyre!(
+            "Taira Digital Kina alias `{TAIRA_DIGITAL_KINA_ALIAS}` must target `{expected_id}`, found `{}`",
+            definition.id
+        ));
+    }
+    if &definition.id != expected_id {
+        return Ok(());
+    }
+    if definition.alias.as_ref() != Some(expected_alias) {
+        let found = definition
+            .alias
+            .as_ref()
+            .map_or_else(|| "<missing>".to_owned(), ToString::to_string);
+        return Err(eyre!(
+            "Taira Digital Kina `{expected_id}` registration must atomically bind `{TAIRA_DIGITAL_KINA_ALIAS}`, found `{found}`"
+        ));
+    }
+    if definition.name != TAIRA_DIGITAL_KINA_NAME {
+        return Err(eyre!(
+            "Taira Digital Kina `{expected_id}` must have name `{TAIRA_DIGITAL_KINA_NAME}`, found `{}`",
+            definition.name
+        ));
+    }
+    let expected_spec = NumericSpec::fractional(TAIRA_DIGITAL_KINA_SCALE);
+    if definition.spec != expected_spec {
+        return Err(eyre!(
+            "Taira Digital Kina `{expected_id}` must use numeric spec {expected_spec:?}, found {:?}",
+            definition.spec
+        ));
+    }
+    if definition.balance_scope_policy != AssetBalancePolicy::DataspaceRestricted {
+        return Err(eyre!(
+            "Taira Digital Kina `{expected_id}` must use DataspaceRestricted balances"
+        ));
+    }
+    if definition.owning_domain.as_ref() != Some(expected_domain) {
+        return Err(eyre!(
+            "Taira Digital Kina `{expected_id}` must be owned by `{TAIRA_DIGITAL_KINA_DOMAIN}`"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_taira_digital_kina_mint_scope(
+    destination: &AssetId,
+    expected_id: &AssetDefinitionId,
+) -> Result<()> {
+    if destination.definition() != expected_id {
+        return Ok(());
+    }
+    let expected_scope =
+        AssetBalanceScope::Dataspace(DataSpaceId::new(TAIRA_DIGITAL_KINA_DATASPACE_ID));
+    if destination.scope() != &expected_scope {
+        return Err(eyre!(
+            "Taira Digital Kina `{expected_id}` genesis mints must target explicit `#dataspace:{TAIRA_DIGITAL_KINA_DATASPACE_ID}` balance buckets"
+        ));
+    }
+    Ok(())
+}
+
+fn reject_taira_base_digital_kina_definition(
+    definition: &NewAssetDefinition,
+    expected_id: &AssetDefinitionId,
+    expected_alias: &AssetDefinitionAlias,
+    expected_domain: &DomainId,
+) -> Result<()> {
+    let forbidden_alias = definition.alias.as_ref().is_some_and(|alias| {
+        alias == expected_alias || RETIRED_TAIRA_DIGITAL_KINA_ALIASES.contains(&alias.as_ref())
+    });
+    if &definition.id == expected_id
+        || forbidden_alias
+        || (definition.name == TAIRA_DIGITAL_KINA_NAME
+            && definition.owning_domain.as_ref() == Some(expected_domain))
+    {
+        return Err(eyre!(
+            "base Taira genesis must leave Digital Kina absent for the reviewed post-health provisioning stage"
+        ));
+    }
+    Ok(())
+}
+
+/// Prove that base Taira genesis contains the BPNG owning-domain prerequisite but no Digital Kina.
+///
+/// Digital Kina is deliberately stage-owned: the reviewed deployment corridor records three
+/// distinct post-health transactions for definition registration, operational permission, and
+/// initial mint. Embedding any part of that state in base genesis would bypass the absence proof
+/// and make the provisioning stage fail closed.
+///
+/// # Errors
+///
+/// Returns an error when `bpng.bpng` is missing or duplicated, or when base genesis already
+/// contains the canonical/retired alias, definition, or a balance for the pinned Digital Kina id.
+pub fn validate_taira_digital_kina_base_prerequisite(
+    manifest: &RawGenesisTransaction,
+) -> Result<DomainId> {
+    let (expected_id, expected_alias, expected_domain) = canonical_taira_digital_kina_identity()?;
+    let mut domain_registration_count = 0_usize;
+    for instruction in manifest.instructions() {
+        if let Some(register) = instruction.as_any().downcast_ref::<Register<Domain>>() {
+            if register.object.id == expected_domain {
+                domain_registration_count += 1;
+            }
+            continue;
+        }
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<Register<AssetDefinition>>()
+        {
+            reject_taira_base_digital_kina_definition(
+                &register.object,
+                &expected_id,
+                &expected_alias,
+                &expected_domain,
+            )?;
+            continue;
+        }
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+        {
+            match register {
+                iroha_data_model::isi::register::RegisterBox::Domain(register)
+                    if register.object.id == expected_domain =>
+                {
+                    domain_registration_count += 1;
+                }
+                iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) => {
+                    reject_taira_base_digital_kina_definition(
+                        &register.object,
+                        &expected_id,
+                        &expected_alias,
+                        &expected_domain,
+                    )?;
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if let Some(mint) = instruction.as_any().downcast_ref::<Mint<Quantity, Asset>>() {
+            if mint.destination.definition() == &expected_id {
+                return Err(eyre!(
+                    "base Taira genesis must not mint stage-owned Digital Kina"
+                ));
+            }
+            continue;
+        }
+        if let Some(MintBox::Asset(mint)) = instruction.as_any().downcast_ref::<MintBox>() {
+            if mint.destination().definition() == &expected_id {
+                return Err(eyre!(
+                    "base Taira genesis must not mint stage-owned Digital Kina"
+                ));
+            }
+            continue;
+        }
+        let Some(binding) = instruction
+            .as_any()
+            .downcast_ref::<SetAssetDefinitionAlias>()
+        else {
+            continue;
+        };
+        let forbidden_alias = binding.alias.as_ref().is_some_and(|alias| {
+            alias == &expected_alias || RETIRED_TAIRA_DIGITAL_KINA_ALIASES.contains(&alias.as_ref())
+        });
+        if forbidden_alias || binding.asset_definition_id == expected_id {
+            return Err(eyre!(
+                "base Taira genesis must not bind canonical or retired Digital Kina aliases before the reviewed provisioning stage"
+            ));
+        }
+    }
+    if domain_registration_count != 1 {
+        return Err(eyre!(
+            "base Taira genesis must register Digital Kina prerequisite domain `{expected_domain}` exactly once; found {domain_registration_count}"
+        ));
+    }
+    Ok(expected_domain)
+}
+
+/// Prove that a post-provision Taira replay manifest registers and binds Digital Kina exactly.
+///
+/// This is not a base-genesis requirement. It is intended for explicit combined/replay artifacts
+/// produced after the reviewed three-transaction Digital Kina stage. Taira retains canonical XOR
+/// for consensus economics while BPNG payments use a separate opaque raw id, human name, and
+/// alias.
+///
+/// # Errors
+///
+/// Returns an error for a missing, duplicate, substituted, or retired Digital Kina binding, or
+/// when the registered asset definition does not match the pinned BPNG domain, scale, and balance
+/// policy.
+pub fn validate_taira_post_provision_digital_kina_binding(
+    manifest: &RawGenesisTransaction,
+) -> Result<AssetDefinitionId> {
+    let (expected_id, expected_alias, expected_domain) = canonical_taira_digital_kina_identity()?;
+
+    let mut domain_registration_count = 0_usize;
+    let mut registration_count = 0_usize;
+    let mut domain_registration_index = None;
+    let mut registration_index = None;
+    for (index, instruction) in manifest.instructions().enumerate() {
+        if let Some(register) = instruction.as_any().downcast_ref::<Register<Domain>>() {
+            if register.object.id == expected_domain {
+                domain_registration_count += 1;
+                domain_registration_index.get_or_insert(index);
+            }
+            continue;
+        }
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<Register<AssetDefinition>>()
+        {
+            validate_taira_digital_kina_definition(
+                &register.object,
+                &expected_id,
+                &expected_alias,
+                &expected_domain,
+            )?;
+            if register.object.id == expected_id {
+                registration_count += 1;
+                registration_index.get_or_insert(index);
+            }
+            continue;
+        }
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+        {
+            match register {
+                iroha_data_model::isi::register::RegisterBox::Domain(register)
+                    if register.object.id == expected_domain =>
+                {
+                    domain_registration_count += 1;
+                    domain_registration_index.get_or_insert(index);
+                }
+                iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) => {
+                    validate_taira_digital_kina_definition(
+                        &register.object,
+                        &expected_id,
+                        &expected_alias,
+                        &expected_domain,
+                    )?;
+                    if register.object.id == expected_id {
+                        registration_count += 1;
+                        registration_index.get_or_insert(index);
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if let Some(mint) = instruction.as_any().downcast_ref::<Mint<Quantity, Asset>>() {
+            validate_taira_digital_kina_mint_scope(&mint.destination, &expected_id)?;
+            continue;
+        }
+        if let Some(MintBox::Asset(mint)) = instruction.as_any().downcast_ref::<MintBox>() {
+            validate_taira_digital_kina_mint_scope(mint.destination(), &expected_id)?;
+            continue;
+        }
+        let Some(binding) = instruction
+            .as_any()
+            .downcast_ref::<SetAssetDefinitionAlias>()
+        else {
+            continue;
+        };
+        if let Some(alias) = binding.alias.as_ref()
+            && RETIRED_TAIRA_DIGITAL_KINA_ALIASES.contains(&alias.as_ref())
+        {
+            return Err(eyre!(
+                "retired Taira Digital Kina alias `{alias}` is forbidden; use `{TAIRA_DIGITAL_KINA_ALIAS}`"
+            ));
+        }
+        if binding.alias.as_ref() == Some(&expected_alias)
+            || binding.asset_definition_id == expected_id
+        {
+            return Err(eyre!(
+                "post-provision Digital Kina alias must be bound atomically by its reviewed Register.AssetDefinition transaction, not a separate SetAssetDefinitionAlias instruction"
+            ));
+        }
+    }
+    if domain_registration_count != 1 {
+        return Err(eyre!(
+            "Taira genesis must register Digital Kina owning domain `{expected_domain}` exactly once; found {domain_registration_count}"
+        ));
+    }
+    if registration_count != 1 {
+        return Err(eyre!(
+            "Taira genesis must register Digital Kina `{expected_id}` exactly once; found {registration_count}"
+        ));
+    }
+    let domain_registration_index = domain_registration_index.expect("validated count is one");
+    let registration_index = registration_index.expect("validated count is one");
+    if domain_registration_index >= registration_index {
+        return Err(eyre!(
+            "post-provision Digital Kina replay must register `{expected_domain}` before the atomic `{expected_id}`/`{TAIRA_DIGITAL_KINA_ALIAS}` definition"
+        ));
+    }
+    Ok(expected_id)
 }
 /// Default canonical XOR asset id for public profiles where it is known.
 ///
@@ -229,6 +592,47 @@ pub fn resolve_vrf_seed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::{asset::AssetBalancePolicy, prelude::Metadata};
+    use iroha_genesis::GenesisBuilder;
+    use iroha_test_samples::ALICE_ID;
+    use std::path::PathBuf;
+
+    fn taira_digital_kina_manifest(
+        alias: &str,
+        target: AssetDefinitionId,
+        register_domain: bool,
+        mint_scope: Option<AssetBalanceScope>,
+    ) -> RawGenesisTransaction {
+        let definition_id = target;
+        let owning_domain = DomainId::parse_fully_qualified(TAIRA_DIGITAL_KINA_DOMAIN)
+            .expect("pinned Digital Kina domain");
+        let mut builder = GenesisBuilder::new_without_executor(
+            ChainId::from(PUBLIC_TAIRA_CHAIN_ID),
+            PathBuf::from("."),
+        );
+        if register_domain {
+            builder =
+                builder.append_instruction(Register::domain(Domain::new(owning_domain.clone())));
+        }
+        builder = builder.append_instruction(Register::asset_definition(
+            AssetDefinition::new(
+                definition_id.clone(),
+                TAIRA_DIGITAL_KINA_NAME.to_owned(),
+                NumericSpec::fractional(TAIRA_DIGITAL_KINA_SCALE),
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(owning_domain),
+            )
+            .with_alias(Some(alias.parse().expect("test alias")))
+            .with_metadata(Metadata::default()),
+        ));
+        if let Some(scope) = mint_scope {
+            builder = builder.append_instruction(Mint::asset_quantity(
+                1_u32,
+                AssetId::with_scope(definition_id, ALICE_ID.clone(), scope),
+            ));
+        }
+        builder.build_raw()
+    }
     #[test]
     fn profile_defaults_assign_expected_values() {
         let dev = profile_defaults(GenesisProfile::Iroha3Dev);
@@ -334,6 +738,209 @@ mod tests {
             err.to_string().contains(TAIRA_XOR_ASSET_DEFINITION_ID),
             "unexpected error: {err}"
         );
+    }
+    #[test]
+    fn taira_base_keeps_bpng_domain_but_defers_digital_kina_provisioning() {
+        let owning_domain = DomainId::parse_fully_qualified(TAIRA_DIGITAL_KINA_DOMAIN)
+            .expect("pinned Digital Kina domain");
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from(PUBLIC_TAIRA_CHAIN_ID),
+            PathBuf::from("."),
+        )
+        .append_instruction(Register::domain(Domain::new(owning_domain.clone())))
+        .build_raw();
+        assert_eq!(
+            validate_taira_digital_kina_base_prerequisite(&manifest)
+                .expect("base prerequisite and absence"),
+            owning_domain
+        );
+    }
+    #[test]
+    fn taira_base_rejects_preprovisioned_digital_kina() {
+        let expected_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+                .expect("pinned Digital Kina id");
+        let manifest =
+            taira_digital_kina_manifest(TAIRA_DIGITAL_KINA_ALIAS, expected_id, true, None);
+        let error = validate_taira_digital_kina_base_prerequisite(&manifest)
+            .expect_err("base genesis must preserve the stage-owned absence proof");
+        assert!(
+            error.to_string().contains("post-health provisioning stage"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn taira_base_rejects_retired_digital_kina_aliases() {
+        let expected_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+                .expect("pinned Digital Kina id");
+        let owning_domain = DomainId::parse_fully_qualified(TAIRA_DIGITAL_KINA_DOMAIN)
+            .expect("pinned Digital Kina domain");
+        for retired in RETIRED_TAIRA_DIGITAL_KINA_ALIASES {
+            let manifest = GenesisBuilder::new_without_executor(
+                ChainId::from(PUBLIC_TAIRA_CHAIN_ID),
+                PathBuf::from("."),
+            )
+            .append_instruction(Register::domain(Domain::new(owning_domain.clone())))
+            .append_instruction(SetAssetDefinitionAlias::bind(
+                expected_id.clone(),
+                retired.parse().expect("retired alias fixture"),
+                None,
+            ))
+            .build_raw();
+            let error = validate_taira_digital_kina_base_prerequisite(&manifest)
+                .expect_err("retired aliases must fail closed before provisioning");
+            assert!(
+                error.to_string().contains("canonical or retired"),
+                "unexpected error for {retired}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn taira_digital_kina_binding_pins_raw_name_alias_domain_and_scale() {
+        let expected_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+                .expect("pinned Digital Kina id");
+        let manifest =
+            taira_digital_kina_manifest(TAIRA_DIGITAL_KINA_ALIAS, expected_id.clone(), true, None);
+        assert_eq!(
+            validate_taira_post_provision_digital_kina_binding(&manifest)
+                .expect("canonical binding"),
+            expected_id
+        );
+    }
+    #[test]
+    fn taira_digital_kina_binding_rejects_a_separate_fourth_alias_instruction() {
+        let expected_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+                .expect("pinned Digital Kina id");
+        let manifest =
+            taira_digital_kina_manifest(TAIRA_DIGITAL_KINA_ALIAS, expected_id.clone(), true, None)
+                .into_builder()
+                .next_transaction()
+                .append_instruction(SetAssetDefinitionAlias::bind(
+                    expected_id,
+                    TAIRA_DIGITAL_KINA_ALIAS.parse().expect("canonical alias"),
+                    None,
+                ))
+                .build_raw();
+        let error = validate_taira_post_provision_digital_kina_binding(&manifest)
+            .expect_err("the reviewed register transaction must bind the alias atomically");
+        assert!(
+            error.to_string().contains("not a separate"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn taira_digital_kina_binding_rejects_retired_aliases() {
+        let expected_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+                .expect("pinned Digital Kina id");
+        for retired in RETIRED_TAIRA_DIGITAL_KINA_ALIASES {
+            let manifest = taira_digital_kina_manifest(retired, expected_id.clone(), true, None);
+            let error = validate_taira_post_provision_digital_kina_binding(&manifest)
+                .expect_err("retired alias must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("retired Taira Digital Kina alias"),
+                "unexpected error for {retired}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn taira_digital_kina_binding_rejects_substituted_raw_id() {
+        let substituted = AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
+            .expect("pinned XOR id");
+        let manifest =
+            taira_digital_kina_manifest(TAIRA_DIGITAL_KINA_ALIAS, substituted, true, None);
+        let error = validate_taira_post_provision_digital_kina_binding(&manifest)
+            .expect_err("canonical alias must not select a substituted raw id");
+        assert!(
+            error.to_string().contains("must target"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn taira_digital_kina_binding_rejects_missing_owning_domain_registration() {
+        let expected_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+                .expect("pinned Digital Kina id");
+        let manifest =
+            taira_digital_kina_manifest(TAIRA_DIGITAL_KINA_ALIAS, expected_id, false, None);
+        let error = validate_taira_post_provision_digital_kina_binding(&manifest)
+            .expect_err("an orphaned Digital Kina owning domain must fail closed");
+        assert!(
+            error.to_string().contains("owning domain"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn taira_digital_kina_binding_rejects_late_owning_domain_registration() {
+        let expected_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+                .expect("pinned Digital Kina id");
+        let owning_domain = DomainId::parse_fully_qualified(TAIRA_DIGITAL_KINA_DOMAIN)
+            .expect("pinned Digital Kina domain");
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from(PUBLIC_TAIRA_CHAIN_ID),
+            PathBuf::from("."),
+        )
+        .append_instruction(Register::asset_definition(
+            AssetDefinition::new(
+                expected_id.clone(),
+                TAIRA_DIGITAL_KINA_NAME.to_owned(),
+                NumericSpec::fractional(TAIRA_DIGITAL_KINA_SCALE),
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(owning_domain.clone()),
+            )
+            .with_alias(Some(
+                TAIRA_DIGITAL_KINA_ALIAS.parse().expect("canonical alias"),
+            ))
+            .with_metadata(Metadata::default()),
+        ))
+        .append_instruction(Register::domain(Domain::new(owning_domain)))
+        .build_raw();
+        let error = validate_taira_post_provision_digital_kina_binding(&manifest)
+            .expect_err("late owning-domain registration must fail closed");
+        assert!(
+            error.to_string().contains("before the atomic"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn taira_digital_kina_binding_rejects_implicit_global_genesis_mint() {
+        let expected_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+                .expect("pinned Digital Kina id");
+        let manifest = taira_digital_kina_manifest(
+            TAIRA_DIGITAL_KINA_ALIAS,
+            expected_id,
+            true,
+            Some(AssetBalanceScope::Global),
+        );
+        let error = validate_taira_post_provision_digital_kina_binding(&manifest)
+            .expect_err("an implicit universal Kina balance bucket must fail closed");
+        assert!(
+            error.to_string().contains("#dataspace:10"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn taira_digital_kina_binding_accepts_explicit_bpng_genesis_mint() {
+        let expected_id =
+            AssetDefinitionId::parse_address_literal(TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID)
+                .expect("pinned Digital Kina id");
+        let manifest = taira_digital_kina_manifest(
+            TAIRA_DIGITAL_KINA_ALIAS,
+            expected_id,
+            true,
+            Some(AssetBalanceScope::Dataspace(DataSpaceId::new(
+                TAIRA_DIGITAL_KINA_DATASPACE_ID,
+            ))),
+        );
+        validate_taira_post_provision_digital_kina_binding(&manifest)
+            .expect("explicit BPNG dataspace mint should remain valid");
     }
     #[test]
     fn known_chain_discriminant_maps_taira_and_nexus() {

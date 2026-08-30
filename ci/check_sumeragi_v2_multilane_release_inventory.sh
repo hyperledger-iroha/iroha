@@ -372,6 +372,22 @@ release_bootstrap = Path(sys.argv[8])
 release_bootstrap_source = release_bootstrap.read_text(encoding="utf-8")
 release_bootstrap_test = Path(sys.argv[9])
 release_bootstrap_test_source = release_bootstrap_test.read_text(encoding="utf-8")
+release_bootstrap_test_components = tuple(
+    release_bootstrap_test.with_name(name)
+    for name in (
+        "sumeragi_v2_release_bootstrap_terminal_cases.py",
+        "sumeragi_v2_release_bootstrap_environment_cases.py",
+    )
+)
+for component in release_bootstrap_test_components:
+    if component.is_symlink() or not component.is_file():
+        reject(f"release-bootstrap test component is unavailable: {component}")
+release_bootstrap_test_closure_source = "\n".join(
+    (
+        release_bootstrap_test_source,
+        *(component.read_text(encoding="utf-8") for component in release_bootstrap_test_components),
+    )
+)
 cargo_cache_ack_component = Path(sys.argv[11])
 cargo_cache_ack_component_source = cargo_cache_ack_component.read_text(
     encoding="utf-8"
@@ -610,10 +626,11 @@ for token, count in (
         reject(f"private child command-closure binding changed: {token}")
 for token, count in (
     ('"unlisted-command": "iroha-unlisted-release-command"', 1),
-    ("def test_undeclared_runner_tool_has_no_ambient_path_fallback(", 1),
+    ("def test_runner_tool_manifest_digest_mismatch_never_launches(", 1),
+    ("_write(release_fixture.tool_manifest, protected_manifest, 0o400)", 1),
     ("assert result.returncode == 127", 1),
 ):
-    if release_bootstrap_test_source.count(token) != count:
+    if release_bootstrap_test_closure_source.count(token) != count:
         reject(f"unknown-command rejection contract changed: {token}")
 
 for token, count in (
@@ -721,6 +738,7 @@ expected_receipt_component_symbols = (
     "_validate_multilane_apalache_evidence",
     "_validate_formal_snapshot_replays",
     "_formal_artifacts",
+    "_formal_replay_release",
 )
 expected_receipt_corridor_component_symbols = (
     "_receipt_validation_invocation_value_sha256",

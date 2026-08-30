@@ -72,6 +72,29 @@ final class StubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class AmbientCredentialSessionDelegate: NSObject,
+    URLSessionTaskDelegate,
+    @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        completionHandler(
+            .useCredential,
+            URLCredential(
+                user: "ambient",
+                password: "must-not-leak",
+                persistence: .forSession
+            )
+        )
+    }
+}
+
 private func canonicalVerifierRecordArchive(
     seed: UInt8,
     verifierKeyLength: Int = 96
@@ -11964,12 +11987,13 @@ final class ToriiClientHeaderTests: XCTestCase {
         let inlineKey = keyBytes.map {
             structure([string(backend), byteVector($0)])
         }
+        let backendTag = VerifyingKeyBackendTag.verifierBackendRegistryTagV1(backend)!
         let record = structure([
             uint32(recordVersion ?? version),
             string(circuitId),
             option(nil),
             string("core"),
-            uint32(backend.hasPrefix("stark/") ? 1 : 0),
+            uint32(backendTag.noritoDiscriminant),
             string("unknown"),
             schemaHash,
             commitment,
@@ -12547,6 +12571,320 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(keys.count, 1)
         XCTAssertEqual(keys[0].id.name, "vk_enveloped")
         XCTAssertEqual(keys[0].record?.verifyingKeyLength, 64)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListActiveVerifyingKeyIdsUsesExactBoundedProjection() async throws {
+        let payload = Data(
+            """
+            [
+              {
+                "backend": "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+                "name": "kagemusha_topup_v3"
+              },
+              { "backend": "halo2/ipa", "name": "same_name" },
+              { "backend": "stark/fri", "name": "same_name" },
+              { "backend": "stark/fri", "name": "stark_transfer_v1" },
+              { "backend": "stark/fri", "name": "transfer:v1" }
+            ]
+            """.utf8
+        )
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/v1/zk/vk")
+            XCTAssertEqual(
+                request.url?.query,
+                "status=Active&ids_only=true&limit=1000&order=asc"
+            )
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+            XCTAssertFalse(request.httpShouldHandleCookies)
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "Proxy-Authorization"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-API-Token"))
+            XCTAssertNil(request.value(forHTTPHeaderField: ToriiAccountOnboardingTokenHeader))
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-Account-Id"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-Dataspace-Id"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-Iroha-Operator-Signature"))
+            XCTAssertNil(
+                request.value(forHTTPHeaderField: "X-Iroha-Operator-Future-Credential")
+            )
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Trace-Id"), "active-vk-read")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Content-Length": String(payload.count),
+                ]
+            )!
+            return (response, payload)
+        }
+
+        let ambientConfiguration = URLSessionConfiguration.ephemeral
+        ambientConfiguration.protocolClasses = [StubURLProtocol.self]
+        ambientConfiguration.httpAdditionalHeaders = [
+            "Authorization": "Basic ambient-must-not-leak",
+            "Cookie": "ambient-session=must-not-leak",
+        ]
+        let ambientSession = URLSession(
+            configuration: ambientConfiguration,
+            delegate: AmbientCredentialSessionDelegate(),
+            delegateQueue: nil
+        )
+        let ids = try await ToriiClient(
+            baseURL: URL(string: "https://example.test/api")!,
+            session: ambientSession,
+            defaultHeaders: [
+                "Authorization": "Bearer must-not-leak",
+                "Proxy-Authorization": "Bearer must-not-leak",
+                "Cookie": "session=must-not-leak",
+                "X-API-Token": "must-not-leak",
+                ToriiAccountOnboardingTokenHeader: "must-not-leak",
+                "X-Account-Id": "must-not-leak",
+                "X-Dataspace-Id": "must-not-leak",
+                "X-Iroha-Operator-Signature": "must-not-leak",
+                "x-iroha-operator-future-credential": "must-not-leak",
+                "X-Trace-Id": "active-vk-read",
+            ]
+        ).listActiveVerifyingKeyIds()
+        XCTAssertEqual(ids.count, 5)
+        XCTAssertEqual(
+            Array(ids.prefix(4)),
+            [
+                try ToriiVerifyingKeyId(
+                    backend: "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+                    name: "kagemusha_topup_v3"
+                ),
+                try ToriiVerifyingKeyId(
+                    backend: "halo2/ipa",
+                    name: "same_name"
+                ),
+                try ToriiVerifyingKeyId(
+                    backend: "stark/fri",
+                    name: "same_name"
+                ),
+                try ToriiVerifyingKeyId(
+                    backend: "stark/fri",
+                    name: "stark_transfer_v1"
+                ),
+            ]
+        )
+        XCTAssertEqual(ids[4].backend, "stark/fri")
+        XCTAssertEqual(ids[4].name, "transfer:v1")
+    }
+
+    func testActiveVerifyingKeySessionIsCredentialFreeAndRejectsAuthChallenges() {
+        let ambientConfiguration = URLSessionConfiguration.ephemeral
+        ambientConfiguration.protocolClasses = [StubURLProtocol.self]
+        ambientConfiguration.httpAdditionalHeaders = [
+            "Authorization": "Basic ambient-must-not-leak",
+            "Cookie": "ambient-session=must-not-leak",
+        ]
+        ambientConfiguration.httpCookieStorage = .shared
+        ambientConfiguration.connectionProxyDictionary = [
+            "HTTPEnable": true,
+            "HTTPProxy": "proxy.example.test",
+            "HTTPPort": 8_080,
+            "HTTPUser": "ambient",
+            "HTTPPassword": "must-not-leak",
+        ]
+        let credentialStorage = URLCredentialStorage()
+        let protectionSpace = URLProtectionSpace(
+            host: "example.test",
+            port: 443,
+            protocol: "https",
+            realm: "ambient",
+            authenticationMethod: NSURLAuthenticationMethodHTTPBasic
+        )
+        credentialStorage.setDefaultCredential(
+            URLCredential(
+                user: "ambient",
+                password: "must-not-leak",
+                persistence: .forSession
+            ),
+            for: protectionSpace
+        )
+        ambientConfiguration.urlCredentialStorage = credentialStorage
+        let ambientDelegate = AmbientCredentialSessionDelegate()
+        let ambientSession = URLSession(
+            configuration: ambientConfiguration,
+            delegate: ambientDelegate,
+            delegateQueue: nil
+        )
+        let isolated = ToriiClient.makeCredentialFreeSession(from: ambientSession)
+        defer {
+            isolated.invalidateAndCancel()
+            ambientSession.invalidateAndCancel()
+        }
+
+        XCTAssertNil(isolated.configuration.httpAdditionalHeaders)
+        XCTAssertNil(isolated.configuration.httpCookieStorage)
+        XCTAssertFalse(isolated.configuration.httpShouldSetCookies)
+        XCTAssertEqual(isolated.configuration.httpCookieAcceptPolicy, .never)
+        XCTAssertNil(isolated.configuration.urlCredentialStorage)
+        XCTAssertNil(isolated.configuration.connectionProxyDictionary)
+        XCTAssertNil(isolated.configuration.urlCache)
+        XCTAssertEqual(
+            isolated.configuration.requestCachePolicy,
+            .reloadIgnoringLocalCacheData
+        )
+        XCTAssertTrue(isolated.delegate is ToriiCredentialFreeSessionDelegate)
+        XCTAssertFalse(isolated.delegate === ambientDelegate)
+        XCTAssertTrue(
+            isolated.configuration.protocolClasses?.contains {
+                ObjectIdentifier($0) == ObjectIdentifier(StubURLProtocol.self)
+            } == true
+        )
+        XCTAssertEqual(
+            ToriiCredentialFreeSessionDelegate.disposition(
+                for: NSURLAuthenticationMethodHTTPBasic
+            ),
+            .cancelAuthenticationChallenge
+        )
+        XCTAssertEqual(
+            ToriiCredentialFreeSessionDelegate.disposition(
+                for: NSURLAuthenticationMethodHTTPDigest
+            ),
+            .cancelAuthenticationChallenge
+        )
+        XCTAssertEqual(
+            ToriiCredentialFreeSessionDelegate.disposition(
+                for: NSURLAuthenticationMethodServerTrust
+            ),
+            .performDefaultHandling
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testActiveVerifyingKeyIdsRejectURLUserInfoBeforeDispatch() async {
+        var requests = 0
+        StubURLProtocol.handler = { request in
+            requests += 1
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 401,
+                httpVersion: nil,
+                headerFields: ["WWW-Authenticate": "Basic realm=ambient"]
+            )!
+            return (response, Data())
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiClient(
+            baseURL: URL(string: "https://ambient:must-not-leak@example.test/api")!,
+            session: session
+        )
+        defer { client.invalidateAndCancel() }
+
+        await XCTAssertThrowsErrorAsync(
+            try await client.listActiveVerifyingKeyIds()
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("reject URL user-info"))
+        }
+        XCTAssertEqual(requests, 0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListActiveVerifyingKeyIdsRejectsNonExactResponses() async throws {
+        var hostilePayloads = [
+            #"[{"backend":"halo2/ipa","name":"vk","status":"Active"}]"#,
+            #"[{"backend":"unsupported","name":"vk"}]"#,
+            #"[{"backend":"halo2/ipa","name":" vk"}]"#,
+            #"[{"backend":"halo2/ipa","backend":"stark/fri","name":"vk"}]"#,
+            #"[{"backend":"halo2/ipa","name":"vk"},{"backend":"halo2/ipa","name":"vk"}]"#,
+            #"[{"backend":"stark/fri","name":"z"},{"backend":"halo2/ipa","name":"a"}]"#,
+            #"[{"backend":"stark/fri","name":"same_name"},{"backend":"halo2/ipa","name":"same_name"}]"#,
+            #"[{"backend":"halo2/ipa","name":"Uppercase"}]"#,
+            #"[{"backend":"halo2/ipa","name":"a..b"}]"#,
+            #"[{"backend":"halo2/ipa","name":"名前"}]"#,
+            #"{"items":[{"backend":"halo2/ipa","name":"vk"}]}"#,
+        ].map { Data($0.utf8) }
+        hostilePayloads.append(Data([0xff]))
+        hostilePayloads.append(
+            Data(
+                "[{\"backend\":\"halo2/ipa\",\"name\":\"\(String(repeating: "a", count: 257))\"}]".utf8
+            )
+        )
+        let tooMany = (0...1_000)
+            .map {
+                "{\"backend\":\"halo2/ipa\",\"name\":\"vk_\(String(format: "%04d", $0))\"}"
+            }
+            .joined(separator: ",")
+        hostilePayloads.append(Data("[\(tooMany)]".utf8))
+
+        for payload in hostilePayloads {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, payload)
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().listActiveVerifyingKeyIds()
+            )
+        }
+
+        let valid = Data(#"[{"backend":"halo2/ipa","name":"vk"}]"#.utf8)
+        for contentType in ["application/json; charset=utf-8", "text/json"] {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": contentType]
+                )!
+                return (response, valid)
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().listActiveVerifyingKeyIds()
+            )
+        }
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                    "Content-Length": "1",
+                ]
+            )!
+            return (response, valid)
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().listActiveVerifyingKeyIds()
+        )
+
+        let oversized = Data(repeating: UInt8(ascii: " "), count: 512 * 1_024 + 1)
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Content-Length": String(oversized.count),
+                ]
+            )!
+            return (response, oversized)
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().listActiveVerifyingKeyIds()
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -13264,6 +13602,16 @@ final class ToriiClientHeaderTests: XCTestCase {
             XCTAssertTrue(reason.contains("surrounding whitespace"))
         }
 
+        var separatedName = base
+        separatedName.name = "scope:vk"
+        XCTAssertThrowsError(try JSONEncoder().encode(separatedName)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+            XCTAssertTrue(reason.contains("name"))
+            XCTAssertTrue(reason.contains(":"))
+        }
+
         var paddedCircuit = base
         paddedCircuit.circuitId = "halo2/ipa::transfer_v1 "
         XCTAssertThrowsError(try JSONEncoder().encode(paddedCircuit)) { error in
@@ -13408,6 +13756,13 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     func testVerifyingKeyRequestsRejectUnsupportedProductionBackendsBeforeEncoding() {
+        XCTAssertEqual(
+            VerifyingKeyBackendTag.verifierBackendRegistryTagV1("stark/fri"),
+            .stark
+        )
+        XCTAssertNil(
+            VerifyingKeyBackendTag.verifierBackendRegistryTagV1("stark/unknown-native-v1")
+        )
         let unsupported = [
             "halo2/unknown-native-v1",
             "halo2/ipa:unknown-native-v1",

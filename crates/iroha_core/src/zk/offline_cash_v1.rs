@@ -25,6 +25,8 @@ mod p256_packed_affine_v3;
 mod packed_base;
 /// Exact Offline Cash V1 Halo2 profile and protocol identities.
 mod protocol;
+/// Public fail-closed wallet-runtime boundary.
+mod runtime_facade;
 /// Exact 229-word / 33-cell field-neutral STATE public-instance ABI.
 mod state_abi;
 /// Exact Eq/Fp and Ep/Fq STATE relation circuit scaffolds.
@@ -57,6 +59,10 @@ pub(crate) use protocol::OfflineCashHalo2ParityV1;
 pub(crate) use protocol::{
     OfflineCashHalo2CircuitRoleV1, offline_cash_halo2_profile_digest_v1,
     offline_cash_halo2_protocol_identity_v1,
+};
+pub use runtime_facade::{
+    OfflineCashWalletSessionActionV1, OfflineCashWalletSessionErrorV1,
+    OfflineCashWalletSessionStateV1, OfflineCashWalletSessionStatusV1, OfflineCashWalletSessionV1,
 };
 
 /// Exact move-only statement source accepted by the private packed P-256 V3 bridge.

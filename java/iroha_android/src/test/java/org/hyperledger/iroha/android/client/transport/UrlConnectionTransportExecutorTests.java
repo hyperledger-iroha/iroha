@@ -25,6 +25,47 @@ import org.junit.Test;
 public final class UrlConnectionTransportExecutorTests {
 
   @Test
+  public void credentialFreeRequestFailsClosedBeforeOpeningAConnection() throws Exception {
+    try (ServerSocket server = loopbackServer()) {
+      server.setSoTimeout(500);
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(URI.create("http://127.0.0.1:" + server.getLocalPort() + "/v1/zk/vk"))
+              .setAllowAmbientCredentials(false)
+              .build();
+      try {
+        new UrlConnectionTransportExecutor().execute(request).get();
+        fail("credential-free URLConnection request must fail closed");
+      } catch (final ExecutionException expected) {
+        assertTrue(hasCauseMessage(expected, "unsupported by URLConnection"));
+      }
+      try {
+        server.accept().close();
+        fail("credential-free request must fail before opening the connection");
+      } catch (final SocketTimeoutException expected) {
+        // Expected: URLConnection cannot isolate its authentication cache, so no socket opens.
+      }
+    }
+  }
+
+  @Test
+  public void credentialFreeStreamingFailsClosed() throws Exception {
+    final TransportRequest request =
+        TransportRequest.builder()
+            .setMethod("GET")
+            .setUri(URI.create("http://127.0.0.1:1/v1/zk/vk"))
+            .setAllowAmbientCredentials(false)
+            .build();
+    try {
+      new UrlConnectionTransportExecutor().openStream(request).get();
+      fail("credential-free URLConnection stream must fail closed");
+    } catch (final ExecutionException expected) {
+      assertTrue(hasCauseMessage(expected, "unsupported by URLConnection"));
+    }
+  }
+
+  @Test
   public void executeReturns404WithEmptyBodyWhenServerSendsNoContent() throws Exception {
     try (ServerSocket server = loopbackServer()) {
       final int port = server.getLocalPort();

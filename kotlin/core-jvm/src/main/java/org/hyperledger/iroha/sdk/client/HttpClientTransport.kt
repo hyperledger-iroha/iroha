@@ -775,6 +775,23 @@ class HttpClientTransport(
     fun listVpnReceipts(canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnReceiptListResponse> =
         fetchJson(buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth), VpnJsonParser::parseReceiptList, "vpn receipt list", 200)
 
+    /** Fetch only active verifying-key ids through Torii's fixed, bounded public projection. */
+    override fun listActiveVerifyingKeyIds(): CompletableFuture<List<VerifyingKeyId>> =
+        fetchExactJson(
+            buildExactPublicJsonGetRequest(
+                "/v1/zk/vk",
+                linkedMapOf(
+                    "status" to "Active",
+                    "ids_only" to "true",
+                    "limit" to "1000",
+                    "order" to "asc",
+                ),
+                VERIFYING_KEY_IDS_RESPONSE_MAX_BYTES,
+            ),
+            VerifyingKeyJsonParser::parseActiveIds,
+            "active verifying-key ids",
+        )
+
     /**
      * Prepare an unsigned verifying-key registration transaction for local signing.
      *
@@ -1239,6 +1256,38 @@ class HttpClientTransport(
         return builder.build()
     }
 
+    /** Build an exact public JSON read without forwarding configured request credentials. */
+    private fun buildExactPublicJsonGetRequest(
+        path: String,
+        queryParams: Map<String, String>,
+        maximumResponseBytes: Long,
+    ): TransportRequest {
+        require(config.defaultHeaders().keys.none { it.equals("Accept", ignoreCase = true) }) {
+            "Accept must not be overridden for exact JSON requests"
+        }
+        require(config.defaultHeaders().keys.none { it.equals("Accept-Encoding", ignoreCase = true) }) {
+            "Accept-Encoding must not be overridden for credential-free exact JSON requests"
+        }
+        val target = appendQuery(resolvePath(path), queryParams)
+        require(target.rawUserInfo == null) {
+            "credential-free public reads reject URI user-info"
+        }
+        val builder = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("GET")
+            .addHeader("Accept", "application/json")
+            .addHeader("Accept-Encoding", "identity")
+            .setMaximumResponseBytes(maximumResponseBytes)
+            .setAllowAmbientCredentials(false)
+            .setTimeout(config.requestTimeout())
+        for ((key, value) in config.defaultHeaders()) {
+            if (!isPublicReadCredentialHeader(key)) {
+                builder.addHeader(key, value)
+            }
+        }
+        return builder.build()
+    }
+
     private fun buildExactOperatorJsonGetRequest(
         path: String,
         maximumResponseBytes: Long,
@@ -1483,6 +1532,9 @@ class HttpClientTransport(
             )
             try {
                 requireExactJsonResponse(response, errorContext)
+                if (!request.allowAmbientCredentials) {
+                    requireIdentityContentEncoding(response.headers, errorContext)
+                }
                 val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
                     "$errorContext request must declare a response-body limit"
                 }
@@ -1585,6 +1637,24 @@ class HttpClientTransport(
         }
         require(value.toLongOrNull() == actualBytes.toLong()) {
             "$errorContext response Content-Length does not match the body"
+        }
+    }
+
+    private fun requireIdentityContentEncoding(
+        headers: Map<String, List<String>>,
+        errorContext: String,
+    ) {
+        val values = headers.entries
+            .asSequence()
+            .filter { (name, _) -> name.equals("Content-Encoding", ignoreCase = true) }
+            .flatMap { (_, headerValues) -> headerValues.asSequence() }
+            .toList()
+        if (values.isEmpty()) return
+        require(
+            values.size == 1 &&
+                (values.single().isBlank() || values.single().trim().equals("identity", true)),
+        ) {
+            "$errorContext response must preserve the identity representation"
         }
     }
 
@@ -1732,6 +1802,7 @@ class HttpClientTransport(
         )
         private const val SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
         private const val NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L
+        private const val VERIFYING_KEY_IDS_RESPONSE_MAX_BYTES = 512L * 1024L
         private const val SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L
         private const val SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L
         private const val EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L
@@ -1742,8 +1813,29 @@ class HttpClientTransport(
             CanonicalRequestSigner.HEADER_TIMESTAMP_MS,
             CanonicalRequestSigner.HEADER_NONCE,
         )
+        private val PUBLIC_READ_CREDENTIAL_HEADERS = setOf(
+            "Authorization",
+            "Proxy-Authorization",
+            "Cookie",
+            "X-API-Token",
+            "X-Account-Id",
+            "X-Dataspace-Id",
+            CanonicalRequestSigner.HEADER_ACCOUNT,
+            CanonicalRequestSigner.HEADER_SIGNATURE,
+            CanonicalRequestSigner.HEADER_TIMESTAMP_MS,
+            CanonicalRequestSigner.HEADER_NONCE,
+            "X-Iroha-Witness",
+            ONBOARDING_TOKEN_HEADER,
+        )
 
         @JvmStatic fun createDefault(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
+        /**
+         * Uses a caller-supplied trusted executor. It must enforce
+         * [TransportRequest.allowAmbientCredentials] when false without adding cookies,
+         * authentication, proxy credentials, redirects, or retries. SDK-owned executors enforce
+         * or fail closed on that policy; arbitrary implementations, including their transport and
+         * TLS identity configuration, are an extension trust boundary.
+         */
         @JvmStatic fun withExecutor(executor: HttpTransportExecutor, config: ClientConfig): HttpClientTransport = HttpClientTransport(executor, config)
         @JvmStatic fun withDefaultExecutor(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
         /**
@@ -1795,6 +1887,9 @@ class HttpClientTransport(
             }
             return normalized.lowercase(Locale.ROOT)
         }
+        private fun isPublicReadCredentialHeader(name: String): Boolean =
+            PUBLIC_READ_CREDENTIAL_HEADERS.any { it.equals(name, ignoreCase = true) } ||
+                name.startsWith("X-Iroha-Operator-", ignoreCase = true)
         private fun resolveAuthority(request: TransportRequest?): String {
             if (request == null) return ""; val authority = request.uri.authority; if (authority != null) return authority
             val host = request.headers["Host"]; return if (host.isNullOrEmpty()) "" else host[0]

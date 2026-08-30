@@ -52,6 +52,8 @@ FRAMEWORK_PYTHON = (
 )
 FINGERPRINT = "SHA256:" + "A" * 43
 OTHER_FINGERPRINT = "SHA256:" + "B" * 43
+FORMAL_REPLAY_SIGNATURE_SHA256 = "f" * 64
+FORMAL_REPLAY_PRINCIPAL = "fixture-formal-replay"
 APPROVAL_EVIDENCE_ROOT_ID = "fixture-release-evidence-root"
 APPROVAL_DURATIONS = (900, 901, 902, 903)
 APPROVAL_CLASS_IDS = (
@@ -341,6 +343,19 @@ def _fixture_validator_values(
         "--runtime-tool-probe-result": (
             "path", str(invocation / "runtime-tool-probe-result.json"),
         ),
+        "--formal-replay-source-receipt": (
+            "path",
+            str(
+                invocation / "fixture" / "formal-replay-source" / "receipt.json"
+            ),
+        ),
+        "--formal-replay-release-root": (
+            "path", str(invocation / "fixture" / "formal-replay-release"),
+        ),
+        "--expected-formal-replay-signature-sha256": (
+            "text", FORMAL_REPLAY_SIGNATURE_SHA256,
+        ),
+        "--formal-replay-principal": ("text", FORMAL_REPLAY_PRINCIPAL),
         "--output": ("path", str(receipt)),
         "--verify-existing": ("flag", True),
         "--validation-ack": ("path", str(acknowledgment)),
@@ -390,6 +405,26 @@ def _fixture_receipt_for_validator(
             "release_signature_ssh_keygen": path("--signature-ssh-keygen"),
             "corridor_completion": path("--corridor-completion"),
             "formal_completion": path("--formal-completion"),
+            "formal_replay_release": {
+                "principal": values["--formal-replay-principal"][1],
+                "source_receipt": path("--formal-replay-source-receipt"),
+                "receipt": {
+                    "path": str(
+                        Path(values["--formal-replay-release-root"][1])
+                        / "receipt.json"
+                    ),
+                    "sha256": "1" * 64,
+                },
+                "signature": {
+                    "path": str(
+                        Path(values["--formal-replay-release-root"][1])
+                        / "receipt.json.sig"
+                    ),
+                    "sha256": values[
+                        "--expected-formal-replay-signature-sha256"
+                    ][1],
+                },
+            },
             "seed_matrix_completion": path("--seed-completion"),
             "chaos_completion": path("--chaos-completion"),
             "g4p_multilane": {"completion": path("--g4p-completion")},
@@ -977,6 +1012,25 @@ class Fixture:
         self.environment["IROHA_RELEASE_INVOCATION_ROOT"] = str(invocation)
         self.environment["IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"] = str(
             invocation / "fixture" / "scaling-evidence-manifest"
+        )
+        self.environment.update(
+            {
+                "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT": str(
+                    invocation
+                    / "fixture"
+                    / "formal-replay-source"
+                    / "receipt.json"
+                ),
+                "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT": str(
+                    invocation / "fixture" / "formal-replay-release"
+                ),
+                "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256": (
+                    FORMAL_REPLAY_SIGNATURE_SHA256
+                ),
+                "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL": (
+                    FORMAL_REPLAY_PRINCIPAL
+                ),
+            }
         )
         marker = self.marker()
         marker_environment = {

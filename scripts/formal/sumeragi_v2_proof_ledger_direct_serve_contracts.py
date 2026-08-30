@@ -300,14 +300,36 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         "turn",
         "LaunchedProductionLifecycleV1",
         "drive_ready_completion_turn",
-        "fresh Ready completion dispatch after the Producer eligibility gate",
+        "ordinary Ready completion delegation after the Producer eligibility gate",
         (
+            "self.drive_ready_completion_turn_with_required_ordinal(ready, None)",
+        ),
+    )
+    sequence(
+        "turn",
+        "LaunchedProductionLifecycleV1",
+        "drive_ready_completion_turn_requiring_ordinal",
+        "exact-ordinal Ready completion delegation after the retained Apply claim",
+        (
+            "self.drive_ready_completion_turn_with_required_ordinal(ready, Some(required_ordinal))",
+        ),
+    )
+    sequence(
+        "turn",
+        "LaunchedProductionLifecycleV1",
+        "drive_ready_completion_turn_with_required_ordinal",
+        "complete Ready census classification and exact-ordinal dispatch",
+        (
+            "let fence = self.executor.lifecycle_reducer_fence_observation()",
             "self.owner.classify_completion_ready_work(fence)",
             "ProductionCompletionReadyWorkV1::None",
+            "ProductionCompletionReadyWorkV1::PassThrough",
             "ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
             "ProductionCompletionReadyWorkV1::Invalid",
             "self.close_output_for_restart()",
             "ProductionCompletionReadyWorkV1::CompletionIo",
+            "match required_ordinal",
+            "dispatch_completion_requiring_ready_ordinal",
             "dispatch_completion_with_runner_debt",
             "ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast",
             "refanout_recovered_lifecycle_signed_broadcast_with_runner_debt",
@@ -486,9 +508,11 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         "height-runner Serve completion yield",
         (
             "drive_completion_pre_gate(current_turn, lane_work)",
-            "PreGate::Ready(ready)",
-            "producer_claim == LifecycleProducerClaimDispositionV1::Eligible",
-            "drive_ready_completion_turn(ready)",
+            "PreGate::Ready(ready) if producer_claim.permits_ready_completion()",
+            "producer_claim.required_ready_ordinal()",
+            "drive_ready_completion_turn_requiring_ordinal(ready, ordinal)",
+            "None => activated.drive_ready_completion_turn(ready)",
+            "producer_claim.requires_exact_ready_selection()",
             "completion_selection_stops_batch(&selected)",
             "return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim))",
             "ingress_restart_error(&output_guard)",

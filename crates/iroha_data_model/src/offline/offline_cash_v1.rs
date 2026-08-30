@@ -1679,49 +1679,101 @@ impl OfflineCashAcknowledgementV1 {
     }
 }
 
-/// State of one receiver-bound Offline Cash V1 wallet session.
+/// State of one non-authorizing Offline Cash V1 verification transcript.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OfflineCashWalletSessionStateV1 {
-    /// The signed receiver request is ready to share.
-    ReceiveRequestReady,
-    /// The sender response has been fully validated and committed to this session.
-    PaymentCommitted,
-    /// The post-persistence receiver acknowledgement has been fully validated.
-    Acknowledged,
+pub enum OfflineCashVerificationTranscriptStateV1 {
+    /// The signed receiver request passed structural validation.
+    ReceiveRequestValidated,
+    /// The sender response passed structural validation.
+    PaymentValidated,
+    /// The post-persistence receiver acknowledgement passed structural validation.
+    AcknowledgementValidated,
 }
 
-/// Result of applying a peer message to an Offline Cash V1 wallet session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OfflineCashWalletSessionEventV1 {
-    /// A previously unseen payment was committed.
-    PaymentCommitted,
-    /// The exact already-committed payment was replayed idempotently.
-    PaymentReplay,
-    /// A previously unseen acknowledgement was accepted.
-    Acknowledged,
-    /// The exact already-accepted acknowledgement was replayed idempotently.
-    AcknowledgementReplay,
+impl OfflineCashVerificationTranscriptStateV1 {
+    /// Deprecated compatibility spelling for [`Self::ReceiveRequestValidated`].
+    #[allow(non_upper_case_globals)]
+    #[deprecated(
+        note = "use OfflineCashVerificationTranscriptStateV1::ReceiveRequestValidated; this data-model value does not own a wallet runtime"
+    )]
+    pub const ReceiveRequestReady: Self = Self::ReceiveRequestValidated;
+
+    /// Deprecated compatibility spelling for [`Self::PaymentValidated`].
+    #[allow(non_upper_case_globals)]
+    #[deprecated(
+        note = "use OfflineCashVerificationTranscriptStateV1::PaymentValidated; structural validation is not a wallet commit"
+    )]
+    pub const PaymentCommitted: Self = Self::PaymentValidated;
+
+    /// Deprecated compatibility spelling for [`Self::AcknowledgementValidated`].
+    #[allow(non_upper_case_globals)]
+    #[deprecated(
+        note = "use OfflineCashVerificationTranscriptStateV1::AcknowledgementValidated; validation is not lifecycle acknowledgement authority"
+    )]
+    pub const Acknowledged: Self = Self::AcknowledgementValidated;
 }
 
-/// Structural, non-authorizing state-machine facade for one Offline Cash V1 handoff.
+/// Result of structurally validating a peer message into a verification transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfflineCashVerificationTranscriptEventV1 {
+    /// A previously unseen payment passed structural validation.
+    PaymentValidated,
+    /// The exact already-validated payment was replayed idempotently.
+    PaymentValidationReplay,
+    /// A previously unseen acknowledgement passed structural validation.
+    AcknowledgementValidated,
+    /// The exact already-validated acknowledgement was replayed idempotently.
+    AcknowledgementValidationReplay,
+}
+
+impl OfflineCashVerificationTranscriptEventV1 {
+    /// Deprecated compatibility spelling for [`Self::PaymentValidated`].
+    #[allow(non_upper_case_globals)]
+    #[deprecated(
+        note = "use OfflineCashVerificationTranscriptEventV1::PaymentValidated; structural validation is not a wallet commit"
+    )]
+    pub const PaymentCommitted: Self = Self::PaymentValidated;
+
+    /// Deprecated compatibility spelling for [`Self::PaymentValidationReplay`].
+    #[allow(non_upper_case_globals)]
+    #[deprecated(note = "use OfflineCashVerificationTranscriptEventV1::PaymentValidationReplay")]
+    pub const PaymentReplay: Self = Self::PaymentValidationReplay;
+
+    /// Deprecated compatibility spelling for [`Self::AcknowledgementValidated`].
+    #[allow(non_upper_case_globals)]
+    #[deprecated(
+        note = "use OfflineCashVerificationTranscriptEventV1::AcknowledgementValidated; validation is not lifecycle acknowledgement authority"
+    )]
+    pub const Acknowledged: Self = Self::AcknowledgementValidated;
+
+    /// Deprecated compatibility spelling for [`Self::AcknowledgementValidationReplay`].
+    #[allow(non_upper_case_globals)]
+    #[deprecated(
+        note = "use OfflineCashVerificationTranscriptEventV1::AcknowledgementValidationReplay"
+    )]
+    pub const AcknowledgementReplay: Self = Self::AcknowledgementValidationReplay;
+}
+
+/// Structural, non-authorizing transcript for one Offline Cash V1 handoff.
 ///
-/// The facade owns typed canonical values and mutates state only after wire,
+/// The transcript owns typed canonical values and records them only after wire,
 /// signature, request-binding, and aggregate-size validation succeeds. It does
-/// not authenticate a release registry or authorize opaque proof bytes;
+/// not authenticate a release registry, authorize opaque proof bytes, own a
+/// secure-device session, mutate a balance, or publish an outbox record;
 /// production callers must first pass the payment through Core's terminal
 /// verifier, directly or through the authenticated native facade, bound to an
 /// [`super::OfflineCashAuthenticatedReleaseV1`].
-#[derive(Debug, Clone)]
-pub struct OfflineCashWalletSessionV1 {
+#[derive(Debug)]
+pub struct OfflineCashVerificationTranscriptV1 {
     request: OfflineCashPaymentRequestV1,
     expected_release_id: [u8; 32],
     expected_artifact_manifest_sha256: [u8; 32],
-    payment: Option<OfflineCashPaymentV1>,
-    acknowledgement: Option<OfflineCashAcknowledgementV1>,
+    validated_payment: Option<OfflineCashPaymentV1>,
+    validated_acknowledgement: Option<OfflineCashAcknowledgementV1>,
 }
 
-impl OfflineCashWalletSessionV1 {
-    /// Create a request-ready structural session after validating the exact
+impl OfflineCashVerificationTranscriptV1 {
+    /// Create a structural transcript after validating the exact
     /// receiver request and caller-supplied release identities.
     ///
     /// These digest arguments are bookkeeping, not release authentication.
@@ -1742,27 +1794,27 @@ impl OfflineCashWalletSessionV1 {
             || request.release_id != expected_release_id
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "offline_cash.session.release_binding",
+                field: "offline_cash.verification_transcript.release_binding",
             });
         }
         Ok(Self {
             request,
             expected_release_id,
             expected_artifact_manifest_sha256,
-            payment: None,
-            acknowledgement: None,
+            validated_payment: None,
+            validated_acknowledgement: None,
         })
     }
 
-    /// Return the current monotonic session state.
+    /// Return the current monotonic transcript state.
     #[must_use]
-    pub const fn state(&self) -> OfflineCashWalletSessionStateV1 {
-        if self.acknowledgement.is_some() {
-            OfflineCashWalletSessionStateV1::Acknowledged
-        } else if self.payment.is_some() {
-            OfflineCashWalletSessionStateV1::PaymentCommitted
+    pub const fn state(&self) -> OfflineCashVerificationTranscriptStateV1 {
+        if self.validated_acknowledgement.is_some() {
+            OfflineCashVerificationTranscriptStateV1::AcknowledgementValidated
+        } else if self.validated_payment.is_some() {
+            OfflineCashVerificationTranscriptStateV1::PaymentValidated
         } else {
-            OfflineCashWalletSessionStateV1::ReceiveRequestReady
+            OfflineCashVerificationTranscriptStateV1::ReceiveRequestValidated
         }
     }
 
@@ -1786,87 +1838,140 @@ impl OfflineCashWalletSessionV1 {
         self.expected_artifact_manifest_sha256
     }
 
-    /// Return the committed payment, when present.
+    /// Return the structurally validated payment, when present.
     #[must_use]
-    pub const fn payment(&self) -> Option<&OfflineCashPaymentV1> {
-        self.payment.as_ref()
+    pub const fn validated_payment(&self) -> Option<&OfflineCashPaymentV1> {
+        self.validated_payment.as_ref()
     }
 
-    /// Return the accepted acknowledgement, when present.
+    /// Return the structurally validated acknowledgement, when present.
     #[must_use]
-    pub const fn acknowledgement(&self) -> Option<&OfflineCashAcknowledgementV1> {
-        self.acknowledgement.as_ref()
+    pub const fn validated_acknowledgement(&self) -> Option<&OfflineCashAcknowledgementV1> {
+        self.validated_acknowledgement.as_ref()
     }
 
-    /// Structurally validate and atomically commit a sender payment.
+    /// Structurally validate and record a sender payment.
     ///
     /// This method does not authorize opaque proofs or authenticate a release;
     /// callers must first obtain a successful Core/native terminal-verifier decision.
     ///
     /// Exact replay is idempotent. A different payment or any payment applied
-    /// after acknowledgement is rejected without changing the session.
+    /// after acknowledgement is rejected without changing the transcript.
     ///
     /// # Errors
     ///
     /// Returns an error when the payment is invalid, mismatched, or conflicts
-    /// with already-committed session state.
-    pub fn accept_payment(
+    /// with already-validated transcript state.
+    pub fn validate_payment(
         &mut self,
         payment: OfflineCashPaymentV1,
-    ) -> Result<OfflineCashWalletSessionEventV1, KagemushaValidationError> {
+    ) -> Result<OfflineCashVerificationTranscriptEventV1, KagemushaValidationError> {
         payment.validate_against(&self.request)?;
-        if self.acknowledgement.is_some() {
+        if self.validated_acknowledgement.is_some() {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "offline_cash.session.payment_after_acknowledgement",
+                field: "offline_cash.verification_transcript.payment_after_acknowledgement",
             });
         }
-        if let Some(existing) = self.payment.as_ref() {
+        if let Some(existing) = self.validated_payment.as_ref() {
             return if existing == &payment {
-                Ok(OfflineCashWalletSessionEventV1::PaymentReplay)
+                Ok(OfflineCashVerificationTranscriptEventV1::PaymentValidationReplay)
             } else {
                 Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "offline_cash.session.conflicting_payment",
+                    field: "offline_cash.verification_transcript.conflicting_payment",
                 })
             };
         }
-        self.payment = Some(payment);
-        Ok(OfflineCashWalletSessionEventV1::PaymentCommitted)
+        self.validated_payment = Some(payment);
+        Ok(OfflineCashVerificationTranscriptEventV1::PaymentValidated)
     }
 
-    /// Validate and atomically accept a receiver acknowledgement.
+    /// Structurally validate and record a receiver acknowledgement.
     ///
     /// Exact replay is idempotent. A different acknowledgement is rejected
-    /// without changing the session.
+    /// without changing the transcript.
     ///
     /// # Errors
     ///
-    /// Returns an error when no payment is committed or when the
+    /// Returns an error when no payment was validated or when the
     /// acknowledgement is invalid, mismatched, oversized, or conflicting.
-    pub fn accept_acknowledgement(
+    pub fn validate_acknowledgement(
         &mut self,
         acknowledgement: OfflineCashAcknowledgementV1,
-    ) -> Result<OfflineCashWalletSessionEventV1, KagemushaValidationError> {
-        let payment =
-            self.payment
-                .as_ref()
-                .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "offline_cash.session.acknowledgement_before_payment",
-                })?;
+    ) -> Result<OfflineCashVerificationTranscriptEventV1, KagemushaValidationError> {
+        let payment = self.validated_payment.as_ref().ok_or(
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "offline_cash.verification_transcript.acknowledgement_before_payment",
+            },
+        )?;
         acknowledgement.validate_against(&self.request, payment)?;
         validate_offline_cash_session_v1(&self.request, payment, &acknowledgement)?;
-        if let Some(existing) = self.acknowledgement.as_ref() {
+        if let Some(existing) = self.validated_acknowledgement.as_ref() {
             return if existing == &acknowledgement {
-                Ok(OfflineCashWalletSessionEventV1::AcknowledgementReplay)
+                Ok(OfflineCashVerificationTranscriptEventV1::AcknowledgementValidationReplay)
             } else {
                 Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "offline_cash.session.conflicting_acknowledgement",
+                    field: "offline_cash.verification_transcript.conflicting_acknowledgement",
                 })
             };
         }
-        self.acknowledgement = Some(acknowledgement);
-        Ok(OfflineCashWalletSessionEventV1::Acknowledged)
+        self.validated_acknowledgement = Some(acknowledgement);
+        Ok(OfflineCashVerificationTranscriptEventV1::AcknowledgementValidated)
+    }
+
+    /// Deprecated compatibility accessor for [`Self::validated_payment`].
+    #[must_use]
+    #[deprecated(
+        note = "use validated_payment; this transcript does not own committed wallet state"
+    )]
+    pub const fn payment(&self) -> Option<&OfflineCashPaymentV1> {
+        self.validated_payment()
+    }
+
+    /// Deprecated compatibility accessor for [`Self::validated_acknowledgement`].
+    #[must_use]
+    #[deprecated(note = "use validated_acknowledgement")]
+    pub const fn acknowledgement(&self) -> Option<&OfflineCashAcknowledgementV1> {
+        self.validated_acknowledgement()
+    }
+
+    /// Deprecated compatibility method for [`Self::validate_payment`].
+    #[deprecated(
+        note = "use validate_payment; this transcript does not commit secure-device or wallet state"
+    )]
+    pub fn accept_payment(
+        &mut self,
+        payment: OfflineCashPaymentV1,
+    ) -> Result<OfflineCashVerificationTranscriptEventV1, KagemushaValidationError> {
+        self.validate_payment(payment)
+    }
+
+    /// Deprecated compatibility method for [`Self::validate_acknowledgement`].
+    #[deprecated(note = "use validate_acknowledgement")]
+    pub fn accept_acknowledgement(
+        &mut self,
+        acknowledgement: OfflineCashAcknowledgementV1,
+    ) -> Result<OfflineCashVerificationTranscriptEventV1, KagemushaValidationError> {
+        self.validate_acknowledgement(acknowledgement)
     }
 }
+
+/// Deprecated compatibility alias for the non-authorizing transcript state.
+#[deprecated(
+    note = "use OfflineCashVerificationTranscriptStateV1; the data-model type is not a wallet session"
+)]
+pub type OfflineCashWalletSessionStateV1 = OfflineCashVerificationTranscriptStateV1;
+
+/// Deprecated compatibility alias for the non-authorizing transcript event.
+#[deprecated(
+    note = "use OfflineCashVerificationTranscriptEventV1; the data-model type does not authorize wallet effects"
+)]
+pub type OfflineCashWalletSessionEventV1 = OfflineCashVerificationTranscriptEventV1;
+
+/// Deprecated compatibility alias for the non-authorizing verification transcript.
+#[deprecated(
+    note = "use OfflineCashVerificationTranscriptV1; Core owns the opaque wallet-runtime facade"
+)]
+pub type OfflineCashWalletSessionV1 = OfflineCashVerificationTranscriptV1;
 
 fn offline_cash_text_max_for_raw(raw_max: usize) -> usize {
     OFFLINE_CASH_TEXT_PREFIX_V1.len() + unpadded_base64url_len(raw_max)
@@ -3118,54 +3223,128 @@ mod tests {
     }
 
     #[test]
-    fn structural_wallet_session_is_request_release_bound_monotonic_and_replay_safe() {
+    fn verification_transcript_is_request_release_bound_monotonic_and_replay_safe() {
         let request = request();
         let payment_value = payment(&request);
         let acknowledgement = acknowledgement(&request, &payment_value);
-        assert!(OfflineCashWalletSessionV1::new(request.clone(), [0xFF; 32], [0xAA; 32],).is_err());
-        let mut session =
-            OfflineCashWalletSessionV1::new(request.clone(), request.release_id, [0xAA; 32])
-                .expect("release-bound session");
-        assert_eq!(session.expected_artifact_manifest_sha256(), [0xAA; 32]);
+        assert!(
+            OfflineCashVerificationTranscriptV1::new(request.clone(), [0xFF; 32], [0xAA; 32],)
+                .is_err()
+        );
+        let mut transcript = OfflineCashVerificationTranscriptV1::new(
+            request.clone(),
+            request.release_id,
+            [0xAA; 32],
+        )
+        .expect("release-bound structural transcript");
+        assert_eq!(transcript.expected_artifact_manifest_sha256(), [0xAA; 32]);
         assert_eq!(
-            session.state(),
-            OfflineCashWalletSessionStateV1::ReceiveRequestReady
+            transcript.state(),
+            OfflineCashVerificationTranscriptStateV1::ReceiveRequestValidated
         );
         assert_eq!(
-            session
-                .accept_payment(payment_value.clone())
-                .expect("commit payment"),
-            OfflineCashWalletSessionEventV1::PaymentCommitted
+            transcript
+                .validate_payment(payment_value.clone())
+                .expect("validate payment"),
+            OfflineCashVerificationTranscriptEventV1::PaymentValidated
         );
         assert_eq!(
-            session
-                .accept_payment(payment_value.clone())
+            transcript
+                .validate_payment(payment_value.clone())
                 .expect("idempotent payment replay"),
-            OfflineCashWalletSessionEventV1::PaymentReplay
+            OfflineCashVerificationTranscriptEventV1::PaymentValidationReplay
         );
         let mut conflicting_payment = payment_value.clone();
         conflicting_payment.encrypted_credit.push(0x44);
-        assert!(session.accept_payment(conflicting_payment).is_err());
+        assert!(transcript.validate_payment(conflicting_payment).is_err());
         assert_eq!(
-            session
-                .accept_acknowledgement(acknowledgement)
-                .expect("accept acknowledgement"),
-            OfflineCashWalletSessionEventV1::Acknowledged
+            transcript
+                .validate_acknowledgement(acknowledgement)
+                .expect("validate acknowledgement"),
+            OfflineCashVerificationTranscriptEventV1::AcknowledgementValidated
         );
         assert_eq!(
-            session.state(),
-            OfflineCashWalletSessionStateV1::Acknowledged
+            transcript.state(),
+            OfflineCashVerificationTranscriptStateV1::AcknowledgementValidated
         );
-        let acknowledgement_replay = session
-            .acknowledgement()
-            .expect("stored acknowledgement")
+        let acknowledgement_replay = transcript
+            .validated_acknowledgement()
+            .expect("validated acknowledgement")
             .to_owned();
         assert_eq!(
-            session
-                .accept_acknowledgement(acknowledgement_replay)
+            transcript
+                .validate_acknowledgement(acknowledgement_replay)
                 .expect("idempotent acknowledgement replay"),
-            OfflineCashWalletSessionEventV1::AcknowledgementReplay
+            OfflineCashVerificationTranscriptEventV1::AcknowledgementValidationReplay
         );
-        assert!(session.accept_payment(payment_value).is_err());
+        assert!(transcript.validate_payment(payment_value).is_err());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_wallet_session_aliases_preserve_non_authorizing_source_compatibility() {
+        assert_eq!(
+            OfflineCashWalletSessionStateV1::ReceiveRequestReady,
+            OfflineCashVerificationTranscriptStateV1::ReceiveRequestValidated
+        );
+        assert_eq!(
+            OfflineCashWalletSessionStateV1::PaymentCommitted,
+            OfflineCashVerificationTranscriptStateV1::PaymentValidated
+        );
+        assert_eq!(
+            OfflineCashWalletSessionEventV1::Acknowledged,
+            OfflineCashVerificationTranscriptEventV1::AcknowledgementValidated
+        );
+
+        let request = request();
+        let payment = payment(&request);
+        let mut transcript: OfflineCashWalletSessionV1 =
+            OfflineCashWalletSessionV1::new(request.clone(), request.release_id, [0xAA; 32])
+                .expect("deprecated alias constructs only a structural transcript");
+        assert_eq!(
+            transcript
+                .accept_payment(payment)
+                .expect("deprecated method validates only"),
+            OfflineCashWalletSessionEventV1::PaymentCommitted
+        );
+    }
+
+    #[test]
+    fn wallet_session_compatibility_names_are_deprecated_transcript_aliases_by_source_contract() {
+        let source = include_str!("offline_cash_v1.rs");
+        for (alias, target) in [
+            (
+                "OfflineCashWalletSessionStateV1",
+                "OfflineCashVerificationTranscriptStateV1",
+            ),
+            (
+                "OfflineCashWalletSessionEventV1",
+                "OfflineCashVerificationTranscriptEventV1",
+            ),
+            (
+                "OfflineCashWalletSessionV1",
+                "OfflineCashVerificationTranscriptV1",
+            ),
+        ] {
+            let declaration = format!("pub type {alias} = {target};");
+            let attribute_block = source
+                .split_once(&declaration)
+                .unwrap_or_else(|| panic!("missing compatibility alias `{declaration}`"))
+                .0
+                .rsplit_once("\n\n")
+                .expect("compatibility alias has an attribute boundary")
+                .1;
+            assert!(
+                attribute_block.contains("#[deprecated("),
+                "compatibility alias `{alias}` must remain deprecated"
+            );
+            for forbidden_kind in ["struct", "enum"] {
+                let forbidden = format!("pub {forbidden_kind} {alias}");
+                assert!(
+                    !source.contains(&forbidden),
+                    "compatibility name `{alias}` must not declare a runtime {forbidden_kind}"
+                );
+            }
+        }
     }
 }

@@ -2094,7 +2094,7 @@ def _run_bounded_python_validator(
     )
     return _run_bounded_replay(
         interpreter,
-        ["-I", "-S", "-c", loader, str(checker), *arguments],
+        ["-I", "-S", "-B", "-c", loader, str(checker), *arguments],
         cwd=cwd,
         environment=environment,
         name=name,

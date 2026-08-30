@@ -16,6 +16,16 @@ def _source() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
+def test_publish_manifest_heredoc_contains_no_shell_comment_lines() -> None:
+    source = _source()
+    marker = 'cat > "$PUBLISH_MANIFEST" <<EOF\n'
+    manifest_body = source.split(marker, 1)[1].split("\nEOF", 1)[0]
+
+    assert not any(
+        line.lstrip().startswith("#") for line in manifest_body.splitlines()
+    )
+
+
 def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
     source = _source()
     lines = source.splitlines()

@@ -1585,6 +1585,26 @@ fn taira_config_enables_untrusted_cid_hosting() {
         ["iroha."],
         "public Taira should expose only curated iroha.* MCP tools"
     );
+    let cors_origins = doc
+        .get("torii")
+        .and_then(TomlValue::as_table)
+        .and_then(|torii| torii.get("cors"))
+        .and_then(TomlValue::as_table)
+        .and_then(|cors| cors.get("allowed_origins"))
+        .and_then(TomlValue::as_array)
+        .expect("public Taira should configure browser CORS origins");
+    for required_origin in [
+        "https://bpng.soramitsu.io",
+        "https://mibank.soramitsu.io",
+        "https://explorer-bpng.soramitsu.io",
+    ] {
+        assert!(
+            cors_origins
+                .iter()
+                .any(|origin| origin.as_str() == Some(required_origin)),
+            "public Taira should allow browser origin {required_origin}"
+        );
+    }
     let dataspaces = doc
         .get("nexus")
         .and_then(TomlValue::as_table)
@@ -1602,8 +1622,22 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .collect();
     assert_eq!(
         dataspace_aliases,
-        ["universal", "dpn", "is", "is2", "cbsi"],
+        ["universal", "bpng", "is", "is2", "cbsi"],
         "only physically distinct validator/storage topologies belong in the dataspace catalog"
+    );
+    let bpng_dataspace = dataspaces
+        .iter()
+        .find(|entry| {
+            entry
+                .get("alias")
+                .and_then(TomlValue::as_str)
+                .is_some_and(|alias| alias == "bpng")
+        })
+        .expect("Taira profile should expose the BPNG dataspace alias");
+    assert_eq!(
+        bpng_dataspace.get("id").and_then(TomlValue::as_integer),
+        Some(10),
+        "BPNG must reuse the existing DPN physical dataspace id"
     );
     let external_dataspace = dataspaces
         .iter()
@@ -1665,7 +1699,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
             ("core", "universal"),
             ("governance", "universal"),
             ("zk", "universal"),
-            ("dpn", "dpn"),
+            ("dpn", "bpng"),
             ("external-poc", "is"),
             ("boi-mobile", "is2"),
             ("cbsi", "cbsi"),
@@ -1690,6 +1724,30 @@ fn taira_config_enables_untrusted_cid_hosting() {
                     == Some(instruction)
         })
     };
+    let has_account_route = |account: &str, lane: i64, dataspace: &str| {
+        routing_rules.iter().any(|rule| {
+            rule.get("lane").and_then(TomlValue::as_integer) == Some(lane)
+                && rule.get("dataspace").and_then(TomlValue::as_str) == Some(dataspace)
+                && rule
+                    .get("matcher")
+                    .and_then(TomlValue::as_table)
+                    .and_then(|matcher| matcher.get("account"))
+                    .and_then(TomlValue::as_str)
+                    == Some(account)
+        })
+    };
+    assert!(
+        has_account_route("*@bpng", 3, "bpng"),
+        "Taira should route BPNG authorities through the existing DPN workload lane"
+    );
+    assert!(
+        has_account_route("*@mibank.bpng", 3, "bpng"),
+        "Taira should route MiBank authorities through the BPNG dataspace"
+    );
+    assert!(
+        !has_account_route("*@dpn", 3, "bpng"),
+        "the retired DPN text alias must not shadow the canonical BPNG dataspace alias"
+    );
     assert!(
         has_instruction_route("governance", 1, "universal"),
         "Taira should route governance instructions to its lane within universal"

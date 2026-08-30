@@ -33,6 +33,86 @@ fn reordered_enter_view_fails_before_fresh_sign_dispatch() {
     assert!(executor.status().fail_closed);
 }
 #[test]
+fn active_store_rejects_enter_view_without_an_advanced_runtime_frontier() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    executor
+        .admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut services,
+        )
+        .expect("start one immutable Store before the malformed EnterView");
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    let before = executor.body_ownership_projection();
+    let ownership_calls = executor.runtime.effect_ownership_calls;
+
+    assert!(matches!(
+        executor.consume_effects(
+            vec![AdapterEffect::EnterView {
+                tag: tag(1),
+                certificate: timeout,
+                protected_lock: Some(prepare),
+            }],
+            &mut services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason == "EnterView did not advance the reconciled reducer incarnation"
+    ));
+    assert_eq!(executor.body_ownership_projection(), before);
+    assert_eq!(executor.runtime.effect_ownership_calls, ownership_calls);
+    assert!(services.cancelled_stores.is_empty());
+    assert!(services.entered_views.is_empty());
+    assert!(executor.output_guard.restart_required());
+    assert_eq!(services.closed.len(), 1);
+}
+#[test]
+fn active_store_rejects_enter_view_with_a_mismatched_authoritative_lock() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    executor
+        .admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut services,
+        )
+        .expect("start one immutable Store before the conflicting EnterView");
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let (foreign_subject, _) = distinct_body(&fixture);
+    executor.runtime.round_tag = Some(tag(1));
+    executor.runtime.locked_body = Some((fixture.manifest.round, foreign_subject));
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    let before = executor.body_ownership_projection();
+    let ownership_calls = executor.runtime.effect_ownership_calls;
+
+    assert!(matches!(
+        executor.consume_effects(
+            vec![AdapterEffect::EnterView {
+                tag: tag(1),
+                certificate: timeout,
+                protected_lock: Some(prepare),
+            }],
+            &mut services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason == "EnterView disagreed with the reducer reconciliation frontier"
+    ));
+    assert_eq!(executor.body_ownership_projection(), before);
+    assert_eq!(executor.runtime.effect_ownership_calls, ownership_calls);
+    assert_eq!(executor.protected_lock, None);
+    assert!(services.cancelled_stores.is_empty());
+    assert!(services.entered_views.is_empty());
+    assert!(executor.output_guard.restart_required());
+    assert_eq!(services.closed.len(), 1);
+}
+#[test]
 fn same_view_higher_generation_tc_requires_and_installs_leading_enter_view() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
@@ -131,10 +211,13 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
         .expect("stage one view-independent locked-body cache");
     assert_eq!(executor.ready_body_bytes, body_len * 2);
     assert!(executor.body_pipeline_owners.is_empty());
+    let first_view_tag = EventTag::new(1, 1, Generation::new(41));
+    executor.runtime.round_tag = Some(first_view_tag);
+    executor.runtime.locked_body = Some(protected);
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
-                tag: EventTag::new(1, 1, Generation::new(41)),
+                tag: first_view_tag,
                 certificate: timeout_at_view(&fixture, 0),
                 protected_lock: Some(protected_lock.clone()),
             }],
@@ -144,15 +227,16 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
     assert_eq!(executor.ready_body_bytes, body_len * 2);
     assert!(executor.retained_locked_body.is_some());
     assert_eq!(executor.ready_bodies.len(), 1);
+    let sources = certified_sources(&fixture, &protected_lock);
     executor
         .consume_effects(
             vec![AdapterEffect::FetchBody {
-                tag: EventTag::new(1, 1, Generation::new(41)),
+                tag: first_view_tag,
                 round: fixture.manifest.round,
                 subject: fixture.manifest.subject,
                 manifest: Some(fixture.manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
+                certified_sources: sources,
+                certificate: Some(protected_lock.clone()),
             }],
             &mut services,
         )
@@ -161,13 +245,15 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
     assert!(matches!(
         executor.runtime.completions.as_slice(),
         [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
-            if *completion_tag == EventTag::new(1, 1, Generation::new(41))
+            if *completion_tag == first_view_tag
                 && manifest == &fixture.manifest
     ));
+    let second_view_tag = EventTag::new(1, 2, Generation::new(42));
+    executor.runtime.round_tag = Some(second_view_tag);
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
-                tag: EventTag::new(1, 2, Generation::new(42)),
+                tag: second_view_tag,
                 certificate: timeout_at_view(&fixture, 1),
                 protected_lock: Some(protected_lock),
             }],
@@ -177,7 +263,7 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
     assert!(matches!(
         executor.runtime.completions.as_slice(),
         [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]
-            if *completion_tag == EventTag::new(1, 2, Generation::new(42))
+            if *completion_tag == second_view_tag
                 && manifest == &fixture.manifest
     ));
     assert_eq!(executor.ready_body_bytes, body_len * 2);
@@ -235,10 +321,13 @@ fn higher_different_lock_releases_retained_cache_before_replacement_staging() {
     replacement.subject = replacement_subject;
     let mut timeout = timeout_at_view(&fixture, 1);
     timeout.groups[0].highest_prepare_qc = Some(replacement.clone());
+    let replacement_tag = EventTag::new(1, 2, Generation::new(52));
+    executor.runtime.round_tag = Some(replacement_tag);
+    executor.runtime.locked_body = Some((replacement_round, replacement_subject));
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
-                tag: EventTag::new(1, 2, Generation::new(52)),
+                tag: replacement_tag,
                 certificate: timeout,
                 protected_lock: Some(replacement),
             }],
@@ -250,7 +339,7 @@ fn higher_different_lock_releases_retained_cache_before_replacement_staging() {
     assert_eq!(executor.ready_body_bytes, 0);
     executor
         .retain_locked_body_for_recovery(
-            EventTag::new(1, 2, Generation::new(52)),
+            replacement_tag,
             replacement_round,
             replacement_subject,
             replacement_body.clone(),
@@ -426,9 +515,12 @@ fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1_048_576, 1));
     let mut services = fixture.services();
+    let initial_tag = EventTag::new(1, 0, Generation::new(60));
+    executor.runtime.round_tag = Some(initial_tag);
+    executor.reconciled_tag = Some(initial_tag);
     executor
         .admit_local_proposal(
-            EventTag::new(1, 0, Generation::new(60)),
+            initial_tag,
             fixture.manifest.clone(),
             fixture.body.clone(),
             &mut services,
@@ -442,10 +534,13 @@ fn queued_protected_store_keeps_one_work_id_across_repeated_tcs() {
     for (view, generation) in [(1, 61), (2, 62)] {
         let mut timeout = timeout_at_view(&fixture, view - 1);
         timeout.groups[0].highest_prepare_qc = Some(high_prepare.clone());
+        let current_tag = EventTag::new(1, view, Generation::new(generation));
+        executor.runtime.round_tag = Some(current_tag);
+        executor.runtime.locked_body = Some(protected);
         executor
             .consume_effects(
                 vec![AdapterEffect::EnterView {
-                    tag: EventTag::new(1, view, Generation::new(generation)),
+                    tag: current_tag,
                     certificate: timeout,
                     protected_lock: Some(high_prepare.clone()),
                 }],
@@ -526,6 +621,8 @@ fn active_old_view_store_rebinds_current_consumer_before_late_completion() {
     let sources = certified_sources(&fixture, &prepare);
     let mut timeout = timeout_certificate(&fixture);
     timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(tag(1));
+    executor.runtime.locked_body = Some((fixture.manifest.round, fixture.manifest.subject));
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
@@ -631,6 +728,8 @@ fn active_old_view_store_completes_between_current_fetch_and_store() {
     let sources = certified_sources(&fixture, &prepare);
     let mut timeout = timeout_certificate(&fixture);
     timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(tag(1));
+    executor.runtime.locked_body = Some((fixture.manifest.round, fixture.manifest.subject));
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
@@ -769,20 +868,35 @@ fn late_retired_store_cannot_overwrite_current_pending_manifest() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
+    let initial_tag = tag(1);
+    let initial_manifest = canonical_payload_manifest(
+        &fixture.context,
+        round(&fixture.context, initial_tag.view()),
+        fixture.manifest.subject,
+        &fixture.body,
+    );
+    executor.runtime.round_tag = Some(initial_tag);
+    executor.reconciled_tag = Some(initial_tag);
     executor
         .admit_local_proposal(
-            tag(0),
-            fixture.manifest.clone(),
+            initial_tag,
+            initial_manifest.clone(),
             fixture.body.clone(),
             &mut services,
         )
         .expect("start old-view body store");
     let retired_id = services.store_tasks[0].id();
     services.inflight_stores.insert(retired_id);
+    let current_tag = EventTag::new(
+        initial_tag.height(),
+        initial_tag.view(),
+        Generation::new(initial_tag.generation().get().saturating_add(1)),
+    );
+    executor.runtime.round_tag = Some(current_tag);
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
-                tag: tag(1),
+                tag: current_tag,
                 certificate: timeout_certificate(&fixture),
                 protected_lock: None,
             }],
@@ -794,14 +908,14 @@ fn late_retired_store_cannot_overwrite_current_pending_manifest() {
     alternate_chunk[0] ^= 1;
     let alternate_manifest = deliberately_conflicting_payload_manifest(
         &fixture.context,
-        fixture.manifest.round,
-        fixture.manifest.subject,
+        initial_manifest.round,
+        initial_manifest.subject,
         &alternate_chunk,
     );
-    assert_ne!(alternate_manifest, fixture.manifest);
+    assert_ne!(alternate_manifest, initial_manifest);
     executor
         .admit_local_proposal(
-            tag(1),
+            current_tag,
             alternate_manifest.clone(),
             fixture.body.clone(),
             &mut services,
@@ -849,6 +963,8 @@ fn active_losing_store_releases_capacity_for_high_qc_fetch() {
     let sources = certified_sources(&fixture, &high_prepare);
     let mut timeout = timeout_certificate(&fixture);
     timeout.groups[0].highest_prepare_qc = Some(high_prepare.clone());
+    executor.runtime.round_tag = Some(tag(1));
+    executor.runtime.locked_body = Some((high_prepare.round, high_subject));
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {

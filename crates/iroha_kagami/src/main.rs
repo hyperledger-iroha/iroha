@@ -373,9 +373,9 @@ mod tests {
         );
     }
     #[test]
-    fn kagemusha_taira_base_genesis_rejects_pre_genesis_release_inputs() {
+    fn kagemusha_taira_post_provision_genesis_rejects_pre_genesis_release_inputs() {
         let base = "kagami kagemusha prepare-taira-testnet-base-genesis-v4 \
-             --genesis ./genesis.json \
+             --post-provision-genesis ./post-provision-genesis.json \
              --genesis-authority genesis-authority \
              --command-authority command-authority \
              --output ./base-genesis.json";

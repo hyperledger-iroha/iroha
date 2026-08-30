@@ -20,13 +20,14 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
     // protected pre-reset tree measured 945,975 bytes on the same pinned runner;
-    // The eager code-split closure is 1,007,275 bytes after the reviewed
-    // Kagemusha archive, typed-NetworkId, and fee-quote domain hardening.
+    // The eager code-split closure is 1,007,565 bytes after the reviewed
+    // Kagemusha archive, typed-NetworkId, fee-quote domain hardening, and
+    // closed verifier-registry projection.
     // Sumeragi's three typed methods load their reviewed 73,354-byte
-    // incremental closure on demand. The 984 KiB eager ceiling leaves 341 bytes.
+    // incremental closure on demand. The 984 KiB eager ceiling leaves 51 bytes.
     limitKb: 984,
-    reviewedEagerBytes: 1_007_275,
-    reviewedCombinedBytes: 1_080_629,
+    reviewedEagerBytes: 1_007_565,
+    reviewedCombinedBytes: 1_080_919,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
@@ -106,27 +107,35 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // The previous reviewed browser aggregate measured 480,214 bytes on the
     // same pinned runner. Strict Kagemusha V4 archive binding plus canonical
-    // typed-NetworkId wire validation bring the eager closure to 492,896 bytes
-    // (+2.64%). The 482 KiB ceiling leaves 672 bytes. Typed Sumeragi and
-    // deployment continuations remain separately audited non-overlapping lazy
-    // closures.
-    limitKb: 482,
-    reviewedEagerBytes: 492_896,
-    reviewedCombinedBytes: 575_765,
+    // typed-NetworkId wire validation and the public closed verifier registry
+    // bring the eager closure to 496,464 bytes (+3.38%). The 485 KiB ceiling
+    // leaves 176 bytes. Typed Sumeragi, deployment, and the redirect-safe,
+    // identity-only active-VK continuation remain separately audited
+    // non-overlapping lazy closures.
+    limitKb: 485,
+    reviewedEagerBytes: 496_464,
+    reviewedCombinedBytes: 582_419,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
         entryPoint: join(ROOT, "dist", "sumeragiTyped.js"),
         edgeCount: 2,
-        reviewedBytes: 73_692,
+        reviewedBytes: 73_719,
         limitKb: 72,
       }),
       Object.freeze({
         specifier: "./smartContractDeploymentSubmit.js",
         entryPoint: join(ROOT, "dist", "smartContractDeploymentSubmit.js"),
         edgeCount: 1,
-        reviewedBytes: 9_177,
+        reviewedBytes: 9_204,
         limitKb: 9,
+      }),
+      Object.freeze({
+        specifier: "./activeVerifyingKeyIds.js",
+        entryPoint: join(ROOT, "dist", "activeVerifyingKeyIds.js"),
+        edgeCount: 1,
+        reviewedBytes: 3_032,
+        limitKb: 3,
       }),
     ]),
     forbidNodeInputs: true,

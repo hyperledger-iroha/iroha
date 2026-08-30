@@ -325,6 +325,40 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         Some(upgraded_statement),
         "the incumbent owner must retain the strongest admitted authority",
     );
+    let stale_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint independently admitted stale ordinary carrier");
+    let stale = bind_fetch(&ordinary_fetch, stale_ordinal);
+    assert_ne!(stale.owner(), incumbent.owner());
+    assert_eq!(
+        upgraded_statement.fetch_authority_relation_to(
+            stale
+                .candidate_semantic_statement()
+                .expect("ordinary Fetch carries its complete authority statement"),
+        ),
+        Some(RuntimeFetchAuthorityRelation::Stale),
+        "the late ordinary Fetch must be strictly weaker than queued Prepare authority",
+    );
+    let coalesced_stale = runtime
+        .reserve_body_available_with_owner(tag, manifest.clone(), &stale)
+        .expect("a stale exact Fetch keeps the stronger queued completion owner");
+    assert!(!coalesced_stale.owns_new_slot());
+    assert_eq!(
+        coalesced_stale.lifecycle_owner().as_ref(),
+        Some(incumbent.owner()),
+        "the stale Fetch cannot replace the physical completion owner",
+    );
+    runtime
+        .commit_body_available(coalesced_stale)
+        .expect("a stale Fetch publishes no second completion");
+    assert_eq!(runtime.queued_commands(), 1);
+    assert_eq!(
+        runtime.ingress.commands[0].candidate_semantic_statement,
+        Some(upgraded_statement),
+        "the stale Fetch cannot downgrade the retained authority",
+    );
+    assert!(!runtime.fail_closed);
     let mut conflicting_prepare = prepare;
     conflicting_prepare.execution_commitment =
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -359,6 +393,263 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
         "conflicting authority must not rewrite the retained statement",
     );
     assert!(runtime.fail_closed);
+}
+#[test]
+fn queued_commit_body_available_accepts_foreign_ordinary_but_rejects_foreign_prepare() {
+    let directory = TempDir::new().expect("temporary Commit BodyAvailable owner directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let tag = runtime.round_tag();
+    let manifest = runtime_manifest(&context, 0xA4);
+    let mut commit = signed_runtime_quorum_certificate(&context, &keys, 0xA5);
+    commit.phase = wire::GlobalPhase::Commit;
+    commit.round = manifest.round;
+    commit.proposal_round = manifest.round;
+    commit.subject = manifest.subject;
+    let commit_fetch = AdapterEffect::FetchBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(commit.clone()),
+    };
+    let bind_fetch = |effect: &AdapterEffect, ordinal| {
+        bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+        )
+        .expect("bind exact test Fetch ownership")
+        .pop()
+        .expect("one Fetch owns one candidate")
+    };
+    let incumbent_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the incumbent Commit Fetch lifecycle");
+    let incumbent = bind_fetch(&commit_fetch, incumbent_ordinal);
+    let commit_statement = incumbent
+        .candidate_semantic_statement()
+        .expect("Commit Fetch carries its exact authority statement");
+    let reservation = runtime
+        .reserve_body_available_with_owner(tag, manifest.clone(), &incumbent)
+        .expect("reserve BodyAvailable under the Commit Fetch owner");
+    runtime
+        .commit_body_available(reservation)
+        .expect("publish the Commit-authorized BodyAvailable completion");
+
+    let ordinary_fetch = AdapterEffect::FetchBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let ordinary_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the late ordinary Fetch lifecycle");
+    let ordinary = bind_fetch(&ordinary_fetch, ordinary_ordinal);
+    assert_ne!(ordinary.owner(), incumbent.owner());
+    assert_eq!(
+        commit_statement.fetch_authority_relation_to(
+            ordinary
+                .candidate_semantic_statement()
+                .expect("ordinary Fetch carries its exact body statement"),
+        ),
+        Some(RuntimeFetchAuthorityRelation::Stale),
+    );
+    let stale_ordinary = runtime
+        .reserve_body_available_with_owner(tag, manifest.clone(), &ordinary)
+        .expect("late ordinary Fetch rejoins the Commit-owned BodyAvailable terminal");
+    assert!(!stale_ordinary.owns_new_slot());
+    assert_eq!(
+        stale_ordinary.lifecycle_owner().as_ref(),
+        Some(incumbent.owner()),
+    );
+    runtime
+        .commit_body_available(stale_ordinary)
+        .expect("late ordinary Fetch publishes no second completion");
+    assert_eq!(runtime.queued_commands(), 1);
+    assert_eq!(
+        runtime.ingress.commands[0].candidate_semantic_statement,
+        Some(commit_statement),
+        "ordinary retry cannot downgrade the retained Commit statement",
+    );
+    assert!(!runtime.fail_closed);
+
+    let mut prepare = commit;
+    prepare.phase = wire::GlobalPhase::Prepare;
+    let prepare_fetch = AdapterEffect::FetchBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(prepare),
+    };
+    let prepare_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the foreign Prepare Fetch lifecycle");
+    let foreign_prepare = bind_fetch(&prepare_fetch, prepare_ordinal);
+    assert_ne!(foreign_prepare.owner(), incumbent.owner());
+    assert_eq!(
+        commit_statement.fetch_authority_relation_to(
+            foreign_prepare
+                .candidate_semantic_statement()
+                .expect("Prepare Fetch carries its exact authority statement"),
+        ),
+        Some(RuntimeFetchAuthorityRelation::Stale),
+    );
+    assert_eq!(
+        runtime.reserve_body_available_with_owner(tag, manifest, &foreign_prepare),
+        Err(EnqueueError::FailClosed),
+        "a foreign Prepare carrier cannot use the late-ordinary Fetch exemption",
+    );
+    assert_eq!(runtime.queued_commands(), 1);
+    assert_eq!(
+        runtime.ingress.commands[0].candidate_semantic_statement,
+        Some(commit_statement),
+        "rejected Prepare authority cannot rewrite the Commit terminal",
+    );
+    assert!(runtime.fail_closed);
+}
+#[test]
+fn busy_deferred_commit_body_available_accepts_foreign_ordinary_fetch() {
+    let directory = TempDir::new().expect("temporary Busy Commit BodyAvailable directory");
+    let (mut runtime, context, keys) =
+        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+    let tag = runtime.round_tag();
+    let manifest = runtime_manifest(&context, 0xA2);
+    let mut commit = signed_runtime_quorum_certificate(&context, &keys, 0xA3);
+    commit.phase = wire::GlobalPhase::Commit;
+    commit.round = manifest.round;
+    commit.proposal_round = manifest.round;
+    commit.subject = manifest.subject;
+    let commit_fetch = AdapterEffect::FetchBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: Some(commit),
+    };
+    let incumbent_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the Busy incumbent Commit Fetch lifecycle");
+    let incumbent = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&commit_fetch),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            tag,
+            incumbent_ordinal,
+        )],
+    )
+    .expect("bind the Busy incumbent Commit Fetch")
+    .pop()
+    .expect("one Commit Fetch owns one candidate");
+    let commit_statement = incumbent
+        .candidate_semantic_statement()
+        .expect("Busy incumbent retains its Commit statement");
+    let deferred_before = runtime.driver.all_deferred_admission_ordinals();
+    runtime
+        .driver
+        .defer_body_pipeline_stage_for_test(
+            tag,
+            &manifest,
+            DeferredBodyPipelineStageForTest::BodyAvailable,
+        )
+        .expect("stage the exact Busy-deferred BodyAvailable completion");
+    let deferred_ordinals = runtime
+        .driver
+        .all_deferred_admission_ordinals()
+        .difference(&deferred_before)
+        .copied()
+        .collect::<Vec<_>>();
+    let [deferred_ordinal] = deferred_ordinals.as_slice() else {
+        panic!("one BodyAvailable completion owns one Busy ordinal")
+    };
+    let deferred_ordinal = *deferred_ordinal;
+    bind_deferred_lifecycle_owner_for_test(
+        &mut runtime,
+        deferred_ordinal,
+        incumbent.owner().clone(),
+    );
+    let deferred = runtime
+        .deferred_lifecycle_ownership
+        .remove(&deferred_ordinal)
+        .expect("Busy BodyAvailable has one runtime ownership wrapper")
+        .with_candidate_semantic_statement(Some(commit_statement))
+        .expect("attach the exact Commit statement to the Busy wrapper");
+    assert!(
+        runtime
+            .deferred_lifecycle_ownership
+            .insert(deferred_ordinal, deferred)
+            .is_none(),
+    );
+    let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
+        manifest: manifest.clone(),
+    };
+    assert_eq!(
+        runtime
+            .driver
+            .deferred_body_pipeline_completion_exact_owner_ordinals(tag, &evidence),
+        vec![deferred_ordinal],
+    );
+
+    let ordinary_fetch = AdapterEffect::FetchBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let ordinary_ordinal = runtime
+        .ingress
+        .mint_non_fifo_lifecycle_ordinal()
+        .expect("mint the late ordinary Busy retry lifecycle");
+    let ordinary = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&ordinary_fetch),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            tag,
+            ordinary_ordinal,
+        )],
+    )
+    .expect("bind the late ordinary Busy retry")
+    .pop()
+    .expect("one ordinary Fetch owns one candidate");
+    assert_ne!(ordinary.owner(), incumbent.owner());
+    let stale_ordinary = runtime
+        .reserve_body_available_with_owner(tag, manifest.clone(), &ordinary)
+        .expect("late ordinary Fetch rejoins the Busy Commit-owned terminal");
+    assert!(!stale_ordinary.owns_new_slot());
+    assert_eq!(
+        stale_ordinary.lifecycle_owner().as_ref(),
+        Some(incumbent.owner()),
+    );
+    runtime
+        .commit_body_available(stale_ordinary)
+        .expect("Busy stale retry publishes no FIFO duplicate");
+    assert_eq!(runtime.queued_commands(), 0);
+    assert_eq!(
+        runtime.driver.all_deferred_admission_ordinals(),
+        BTreeSet::from([deferred_ordinal]),
+    );
+    let retained = runtime
+        .deferred_lifecycle_ownership
+        .get(&deferred_ordinal)
+        .expect("Busy terminal retains its original runtime wrapper");
+    assert_eq!(retained.owner(), incumbent.owner());
+    assert_eq!(
+        retained.candidate_semantic_statement,
+        Some(commit_statement),
+        "late ordinary Fetch cannot downgrade the Busy Commit statement",
+    );
+    assert!(retained.validate_exact());
+    assert!(!runtime.fail_closed);
 }
 #[test]
 fn foreign_stale_store_authority_cannot_take_a_queued_terminal() {

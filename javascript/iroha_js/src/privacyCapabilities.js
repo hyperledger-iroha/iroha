@@ -137,9 +137,9 @@ export function parseLegacyPrivacyCapabilityInspectionSnapshotV1(payload) {
 }
 
 /**
- * Fetch and fail-closed validate the legacy privacy-capability inspection
- * response from a configured Iroha JS Torii client. The returned object is
- * diagnostic only and is never valid admission evidence.
+ * Fetch and fail-closed validate Torii's current Exact12 JSON capability
+ * manifest, then return its legacy read-only inspection projection. The
+ * returned object is diagnostic only and is never valid admission evidence.
  *
  * @param {unknown} client A package ToriiClient or ToriiBrowserClient.
  * @param {object} [options] Client-specific request options.
@@ -161,7 +161,17 @@ export async function getLegacyPrivacyCapabilityInspectionV1(client, options) {
     );
   }
   const payload = await Reflect.apply(transport, client, [options]);
-  return parseLegacyPrivacyCapabilityInspectionSnapshotV1(payload);
+  const manifest = parsePrivacyExact12ManifestProjectionV1(payload, false);
+  return parseLegacyPrivacyCapabilityInspectionSnapshotV1({
+    version: manifest.version,
+    committed_height: manifest.committed_height,
+    consensus_policy: manifest.consensus_policy,
+    protocols: manifest.protocols.map((row) => ({
+      protocol_id: row.protocol_id,
+      compiled_profile: row.compiled_profile,
+      activation: row.activation,
+    })),
+  });
 }
 
 function parseConsensusPolicy(value, committedHeight) {
@@ -734,7 +744,7 @@ function copyPrivacyExact12ArchiveV1(value, path) {
   return bytes;
 }
 
-function parsePrivacyExact12ManifestProjectionV1(payload) {
+function parsePrivacyExact12ManifestProjectionV1(payload, wrapLegacyErrors = true) {
   const manifest = exactManifestObjectV1(payload, [
     "version",
     "committed_height",
@@ -757,6 +767,7 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
         : manifest.protocols,
     });
   } catch (cause) {
+    if (!wrapLegacyErrors) throw cause;
     throw new PrivacyExact12CapabilityManifestError(
       "native projection violates the closed profile, policy, or activation contract",
       "Exact12 capability manifest",

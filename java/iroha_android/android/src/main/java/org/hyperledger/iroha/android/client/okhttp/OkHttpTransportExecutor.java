@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client.okhttp;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.Proxy;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
@@ -15,6 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import okhttp3.Authenticator;
 import okhttp3.Call;
 import okhttp3.Callback;
+import okhttp3.CookieJar;
 import okhttp3.Headers;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -29,12 +31,19 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
 
-/** OkHttp-backed {@link HttpTransportExecutor} for Android runtimes. */
+/**
+ * OkHttp-backed {@link HttpTransportExecutor} for Android runtimes.
+ *
+ * <p>Credential-free requests use a derived client with HTTP credential sources, redirects,
+ * retries, proxy routing, and caller interceptors disabled. An injected client's DNS and TLS
+ * identity configuration remain an explicit caller trust boundary.
+ */
 public final class OkHttpTransportExecutor
     implements HttpTransportExecutor, StreamingTransportExecutor {
 
   private final OkHttpClient client;
   private final OkHttpClient oneShotClient;
+  private final OkHttpClient credentialFreeClient;
   private final boolean ownsClient;
   private final long maximumResponseBytes;
   private final Set<Call> trackedCalls = ConcurrentHashMap.newKeySet();
@@ -82,6 +91,20 @@ public final class OkHttpTransportExecutor
                       : response;
                 })
             .build();
+    final OkHttpClient.Builder credentialFreeBuilder =
+        client
+            .newBuilder()
+            .cookieJar(CookieJar.NO_COOKIES)
+            .authenticator(Authenticator.NONE)
+            .proxyAuthenticator(Authenticator.NONE)
+            .proxy(Proxy.NO_PROXY)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .cache(null);
+    credentialFreeBuilder.interceptors().clear();
+    credentialFreeBuilder.networkInterceptors().clear();
+    this.credentialFreeClient = credentialFreeBuilder.build();
     this.ownsClient = ownsClient;
     BoundedResponseBodyReader.validateMaximum(maximumResponseBytes);
     this.maximumResponseBytes = maximumResponseBytes;
@@ -90,6 +113,7 @@ public final class OkHttpTransportExecutor
   @Override
   public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
     Objects.requireNonNull(request, "request");
+    requireCredentialFreeRequestSafe(request);
     final Request okRequest = buildRequest(request);
     final long responseLimit = responseLimit(request, maximumResponseBytes);
     final Call call = clientFor(request).newCall(okRequest);
@@ -138,6 +162,9 @@ public final class OkHttpTransportExecutor
   @Override
   public CompletableFuture<TransportStreamResponse> openStream(final TransportRequest request) {
     Objects.requireNonNull(request, "request");
+    if (!request.allowAmbientCredentials()) {
+      throw new IllegalArgumentException("credential-free streaming is unsupported");
+    }
     final Request okRequest = buildRequest(request);
     final Call call = clientFor(request).newCall(okRequest);
     trackedCalls.add(call);
@@ -218,7 +245,16 @@ public final class OkHttpTransportExecutor
   }
 
   private OkHttpClient clientFor(final TransportRequest request) {
+    if (!request.allowAmbientCredentials()) {
+      return credentialFreeClient;
+    }
     return request.replayPolicy() == RequestReplayPolicy.ONE_SHOT ? oneShotClient : client;
+  }
+
+  private static void requireCredentialFreeRequestSafe(final TransportRequest request) {
+    if (!request.allowAmbientCredentials() && request.uri().getRawUserInfo() != null) {
+      throw new IllegalArgumentException("credential-free requests reject URI user-info");
+    }
   }
 
   private Request buildRequest(final TransportRequest request) {

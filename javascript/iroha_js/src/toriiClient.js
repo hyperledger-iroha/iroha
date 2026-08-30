@@ -55,6 +55,7 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
+import { isVerifierBackendRegistryLabelV1 } from "./verifierBackendRegistry.js";
 import {
   assertNonBlankString,
   normalizeStatusSet,
@@ -1577,6 +1578,9 @@ export class ToriiClient {
     this._dataModelValidation = { status: "unknown", actual: null };
     this._dataModelValidationPromise = null;
     const parsedBase = new URL(this._baseUrl.endsWith("/") ? this._baseUrl : `${this._baseUrl}/`);
+    if (parsedBase.username || parsedBase.password) {
+      throw new TypeError("ToriiClient baseUrl must not contain userinfo");
+    }
     this._baseOrigin = `${parsedBase.protocol}//${parsedBase.host}`;
     this._baseHost = parsedBase.host;
     this._baseProtocol = parsedBase.protocol.toLowerCase();
@@ -2755,6 +2759,22 @@ export class ToriiClient {
     const payload = await this.listVerifyingKeys(options);
     const verifyingKeys = await loadVerifyingKeyClient();
     return verifyingKeys.list(payload);
+  }
+
+  /**
+   * Return Torii's exact, bounded projection of active verifying-key ids.
+   * This public discovery read never forwards configured authentication.
+   *
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ReadonlyArray<ToriiVerifyingKeyId>>}
+   */
+  async listActiveVerifyingKeyIds(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "listActiveVerifyingKeyIds",
+    );
+    const verifyingKeys = await loadVerifyingKeyClient();
+    return verifyingKeys.activeIds(this, signal);
   }
 
   /**
@@ -4369,7 +4389,7 @@ export class ToriiClient {
     );
   }
 
-  _requireSorafsHedgingBillingIdentityEncoding(response, context) {
+  _requireIdentityEncoding(response, context) {
     let contentEncoding;
     try {
       contentEncoding = this._getHeader(response, "content-encoding");
@@ -4411,7 +4431,7 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    this._requireSorafsHedgingBillingIdentityEncoding(response, context);
+    this._requireIdentityEncoding(response, context);
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
       SORAFS_HEDGING_BILLING_JSON_MAX_BYTES,
@@ -4529,7 +4549,7 @@ export class ToriiClient {
       },
     );
     await this._expectStatus(response, [200]);
-    this._requireSorafsHedgingBillingIdentityEncoding(response, context);
+    this._requireIdentityEncoding(response, context);
     let contentType;
     try {
       contentType = this._getHeader(response, "content-type");
@@ -4610,7 +4630,7 @@ export class ToriiClient {
       },
     );
     await this._expectStatus(response, [200]);
-    this._requireSorafsHedgingBillingIdentityEncoding(response, context);
+    this._requireIdentityEncoding(response, context);
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
       SORAFS_HEDGING_BILLING_JSON_MAX_BYTES,
@@ -10468,7 +10488,10 @@ export class ToriiClient {
     const protocol = url.protocol.toLowerCase();
     const originMatches =
       url.host === this._baseHost && protocol === this._baseProtocol;
-    const initHeaders = this._createHeaders(options.headers);
+    const initHeaders = this._createHeaders(
+      options.headers,
+      options.omitCredentials === true,
+    );
     const operatorSigningContext = options.requireIsoOperatorAuth === true
       ? requireIsoOperatorSigningContext(options.operatorSigningContext, initHeaders)
       : resolveOperatorSigningContext(options.operatorSigningContext);
@@ -10571,6 +10594,9 @@ export class ToriiClient {
       headers: initHeaders,
       body: options.body,
     };
+    if (options.omitCredentials === true) {
+      init.credentials = "omit";
+    }
     // Canonical authentication and caller-supplied nonce headers are one-shot.
     // It is unsafe to replay them after dispatch or to let Fetch follow a
     // redirect after the original endpoint may already have admitted the body.
@@ -10892,7 +10918,7 @@ export class ToriiClient {
     }
   }
 
-  _createHeaders(provided = {}) {
+  _createHeaders(provided = {}, omitCredentials = false) {
     const headers = {};
     const applyEntries = (source) => {
       if (!source) {
@@ -10938,12 +10964,16 @@ export class ToriiClient {
     };
     applyEntries(this._config.defaultHeaders);
     applyEntries(provided);
-    if (this._config.apiToken) {
+    if (!omitCredentials && this._config.apiToken) {
       if (!hasHeader(headers, "x-api-token")) {
         headers["X-API-Token"] = this._config.apiToken;
       }
     }
-    if (this._config.authToken && !hasHeader(headers, "authorization")) {
+    if (
+      !omitCredentials
+      && this._config.authToken
+      && !hasHeader(headers, "authorization")
+    ) {
       headers.Authorization = `Bearer ${this._config.authToken}`;
     }
     attachHeaderAccessors(headers);
@@ -30027,7 +30057,7 @@ function loadVerifyingKeyClient() {
         if (
           !Object.isFrozen(client) ||
           Object.keys(client).join(",") !==
-            "backend,detail,draft,id,list,listQuery,name,register,signingContext,update"
+            "activeIds,backend,detail,draft,id,list,listQuery,name,register,signingContext,update"
         ) {
           throw new TypeError(
             "invalid verifying-key setup: expected frozen helper keys",
@@ -30037,21 +30067,6 @@ function loadVerifyingKeyClient() {
       },
     ));
 }
-
-const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
-  "halo2/ipa",
-  "halo2/pasta/kaigi-roster-v1",
-  "halo2/pasta/kaigi-usage-v1",
-  "halo2/pasta/ivm-execution-v1",
-  "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-  "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-  "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-  "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-  "stark/fri",
-  "stark/fri/sha256-goldilocks",
-  "stark/fri/poseidon2-goldilocks",
-  "stark/fri/sha256_goldilocks.v1",
-]);
 
 function assertProductionVerifyBackendLabel(value, context) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -30069,7 +30084,7 @@ function assertProductionVerifyBackendLabel(value, context) {
       context,
     );
   }
-  if (!PRODUCTION_VERIFY_BACKEND_LABELS_V1.has(backend)) {
+  if (!isVerifierBackendRegistryLabelV1(backend)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${context} uses unsupported production verifier backend ${backend}`,

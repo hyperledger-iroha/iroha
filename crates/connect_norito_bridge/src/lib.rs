@@ -1702,15 +1702,16 @@ pub unsafe extern "C" fn connect_norito_offline_cash_payment_canonicalize_v1(
 }
 
 /// Decode and terminally verify one request-bound Offline Cash V1 payment for a
-/// wallet session against the active authenticated 34-role release.
+/// verification session against the active authenticated 34-role release.
 ///
 /// The compact payment does not echo release-manifest metadata. The signed
 /// request selects the release, so a caller-supplied manifest digest alone
 /// cannot authenticate their mapping. This compatibility entry point resolves
 /// the mapping through the native governed registry and decides both current
 /// proofs before returning canonical bytes. New callers should use the opaque
-/// wallet-session handle API, which also retains the move-only proof receipt for
-/// acknowledgement verification and crash-safe device application.
+/// verification-session handle API, which also retains the move-only proof
+/// receipt for acknowledgement verification. Neither API applies wallet or
+/// secure-device state.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_cash_payment_canonicalize_for_session_v1(
     request_ptr: *const c_uchar,
@@ -1728,7 +1729,7 @@ pub unsafe extern "C" fn connect_norito_offline_cash_payment_canonicalize_for_se
         let payment =
             unsafe { offline_cash_payment_from_bridge_v1(&request, payment_ptr, payment_len) }?;
         let expected = unsafe {
-            offline_cash_v1_bridge::read_session_digest(
+            offline_cash_v1_bridge::read_verification_session_digest(
                 expected_artifact_manifest_sha256_ptr,
                 expected_artifact_manifest_sha256_len,
             )
@@ -2006,8 +2007,9 @@ pub unsafe extern "C" fn connect_norito_offline_cash_peer_decode_acknowledgement
 ///
 /// Successful probing always initializes every output. Callers must require
 /// `available == 1` and exact equality with both signed runtime-manifest
-/// digests before creating a wallet session. The older eight-role Kagemusha V4
-/// registry is deliberately not consulted.
+/// digests before creating a verification session or evaluating wallet-runtime
+/// readiness. The older eight-role Kagemusha V4 registry is deliberately not
+/// consulted.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_cash_release_probe_v1(
     out_available: *mut u8,
@@ -28853,7 +28855,7 @@ mod tests {
         assert_eq!(out_len, 0);
     }
     #[test]
-    fn offline_cash_v1_artifact_and_session_handles_fail_closed() {
+    fn offline_cash_v1_artifact_and_verification_session_handles_fail_closed() {
         let malformed = b"not-canonical-norito";
         let mut artifact_handle = u64::MAX;
         assert_eq!(
@@ -28870,27 +28872,27 @@ mod tests {
         assert_eq!(artifact_handle, 0);
 
         let digest = [1_u8; 32];
-        let mut session_handle = u64::MAX;
+        let mut verification_session_handle = u64::MAX;
         assert_eq!(
             unsafe {
-                offline_cash_v1_bridge::connect_norito_offline_cash_wallet_session_open_v1(
+                offline_cash_v1_bridge::connect_norito_offline_cash_verification_session_open_v1(
                     malformed.as_ptr(),
                     malformed.len() as c_ulong,
                     digest.as_ptr(),
                     digest.len() as c_ulong,
                     digest.as_ptr(),
                     digest.len() as c_ulong,
-                    &mut session_handle,
+                    &mut verification_session_handle,
                 )
             },
             ERR_OFFLINE_CASH_SESSION
         );
-        assert_eq!(session_handle, 0);
+        assert_eq!(verification_session_handle, 0);
 
         let mut state = u8::MAX;
         assert_eq!(
             unsafe {
-                offline_cash_v1_bridge::connect_norito_offline_cash_wallet_session_state_v1(
+                offline_cash_v1_bridge::connect_norito_offline_cash_verification_session_state_v1(
                     1, &mut state,
                 )
             },
@@ -28898,7 +28900,41 @@ mod tests {
         );
         assert_eq!(state, 0);
         assert_eq!(
-            offline_cash_v1_bridge::connect_norito_offline_cash_wallet_session_close_v1(1),
+            offline_cash_v1_bridge::connect_norito_offline_cash_verification_session_close_v1(1),
+            ERR_OFFLINE_CASH_SESSION
+        );
+
+        let mut wallet_runtime_handle = u64::MAX;
+        assert_eq!(
+            unsafe {
+                offline_cash_v1_bridge::connect_norito_offline_cash_wallet_runtime_session_open_v1(
+                    &mut wallet_runtime_handle,
+                )
+            },
+            ERR_OFFLINE_CASH_SESSION
+        );
+        assert_eq!(wallet_runtime_handle, 0);
+
+        let mut wallet_runtime_status = u8::MAX;
+        let mut wallet_runtime_state = u8::MAX;
+        assert_eq!(
+            unsafe {
+                offline_cash_v1_bridge::connect_norito_offline_cash_wallet_runtime_session_status_v1(
+                    &mut wallet_runtime_status,
+                    &mut wallet_runtime_state,
+                )
+            },
+            0
+        );
+        assert_eq!((wallet_runtime_status, wallet_runtime_state), (0, 0));
+        assert_eq!(
+            offline_cash_v1_bridge::connect_norito_offline_cash_wallet_runtime_session_attempt_v1(
+                0, 0,
+            ),
+            ERR_OFFLINE_CASH_SESSION
+        );
+        assert_eq!(
+            offline_cash_v1_bridge::connect_norito_offline_cash_wallet_runtime_session_close_v1(0),
             ERR_OFFLINE_CASH_SESSION
         );
     }
@@ -28923,6 +28959,17 @@ mod tests {
             "connect_norito_offline_cash_artifact_cancel_v1",
             "connect_norito_offline_cash_artifact_set_install_v1",
             "connect_norito_offline_cash_artifact_set_uninstall_v1",
+            "connect_norito_offline_cash_verification_session_open_v1",
+            "connect_norito_offline_cash_verification_session_open_bound_v1",
+            "connect_norito_offline_cash_verification_session_verify_payment_v1",
+            "connect_norito_offline_cash_verification_session_verify_acknowledgement_v1",
+            "connect_norito_offline_cash_verification_session_state_v1",
+            "connect_norito_offline_cash_verification_session_close_v1",
+            "connect_norito_offline_cash_wallet_runtime_session_open_v1",
+            "connect_norito_offline_cash_wallet_runtime_session_status_v1",
+            "connect_norito_offline_cash_wallet_runtime_session_attempt_v1",
+            "connect_norito_offline_cash_wallet_runtime_session_close_v1",
+            // Deprecated ABI22 verifier-only aliases remain linkable.
             "connect_norito_offline_cash_wallet_session_open_v1",
             "connect_norito_offline_cash_wallet_session_open_bound_v1",
             "connect_norito_offline_cash_wallet_session_accept_payment_v1",
@@ -28933,6 +28980,11 @@ mod tests {
             "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeReleaseProbeV1",
             "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeCanonicalizePaymentForSessionV1",
             "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeCanonicalizePaymentForSessionV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionOpenV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionOpenV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionOpenBoundV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionOpenBoundV1",
+            // Deprecated ABI22 verifier-only JNI aliases remain linkable.
             "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionOpenV1",
             "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionOpenV1",
             "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionOpenBoundV1",
@@ -28949,6 +29001,22 @@ mod tests {
             "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeArtifactSetInstallV1",
             "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeArtifactSetUninstallV1",
             "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeArtifactSetUninstallV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyPaymentV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyPaymentV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyAcknowledgementV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyAcknowledgementV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionStateV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionStateV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionCloseV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionCloseV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionOpenV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionOpenV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionStatusV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionStatusV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionAttemptV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionAttemptV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionCloseV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionCloseV1",
             "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionAcceptPaymentV1",
             "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionAcceptPaymentV1",
             "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionAcceptAcknowledgementV1",
@@ -28966,11 +29034,43 @@ mod tests {
     }
 
     #[test]
-    fn offline_cash_v1_sessions_require_the_authenticated_terminal_verifier() {
+    fn offline_cash_v1_wallet_runtime_abi_is_fail_closed_and_verifier_disjoint() {
+        let source = include_str!("offline_cash_v1_bridge.rs");
+        let runtime_body = source
+            .split_once("fn connect_norito_offline_cash_wallet_runtime_session_open_v1")
+            .expect("wallet-runtime open")
+            .1
+            .split_once("// The `wallet_session` exports below")
+            .expect("deprecated verifier aliases")
+            .0;
+
+        for required in [
+            "*out_handle = 0",
+            "*out_status = 0",
+            "*out_state = 0",
+            "BridgeError::OfflineCashSession.code()",
+        ] {
+            assert!(runtime_body.contains(required), "missing {required}");
+        }
+        for forbidden in [
+            "verification_session_arc(",
+            "open_verification_session(",
+            "verify_verification_session_",
+            "verification_sessions()",
+        ] {
+            assert!(
+                !runtime_body.contains(forbidden),
+                "wallet-runtime ABI reached verifier storage through {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn offline_cash_v1_verification_sessions_require_the_authenticated_terminal_verifier() {
         let source = bridge_source();
         let c_body = source
             .split_once("fn connect_norito_offline_cash_payment_canonicalize_for_session_v1")
-            .expect("C session canonicalizer")
+            .expect("C verification-session compatibility canonicalizer")
             .1
             .split_once("fn connect_norito_offline_cash_acknowledgement_canonicalize_v1")
             .expect("next C canonicalizer")
@@ -28980,8 +29080,8 @@ mod tests {
 
         let jni_source = include_str!("platform_jni/part_3.rs");
         let jni_body = jni_source
-            .split_once("fn java_offline_cash_v1_canonicalize_payment_for_session")
-            .expect("JNI session canonicalizer")
+            .split_once("fn java_offline_cash_v1_canonicalize_payment_for_verification_session")
+            .expect("JNI verification-session compatibility canonicalizer")
             .1
             .split_once("fn java_offline_cash_v1_canonicalize_acknowledgement")
             .expect("next JNI canonicalizer")

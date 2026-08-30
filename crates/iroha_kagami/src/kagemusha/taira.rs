@@ -1,5 +1,13 @@
 //! Testnet-only Taira Kagemusha release and genesis bootstrap helpers.
 use super::{Outcome, Result, publish_new_durable_file};
+#[cfg(test)]
+use crate::genesis::profile::validate_taira_digital_kina_base_prerequisite;
+use crate::genesis::profile::{
+    RETIRED_TAIRA_DIGITAL_KINA_ALIASES, TAIRA_DIGITAL_KINA_ALIAS,
+    TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID, TAIRA_DIGITAL_KINA_DATASPACE_ID,
+    TAIRA_DIGITAL_KINA_NAME, TAIRA_DIGITAL_KINA_SCALE,
+    validate_taira_post_provision_digital_kina_binding,
+};
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
 use iroha_core::zk::confidential_v2::{
@@ -12,7 +20,7 @@ use iroha_data_model::isi::{Burn, Transfer};
 use iroha_data_model::{
     NetworkId,
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
-    asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
+    asset::{AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::consensus_v2::{ConsensusMode, ValidatorPower},
     isi::{
         BurnBox, Grant, GrantBox, InstructionBox, Mint, MintBox, Register, RegisterBox,
@@ -27,6 +35,7 @@ use iroha_data_model::{
         verifying_keys::{self, RegisterVerifyingKey},
         zk::RegisterZkAsset,
     },
+    nexus::DataSpaceId,
     offline::{
         KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND, KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
         KAGEMUSHA_VERIFIER_NAMESPACE, KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
@@ -57,11 +66,11 @@ const TAIRA_RELEASE_ACTIVATION_HEIGHT_V4: u64 = 2;
 const DEFAULT_TAIRA_RELEASE_WITHDRAWAL_HEIGHT_V4: u64 = 1_000_000_000;
 const PUBLIC_TAIRA_BLOCK_CADENCE_MS: u64 = 4_000;
 const PUBLIC_TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
-const PUBLIC_TAIRA_OFFLINE_ASSET_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
-const PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS: &str = "ds#boi.is";
-const PUBLIC_TAIRA_OFFLINE_ASSET_SCALE: u32 = 2;
+const PUBLIC_TAIRA_OFFLINE_ASSET_ID: &str = TAIRA_DIGITAL_KINA_ASSET_DEFINITION_ID;
+const PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS: &str = TAIRA_DIGITAL_KINA_ALIAS;
+const PUBLIC_TAIRA_OFFLINE_ASSET_SCALE: u32 = TAIRA_DIGITAL_KINA_SCALE;
 const PUBLIC_TAIRA_FEE_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
-const PUBLIC_TAIRA_OFFLINE_ASSET_NAME: &str = "ds";
+const PUBLIC_TAIRA_OFFLINE_ASSET_NAME: &str = TAIRA_DIGITAL_KINA_NAME;
 /// Build the exact public Taira top-up finality roster consumed by release generation.
 #[derive(Debug, ClapArgs)]
 pub(super) struct PrepareReleaseRosterV4Args {
@@ -78,16 +87,17 @@ pub(super) struct PrepareReleaseRosterV4Args {
     #[arg(long)]
     output: PathBuf,
 }
-/// Append only network-independent offline-cash prerequisites to a fresh Taira genesis.
+/// Append network-independent offline-cash prerequisites to an explicit post-provision replay.
 ///
 /// The exact release roster, recursive release, governed device policy, and
 /// deterministic escrow are intentionally excluded. They bind the signed
-/// genesis hash and must be prepared after this output is signed.
+/// genesis hash and must be prepared after this output is signed. Base Taira genesis is not a
+/// valid input because Digital Kina is deliberately created by the reviewed post-health stage.
 #[derive(Debug, ClapArgs)]
 pub(super) struct PrepareTestnetBaseGenesisV4Args {
-    /// Fresh canonical Taira unsigned genesis manifest.
+    /// Explicit Taira replay manifest containing the completed Digital Kina provisioning stage.
     #[arg(long)]
-    genesis: PathBuf,
+    post_provision_genesis: PathBuf,
     /// I105 account used to sign and execute the genesis block.
     #[arg(long)]
     genesis_authority: String,
@@ -97,7 +107,7 @@ pub(super) struct PrepareTestnetBaseGenesisV4Args {
     /// XOR amount minted to the command authority for transaction fees.
     #[arg(long, default_value = "1000000")]
     fee_mint: String,
-    /// New private path receiving the unsigned Taira base genesis.
+    /// New private path receiving the unsigned post-provision Kagemusha base genesis.
     #[arg(long)]
     output: PathBuf,
 }
@@ -119,7 +129,7 @@ fn validate_canonical_taira_asset_manifest(manifest: &JsonValue) -> Result<()> {
     let transactions = manifest
         .get("transactions")
         .and_then(JsonValue::as_array)
-        .ok_or_else(|| eyre!("fresh Taira genesis is missing its transactions array"))?;
+        .ok_or_else(|| eyre!("post-provision Taira replay is missing its transactions array"))?;
     let mut registration_count = 0_usize;
     let mut alias_count = 0_usize;
     for (transaction_index, transaction) in transactions.iter().enumerate() {
@@ -151,11 +161,24 @@ fn validate_canonical_taira_asset_manifest(manifest: &JsonValue) -> Result<()> {
                         "id",
                         &format!("{instruction_context}.Register.AssetDefinition"),
                     )?;
+                    let alias = definition.get("alias").and_then(JsonValue::as_str);
+                    if alias
+                        .is_some_and(|alias| RETIRED_TAIRA_DIGITAL_KINA_ALIASES.contains(&alias))
+                    {
+                        bail!("post-provision Taira replay contains a retired Digital Kina alias");
+                    }
+                    if alias == Some(PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS)
+                        && id != PUBLIC_TAIRA_OFFLINE_ASSET_ID
+                    {
+                        bail!(
+                            "post-provision Taira replay binds `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` to the wrong asset `{id}`"
+                        );
+                    }
                     if id == PUBLIC_TAIRA_OFFLINE_ASSET_ID {
                         registration_count += 1;
                         if registration_count != 1 {
                             bail!(
-                                "fresh Taira genesis contains duplicate `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}` registrations"
+                                "post-provision Taira replay contains duplicate `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}` registrations"
                             );
                         }
                         let name = json_string_field(
@@ -168,32 +191,12 @@ fn validate_canonical_taira_asset_manifest(manifest: &JsonValue) -> Result<()> {
                                 "canonical Taira asset registration must have name `{PUBLIC_TAIRA_OFFLINE_ASSET_NAME}`, got `{name}`"
                             );
                         }
-                        let metadata = definition
-                            .get("metadata")
-                            .and_then(JsonValue::as_object)
-                            .ok_or_else(|| {
-                                eyre!(
-                                    "{instruction_context}.Register.AssetDefinition.metadata is not an object"
-                                )
-                            })?;
-                        for (key, expected) in [
-                            ("currency_code", "DS"),
-                            ("display_code", "DS"),
-                            ("display_name", "Digital Shekel"),
-                            ("iso_currency_code", "ILS"),
-                            ("symbol", "₪"),
-                        ] {
-                            let actual = json_string_field(
-                                metadata,
-                                key,
-                                &format!("{instruction_context}.Register.AssetDefinition.metadata"),
-                            )?;
-                            if actual != expected {
-                                bail!(
-                                    "canonical Taira asset metadata `{key}` must be `{expected}`, got `{actual}`"
-                                );
-                            }
+                        if alias != Some(PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS) {
+                            bail!(
+                                "canonical Taira asset registration must atomically bind alias `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}`"
+                            );
                         }
+                        alias_count += 1;
                     }
                 }
             }
@@ -211,37 +214,27 @@ fn validate_canonical_taira_asset_manifest(manifest: &JsonValue) -> Result<()> {
                     "alias",
                     &format!("{instruction_context}.SetAssetDefinitionAlias"),
                 )?;
+                if RETIRED_TAIRA_DIGITAL_KINA_ALIASES.contains(&alias) {
+                    bail!("post-provision Taira replay contains a retired Digital Kina alias");
+                }
                 if alias == PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
-                    && asset_definition_id != PUBLIC_TAIRA_OFFLINE_ASSET_ID
+                    || asset_definition_id == PUBLIC_TAIRA_OFFLINE_ASSET_ID
                 {
                     bail!(
-                        "fresh Taira genesis already binds `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` to the wrong asset `{asset_definition_id}`"
+                        "post-provision Taira replay must bind `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` atomically in Register.AssetDefinition, not SetAssetDefinitionAlias"
                     );
-                }
-                if asset_definition_id == PUBLIC_TAIRA_OFFLINE_ASSET_ID {
-                    alias_count += 1;
-                    if alias_count != 1 {
-                        bail!(
-                            "fresh Taira genesis contains multiple aliases for `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}`"
-                        );
-                    }
-                    if alias != PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS {
-                        bail!(
-                            "canonical Taira asset must have alias `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}`, got `{alias}`"
-                        );
-                    }
                 }
             }
         }
     }
     if registration_count != 1 {
         bail!(
-            "fresh Taira genesis must contain exactly one `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}` registration"
+            "post-provision Taira replay must contain exactly one `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}` registration"
         );
     }
     if alias_count != 1 {
         bail!(
-            "fresh Taira genesis must contain exactly one `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` binding for `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}`"
+            "post-provision Taira replay must contain exactly one `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` binding for `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}`"
         );
     }
     Ok(())
@@ -416,7 +409,7 @@ struct TairaGenesisInventory {
     verifier_circuit_versions: BTreeSet<(String, u32)>,
     zk_assets: BTreeSet<AssetDefinitionId>,
     grants: BTreeSet<(AccountId, Permission)>,
-    ds_alias_binding: Option<AssetDefinitionId>,
+    offline_asset_alias_binding: Option<AssetDefinitionId>,
     has_recursive_activation: bool,
 }
 impl TairaGenesisInventory {
@@ -424,7 +417,7 @@ impl TairaGenesisInventory {
         genesis: &RawGenesisTransaction,
         online_backing_definition: &AssetDefinitionId,
     ) -> Result<Self> {
-        let ds_alias: AssetDefinitionAlias = PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
+        let offline_asset_alias: AssetDefinitionAlias = PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
             .parse()
             .expect("static Taira offline alias");
         let mut inventory = Self {
@@ -436,7 +429,7 @@ impl TairaGenesisInventory {
             verifier_circuit_versions: BTreeSet::new(),
             zk_assets: BTreeSet::new(),
             grants: BTreeSet::new(),
-            ds_alias_binding: None,
+            offline_asset_alias_binding: None,
             has_recursive_activation: false,
         };
         for instruction in genesis.instructions() {
@@ -468,8 +461,9 @@ impl TairaGenesisInventory {
                 .as_any()
                 .downcast_ref::<SetAssetDefinitionAlias>()
             {
-                if set_alias.alias().as_ref() == Some(&ds_alias) {
-                    inventory.ds_alias_binding = Some(set_alias.asset_definition_id().clone());
+                if set_alias.alias().as_ref() == Some(&offline_asset_alias) {
+                    inventory.offline_asset_alias_binding =
+                        Some(set_alias.asset_definition_id().clone());
                 }
                 continue;
             }
@@ -496,6 +490,9 @@ impl TairaGenesisInventory {
                     inventory
                         .asset_names
                         .insert(definition.id.clone(), definition.name.clone());
+                    if definition.alias.as_ref() == Some(&offline_asset_alias) {
+                        inventory.offline_asset_alias_binding = Some(definition.id.clone());
+                    }
                 }
                 _ => {}
             }
@@ -558,9 +555,10 @@ fn apply_online_backing_balance_instruction(
             && transfer.source().definition() == online_backing_definition
         {
             let source = transfer.source().clone();
-            let destination = AssetId::new(
+            let destination = AssetId::with_scope(
                 online_backing_definition.clone(),
                 transfer.destination().clone(),
+                source.scope().clone(),
             );
             let source_after = balances
                 .get(&source)
@@ -661,8 +659,12 @@ fn has_nonzero_online_backing_source(
     asset_balances: &BTreeMap<AssetId, Quantity>,
     asset_definition_id: &AssetDefinitionId,
 ) -> bool {
+    let required_scope =
+        AssetBalanceScope::Dataspace(DataSpaceId::new(TAIRA_DIGITAL_KINA_DATASPACE_ID));
     asset_balances.iter().any(|(asset_id, quantity)| {
-        asset_id.definition() == asset_definition_id && !quantity.is_zero()
+        asset_id.definition() == asset_definition_id
+            && asset_id.scope() == &required_scope
+            && !quantity.is_zero()
     })
 }
 fn validate_source_block_cadence_ms(block_cadence_ms: u64) -> Result<()> {
@@ -708,18 +710,20 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
 ) -> Outcome {
     iroha_genesis::init_instruction_registry();
     let genesis_bytes = super::read_external_bounded(
-        &args.genesis,
+        &args.post_provision_genesis,
         GENESIS_MANIFEST_JSON_MAX_BYTES_V1,
-        "fresh Taira genesis manifest",
+        "post-provision Taira replay manifest",
     )?;
     validate_genesis_manifest_json(&genesis_bytes)
-        .wrap_err("fresh Taira genesis manifest exceeds fixed resource bounds")?;
+        .wrap_err("post-provision Taira replay manifest exceeds fixed resource bounds")?;
     let genesis_value: JsonValue = norito::json::from_slice(&genesis_bytes)
-        .wrap_err("failed to decode fresh Taira genesis JSON")?;
+        .wrap_err("failed to decode post-provision Taira replay JSON")?;
     drop(genesis_bytes);
     validate_canonical_taira_asset_manifest(&genesis_value)?;
     let genesis: RawGenesisTransaction = norito::json::value::from_value(genesis_value)
         .wrap_err("failed to decode canonical Taira genesis manifest")?;
+    validate_taira_post_provision_digital_kina_binding(&genesis)
+        .wrap_err("post-provision Taira replay has an invalid Digital Kina binding")?;
     if genesis.chain_id().as_str() != PUBLIC_TAIRA_CHAIN_NAME {
         bail!(
             "genesis chain name must be canonical public Taira `{PUBLIC_TAIRA_CHAIN_NAME}`, got `{}`",
@@ -753,9 +757,6 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     let fee_asset_definition_id =
         AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_FEE_ASSET_ID)
             .expect("static Taira fee asset ID");
-    let asset_alias: AssetDefinitionAlias = PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
-        .parse()
-        .expect("static Taira offline alias");
     let mut inventory = TairaGenesisInventory::from_genesis(&genesis, &asset_definition_id)?;
     // `irohad` creates the genesis signer account in the otherwise-empty
     // world before it executes height one. Treat that implicit account as
@@ -794,12 +795,14 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
             "source genesis already contains a recursive-release activation; reset from clean genesis"
         );
     }
-    if let Some(existing) = &inventory.ds_alias_binding
-        && existing != &asset_definition_id
-    {
-        bail!(
+    match inventory.offline_asset_alias_binding.as_ref() {
+        Some(existing) if existing == &asset_definition_id => {}
+        Some(existing) => bail!(
             "source genesis binds `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` to wrong asset `{existing}`"
-        );
+        ),
+        None => bail!(
+            "source genesis does not atomically bind `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` to `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}`"
+        ),
     }
     if inventory.zk_assets.contains(&asset_definition_id) {
         bail!("source genesis already registers the Taira offline asset as a ZK asset");
@@ -878,11 +881,6 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
             instructions.push(Grant::account_permission(permission, destination).into());
         }
     }
-    if inventory.ds_alias_binding.is_none() {
-        instructions.push(
-            SetAssetDefinitionAlias::bind(asset_definition_id.clone(), asset_alias, None).into(),
-        );
-    }
     let topup_id = base_verifiers[1].0.clone();
     let unshield_id = base_verifiers[2].0.clone();
     for (id, record) in base_verifiers {
@@ -940,7 +938,7 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
         asset_name: PUBLIC_TAIRA_OFFLINE_ASSET_NAME.to_owned(),
         asset_alias: PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS.to_owned(),
         asset_scale: PUBLIC_TAIRA_OFFLINE_ASSET_SCALE,
-        iso_currency_code: "ILS".to_owned(),
+        iso_currency_code: "PGK".to_owned(),
         planned_activation_height: TAIRA_RELEASE_ACTIVATION_HEIGHT_V4,
         exact_network_release_required: true,
         exact_network_escrow_required: true,
@@ -984,6 +982,13 @@ mod tests {
             .expect("derive test account");
         AccountId::new(key_pair.public_key().clone())
     }
+    fn offline_asset_id(definition: AssetDefinitionId, account: AccountId) -> AssetId {
+        AssetId::with_scope(
+            definition,
+            account,
+            AssetBalanceScope::Dataspace(DataSpaceId::new(TAIRA_DIGITAL_KINA_DATASPACE_ID)),
+        )
+    }
     fn canonical_taira_asset_json() -> JsonValue {
         norito::json::from_str(
             r#"{
@@ -992,23 +997,11 @@ mod tests {
                         {
                             "Register": {
                                 "AssetDefinition": {
-                                    "id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
-                                    "name": "ds",
-                                    "metadata": {
-                                        "currency_code": "DS",
-                                        "display_code": "DS",
-                                        "display_name": "Digital Shekel",
-                                        "iso_currency_code": "ILS",
-                                        "symbol": "₪"
-                                    }
+                                    "id": "839FV3NJC8NfgWQvghXU2hEFQm9a",
+                                    "name": "kina",
+                                    "alias": "kina#bpng",
+                                    "metadata": {}
                                 }
-                            }
-                        },
-                        {
-                            "SetAssetDefinitionAlias": {
-                                "alias": "ds#boi.is",
-                                "asset_definition_id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
-                                "lease_expiry_ms": null
                             }
                         }
                     ]
@@ -1023,15 +1016,7 @@ mod tests {
         validate_canonical_taira_asset_manifest(&manifest)
             .expect("accept the exact canonical asset identity");
         let encoded = norito::json::to_string(&manifest).expect("encode canonical fixture");
-        for expected in [
-            r#""name":"ds""#,
-            r#""currency_code":"DS""#,
-            r#""display_code":"DS""#,
-            r#""display_name":"Digital Shekel""#,
-            r#""iso_currency_code":"ILS""#,
-            r#""symbol":"₪""#,
-            r#""alias":"ds#boi.is""#,
-        ] {
+        for expected in [r#""name":"kina""#, r#""alias":"kina#bpng""#] {
             assert!(
                 encoded.contains(expected),
                 "canonical asset is missing {expected}: {encoded}"
@@ -1039,20 +1024,70 @@ mod tests {
         }
     }
     #[test]
+    fn taira_report_keeps_raw_name_and_alias_as_distinct_fields() {
+        let report = TairaBaseGenesisReport {
+            status: "base_genesis_prepared".to_owned(),
+            chain_name: PUBLIC_TAIRA_CHAIN_NAME.to_owned(),
+            asset_definition_id: PUBLIC_TAIRA_OFFLINE_ASSET_ID.to_owned(),
+            asset_name: PUBLIC_TAIRA_OFFLINE_ASSET_NAME.to_owned(),
+            asset_alias: PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS.to_owned(),
+            asset_scale: PUBLIC_TAIRA_OFFLINE_ASSET_SCALE,
+            iso_currency_code: "PGK".to_owned(),
+            planned_activation_height: TAIRA_RELEASE_ACTIVATION_HEIGHT_V4,
+            exact_network_release_required: true,
+            exact_network_escrow_required: true,
+            command_authority: "test-authority".to_owned(),
+            fee_asset_definition_id: PUBLIC_TAIRA_FEE_ASSET_ID.to_owned(),
+            fee_mint: "0".to_owned(),
+            online_backing_source_ready: true,
+            source_block_cadence_ms: PUBLIC_TAIRA_BLOCK_CADENCE_MS,
+            effective_block_cadence_ms: PUBLIC_TAIRA_BLOCK_CADENCE_MS,
+            instruction_count: 0,
+            instructions_hash: "test-hash".to_owned(),
+            output: "test-output".to_owned(),
+        };
+        let encoded = norito::json::to_string(&report).expect("encode Taira report");
+        let value: JsonValue = norito::json::from_str(&encoded).expect("decode Taira report");
+        assert_eq!(
+            value.get("asset_definition_id").and_then(JsonValue::as_str),
+            Some(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
+        );
+        assert_eq!(
+            value.get("asset_name").and_then(JsonValue::as_str),
+            Some(PUBLIC_TAIRA_OFFLINE_ASSET_NAME)
+        );
+        assert_eq!(
+            value.get("asset_alias").and_then(JsonValue::as_str),
+            Some(PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS)
+        );
+        assert_ne!(
+            PUBLIC_TAIRA_OFFLINE_ASSET_ID,
+            PUBLIC_TAIRA_OFFLINE_ASSET_NAME
+        );
+        assert_ne!(
+            PUBLIC_TAIRA_OFFLINE_ASSET_ID,
+            PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
+        );
+        assert_ne!(
+            PUBLIC_TAIRA_OFFLINE_ASSET_NAME,
+            PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
+        );
+    }
+    #[test]
     fn canonical_taira_asset_validation_rejects_noncanonical_identity_fields() {
         let encoded = norito::json::to_string(&canonical_taira_asset_json())
             .expect("encode canonical fixture");
         for (canonical, replacement, expected_error) in [
-            ("\"name\":\"ds\"", "\"name\":\"sbd\"", "must have name"),
+            ("\"name\":\"kina\"", "\"name\":\"pgk\"", "must have name"),
             (
-                "\"alias\":\"ds#boi.is\"",
-                "\"alias\":\"sbd#cbsi\"",
-                "must have alias",
+                "\"alias\":\"kina#bpng\"",
+                "\"alias\":\"digital_kina#bpng\"",
+                "retired Digital Kina alias",
             ),
             (
-                "\"currency_code\":\"DS\"",
-                "\"currency_code\":\"USD\"",
-                "currency_code",
+                "\"id\":\"839FV3NJC8NfgWQvghXU2hEFQm9a\"",
+                "\"id\":\"6TEAJqbb8oEPmLncoNiMRbLEK6tw\"",
+                "wrong asset",
             ),
         ] {
             let altered: JsonValue =
@@ -1067,31 +1102,25 @@ mod tests {
         }
     }
     #[test]
-    fn checked_in_taira_genesis_has_canonical_identity_and_backing_supply() {
+    fn checked_in_taira_genesis_defers_digital_kina_to_the_provisioning_stage() {
         iroha_genesis::init_instruction_registry();
         let _discriminant = ChainDiscriminantGuard::enter(PUBLIC_TAIRA_CHAIN_DISCRIMINANT);
         let manifest: JsonValue = norito::json::from_str(include_str!(
             "../../../../configs/soranexus/taira/genesis.json"
         ))
         .expect("decode checked-in canonical Taira genesis");
-        validate_canonical_taira_asset_manifest(&manifest)
-            .expect("validate checked-in Taira asset identity");
         let genesis: RawGenesisTransaction = norito::json::value::from_value(manifest)
             .expect("decode canonical checked-in Taira genesis");
+        validate_taira_digital_kina_base_prerequisite(&genesis)
+            .expect("checked-in base must preserve the Digital Kina absence proof");
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
         let inventory = TairaGenesisInventory::from_genesis(&genesis, &definition)
             .expect("inventory canonical genesis");
-        assert_eq!(
-            inventory.asset_names.get(&definition).map(String::as_str),
-            Some(PUBLIC_TAIRA_OFFLINE_ASSET_NAME)
-        );
-        assert_eq!(
-            inventory.asset_scales.get(&definition),
-            Some(&Some(PUBLIC_TAIRA_OFFLINE_ASSET_SCALE))
-        );
-        assert_eq!(inventory.ds_alias_binding.as_ref(), Some(&definition));
-        assert!(has_nonzero_online_backing_source(
+        assert!(!inventory.asset_names.contains_key(&definition));
+        assert!(!inventory.asset_scales.contains_key(&definition));
+        assert!(inventory.offline_asset_alias_binding.is_none());
+        assert!(!has_nonzero_online_backing_source(
             &inventory.online_backing_balances,
             &definition,
         ));
@@ -1195,8 +1224,8 @@ mod tests {
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
         let holder = test_account(0x42);
-        let zero_holder = AssetId::new(definition.clone(), holder.clone());
-        let funded_holder = AssetId::new(definition.clone(), holder);
+        let zero_holder = offline_asset_id(definition.clone(), holder.clone());
+        let funded_holder = offline_asset_id(definition.clone(), holder);
         let zero_balances = BTreeMap::from([(zero_holder, Quantity::zero())]);
         let funded_balances = BTreeMap::from([(funded_holder, Quantity::from(100_u32))]);
         assert!(!has_nonzero_online_backing_source(
@@ -1207,14 +1236,34 @@ mod tests {
             &funded_balances,
             &definition,
         ));
+        let wrong_scope = BTreeMap::from([(
+            AssetId::new(definition.clone(), test_account(0x49)),
+            Quantity::from(100_u32),
+        )]);
+        assert!(
+            !has_nonzero_online_backing_source(&wrong_scope, &definition),
+            "an implicit universal balance must not qualify as BPNG online backing"
+        );
+        let wrong_dataspace = BTreeMap::from([(
+            AssetId::with_scope(
+                definition.clone(),
+                test_account(0x4a),
+                AssetBalanceScope::Dataspace(DataSpaceId::new(9)),
+            ),
+            Quantity::from(100_u32),
+        )]);
+        assert!(
+            !has_nonzero_online_backing_source(&wrong_dataspace, &definition),
+            "a non-BPNG dataspace balance must not qualify as BPNG online backing"
+        );
     }
     #[test]
     fn backing_source_uses_final_ordered_balance_not_historical_mints() {
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
-        let source = AssetId::new(definition.clone(), test_account(0x43));
+        let source = offline_asset_id(definition.clone(), test_account(0x43));
         let destination_account = test_account(0x44);
-        let destination = AssetId::new(definition.clone(), destination_account.clone());
+        let destination = offline_asset_id(definition.clone(), destination_account.clone());
         let mut balances = BTreeMap::new();
         for instruction in [
             InstructionBox::from(Mint::asset_quantity(100_u32, source.clone())),
@@ -1244,7 +1293,7 @@ mod tests {
     fn backing_balance_underflow_fails_without_mutation() {
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
-        let holder = AssetId::new(definition.clone(), test_account(0x45));
+        let holder = offline_asset_id(definition.clone(), test_account(0x45));
         let mut balances = BTreeMap::from([(holder.clone(), Quantity::from(5_u32))]);
         let before = balances.clone();
         let burn = InstructionBox::from(Burn::asset_quantity(6_u32, holder));
@@ -1262,7 +1311,7 @@ mod tests {
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
         let holder = test_account(0x46);
-        let source = AssetId::new(definition.clone(), holder.clone());
+        let source = offline_asset_id(definition.clone(), holder.clone());
         let mut balances = BTreeMap::from([(source.clone(), Quantity::from(5_u32))]);
         let before = balances.clone();
         let transfer = InstructionBox::from(Transfer::asset_quantity(source, 6_u32, holder));
@@ -1280,7 +1329,7 @@ mod tests {
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
         let authority = test_account(0x47);
-        let source = AssetId::new(definition.clone(), authority.clone());
+        let source = offline_asset_id(definition.clone(), authority.clone());
         let trigger_id: TriggerId = "backing_balance_mutator"
             .parse()
             .expect("static trigger identifier");

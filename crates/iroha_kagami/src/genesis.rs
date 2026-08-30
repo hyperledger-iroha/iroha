@@ -22,6 +22,7 @@ pub use profile::{
     GenesisProfile, PUBLIC_XOR_ALIAS, ProfileDefaults, TAIRA_XOR_ASSET_DEFINITION_ID,
     parse_vrf_seed_hex, profile_defaults, profile_requires_npos, profile_uses_public_xor,
     public_xor_profile_for_chain_id, resolve_vrf_seed,
+    validate_taira_digital_kina_base_prerequisite,
 };
 /// Deterministic role used to authorize restricted-dataspace reads at the
 /// universal Torii ingress hop for a private localnet profile.

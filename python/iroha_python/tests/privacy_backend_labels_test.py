@@ -13,26 +13,23 @@ from iroha_python._privacy_backends import (
 
 
 def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
-    expected = frozenset(
-        {
-            "halo2/ipa",
-            "halo2/pasta/kaigi-roster-v1",
-            "halo2/pasta/kaigi-usage-v1",
-            "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
-        }
-    )
+    expected = {
+        "halo2/ipa": "halo2-ipa-pasta",
+        "halo2/pasta/kaigi-roster-v1": "halo2-ipa-pasta",
+        "halo2/pasta/kaigi-usage-v1": "halo2-ipa-pasta",
+        "halo2/pasta/ivm-execution-v1": "halo2-ipa-pasta",
+        "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3": "halo2-ipa-pasta",
+        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3": "halo2-ipa-pasta",
+        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3": "halo2-ipa-pasta",
+        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4": "halo2-ipa-pasta",
+        "stark/fri": "stark",
+        "stark/fri/sha256-goldilocks": "stark",
+        "stark/fri/poseidon2-goldilocks": "stark",
+        "stark/fri/sha256_goldilocks.v1": "stark",
+    }
     assert len(expected) == 12
-    assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
-    for backend in expected:
-        expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"
+    assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == frozenset(expected)
+    for backend, expected_tag in expected.items():
         assert _verifier_backend_registry_tag_v1(backend) == expected_tag
         assert _is_verifier_backend_registry_label_v1(backend)
         assert (

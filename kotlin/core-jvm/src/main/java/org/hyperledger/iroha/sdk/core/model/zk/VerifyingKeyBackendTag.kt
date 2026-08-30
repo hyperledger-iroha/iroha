@@ -13,36 +13,33 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
     STARK("stark");
 
     companion object {
+        private val verifierBackendRegistryTagsV1: Map<String, VerifyingKeyBackendTag> =
+            Collections.unmodifiableMap(
+                linkedMapOf(
+                    "halo2/ipa" to HALO2_IPA_PASTA,
+                    "halo2/pasta/kaigi-roster-v1" to HALO2_IPA_PASTA,
+                    "halo2/pasta/kaigi-usage-v1" to HALO2_IPA_PASTA,
+                    "halo2/pasta/ivm-execution-v1" to HALO2_IPA_PASTA,
+                    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3" to
+                        HALO2_IPA_PASTA,
+                    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3" to
+                        HALO2_IPA_PASTA,
+                    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3" to
+                        HALO2_IPA_PASTA,
+                    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" to
+                        HALO2_IPA_PASTA,
+                    "stark/fri" to STARK,
+                    "stark/fri/sha256-goldilocks" to STARK,
+                    "stark/fri/poseidon2-goldilocks" to STARK,
+                    "stark/fri/sha256_goldilocks.v1" to STARK,
+                ),
+            )
+
         /** Exact native verifier configurations admitted by registry v1. */
         @JvmField
         val VERIFIER_BACKEND_REGISTRY_LABELS_V1: Set<String> = Collections.unmodifiableSet(
-            linkedSetOf(
-                "halo2/ipa",
-                "halo2/pasta/kaigi-roster-v1",
-                "halo2/pasta/kaigi-usage-v1",
-                "halo2/pasta/ivm-execution-v1",
-                "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-                "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-                "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-                "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-                "stark/fri",
-                "stark/fri/sha256-goldilocks",
-                "stark/fri/poseidon2-goldilocks",
-                "stark/fri/sha256_goldilocks.v1",
-            ),
+            LinkedHashSet(verifierBackendRegistryTagsV1.keys),
         )
-
-        private val starkFriProductionBackends = setOf(
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
-        )
-
-        private val productionNativeHalo2PastaBackends =
-            VERIFIER_BACKEND_REGISTRY_LABELS_V1.filterTo(linkedSetOf()) {
-                it.startsWith("halo2/pasta/")
-            }
 
         private val productionClaimBackendFragments = listOf(
             "productionready", "productionhardened", "productionenabled",
@@ -78,11 +75,8 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
 
         /** Resolves one exact registry label to its low-level proof engine. */
         @JvmStatic
-        fun verifierBackendRegistryTagV1(label: String?): VerifyingKeyBackendTag? = when (label) {
-            in productionNativeHalo2PastaBackends, "halo2/ipa" -> HALO2_IPA_PASTA
-            in starkFriProductionBackends -> STARK
-            else -> null
-        }
+        fun verifierBackendRegistryTagV1(label: String?): VerifyingKeyBackendTag? =
+            verifierBackendRegistryTagsV1[label]
 
         /** Returns true only for an exact registry-v1 label. */
         @JvmStatic
@@ -129,9 +123,7 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             ) {
                 return false
             }
-            return backend == "halo2/ipa" ||
-                starkFriProductionBackends.contains(backend) ||
-                productionNativeHalo2PastaBackends.contains(backend)
+            return verifierBackendRegistryTagsV1.containsKey(backend)
         }
 
         /** Requires an exact production verifier label and returns it unchanged. */

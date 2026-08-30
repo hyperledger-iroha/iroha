@@ -2814,19 +2814,6 @@ impl ProductionLifecycleOwnerV1 {
                 .install_authenticated_genesis_body(authenticated_genesis)
                 .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         }
-        for (effect, pending, durable_receipt) in self
-            .registry
-            .registry()
-            .recovered_published_validate_retry_markers()
-        {
-            executor
-                .install_recovered_published_lifecycle_validate_retry_marker(
-                    effect,
-                    pending,
-                    durable_receipt,
-                )
-                .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
-        }
         if !body_store
             .instance_identity()
             .same_instance(&body_store_identity)

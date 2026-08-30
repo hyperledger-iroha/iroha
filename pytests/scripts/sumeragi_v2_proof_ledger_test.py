@@ -9004,6 +9004,22 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
         ),
         (
             "begin_fetch",
+            """                    && !fetch_consumer_rebind)
+""",
+            """                    && false)
+""",
+            "authenticated genesis Fetch rediscovery or consumer rebind must preserve the exact immutable Store lineage",
+        ),
+        (
+            "begin_fetch",
+            """                if pending.consumer.is_some()
+""",
+            """                if false
+""",
+            "authenticated genesis Fetch rediscovery or consumer rebind must preserve the exact immutable Store lineage",
+        ),
+        (
+            "begin_fetch",
             """            pending.task = merged;
             pending.request_hash = request_hash;
             return Ok(());""",
@@ -9013,6 +9029,24 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
                 capacity: self.config.max_pending_work,
             });""",
             "a successful same-owner Fetch authority upgrade must atomically install P/Q state and drain its retry",
+        ),
+        (
+            "install_view",
+            """                    RemoteProposalReplayStageV1::Store { .. }
+                        | RemoteProposalReplayStageV1::Stored { .. }
+""",
+            """                    RemoteProposalReplayStageV1::Stored { .. }
+""",
+            "certified-view installation must retain only the protected in-flight or stored Proposal replay owner",
+        ),
+        (
+            "install_view",
+            """                    AuthenticatedGenesisReplayStageV1::Store { .. }
+                        | AuthenticatedGenesisReplayStageV1::Stored { .. }
+""",
+            """                    AuthenticatedGenesisReplayStageV1::Stored { .. }
+""",
+            "certified-view installation must retain only the protected in-flight or stored authenticated-genesis replay owner",
         ),
         (
             "commit_fetch_completion",
@@ -9523,11 +9557,43 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
         (
             "resolve_body_pipeline_completion_owner",
             _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
-            """                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
-                    if retained_owner != *ownership.owner() {""",
-            """                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
-                    if false && retained_owner != *ownership.owner() {""",
-            "same or stale terminal retries must reject a foreign owner while an authority upgrade remains separately reviewed",
+            "BodyPipelineCompletionEvidence::BodyAvailable { .. }",
+            (
+                "BodyPipelineCompletionEvidence::BodyAvailable { .. } | "
+                "BodyPipelineCompletionEvidence::BodyStored { .. }"
+            ),
+            "only a stale ordinary Fetch may rejoin a foreign-owned BodyAvailable terminal while Store, Validate, and certified stale carriers remain owner-strict",
+        ),
+        (
+            "resolve_body_pipeline_completion_owner",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            "BodyPipelineCompletionEvidence::BodyAvailable { .. }",
+            (
+                "BodyPipelineCompletionEvidence::BodyAvailable { .. } | "
+                "BodyPipelineCompletionEvidence::LocalProposalReady { .. }"
+            ),
+            "only a stale ordinary Fetch may rejoin a foreign-owned BodyAvailable terminal while Store, Validate, and certified stale carriers remain owner-strict",
+        ),
+        (
+            "resolve_body_pipeline_completion_owner",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            "statement.phase().is_none() && statement.execution_commitment().is_none()",
+            "statement.phase().is_some() && statement.execution_commitment().is_none()",
+            "only a stale ordinary Fetch may rejoin a foreign-owned BodyAvailable terminal while Store, Validate, and certified stale carriers remain owner-strict",
+        ),
+        (
+            "resolve_body_pipeline_completion_owner",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            "statement.phase().is_none() && statement.execution_commitment().is_none()",
+            "statement.phase().is_none() && statement.execution_commitment().is_some()",
+            "only a stale ordinary Fetch may rejoin a foreign-owned BodyAvailable terminal while Store, Validate, and certified stale carriers remain owner-strict",
+        ),
+        (
+            "resolve_body_pipeline_completion_owner",
+            _RUNTIME_PRODUCTION_SERIALIZED_IMPL,
+            "if retained_owner != *ownership.owner() && !stale_ordinary_fetch_completion {",
+            "if false && retained_owner != *ownership.owner() && !stale_ordinary_fetch_completion {",
+            "only a stale ordinary Fetch may rejoin a foreign-owned BodyAvailable terminal while Store, Validate, and certified stale carriers remain owner-strict",
         ),
         ("body_pipeline_candidate_terminal_ownership_plan", _RUNTIME_PRODUCTION_SERIALIZED_IMPL, "if !ownership.exactly_binds_adapter_effect(effect) {", "if false && !ownership.exactly_binds_adapter_effect(effect) {", "body-terminal lookup must select exactly one authorized live or deferred owner without committing it"),
         (
@@ -21408,7 +21474,7 @@ def test_effect_capacity_semantics_survive_pending_digest_refresh(
             "an inexact unpublished retry must retain the exact incumbent lifecycle owner and effective authority",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "crates/iroha_core/src/sumeragi/tests/v2_runtime_main_00.rs",
             "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner",
             None,
             "assert_eq!(retry, rebound_reservation);",
@@ -21422,6 +21488,79 @@ def test_effect_capacity_semantics_survive_pending_digest_refresh(
             "if !retired_completion {",
             "if retired_completion {",
             "pending Fetch retirement must release its token or restored stage-7 parent before local ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "install_view",
+            None,
+            "        let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));",
+            """        self.durable_validate_retry_seals
+            .retain(|_, _| false);
+        let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));""",
+            "certified-view installation must leave every durable Validate retry authority untouched",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "install_view",
+            None,
+            "        let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));",
+            """        self.published_lifecycle_validate_retry_markers
+            .retain(|_, _| false);
+        let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));""",
+            "certified-view installation must leave every published lifecycle Validate retry authority untouched",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "reconcile_protected_lock",
+            None,
+            "        self.ready_body_bytes = accounting.ready_after;",
+            """        self.durable_validate_retry_seals
+            .retain(|_, _| false);
+        self.ready_body_bytes = accounting.ready_after;""",
+            "protected-lock reconciliation must leave every durable Validate retry authority untouched",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "reconcile_protected_lock",
+            None,
+            "        self.ready_body_bytes = accounting.ready_after;",
+            """        self.published_lifecycle_validate_retry_markers
+            .retain(|_, _| false);
+        self.ready_body_bytes = accounting.ready_after;""",
+            "protected-lock reconciliation must leave every published lifecycle Validate retry authority untouched",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "retain_terminal_validate_retry_tombstone",
+            None,
+            "            Some(None) => Ok(()),",
+            """            Some(None) => {
+                self.durable_validate_retry_seals.remove(&key);
+                Ok(())
+            },""",
+            "terminal Validate retry tombstone helper must not remove its unbound retry authority",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "retain_terminal_validate_retry_tombstone",
+            None,
+            """            Some(Some(_)) => Err(self.close(
+                EffectExecutorError::Contract(
+                    "terminal Validate admission retained an ordinal-bound live retry authority"
+                        .to_owned(),
+                ),
+                services,
+            )),""",
+            "            Some(Some(_)) => Ok(()),",
+            "terminal Validate retry tombstone helper must fail closed unless the exact seal is unbound",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "settle_pending_durable_validate_admissions",
+            None,
+            "                    self.retain_terminal_validate_retry_tombstone(key, services)?;",
+            "                    self.durable_validate_retry_seals.remove(&key);",
+            "returned terminal Validate admission must retain its exact unbound retry tombstone",
         ),
         (
             "crates/iroha_core/src/sumeragi/tests/v2_effects_main_01.rs",
@@ -21478,6 +21617,188 @@ def test_effect_capacity_lifecycle_semantics_survive_pending_digest_refresh(
     module._EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256[item_name] = (
         module._rust_item_token_sha256(mutated_items[0])
     )
+
+    errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "item_name", "seal_key", "old", "new", "expected_error"),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "pending_work",
+            "pending_work",
+            ".and_then(|total| total.checked_add(self.pending_durable_validate_admissions.len()))",
+            ".and_then(|total| total.checked_add(0))",
+            "pending_work must remain the exact executable and service-work count",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "capacity_work",
+            "capacity_work",
+            ".checked_sub(self.pending_durable_validate_admissions.len())",
+            ".checked_sub(0)",
+            "capacity_work must replace paired pending Validate work with the complete retry-authority count",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "validate_retry_authority_count",
+            "validate_retry_authority_count",
+            ".all(|key| self.durable_validate_retry_seals.contains_key(key))",
+            ".all(|key| !self.durable_validate_retry_seals.contains_key(key))",
+            "every pending Validate admission must be paired with a durable retry seal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "validate_retry_authority_count",
+            "validate_retry_authority_count",
+            ".checked_add(self.published_lifecycle_validate_retry_markers.len())",
+            ".checked_add(0)",
+            "the capacity count must include both retry-authority catalogs without eviction",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "release_validate_retry_lifecycle_ordinal",
+            "release_validate_retry_lifecycle_ordinal",
+            "self.protected_decision == Some(owner.decision)",
+            "true",
+            "selected Validate release must authenticate the protected Decision, certificate, and durable receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "release_validate_retry_lifecycle_ordinal",
+            "release_validate_retry_lifecycle_ordinal",
+            "self.decision_body_drained && !exact_live_apply_owns_selected_body",
+            "self.decision_body_drained",
+            "drained Decision cleanup must retain only the exact selected live-Apply tombstone",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "absorb",
+            "recovered_absorb",
+            "if projected_work >= self.executor.config.max_pending_work {",
+            "if false && projected_work >= self.executor.config.max_pending_work {",
+            "cold census absorption must backpressure before adding a new recovered retry authority",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "prepare_published_lifecycle_validate_retry_marker",
+            "prepare_published_lifecycle_validate_retry_marker",
+            "        self.ensure_pending_slot()?;\n        Ok(PreparedPublishedLifecycleValidateRetryMarkerV1 {",
+            "        let _capacity = self.capacity_work();\n        Ok(PreparedPublishedLifecycleValidateRetryMarkerV1 {",
+            "published Validate marker preparation must reserve capacity before exposing its publication token",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "validate_body",
+            "validate_body",
+            "        self.ensure_pending_slot()?;\n        if self.authenticated_genesis_replay.contains_key(&key)",
+            "        let _capacity = self.capacity_work();\n        if self.authenticated_genesis_replay.contains_key(&key)",
+            "fresh live Validate must check every existing retry owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "status",
+            "status",
+            "pending_validations: self.validate_retry_authority_count()",
+            "pending_validations: self.pending_durable_validate_admissions.len()",
+            "status must report every capacity-bearing Validate retry authority",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "can_admit_local_proposal",
+            "can_admit_local_proposal",
+            "self.capacity_work() < self.config.max_pending_work",
+            "self.pending_work() < self.config.max_pending_work",
+            "local Proposal admission must use the retry-authority capacity projection",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "begin_fetch",
+            "begin_fetch",
+            "if self.capacity_work() > self.config.max_pending_work {",
+            "if self.pending_work() > self.config.max_pending_work {",
+            "FetchBody capacity checks must count retained Validate retry authorities",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "ensure_pending_slot",
+            "ensure_pending_slot",
+            "if self.capacity_work() >= self.config.max_pending_work {",
+            "if self.pending_work() >= self.config.max_pending_work {",
+            "ordinary pending admission must use the retry-authority capacity projection",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "ensure_signature_slot",
+            "ensure_signature_slot",
+            "let pending_work = self.capacity_work();",
+            "let pending_work = self.pending_work();",
+            "signature admission and preemption must use the retry-authority capacity projection",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "retain_effect_batch_at_frontier",
+            "retain_effect_batch_at_frontier",
+            "        let mut validate_retry_seal_updates = BTreeMap::<",
+            "        let _full_catalog = self.durable_validate_retry_seals.clone();\n        let mut validate_retry_seal_updates = BTreeMap::<",
+            "must not clone the complete durable Validate retry seal catalog",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "retain_effect_batch_at_frontier",
+            "retain_effect_batch_at_frontier",
+            "        let mut published_validate_retry_marker_updates = BTreeMap::<",
+            "        let _full_catalog = self.published_lifecycle_validate_retry_markers.clone();\n        let mut published_validate_retry_marker_updates = BTreeMap::<",
+            "must not clone the complete published Validate retry marker catalog",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "retain_effect_batch_at_frontier",
+            "retain_effect_batch_at_frontier",
+            "                validate_retry_seal_updates.insert((*round, *subject), projected.seal);",
+            "                self.durable_validate_retry_seals.insert((*round, *subject), projected.seal.clone());\n                validate_retry_seal_updates.insert((*round, *subject), projected.seal);",
+            "durable Validate retry seal overlay must have exactly one installed-catalog commit after complete preflight",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs",
+            "validate_retry_tombstone_capacity_is_bounded_across_long_view_churn",
+            "validate_retry_tombstone_capacity_is_bounded_across_long_view_churn",
+            "for view in 1..=64 {",
+            "for view in 1..=1 {",
+            "the regression must exercise bounded authority across sustained view churn",
+        ),
+    ),
+)
+def test_validate_retry_capacity_semantics_survive_pending_digest_refresh(
+    tmp_path: Path,
+    relative: str,
+    item_name: str,
+    seal_key: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Capacity-bearing retry tombstones remain semantic after seal refresh."""
+
+    module = load_checker()
+    repo_root, _formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
+    source_path = repo_root / relative
+    mutate_rust_item_source(module, source_path, item_name, old, new)
+    mutated_items = module.rust_items(
+        source_path.read_text(encoding="utf-8"), item_name
+    )
+    assert len(mutated_items) == 1, item_name
+    digest = module._rust_item_token_sha256(mutated_items[0])
+    module._VALIDATE_RETRY_CAPACITY_RUST_ITEM_SHA256[seal_key] = digest
+    if item_name == "begin_fetch":
+        module._EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256[item_name] = digest
+    if item_name == "retain_effect_batch_at_frontier":
+        module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = digest
+        module._TOTAL_GATE_CALL_ITEM_SHA256["effect_candidate_retain"] = digest
+        module._REMOTE_PROPOSAL_REPLAY_ITEM_SHA256["executor_retain"] = digest
 
     errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
 

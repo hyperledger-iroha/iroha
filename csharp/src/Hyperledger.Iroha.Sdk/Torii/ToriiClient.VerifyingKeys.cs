@@ -577,9 +577,9 @@ public sealed partial class ToriiClient
         var exactKeyLength = keyBytes is null
             ? keyLength!.Value
             : checked((uint)keyBytes.Length);
-        var backendTag = backend.StartsWith("stark/", StringComparison.Ordinal)
-            ? (uint)VerifyingKeyBackendTag.Stark
-            : (uint)VerifyingKeyBackendTag.Halo2IpaPasta;
+        var backendTag = VerifierBackendRegistryLabels
+            .RequireBackendTag(backend, "verifying-key draft request backend")
+            .NoritoDiscriminant();
         var statusTag = status switch
         {
             null or "Active" => (byte)1,

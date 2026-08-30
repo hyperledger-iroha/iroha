@@ -30,8 +30,15 @@ impl ConcreteLifecycleWorkRegistry {
         }
         let mut logical_keys = std::collections::BTreeSet::new();
         for work in self.entries.values() {
-            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
-                continue;
+            let validate = match &work.kind {
+                ConcreteLifecycleWorkKind::DurableValidateBody(validate) => validate,
+                ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => {
+                    if !completion.validates(work.digest) {
+                        return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier);
+                    }
+                    &completion.incumbent
+                }
+                _ => continue,
             };
             let statement = validate
                 .pending
@@ -46,15 +53,41 @@ impl ConcreteLifecycleWorkRegistry {
         }
         let mut owners = BTreeMap::new();
         for (address, work) in &self.entries {
-            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
-                continue;
+            let (validate, carrier_matches_record) = match &work.kind {
+                ConcreteLifecycleWorkKind::DurableValidateBody(validate) => (
+                    validate,
+                    validate.matches_recovered_record(
+                        coordinator.active_context,
+                        coordinator
+                            .records
+                            .get(&address.ordinal)
+                            .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?,
+                        coordinator
+                            .durable_records
+                            .get(&address.ordinal)
+                            .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?,
+                        work.digest,
+                    ),
+                ),
+                ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => (
+                    &completion.incumbent,
+                    completion.matches_recovered_record(
+                        coordinator.active_context,
+                        coordinator
+                            .records
+                            .get(&address.ordinal)
+                            .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?,
+                        coordinator
+                            .durable_records
+                            .get(&address.ordinal)
+                            .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?,
+                        work.digest,
+                    ),
+                ),
+                _ => continue,
             };
             let record = coordinator
                 .records
-                .get(&address.ordinal)
-                .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?;
-            let metadata = coordinator
-                .durable_records
                 .get(&address.ordinal)
                 .ok_or(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier)?;
             let statement = validate
@@ -128,12 +161,7 @@ impl ConcreteLifecycleWorkRegistry {
                 || coordinator.owner_index.get(&record.owner.causal_root()) != Some(&record.owner)
                 || !coordinator.ready_index.contains(&record.ordinal)
                 || !work.validates_at(*address)
-                || !validate.matches_recovered_record(
-                    coordinator.active_context,
-                    record,
-                    metadata,
-                    work.digest,
-                )
+                || !carrier_matches_record
             {
                 return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier);
             }
@@ -150,6 +178,7 @@ impl ConcreteLifecycleWorkRegistry {
                 effect: validate.effect.clone(),
                 durable_receipt: validate.durable_receipt.clone(),
                 binding,
+                lifecycle_ordinal: address.ordinal,
             };
             if owners.insert(key, owner).is_some() {
                 return Err(RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers);

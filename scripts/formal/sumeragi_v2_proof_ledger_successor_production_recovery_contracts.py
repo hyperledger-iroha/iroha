@@ -413,8 +413,10 @@ def _successor_production_recovery_source_fidelity_errors(
                 if launch_successor_owner is not None
                 else "",
                 (
-                    "let Self { owner, retirement } = self",
-                    "let launched = owner.launch(inputs)?",
+                    "let Self { owner, mut retirement, } = self",
+                    "let mut launched = owner.launch(inputs)?",
+                    "launched.reauthenticate_recovered_complete_tip_successor(&mut retirement)",
+                    ".map_err(|_| super::launch::ProductionLifecycleLaunchErrorV1::InvalidOwner)?",
                     "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched, retirement, }",
                 ),
             )
@@ -455,8 +457,10 @@ def _successor_production_recovery_source_fidelity_errors(
                     "struct BoundRecoveredCompleteTipSuccessorOwnerV1 { owner: ProductionLifecycleOwnerV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
                     "impl BoundRecoveredCompleteTipSuccessorOwnerV1",
                     "fn launch( self, inputs: super::launch::ProductionLifecycleLaunchInputsV1, )",
-                    "let Self { owner, retirement } = self",
-                    "let launched = owner.launch(inputs)?",
+                    "let Self { owner, mut retirement, } = self",
+                    "let mut launched = owner.launch(inputs)?",
+                    "launched.reauthenticate_recovered_complete_tip_successor(&mut retirement)",
+                    ".map_err(|_| super::launch::ProductionLifecycleLaunchErrorV1::InvalidOwner)?",
                     "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched, retirement, }",
                     "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: Box<super::launch::LaunchedProductionLifecycleV1>, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
                     "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
@@ -1554,14 +1558,14 @@ self.io.is_some()
                 "activated runner readiness retirement",
                 activated_runner_authority,
                 "ingress_ready.store(false, Ordering::Release)",
-                2,
+                3,
             )
             require_token_count(
                 runner_dependency_path,
                 "activated runner ingress retirement",
                 activated_runner_authority,
                 "block_ingress.close()",
-                2,
+                3,
             )
             active_runner_borrow = region(
                 runner_dependency_path,
@@ -3221,10 +3225,15 @@ self.io.is_some()
                 "staged recovered Broadcast registry binding",
                 single_broadcast_bind,
                 (
+                    "exact_staged_recovered_lifecycle_broadcast_address(",
+                    "Ok(BoundRecoveredLifecycleSignBroadcastSuccessor",
+                    "pub(super) fn exact_staged_recovered_lifecycle_broadcast_address(",
                     "coordinator.records.get(&child_ordinal)",
                     "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-                    "self.registry.entries.contains_key(&broadcast_address)",
-                    ".validates_at(&self.verified, broadcast_address, child_digest)",
+                    "broadcast.matches_current_ready_record(",
+                    ".validates_at(verified, broadcast_address, child_digest)",
+                    "registry.entries.contains_key(&broadcast_address)",
+                    "Ok(broadcast_address)",
                 ),
             )
             single_broadcast_transition = region(
@@ -3274,7 +3283,7 @@ self.io.is_some()
                 "adjacent fresh Certified-Serve pair after a shared gap",
                 fresh_serve_pair,
                 (
-                    "current.high_water >= serve",
+                    "serve <= current.high_water",
                     "serve.checked_add(1) != Some(producer)",
                     "producer != staged.high_water",
                 ),
@@ -4120,7 +4129,7 @@ self.io.is_some()
                 selector_source,
                 "queue-owned recovered Decision Fetch selector",
                 "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-                "/// Decide whether an already selected exact cut is the recovered Fetch owner.",
+                "/// Classify the exact selected certified-response occurrence without mutation.",
             )
             require_order(
                 selector_path,
@@ -4370,10 +4379,14 @@ self.io.is_some()
                 "staged recovered Store registry binding",
                 single_store_bind,
                 (
+                    "exact_staged_recovered_decision_store_address(",
+                    "self.registry.entries.contains_key(&store_address)",
+                    "Ok(BoundRecoveredDecisionFetchStoreSuccessor",
+                    "pub(super) fn exact_staged_recovered_decision_store_address(",
                     "coordinator.records.get(&child_ordinal)",
                     "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-                    "self.registry.entries.contains_key(&store_address)",
-                    ".validates_at(coordinator.active_context, store_address, child_digest)",
+                    "store.matches_current_ready_record(",
+                    "Ok(store_address)",
                 ),
             )
             single_store_transition = region(
@@ -4870,8 +4883,12 @@ self.io.is_some()
                 "runner lifecycle finalization preflight",
                 lifecycle_run_inner_source,
                 (
-                    "if !ready_to_finish || producer_turn.is_some()",
+                    "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
+                    "if apply_terminal_settled && !ready_to_finish",
+                    "let producer_turn = if apply_terminal_settled",
+                    "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
                     "schedule_local_proposal(",
+                    "claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner))",
                     "let finalization_ready = ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner)",
                     "let rollover_ready = if finalization_ready",
                     "preflight_finalized_lane_rollover(",

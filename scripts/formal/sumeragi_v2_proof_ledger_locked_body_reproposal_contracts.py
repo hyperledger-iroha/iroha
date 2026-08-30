@@ -921,8 +921,8 @@ self.context_id == context_id
         """
 let lock_outcome = lane_work.mark_global_body_locked(locked_round, locked)?;
 if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some() {
-    services
-        .request_locked_candidate(executor.current_tag(), locked_round, locked)
+        services
+        .request_locked_candidate(executor.current_tag(), locked_round, locked,)
         .map_err(V2RunnerError::Service)?;
 }
 """,

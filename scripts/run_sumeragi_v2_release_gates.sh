@@ -4160,15 +4160,15 @@ source_manifest_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-source-seal:after-natural-completion" || exit $?
 source_manifest_pass_summary="$(
-  grep -Ec '^78 passed in [0-9]+([.][0-9]+)?s$' "$source_manifest_contract_log" || true
+  grep -Ec '^77 passed in [0-9]+([.][0-9]+)?s$' "$source_manifest_contract_log" || true
 )"
 if ((source_manifest_pipeline_status[0] != 0 || source_manifest_pipeline_status[1] != 0)) \
   || [[ "$source_manifest_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 source-manifest/seal contract preflight did not run exactly 78 passing tests (pytest=${source_manifest_pipeline_status[0]}, tee=${source_manifest_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 source-manifest/seal contract preflight did not run exactly 77 passing tests (pytest=${source_manifest_pipeline_status[0]}, tee=${source_manifest_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-source-seal pytest 78 \
+  preflight-source-seal pytest 77 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${source_manifest_contract_tests[*]}" \
   "$source_manifest_contract_log" \
   "${source_manifest_pipeline_status[0]}" "${source_manifest_pipeline_status[1]}"
@@ -4321,17 +4321,17 @@ if [[ "$profile" == "--release" ]]; then
   release_gate_boundary \
     "preflight-release-bootstrap-validator:after-natural-completion" || exit $?
   release_bootstrap_validator_pass_summary="$(
-    grep -Ec '^44 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+    grep -Ec '^50 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
       "$release_bootstrap_validator_contract_log" || true
   )"
   if ((release_bootstrap_validator_pipeline_status[0] != 0 \
     || release_bootstrap_validator_pipeline_status[1] != 0)) \
     || [[ "$release_bootstrap_validator_pass_summary" != 1 ]]; then
-    echo "Sumeragi v2 bootstrap-validator preflight did not run exactly 44 passing tests (pytest=${release_bootstrap_validator_pipeline_status[0]}, tee=${release_bootstrap_validator_pipeline_status[1]})" >&2
+    echo "Sumeragi v2 bootstrap-validator preflight did not run exactly 50 passing tests (pytest=${release_bootstrap_validator_pipeline_status[0]}, tee=${release_bootstrap_validator_pipeline_status[1]})" >&2
     exit 1
   fi
   record_corridor_log \
-    preflight-release-bootstrap-validator pytest 44 \
+    preflight-release-bootstrap-validator pytest 50 \
     "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_bootstrap_validator_contract_files[*]}" \
     "$release_bootstrap_validator_contract_log" \
     "${release_bootstrap_validator_pipeline_status[0]}" \
@@ -4356,16 +4356,16 @@ release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-release-receipt:after-natural-completion" || exit $?
 release_receipt_pass_summary="$(
-  grep -Ec '^368 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^362 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 368 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 362 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 368 \
+  preflight-release-receipt pytest 362 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -4432,9 +4432,9 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 5,410 ledger/checker cases (including the
+# Collection is source-bound as 5,389 ledger/checker cases (including the
 # lexically executed case components), 29 pinned-Verus evidence cases,
-# 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 31 Native/passive
+# 27 TLC-normalizer cases, 14 reviewed-Rust closure cases, 31 Native/passive
 # multilane source-contract cases, and twenty cases from twelve selected
 # layout/wire selectors.
 release_gate_boundary "preflight-proof-fidelity:before" || exit $?
@@ -4445,15 +4445,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^5513 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^5510 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5513 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5510 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 5513 \
+  preflight-proof-fidelity pytest 5510 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"

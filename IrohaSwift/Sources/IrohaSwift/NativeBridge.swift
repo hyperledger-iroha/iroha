@@ -89,9 +89,9 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64_x86_64": "7285ee003667d5bdb321e368aae93bbfd404e1a993dc72904782c68b59bc22d7",
-        "ios-arm64": "85c8ac5eae22aef281a89a2c834648a4cefa0e8420fe1ac0b1280aef004d8b62",
-        "ios-arm64_x86_64-simulator": "ac8b14359a02dcb0b834e3c2f44477ada18e5d322eb55c19ee9dcbe1ca474bf6"
+        "macos-arm64_x86_64": "b7e01bbfcbda8aca73935c14238a1e05705db39895cd055e806a3bf434951782",
+        "ios-arm64": "16158c398009979ee9fc33b86ec16b22486abec764796a2c8f91668a9a1439be",
+        "ios-arm64_x86_64-simulator": "f10357029516ec39498d0b4dca13a4e2bbbfd6b74505de0f3057ac509b0be1c6"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
@@ -120,6 +120,16 @@ enum NoritoBridgeLoader {
         "connect_norito_offline_cash_artifact_cancel_v1",
         "connect_norito_offline_cash_artifact_set_install_v1",
         "connect_norito_offline_cash_artifact_set_uninstall_v1",
+        "connect_norito_offline_cash_verification_session_open_v1",
+        "connect_norito_offline_cash_verification_session_open_bound_v1",
+        "connect_norito_offline_cash_verification_session_verify_payment_v1",
+        "connect_norito_offline_cash_verification_session_verify_acknowledgement_v1",
+        "connect_norito_offline_cash_verification_session_state_v1",
+        "connect_norito_offline_cash_verification_session_close_v1",
+        "connect_norito_offline_cash_wallet_runtime_session_open_v1",
+        "connect_norito_offline_cash_wallet_runtime_session_status_v1",
+        "connect_norito_offline_cash_wallet_runtime_session_attempt_v1",
+        "connect_norito_offline_cash_wallet_runtime_session_close_v1",
         "connect_norito_offline_cash_wallet_session_open_v1",
         "connect_norito_offline_cash_wallet_session_open_bound_v1",
         "connect_norito_offline_cash_wallet_session_accept_payment_v1",

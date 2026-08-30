@@ -2646,7 +2646,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         ("Ordinary(LifecycleCurrentRunnerTurn<'cursor>)", 1),
         ("Ready(ProductionLifecycleReadyCompletionTurnV1<'cursor>)", 1),
         ("Selected(ProductionLifecycleIngressSelectionV1)", 1),
-        ("Ordinary(ProductionPreparedOrdinaryIngressTurnV1)", 1),
+        ("Ordinary(ProductionPreparedOrdinaryIngressTurnV1<'cursor>)", 1),
     ):
         observed = _token_sequence_count(outcome_tokens, rust_code_tokens(token))
         if observed != count:
@@ -4167,11 +4167,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         apply_yield_barrier = None
     else:
         apply_yield_barrier = apply_yield_barriers[0]
-    reject_tokens(
+    require_tokens(
         "height_driver",
         apply_yield_barrier,
-        "durable post-Apply rollover barrier does not force a completion yield",
-        ("Self::ApplyTerminalSettled",),
+        "durable post-Apply rollover barrier reaches finalization without a completion yield",
+        ("!matches!(self, Self::Eligible | Self::ApplyTerminalSettled)",),
     )
     apply_runtime_barrier = item("height_driver", "blocks_runtime")
     require_tokens(
@@ -5481,7 +5481,7 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         pending_owner,
         "exact recovered-Apply owner census and ordinal permit retention",
         (
-            "self.registry.exact_recovered_decision_apply_ready_ordinal(&self.coordinator)",
+            "self.registry.registry().exact_recovered_decision_apply_ready_ordinal(&self.coordinator)",
             ".ok_or(",
             "RecoveredPendingKuraApplyCarrierPermitV1 {",
             "lifecycle_ordinal,",

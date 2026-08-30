@@ -1169,7 +1169,12 @@ pub(crate) struct EffectExecutorStatus {
     pub pending_fetches: usize,
     /// Outstanding exact-body persistence operations.
     pub pending_stores: usize,
-    /// Outstanding deterministic-validation operations.
+    /// Bounded Validate admission/retry authority slots.
+    ///
+    /// A pending admission and its paired retry seal consume one shared slot.
+    /// After lifecycle settlement, the retained seal or published marker keeps
+    /// that slot until Decision cleanup or height rollover so an authenticated
+    /// delayed retry never depends on an unaccounted, unbounded tombstone.
     pub pending_validations: usize,
     /// Signed/diagnostic outputs awaiting lifecycle-owned execution.
     pub pending_outputs: usize,
@@ -2864,10 +2869,9 @@ pub(crate) trait EffectRuntime {
         None
     }
     /// Whether any live reducer clock has been armed for this height.
-    /// Synthetic runtimes model cold recovery unless they opt into live clocks.
-    fn lifecycle_live_clocks_are_armed(&self) -> bool {
-        false
-    }
+    /// Every runtime must state this explicitly: a silent default could make a
+    /// production implementation misclassify live execution as cold recovery.
+    fn lifecycle_live_clocks_are_armed(&self) -> bool;
     /// Return the reducer incarnation which currently owns effects.
     fn authoritative_tag(&self) -> Option<EventTag>;
     /// Read the reducer tag, durable lock, and Decision from one serialized
@@ -3797,6 +3801,32 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         construction.complete();
         Ok((executor, body_store))
     }
+    /// Open an executor with an explicitly projected cold retry census for
+    /// focused recovery tests through the same consuming production boundary.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn open_with_body_store_and_validate_retry_census_for_test(
+        runtime: SerializedV2Runtime,
+        body_store: V2BodyStore,
+        recovered_validate_retry_census: super::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1,
+        context: wire::HeightContext,
+        requester: PeerId,
+        local_validator: Option<wire::ValidatorIndex>,
+        output_guard: Arc<ConsensusOutputGuard>,
+        config: EffectQueueConfig,
+    ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
+        let (executor, body_store) = Self::open_with_body_store(
+            runtime,
+            body_store,
+            recovered_validate_retry_census,
+            context,
+            requester,
+            local_validator,
+            output_guard,
+            config,
+        )?;
+        Ok((executor, body_store))
+    }
     /// Preview one recovered signature and authenticate its next body in one borrow.
     ///
     /// The runtime borrow retained by the adapter preview is disjoint from the
@@ -3943,6 +3973,28 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError<'registry>,
     > {
         let mut execution = execution;
+        let Some(key) = execution.validate_retry_key() else {
+            return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
+                execution,
+                AdapterError::ReadyDurableValidatePublicationContractViolation,
+            ));
+        };
+        let Some((authenticated_manifest, durable_receipt)) =
+            self.recovered_bodies.get(&key).cloned()
+        else {
+            return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
+                execution,
+                AdapterError::ReadyDurableValidatePublicationContractViolation,
+            ));
+        };
+        if self.durable_bodies.get(&key) != Some(&durable_receipt)
+            || !execution.bind_authenticated_manifest(&authenticated_manifest, &durable_receipt)
+        {
+            return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
+                execution,
+                AdapterError::ReadyDurableValidatePublicationContractViolation,
+            ));
+        }
         let validated_catalog_authority = execution.take_validated_catalog_authority();
         if matches!(
             execution.outcome_kind(),
@@ -4243,12 +4295,22 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// durably resolves without a live Apply child.
     pub(in crate::sumeragi) fn release_live_lifecycle_validate_successor(
         &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
         ordinal: u128,
     ) -> Result<bool, EffectExecutorError> {
         let Some(owner) = self.live_lifecycle_validate_successor.take() else {
             return Ok(false);
         };
-        if owner.dispatch_key.lifecycle_ordinal() != ordinal {
+        let ordinal_matches = owner.dispatch_key.lifecycle_ordinal() == ordinal;
+        let key_matches = (owner.round, owner.subject) == key;
+        if !ordinal_matches && !key_matches {
+            // A durable Decision may leave several ordinal-bound Validate rows
+            // ready to settle. Losing rows must not consume or conflict with
+            // the selected row's preliminary Apply successor.
+            self.live_lifecycle_validate_successor = Some(owner);
+            return Ok(false);
+        }
+        if ordinal_matches != key_matches {
             self.live_lifecycle_validate_successor = Some(owner);
             return Err(EffectExecutorError::Contract(
                 "resolved Validate changed its preliminary retransmit owner".to_owned(),
@@ -4376,8 +4438,8 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     services,
                 ));
             }
-            self.retained_effect_batch = None;
             self.live_lifecycle_validate_successor = None;
+            self.retained_effect_batch = None;
         }
         if self.protected_decision != Some(decision)
             || !self.decision_body_drained
@@ -5578,7 +5640,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             && !self.output_guard.restart_required()
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
-            && self.pending_work() < self.config.max_pending_work
+            && self.capacity_work() < self.config.max_pending_work
     }
     /// Exact runtime FIFO capacity currently available to trusted completions.
     pub(crate) fn remaining_completion_capacity(&self) -> usize {
@@ -5967,10 +6029,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .retain(|key, _| !superseded_keys.contains(key));
         self.authenticated_genesis_replay
             .retain(|key, _| !superseded_keys.contains(key));
-        self.durable_validate_retry_seals
-            .retain(|key, _| !superseded_keys.contains(key));
-        self.published_lifecycle_validate_retry_markers
-            .retain(|key, _| !superseded_keys.contains(key));
+        // Lock replacement may overtake an already-queued Validate just like
+        // EnterView. Retiring the superseded body pipeline does not prove that
+        // every reducer carrier naming its durable body has been consumed.
+        // Preserve both live retry rows and resolved idempotence tombstones;
+        // Decision cleanup is the first boundary that can retire losing
+        // tombstones, and height rollover consumes the selected remainder.
         if retire_retained {
             self.retained_locked_body = None;
         }
@@ -6939,9 +7003,19 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let mut retire_parked_fetch_lineages = BTreeSet::new();
         let mut retire_parked_body_stage_lineages = BTreeSet::new();
         let mut runtime_terminal_commits = Vec::new();
-        let mut retained_validate_retry_seals = self.durable_validate_retry_seals.clone();
-        let mut retained_published_validate_retry_markers =
-            self.published_lifecycle_validate_retry_markers.clone();
+        // Retry projection is transactional, but cloning the complete
+        // height-local tombstone catalogs for every reducer macro-step would
+        // turn unrelated traffic into O(retained tombstones) work. Stage only
+        // keys touched by this bounded batch and publish the overlay after all
+        // effects and runtime terminal preflights succeed.
+        let mut validate_retry_seal_updates = BTreeMap::<
+            (wire::ConsensusRound, wire::BlockSubject),
+            DurableValidateRetrySealV1,
+        >::new();
+        let mut published_validate_retry_marker_updates = BTreeMap::<
+            (wire::ConsensusRound, wire::BlockSubject),
+            PublishedLifecycleValidateRetryMarkerV1,
+        >::new();
         let mut candidate_position = 0u8;
         for (index, (effect, evidence)) in effects.iter().zip(&mut ownership).enumerate() {
             let candidate = production_adapter_effect_candidate_semantic_identity(effect);
@@ -6958,8 +7032,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })?;
             if let AdapterEffect::ValidateBody { round, subject, .. } = effect
-                && let Some(marker) = retained_published_validate_retry_markers
+                && let Some(marker) = published_validate_retry_marker_updates
                     .get(&(*round, *subject))
+                    .or_else(|| {
+                        self.published_lifecycle_validate_retry_markers
+                            .get(&(*round, *subject))
+                    })
                     .cloned()
             {
                 // The direct lifecycle transaction already published the
@@ -7013,13 +7091,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "published lifecycle Validate retry failed candidate refinement".to_owned(),
                     )
                 })?;
-                retained_published_validate_retry_markers.insert((*round, *subject), projected);
+                published_validate_retry_marker_updates.insert((*round, *subject), projected);
                 retain_effect.push(false);
                 continue;
             }
             if let AdapterEffect::ValidateBody { round, subject, .. } = effect
-                && let Some(seal) = retained_validate_retry_seals
+                && let Some(seal) = validate_retry_seal_updates
                     .get(&(*round, *subject))
+                    .or_else(|| self.durable_validate_retry_seals.get(&(*round, *subject)))
                     .cloned()
             {
                 // The move-only Validate owner has already crossed (or is
@@ -7084,9 +7163,23 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 })?;
                 *evidence = projected.ownership.clone();
                 retained_candidate_owners.insert(identity, projected.ownership.clone());
-                retained_validate_retry_seals.insert((*round, *subject), projected.seal);
+                validate_retry_seal_updates.insert((*round, *subject), projected.seal);
                 retain_effect.push(false);
                 continue;
+            }
+            if let AdapterEffect::StoreBody { round, subject, .. } = effect
+                && let Some(incumbent) = self.stored_replay_incumbent_store_ownership(
+                    (*round, *subject),
+                    effect,
+                    evidence,
+                )?
+            {
+                // A durable signed-Proposal/genesis replay is the move-only
+                // proof that this fresh carrier is the later consumer of the
+                // same physical Store. Re-adopt its immutable owner before a
+                // queued BodyStored terminal applies the stale-authority
+                // owner check.
+                *evidence = incumbent;
             }
             let mut candidate_semantic_identity = evidence.candidate_semantic_identity();
             let mut exact_incumbent = candidate_semantic_identity
@@ -7395,8 +7488,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .commit_body_pipeline_candidate_terminals(&terminals)
                 .map_err(EffectExecutorError::Runtime)?;
         }
-        self.durable_validate_retry_seals = retained_validate_retry_seals;
-        self.published_lifecycle_validate_retry_markers = retained_published_validate_retry_markers;
+        for (key, seal) in validate_retry_seal_updates {
+            let previous = self.durable_validate_retry_seals.insert(key, seal);
+            debug_assert!(previous.is_some());
+        }
+        for (key, marker) in published_validate_retry_marker_updates {
+            let previous = self
+                .published_lifecycle_validate_retry_markers
+                .insert(key, marker);
+            debug_assert!(previous.is_some());
+        }
         #[cfg(test)]
         if let Some(trace_root) = recovered_validate_retry_trace_root {
             self.last_recovered_validate_retry_trace_root = Some(trace_root);
@@ -9883,7 +9984,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             pending_candidate_loads: 0,
             pending_fetches: self.pending_fetches.len(),
             pending_stores: self.pending_stores.len(),
-            pending_validations: self.pending_durable_validate_admissions.len(),
+            pending_validations: self.validate_retry_authority_count(),
             pending_outputs: self.pending_lifecycle_output_admissions.len(),
             deferred_application_merge_work,
             pending_applications: self.pending_applications.len(),
@@ -9957,27 +10058,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .collect()
     }
 
-    /// Drive the production Decision cleanup over recovered retry seals in tests.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn reconcile_recovered_validate_retry_decision_for_test<
-        S: V2EffectServices,
-    >(
-        &mut self,
-        decision: DurableDecision,
-        drain_decision_body: bool,
-        services: &mut S,
-    ) -> Result<(), EffectExecutorError> {
-        self.reconcile_decision_work(decision, drain_decision_body, services)
-    }
-
     /// Capture only stable recovered-owner and monotonic-frontier identity.
     #[cfg(test)]
     pub(in crate::sumeragi) fn recovered_durable_validate_retry_snapshot_for_test(
         &self,
         key: (wire::ConsensusRound, wire::BlockSubject),
     ) -> Option<RecoveredDurableValidateRetrySnapshotV1> {
-        let DurableValidateRetrySealV1::Recovered { owner, frontier } =
-            self.durable_validate_retry_seals.get(&key)?
+        let DurableValidateRetrySealV1::Recovered {
+            owner, frontier, ..
+        } = self.durable_validate_retry_seals.get(&key)?
         else {
             return None;
         };
@@ -10728,8 +10817,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         let key = (round, subject);
         if let Some(stage) = self.authenticated_genesis_replay.get(&key) {
+            let fetch_consumer_rebind =
+                stage.exactly_authenticates_fetch_consumer_rebind(&incoming_effect, &ownership);
             if proposal_replay.is_some()
-                || !stage.exactly_authenticates_fetch_rediscovery(&incoming_effect)
+                || (!stage.exactly_authenticates_fetch_rediscovery(&incoming_effect)
+                    && !fetch_consumer_rebind)
             {
                 return Err(EffectExecutorError::Contract(
                     "certified genesis Fetch rediscovery changed its authenticated origin"
@@ -10741,6 +10833,52 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "certified genesis Fetch rediscovery observed transient Store admission"
                         .to_owned(),
                 ));
+            }
+            if fetch_consumer_rebind {
+                let Some(work_id) = stage.store_work_id() else {
+                    return Err(EffectExecutorError::Contract(
+                        "authenticated-genesis Fetch consumer rebind lost its Store work ID"
+                            .to_owned(),
+                    ));
+                };
+                let pending = self.pending_stores.get(&work_id).ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "authenticated-genesis Fetch consumer rebind lost its Store task"
+                            .to_owned(),
+                    )
+                })?;
+                let store_effect = AdapterEffect::StoreBody {
+                    tag: pending.task.tag(),
+                    round,
+                    subject,
+                };
+                let exact_store_task = matches!(
+                    stage,
+                    AuthenticatedGenesisReplayStageV1::Store { replay, .. }
+                        if replay.exactly_matches_retry(
+                            &store_effect,
+                            pending.task.ownership(),
+                        )
+                );
+                if pending.consumer.is_some()
+                    || (pending.task.manifest.round, pending.task.manifest.subject) != key
+                    || !exact_store_task
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "authenticated-genesis Fetch consumer rebind changed its immutable Store"
+                            .to_owned(),
+                    ));
+                }
+                let store_manifest = pending.task.manifest.clone();
+                let owner_plan = self.plan_body_pipeline_owner(tag, &store_manifest)?;
+                let reservation = self
+                    .runtime
+                    .reserve_body_available_with_owner(tag, store_manifest, &ownership)
+                    .map_err(runtime_enqueue_error)?;
+                self.runtime
+                    .commit_body_available(reservation)
+                    .map_err(runtime_enqueue_error)?;
+                self.commit_body_pipeline_owner(owner_plan);
             }
             return Ok(());
         }
@@ -11197,12 +11335,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.commit_remote_proposal_body_available_replay(key, proposal_replay);
             return Ok(());
         }
-        if self.pending_work() > self.config.max_pending_work {
+        if self.capacity_work() > self.config.max_pending_work {
             return Err(EffectExecutorError::Contract(
                 "pending effect work exceeded its configured capacity".to_owned(),
             ));
         }
-        if self.pending_work() == self.config.max_pending_work {
+        if self.capacity_work() == self.config.max_pending_work {
             // Retain this exact effect and lifecycle owner at the causal FIFO
             // head. Capacity release retries it directly; periodic producer
             // ticks may coalesce with it but may not replace its admission age.
@@ -11740,7 +11878,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
             }
             Some(RemoteProposalReplayStageV1::Store { replay, .. }) => {
-                if !replay.exactly_matches_retry(&effect, &ownership) {
+                if !replay.exactly_matches_retry(&effect, &ownership)
+                    && !replay.exactly_authenticates_consumer_rebind(&effect, &ownership)
+                {
                     return Err(EffectExecutorError::Contract(
                         "Proposal StoreBody retry changed its exact replay owner".to_owned(),
                     ));
@@ -12774,18 +12914,24 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 && *key == decision_body
                 && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
         });
-        // A consumed Validate owner leaves an inert idempotence tombstone, not
-        // live work. Decision makes every competing body permanently stale;
-        // keep only the selected body's tombstone until rollover, and none
-        // once terminal body cleanup begins.
-        if !drain_decision_body && let Some(seal) = projected_recovered_decision_seal {
+        // A resolved Validate owner may leave an inert idempotence tombstone,
+        // while an ordinal-bound seal still denotes a live registry row.
+        // Preserve every live row across Decision cleanup; exact lifecycle
+        // settlement releases it later and discards losing or drained rows.
+        // Only the selected ordinary-body tombstone may survive unbound.
+        if let Some(seal) = projected_recovered_decision_seal
+            && (!drain_decision_body || seal.lifecycle_ordinal().is_some())
+        {
             self.durable_validate_retry_seals
                 .insert(decision_body, seal);
         }
-        self.durable_validate_retry_seals
-            .retain(|key, _| !drain_decision_body && *key == decision_body);
+        self.durable_validate_retry_seals.retain(|key, seal| {
+            seal.lifecycle_ordinal().is_some() || (!drain_decision_body && *key == decision_body)
+        });
         self.published_lifecycle_validate_retry_markers
-            .retain(|key, _| !drain_decision_body && *key == decision_body);
+            .retain(|key, marker| {
+                marker.owns_live_lifecycle_row() || (!drain_decision_body && *key == decision_body)
+            });
         self.body_pipeline_owners.retain(|key, _| !retire_key(*key));
         self.ready_bodies.retain(|key, _| !retire_key(*key));
         if retire_retained {
@@ -13379,25 +13525,35 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             !tag.strictly_advances(owner.tag) || retained_apply_owners.contains(key)
         });
         // Unprotected Proposal families retire with the superseded view.
-        // Preserve only the protected body's already-fsynced Store lineage:
-        // its later Prepare/Commit Validate carrier must first adopt this
-        // incumbent causal root before consuming the exact Proposal replay.
-        // Earlier physical stages restart from the certified pipeline.
+        // Preserve the protected body's in-flight or already-fsynced Store
+        // lineage. The immutable Store task may complete after this view is
+        // installed; its later reducer consumer is authenticated separately
+        // and the original replay owner must survive through durability.
+        // Earlier acquisition stages restart from the certified pipeline.
         self.remote_proposal_replay.retain(|key, stage| {
             Some(*key) == protected_body
-                && matches!(stage, RemoteProposalReplayStageV1::Stored { .. })
+                && matches!(
+                    stage,
+                    RemoteProposalReplayStageV1::Store { .. }
+                        | RemoteProposalReplayStageV1::Stored { .. }
+                )
         });
         self.authenticated_genesis_replay.retain(|key, stage| {
             Some(*key) == protected_body
-                && matches!(stage, AuthenticatedGenesisReplayStageV1::Stored { .. })
+                && matches!(
+                    stage,
+                    AuthenticatedGenesisReplayStageV1::Store { .. }
+                        | AuthenticatedGenesisReplayStageV1::Stored { .. }
+                )
         });
-        // Retry seals are post-admission tombstones, so they own neither
-        // lifecycle capacity nor service work. Once the view advances, only
-        // the exact protected body can still emit a legitimate duplicate.
-        self.durable_validate_retry_seals
-            .retain(|key, _| Some(*key) == protected_body);
-        self.published_lifecycle_validate_retry_markers
-            .retain(|key, _| Some(*key) == protected_body);
+        // Retry authorities own no service work. EnterView can overtake an
+        // already-queued Validate for any durable body from the superseded
+        // view, including one which is not selected by the incoming TC. Keep
+        // both live rows and resolved tombstones across view cleanup so that
+        // delayed reducer work can still prove its immutable body owner.
+        // Decision cleanup is the first boundary that can retire losing
+        // tombstones; the per-height executor consumes the selected remainder
+        // at rollover.
         let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));
         self.runtime
             .reconcile_active_view_producer(tag, retain_local_producer)
@@ -13409,7 +13565,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
     fn ensure_pending_slot(&self) -> Result<(), EffectExecutorError> {
-        if self.pending_work() >= self.config.max_pending_work {
+        if self.capacity_work() >= self.config.max_pending_work {
             Err(EffectExecutorError::PendingWorkCapacity {
                 capacity: self.config.max_pending_work,
             })
@@ -13427,7 +13583,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &mut self,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
-        let pending_work = self.pending_work();
+        let pending_work = self.capacity_work();
         if pending_work < self.config.max_pending_work {
             return Ok(());
         }

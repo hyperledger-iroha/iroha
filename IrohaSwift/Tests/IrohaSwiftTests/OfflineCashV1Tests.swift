@@ -62,24 +62,24 @@ final class OfflineCashV1Tests: XCTestCase {
         )
     }
 
-    func testWalletSessionVocabularyDoesNotClaimDeviceCommit() {
+    func testVerificationSessionVocabularyDoesNotClaimDeviceCommit() {
         XCTAssertEqual(
             [
-                OfflineCashWalletSessionStateV1.unavailable,
-                .receiveRequestReady,
+                OfflineCashVerificationSessionStateV1.unavailable,
+                .requestVerified,
                 .paymentVerified,
                 .acknowledgementVerified,
             ].map(\.rawValue),
             [
                 "unavailable",
-                "receiveRequestReady",
+                "requestVerified",
                 "paymentVerified",
                 "acknowledgementVerified",
             ]
         )
         XCTAssertEqual(
             [
-                OfflineCashWalletSessionEventV1.paymentVerified,
+                OfflineCashVerificationSessionEventV1.paymentVerified,
                 .paymentVerificationReplay,
                 .acknowledgementVerified,
                 .acknowledgementVerificationReplay,
@@ -93,18 +93,75 @@ final class OfflineCashV1Tests: XCTestCase {
         )
     }
 
-    func testWalletSessionConstructionRequiresTypedNetworkAndAssetContext() {
+    func testVerificationSessionConstructionRequiresTypedNetworkAndAssetContext() {
         let initializer: (
             OfflineCashPaymentRequestV1,
             Data,
             Data,
             NetworkId,
             String
-        ) throws -> OfflineCashWalletSessionV1 = OfflineCashWalletSessionV1.init(
+        ) throws -> OfflineCashVerificationSessionV1 = OfflineCashVerificationSessionV1.init(
             request:expectedReleaseId:expectedArtifactManifestSHA256:
                 expectedNetworkID:expectedAssetDefinitionID:
         )
 
         _ = initializer
+    }
+
+    func testWalletFacadeHasExactStableStatesAndAlwaysFailsClosed() throws {
+        XCTAssertEqual(
+            OfflineCashWalletSessionStateV1.allCases.map(\.rawValue),
+            Array(UInt8(0)...UInt8(12))
+        )
+        XCTAssertEqual(
+            OfflineCashWalletSessionStateV1.allCases,
+            [
+                .unavailable,
+                .setupRequired,
+                .empty,
+                .topUpPending,
+                .available,
+                .receiveRequestReady,
+                .sendPreparing,
+                .paymentCommitted,
+                .awaitingAcknowledgement,
+                .received,
+                .redeemPending,
+                .recoveryRequired,
+                .error,
+            ]
+        )
+        XCTAssertEqual(OfflineCashWalletSessionStatusV1.unavailable.rawValue, 0)
+        XCTAssertEqual(
+            OfflineCashWalletSessionActionV1.allCases.map(\.rawValue),
+            Array(UInt8(0)...UInt8(8))
+        )
+        XCTAssertEqual(
+            OfflineCashWalletSessionActionV1.allCases,
+            [
+                .setUp,
+                .topUp,
+                .createReceiveRequest,
+                .prepareSend,
+                .commitPayment,
+                .recordAcknowledgementEvidence,
+                .receivePayment,
+                .redeem,
+                .recover,
+            ]
+        )
+        XCTAssertThrowsError(try OfflineCashWalletSessionV1.open()) { error in
+            XCTAssertEqual(error as? OfflineCashWalletSessionErrorV1, .unavailable)
+        }
+
+        let session = OfflineCashWalletSessionV1.unavailable()
+        XCTAssertEqual(session.status, .unavailable)
+        XCTAssertEqual(session.state, .unavailable)
+        for action in OfflineCashWalletSessionActionV1.allCases {
+            XCTAssertThrowsError(try session.attempt(action)) { error in
+                XCTAssertEqual(error as? OfflineCashWalletSessionErrorV1, .unavailable)
+            }
+            XCTAssertEqual(session.state, .unavailable)
+        }
     }
 }

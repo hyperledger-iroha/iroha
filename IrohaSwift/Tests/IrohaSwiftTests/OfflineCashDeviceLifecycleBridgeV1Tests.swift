@@ -105,7 +105,11 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
       ))
   }
 
-  func testNativeOutputOwnerWipesItsFullAllocationOnEveryExit() throws {
+  func testProductionCannotBeEnabledByOptionalSymbolsOrStructuralCapabilities() throws {
+    let bridge = OfflineCashDeviceLifecycleBridgeV1.production()
+    XCTAssertEqual(bridge.availability, .onlineOnly)
+    XCTAssertNil(bridge.acceptedCapabilities)
+
     let packageRoot = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
       .deletingLastPathComponent()
@@ -118,19 +122,20 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
         ),
       encoding: .utf8
     )
-    let nativeExecute = try XCTUnwrap(
-      source.components(separatedBy: "      func execute(_ command: Data) throws -> Data {").last?
-        .components(separatedBy: "    #else").first
+    let production = try XCTUnwrap(
+      source.components(
+        separatedBy:
+          "public static func production() -> OfflineCashDeviceLifecycleBridgeV1 {"
+      ).last?
+        .components(separatedBy: "  /// Construct an explicit online-only bridge").first
     )
-    XCTAssertTrue(
-      nativeExecute.contains("let outputRange = output.startIndex..<output.endIndex")
-    )
-    XCTAssertTrue(nativeExecute.contains("defer { output.resetBytes(in: outputRange) }"))
-    XCTAssertLessThan(
-      try XCTUnwrap(
-        nativeExecute.range(of: "defer { output.resetBytes(in: outputRange) }")?.lowerBound),
-      try XCTUnwrap(nativeExecute.range(of: "executeFunction(")?.lowerBound)
-    )
+    XCTAssertTrue(production.contains("onlineOnly()"))
+    XCTAssertFalse(production.contains("capabilities"))
+    XCTAssertFalse(source.contains("dlsym"))
+    XCTAssertFalse(source.contains("NativeEndpoint"))
+    XCTAssertFalse(source.contains("connect_norito_offline_cash_device_capabilities_v1"))
+    XCTAssertFalse(source.contains("connect_norito_offline_cash_device_execute_v1"))
+    XCTAssertTrue(source.contains("static func withEndpointForTests("))
   }
 
   private func fixed(_ value: UInt8, count: Int) -> Data {

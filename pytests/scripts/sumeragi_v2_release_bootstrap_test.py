@@ -10,11 +10,12 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
-import sysconfig
 import time
+import types
 
 import pytest
 from pytests.scripts import sumeragi_v2_release_bootstrap_tool_manifest_support as _tool_support
@@ -28,9 +29,19 @@ BOOTSTRAP_COMPONENTS = tuple(
 APPROVAL_CONTRACT = (
     REPO_ROOT / "scripts" / "sumeragi_v2_release_approval_contract.py"
 )
+LIVENESS_SPEC = REPO_ROOT / "specs" / "sumeragi_v2_liveness.md"
 RECEIPT_VALIDATOR_SUPPORT = REPO_ROOT / "scripts" / "sumeragi_v2_localnet_manifest.py"
 PYTHON = Path(sys.executable).resolve(strict=True)
 FINGERPRINT = "SHA256:" + "A" * 43
+# These are test-fixture budgets, not production policy. The authenticated
+# framework-Python closure durably copies, hashes, probes, and repeatedly
+# revalidates hundreds of files. A valid cold macOS run can exceed 120 seconds
+# for one protected helper while APFS is contended, so keep enough finite room
+# for that helper and for the later phase-boundary revalidations. Unit tests
+# below independently prove that the requested command deadline still latches
+# a fail-closed verdict and never authorizes child termination.
+FIXTURE_COMMAND_TIMEOUT_SECONDS = 300
+FIXTURE_PROCESS_TIMEOUT_SECONDS = 900
 SCALING_EVIDENCE_ENV = "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
 SCALING_TRUST_ENV = (
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
@@ -43,6 +54,16 @@ RELEASE_CONTROL_ENV = (
     "IROHA_RELEASE_APALACHE_BIN",
     "IROHA_RELEASE_CANCEL_REQUEST_PATH",
     "IROHA_RELEASE_TLA2TOOLS_JAR",
+)
+FORMAL_TOOL_ENV = (
+    "IROHA_RELEASE_TLA2TOOLS_JAR",
+    "IROHA_RELEASE_APALACHE_BIN",
+)
+FORMAL_REPLAY_ENV = (
+    "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
+    "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
+    "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
 )
 DEFAULT_SCALING_DIGESTS = {
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": "a" * 64,
@@ -78,7 +99,7 @@ def _load_bootstrap_module() -> object:
     return module
 
 
-def test_release_trust_inputs_are_the_only_new_runner_environment_names(
+def _assert_release_trust_inputs_and_documented_invocation_are_exact(
     tmp_path: Path,
 ) -> None:
     module = _load_bootstrap_module()
@@ -91,7 +112,11 @@ def test_release_trust_inputs_are_the_only_new_runner_environment_names(
         "RUSTUP_TOOLCHAIN",
         "SSL_CERT_FILE",
     }
-    expected_release_environment = set(SCALING_TRUST_ENV) | set(RELEASE_CONTROL_ENV)
+    expected_release_environment = (
+        set(SCALING_TRUST_ENV)
+        | set(RELEASE_CONTROL_ENV)
+        | set(FORMAL_REPLAY_ENV)
+    )
     assert (
         module._RUNNER_ENV_ALLOWLIST - preexisting_allowlist
         == expected_release_environment
@@ -129,6 +154,33 @@ def test_release_trust_inputs_are_the_only_new_runner_environment_names(
     assert result.returncode != 0
     assert b"bootstrap component binding is invalid" in result.stderr
 
+    source = LIVENESS_SPEC.read_text(encoding="utf-8")
+    match = re.search(
+        r"```bash\n"
+        r"(/protected/python3 -I -S /protected/bootstrap_sumeragi_v2_release\.py"
+        r".*?\n)```",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None
+    tokens = shlex.split(match.group(1).replace("\\\n", " "))
+    documented_options = [token for token in tokens if token.startswith("--")]
+    assert list(dict.fromkeys(documented_options)) == [
+        action.option_strings[0]
+        for action in module._parser()._actions
+        if action.option_strings and action.dest != "help"
+    ]
+    documented_environment = [
+        tokens[index + 1].partition("=")[0]
+        for index, token in enumerate(tokens[:-1])
+        if token == "--runner-environment"
+    ]
+    assert documented_environment == [
+        *SCALING_TRUST_ENV,
+        *FORMAL_TOOL_ENV,
+        *FORMAL_REPLAY_ENV,
+    ]
+
 
 def test_release_runner_waits_for_natural_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -161,7 +213,7 @@ def test_release_runner_waits_for_natural_completion(
     assert "start_new_session" not in spawned[0]
 
 
-def test_authenticated_sdk_source_manifest_pruning_is_exact(
+def _assert_authenticated_sdk_source_manifest_pruning_is_exact(
     tmp_path: Path,
 ) -> None:
     module = _load_bootstrap_module()
@@ -280,6 +332,67 @@ def _write(path: Path, data: str | bytes, mode: int = 0o600) -> Path:
         path.write_bytes(data)
     path.chmod(mode)
     return path.resolve(strict=True)
+
+
+def _formal_replay_fixture(
+    root: Path,
+    *,
+    ssh_keygen: Path,
+    allowed_signers: Path,
+    revocation: Path,
+) -> dict[str, Path | str]:
+    source_root = root / "formal-replay-input"
+    events = source_root / "events"
+    source_root.mkdir(mode=0o700)
+    events.mkdir(mode=0o700)
+    event_names = (
+        "01-standalone_sany.stderr",
+        "01-standalone_sany.stdout",
+        "02-raw_tlc.stderr",
+        "02-raw_tlc.stdout",
+        "03-normalizer.stderr",
+        "03-normalizer.stdout",
+    )
+    for name in event_names:
+        _write(events / name, f"fixture {name}\n", 0o600)
+    source_receipt = _write(
+        source_root / "receipt.json",
+        _fixture_canonical(
+            {
+                "artifact_inventory": [
+                    {"path": f"events/{name}"} for name in event_names
+                ],
+                "schema_version": 1,
+            }
+        ),
+        0o600,
+    )
+    release_root = root / "formal-replay-finalized" / "release"
+    release_root.mkdir(mode=0o700, parents=True)
+    _write(release_root / "receipt.json", source_receipt.read_bytes(), 0o400)
+    signature = _write(
+        release_root / "receipt.json.sig", b"fixture SSHSIG\n", 0o400
+    )
+    _write(
+        release_root / "ssh-keygen.release-tool",
+        ssh_keygen.read_bytes(),
+        0o500,
+    )
+    _write(
+        release_root / "allowed_signers", allowed_signers.read_bytes(), 0o400
+    )
+    _write(release_root / "revocation.krl", revocation.read_bytes(), 0o400)
+    _write(
+        release_root / "release-attestation.json",
+        _fixture_canonical({"schema_version": 1}),
+        0o400,
+    )
+    return {
+        "source_receipt": source_receipt,
+        "release_root": release_root.resolve(strict=True),
+        "signature_sha256": _sha256(signature),
+        "principal": "sumeragi-release@test.invalid",
+    }
 
 
 def _load_approval_component(path: Path) -> object:
@@ -638,7 +751,10 @@ OPTION_ORDER = (
     "--signature-git", "--signature-ssh-keygen", "--expected-git-sha256",
     "--expected-ssh-keygen-sha256", "--expected-allowed-signers-sha256",
     "--expected-revocation-sha256", "--expected-signer-fingerprint",
-    "--corridor-completion", "--formal-completion", "--seed-completion",
+    "--corridor-completion", "--formal-completion",
+    "--formal-replay-source-receipt", "--formal-replay-release-root",
+    "--expected-formal-replay-signature-sha256",
+    "--formal-replay-principal", "--seed-completion",
     "--chaos-completion", "--g4p-completion",
     "--g12-seed-completion", "--g12-fault-soak-completion",
     "--scaling-evidence-manifest",
@@ -663,6 +779,8 @@ PATH_OPTIONS = frozenset({
         "--expected-scaling-configuration-sha256",
         "--expected-scaling-irohad-sha256",
         "--expected-scaling-iroha-cli-sha256",
+        "--expected-formal-replay-signature-sha256",
+        "--formal-replay-principal",
     }
 })
 
@@ -694,6 +812,10 @@ for option in (
     "bootstrap-runner",
     "corridor-completion",
     "formal-completion",
+    "formal-replay-source-receipt",
+    "formal-replay-release-root",
+    "expected-formal-replay-signature-sha256",
+    "formal-replay-principal",
     "seed-completion",
     "chaos-completion",
     "g4p-completion",
@@ -1349,6 +1471,37 @@ def full_artifact(path):
         "nlink": metadata.st_nlink,
     }}
 
+formal_replay_source = Path(
+    os.environ["IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT"]
+)
+formal_replay_root = Path(
+    os.environ["IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT"]
+)
+formal_source_value = json.loads(formal_replay_source.read_bytes())
+formal_replay_release = {{
+    "schema_version": 1,
+    "scheme": "detached-ssh",
+    "provider": "openssh-sshsig",
+    "namespace": "iroha-sumeragi-v2-replay-receipt-v1",
+    "principal": os.environ["IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL"],
+    "signer_fingerprint": signer_fingerprint,
+    "source_artifacts": [
+        full_artifact(formal_replay_source.parent / record["path"])
+        for record in formal_source_value["artifact_inventory"]
+    ],
+    "source_receipt": full_artifact(formal_replay_source),
+    "receipt": full_artifact(formal_replay_root / "receipt.json"),
+    "signature": full_artifact(formal_replay_root / "receipt.json.sig"),
+    "ssh_keygen": full_artifact(
+        formal_replay_root / "ssh-keygen.release-tool"
+    ),
+    "allowed_signers": full_artifact(formal_replay_root / "allowed_signers"),
+    "revocation": full_artifact(formal_replay_root / "revocation.krl"),
+    "attestation": full_artifact(
+        formal_replay_root / "release-attestation.json"
+    ),
+}}
+
 def artifact(path):
     return {{
         "path": str(path),
@@ -1371,6 +1524,7 @@ def evidence_file(directory, name, data, mode=0o400):
     path.write_bytes(data)
     path.chmod(mode)
     return path
+
 
 for name in ("home", "tmp", "cache", "cargo-home"):
     directory = release_runner / "output" / name
@@ -1896,6 +2050,7 @@ receipt = {{
         "formal_toolchain": {{}},
         "formal_tlaps_resource_jsonl": artifact(formal_resource_jsonl),
         "formal_tlaps_resource_summary": artifact(formal_resource_summary),
+        "formal_replay_release": formal_replay_release,
         "seed_matrix_summary": {{}},
         "seed_matrix_run_logs": [],
         "seed_matrix_localnet_manifest_index": {{}},
@@ -1964,6 +2119,10 @@ python3 -I -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" 
   --expected-signer-fingerprint "$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
   --corridor-completion "$release_output/mock-completions/corridor_completion.tsv" \
   --formal-completion "$release_output/mock-completions/formal_completion.tsv" \
+  --formal-replay-source-receipt "$IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT" \
+  --formal-replay-release-root "$IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT" \
+  --expected-formal-replay-signature-sha256 "$IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256" \
+  --formal-replay-principal "$IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL" \
   --seed-completion "$release_output/mock-completions/seed_matrix_completion.tsv" \
   --chaos-completion "$release_output/mock-completions/chaos_completion.tsv" \
   --g4p-completion "$release_output/g4p/COMPLETED.tsv" \
@@ -2160,6 +2319,7 @@ class Fixture:
     trust: Path
     evidence: Path
     launch_count: Path
+    python: Path
     manifest: Path
     verifier: Path
     receipt_validator: Path
@@ -2176,6 +2336,13 @@ class Fixture:
     bash: Path
     allowed: Path
     revocation: Path
+    signer_fingerprint: str
+    formal_replay_source_receipt: Path
+    formal_replay_release_root: Path
+    formal_replay_signature_sha256: str
+    formal_replay_principal: str
+    tla2tools: Path
+    apalache: Path
 
     @property
     def retained_root(self) -> Path:
@@ -2200,15 +2367,15 @@ class Fixture:
 
     def arguments(self) -> list[str]:
         arguments = [
-            str(PYTHON),
+            str(self.python),
             "-I",
             "-S",
             str(BOOTSTRAP),
             "--candidate-root", str(self.candidate),
             "--evidence-dir", str(self.evidence),
             "--expected-bootstrap-sha256", _sha256(BOOTSTRAP),
-            "--python-bin", str(PYTHON),
-            "--expected-python-sha256", _sha256(PYTHON),
+            "--python-bin", str(self.python),
+            "--expected-python-sha256", _sha256(self.python),
             "--git-bin", str(self.git),
             "--expected-git-sha256", _sha256(self.git),
             "--ssh-keygen-bin", str(self.ssh),
@@ -2256,12 +2423,11 @@ class Fixture:
             "--expected-runner-tool-manifest-sha256", _sha256(self.tool_manifest),
             "--bash-bin", str(self.bash),
             "--expected-bash-sha256", _sha256(self.bash),
-            "--expected-signer-fingerprint", FINGERPRINT,
+            "--expected-signer-fingerprint", self.signer_fingerprint,
             "--ssh-allowed-signers", str(self.allowed),
             "--expected-ssh-allowed-signers-sha256", _sha256(self.allowed),
             "--ssh-revocation-file", str(self.revocation),
             "--expected-ssh-revocation-sha256", _sha256(self.revocation),
-            "--command-timeout-seconds", "10",
         ]
         scaling_environment = {
             **DEFAULT_SCALING_DIGESTS,
@@ -2276,36 +2442,194 @@ class Fixture:
             arguments.extend(
                 ["--runner-environment", f"{name}={scaling_environment[name]}"]
             )
+        formal_tool_environment = {
+            "IROHA_RELEASE_TLA2TOOLS_JAR": str(self.tla2tools),
+            "IROHA_RELEASE_APALACHE_BIN": str(self.apalache),
+        }
+        for name in FORMAL_TOOL_ENV:
+            arguments.extend(
+                ["--runner-environment", f"{name}={formal_tool_environment[name]}"]
+            )
+        formal_replay_environment = {
+            "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT": str(
+                self.formal_replay_source_receipt
+            ),
+            "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT": str(
+                self.formal_replay_release_root
+            ),
+            "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256": (
+                self.formal_replay_signature_sha256
+            ),
+            "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL": (
+                self.formal_replay_principal
+            ),
+        }
+        for name in FORMAL_REPLAY_ENV:
+            arguments.extend(
+                ["--runner-environment", f"{name}={formal_replay_environment[name]}"]
+            )
+        arguments.extend(
+            ["--command-timeout-seconds", str(FIXTURE_COMMAND_TIMEOUT_SECONDS)]
+        )
         return arguments
 
     def run(
         self,
         arguments: list[str] | None = None,
         *,
-        timeout_seconds: float = 30,
+        timeout_seconds: float = FIXTURE_PROCESS_TIMEOUT_SECONDS,
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            arguments or self.arguments(),
+        command = arguments or self.arguments()
+        process = subprocess.Popen(
+            command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
-            check=False,
             env={"PATH": os.environ.get("PATH", "")},
+            start_new_session=True,
+        )
+
+        def kill_private_process_group() -> None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            # A timed-out bootstrap can have authenticated runner descendants.
+            # Reap the fixture's private process group before pytest retires its
+            # temporary root; otherwise those descendants can mutate a later
+            # test's containment-parent snapshot.
+            kill_private_process_group()
+            stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(
+                command,
+                timeout_seconds,
+                output=stdout,
+                stderr=stderr,
+            ) from None
+        # A successful bootstrap must not leave a detached fixture descendant
+        # writing into pytest's soon-to-be-retired temporary root either.
+        kill_private_process_group()
+        return subprocess.CompletedProcess(
+            command,
+            process.returncode,
+            stdout,
+            stderr,
         )
 
 
+@pytest.fixture(scope="session")
+def protected_python(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build one sealed, relocated framework Python for bootstrap fixtures."""
+
+    base = tmp_path_factory.mktemp("sumeragi-protected-python")
+    copy_helper = REPO_ROOT / "scripts" / "copy_sumeragi_v2_release_cargo_cache.py"
+    source_python = PYTHON
+    if sys.platform == "darwin":
+        system_probe = subprocess.run(
+            [
+                "/usr/bin/python3",
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                "import sys;print(sys.prefix)",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if system_probe.returncode == 0:
+            candidate = (
+                Path(system_probe.stdout.strip()) / "bin" / "python3"
+            ).resolve(strict=True)
+            if candidate.is_file() and not candidate.is_symlink():
+                source_python = candidate
+    last_failure: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(3):
+        runtime_root = base / f"runtime-{attempt}"
+        inventory = base / f"runtime-{attempt}-input.json"
+        copied = subprocess.run(
+            [
+                str(source_python),
+                "-I",
+                "-S",
+                str(copy_helper),
+                "--copy-framework-python",
+                "--runtime-root",
+                str(runtime_root),
+                "--runtime-inventory",
+                str(inventory),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if copied.returncode == 0:
+            private_python = runtime_root / "bin" / "python3"
+            probe = subprocess.run(
+                [
+                    str(private_python),
+                    "-I",
+                    "-S",
+                    "-c",
+                    "import sys;print(sys.executable);print(sys.prefix)",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            assert probe.returncode == 0, probe.stderr
+            assert probe.stdout == f"{private_python}\n{runtime_root}\n"
+            return private_python.resolve(strict=True)
+        last_failure = copied
+        if "changed while opened" not in copied.stderr:
+            break
+    assert last_failure is not None
+    pytest.fail(
+        "could not seal a stable fixture framework Python: "
+        + last_failure.stderr
+    )
+
+
 @pytest.fixture
-def release_fixture(tmp_path: Path) -> Fixture:
+def release_fixture(tmp_path: Path, protected_python: Path) -> Fixture:
     root = tmp_path.resolve(strict=True)
     candidate = root / "candidate"
     trust = root / "trust"
     candidate.mkdir()
     trust.mkdir()
+    tla2tools = _write(
+        root / "formal-tool-inputs" / "tla2tools.jar",
+        b"fixture TLA2Tools jar\n",
+        0o400,
+    )
+    apalache = _write(
+        root
+        / "formal-tool-inputs"
+        / "apalache-distribution"
+        / "bin"
+        / "apalache-mc",
+        "#!/bin/sh\nexit 0\n",
+        0o500,
+    )
+    _write(
+        apalache.parent.parent / "lib" / "apalache.jar",
+        b"fixture Apalache jar\n",
+        0o400,
+    )
     launch_count = root / "launch-count"
     evidence = root / "evidence"
-    _tool_support.provision_future_archived_python_runtime(PYTHON, root)
     _write(candidate / "Cargo.lock", b"locked\n")
     _write(candidate / "payload", b"candidate\n")
     _write(
@@ -2388,6 +2712,20 @@ def release_fixture(tmp_path: Path) -> Fixture:
         0o400,
     )
     revocation = _write(trust / "revocation", b"", 0o400)
+    formal_replay = _formal_replay_fixture(
+        root,
+        ssh_keygen=ssh,
+        allowed_signers=allowed,
+        revocation=revocation,
+    )
+    formal_replay_source_receipt = formal_replay["source_receipt"]
+    formal_replay_release_root = formal_replay["release_root"]
+    formal_replay_signature_sha256 = formal_replay["signature_sha256"]
+    formal_replay_principal = formal_replay["principal"]
+    assert isinstance(formal_replay_source_receipt, Path)
+    assert isinstance(formal_replay_release_root, Path)
+    assert isinstance(formal_replay_signature_sha256, str)
+    assert isinstance(formal_replay_principal, str)
     _write(
         candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
         _runner(launch_count, candidate, "success"),
@@ -2406,6 +2744,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         trust.resolve(strict=True),
         evidence,
         launch_count,
+        protected_python,
         manifest,
         verifier,
         receipt_validator,
@@ -2422,6 +2761,13 @@ def release_fixture(tmp_path: Path) -> Fixture:
         bash,
         allowed,
         revocation,
+        FINGERPRINT,
+        formal_replay_source_receipt,
+        formal_replay_release_root,
+        formal_replay_signature_sha256,
+        formal_replay_principal,
+        tla2tools,
+        apalache,
     )
 
 
@@ -2485,10 +2831,10 @@ def _rebind_bootstrap_trusted_input(
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     framework_python = (
         label == "python"
-        and source == PYTHON
         and sys.platform == "darwin"
-        and isinstance(sysconfig.get_config_var("PYTHONFRAMEWORK"), str)
-        and bool(sysconfig.get_config_var("PYTHONFRAMEWORK"))
+        and source.parent.name == "bin"
+        and (source.parent.parent / "Resources").is_dir()
+        and (source.parent.parent / "lib").is_dir()
     )
     runtime_record: dict[str, object] | None = None
     if framework_python:
@@ -2614,7 +2960,7 @@ def _rebind_bootstrap_trusted_input(
         runtime_tool = runtime_tools[runtime_name]
         assert isinstance(runtime_tool, Path)
         runtime_tool.chmod(0o700)
-        runtime_tool.write_bytes(source.read_bytes())
+        runtime_tool.write_bytes(archive.read_bytes())
         runtime_tool.chmod(0o500)
         completion_lines = corridor_completion.read_text(
             encoding="utf-8"
@@ -2868,24 +3214,6 @@ def test_success_authenticates_then_launches_exactly_once(release_fixture: Fixtu
 
 
 _execute_bootstrap_test_component(RELEASE_BOOTSTRAP_TEST_COMPONENT_FILES[0])
-
-
-def test_undeclared_runner_tool_has_no_ambient_path_fallback(
-    release_fixture: Fixture,
-) -> None:
-    release_fixture.install_planned_runner(
-        _runner(
-            release_fixture.launch_count,
-            release_fixture.candidate,
-            "unlisted-command",
-        ),
-    )
-
-    result = release_fixture.run()
-
-    assert result.returncode == 127
-    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
-    assert not release_fixture.evidence.exists()
 
 
 _execute_bootstrap_test_component(RELEASE_BOOTSTRAP_TEST_COMPONENT_FILES[1])

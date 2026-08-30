@@ -40,7 +40,6 @@ import {
   AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
 } from "./authenticatedBlockProofs.browser.js";
-
 const DEFAULT_SUCCESS_STATUSES = [200];
 const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
@@ -146,6 +145,10 @@ function normalizeBaseUrl(baseUrl) {
   const raw = String(baseUrl ?? "").trim();
   if (!raw) {
     throw new TypeError("ToriiBrowserClient baseUrl must be a non-empty URL");
+  }
+  const parsed = new URL(raw);
+  if (parsed.username || parsed.password) {
+    throw new TypeError("ToriiBrowserClient baseUrl must not contain userinfo");
   }
   return raw.replace(/\/+$/, "").replace(/\/v1\/explorer$/i, "").replace(/\/v1$/i, "");
 }
@@ -1340,6 +1343,23 @@ function streamRequestHeaders(defaultHeaders) {
   return headers;
 }
 
+function mergeRequestHeaders(...sources) {
+  const headers = {};
+  const names = new Map();
+  for (const source of sources) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      const normalizedName = name.toLowerCase();
+      const previousName = names.get(normalizedName);
+      if (previousName !== undefined) {
+        delete headers[previousName];
+      }
+      headers[name] = value;
+      names.set(normalizedName, name);
+    }
+  }
+  return headers;
+}
+
 function parseSseEventFrame(rawFrame) {
   let event = null;
   let id = null;
@@ -1462,6 +1482,45 @@ export class ToriiBrowserClient {
     }).then((payload) => normalizeOfflineStatus(payload));
   }
 
+  /** Return Torii's exact, bounded public projection of active verifying-key ids. */
+  async listActiveVerifyingKeyIds(options = {}) {
+    const opts = signalOnlyOptions(
+      options,
+      "listActiveVerifyingKeyIds options",
+    );
+    const activeVerifyingKeys = await import("./activeVerifyingKeyIds.js");
+    return this._json("GET", "/v1/zk/vk", {
+      headers: { Accept: "application/json" },
+      params: {
+        status: "Active",
+        ids_only: true,
+        limit: 1_000,
+        order: "asc",
+      },
+      signal: opts.signal,
+      omitCredentials: true,
+      oneShot: true,
+      stripCredentialHeaders:
+        activeVerifyingKeys.stripPublicReadCredentialHeaders,
+      maximumBodyBytes:
+        activeVerifyingKeys.ACTIVE_VERIFYING_KEY_IDS_RESPONSE_MAX_BYTES,
+      responseObserver: (response) => {
+        const contentEncoding = response.headers.get("content-encoding");
+        if (contentEncoding !== null && contentEncoding.toLowerCase() !== "identity") {
+          throw new TypeError(
+            "active verifying-key ids response Content-Encoding must be identity",
+          );
+        }
+        if (response.headers.get("content-type") !== "application/json") {
+          throw new TypeError(
+            "active verifying-key ids response Content-Type must be exactly application/json",
+          );
+        }
+      },
+      jsonParser: (text) => activeVerifyingKeys.parseActiveVerifyingKeyIdsJson(text),
+    });
+  }
+
   submitKagemushaTopUpV4(request, options = {}) {
     return this._submitKagemushaCommandV4(
       "/v1/offline/top-up",
@@ -1550,11 +1609,14 @@ export class ToriiBrowserClient {
 
   async _json(method, path, options = {}) {
     const normalizedOptions = requireObject(options, `${method} ${path} options`);
-    const headers = {
-      Accept: "application/json",
-      ...this.defaultHeaders,
-      ...(normalizedOptions.headers ?? {}),
-    };
+    const headers = mergeRequestHeaders(
+      { Accept: "application/json" },
+      this.defaultHeaders,
+      normalizedOptions.headers,
+    );
+    if (normalizedOptions.omitCredentials === true) {
+      normalizedOptions.stripCredentialHeaders(headers);
+    }
     const { signal, timeoutId } = requestSignal(normalizedOptions, this.timeoutMs);
     const init = {
       method,
@@ -1562,6 +1624,9 @@ export class ToriiBrowserClient {
       headers,
       signal,
     };
+    if (normalizedOptions.omitCredentials === true) {
+      init.credentials = "omit";
+    }
     const hasCanonicalNonce = Object.keys(headers).some(
       (name) => name.toLowerCase() === "x-iroha-nonce",
     );

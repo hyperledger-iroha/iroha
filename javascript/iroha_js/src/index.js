@@ -72,6 +72,14 @@ export {
 } from "./validationFeeProposal.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
+  OPEN_VERIFY_BACKEND_TAGS_V1,
+  VERIFIER_BACKEND_REGISTRY_BINDINGS_V1,
+  VERIFIER_BACKEND_REGISTRY_LABELS_V1,
+  isVerifierBackendRegistryLabelV1,
+  requireVerifierBackendRegistryLabelV1,
+  verifierBackendRegistryTagV1,
+} from "./verifierBackendRegistry.js";
+export {
   LocalSigningContext,
   OperatorSigningContext,
   ToriiClient,

@@ -23,7 +23,7 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "245e6b6ac906533eb0c2e5c0a879f9fb53ad45e4ff24e6853c3b0b8a7d307ea1"
     ),
     "scripts/formal/run_sumeragi_v2_harness.sh": (
-        "e400734ca5d3a9079f5ac5b01cca06921b3811ea6ea8fa93e3e5d128984280b8"
+        "099c05d22938f7a0384ab2671ea85bc18d892656101cda87e7cf8f9a8cd7224a"
     ),
     "scripts/formal/check_sumeragi_v2_replay_receipt.py": (
         "0f773cfe797f0a3b05865caec82d7db2fcc2c3d0409293899c6795f1b8134108"
@@ -1143,10 +1143,10 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "c0b5ef19fc5daec8d4d314668d33655e66c1dc7b20327f5ccb92ea2ca0b7603e"
+        "1f3b100ffa1c549050071a1e10b768758d8bf71103b62ac4f7021ed37305db48"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "047871a2fbbc08306274a266a0592cae1f2fc360c66ff66f7e08386f1f4cffd2"
+        "18b7ee43264d147b38dd8579c31105048fc47d211f64617b1a1faf43c1bb0f44"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "8fd2bbface65035fe2acc59274c514f88233875161915e02229851a3d08852a0"
@@ -1155,13 +1155,13 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "4d16915a3dcd6817be753c7e50e3924bd5afa7c072d2d561e55bf22d9bc81793"
+        "f7334ab99e5340ee5675a6581b73fade53ae30938065358e8eb263608eec36e3"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "093f112f182ade0fecfe6ed51342f4d4ad2558977ac78fafae550b45e06e5ced"
+        "43e52169b72b9a59f7c5849677fce0595f382aab1985624a52a83b4bddce9a09"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "b7f8c2c1b36458d844247e4d84f8179d38b0c77bde4d200ad74b9bcb87ea504c"
+        "e5e42874cce1db74a4cd5097966c3d06234e11c97d1331a98bfb2c7da569f747"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "11f0d554e114b832ec31604a6fa3bb78e9ecbc965e0269be1bc5b3548ff8e519"
@@ -1581,11 +1581,12 @@ let effect = self.start_persistence(
                 "view-zero proposal admission must bind the semantic parent decision",
             ),
             (
-                "let Some(checked_refinement) = refinement::check(transition) "
-                "else { let diagnostic = refinement::diagnose(transition); "
-                "iroha_logger::error!(event = ?audit_event, ?diagnostic, "
-                '"Sumeragi v2 reducer rejected the transition refinement predicate"); '
-                "return Err(ReducerError::RefinementViolation); };",
+                """
+let Some(checked_refinement) = refinement::check(transition) else {
+    let _diagnostic = refinement::diagnose(transition);
+    return Err(ReducerError::RefinementViolation);
+};
+""",
                 "Reducer::step must acquire checked production refinement "
                 "authority before committing candidate state",
             ),
@@ -1597,12 +1598,13 @@ let _authorized_refinement = checked_refinement.into_projection();
                 "Reducer::step must consume checked refinement authority before commit",
             ),
             (
-                "let Some(checked_transition) = "
-                "check_production_durable_intent_transition(durable_intent_trace) "
-                "else { iroha_logger::error!(event = ?audit_event, "
-                "?durable_intent_trace, "
-                '"Sumeragi v2 reducer rejected the durable-intent refinement predicate"); '
-                "return Err(ReducerError::RefinementViolation); };",
+                """
+let Some(checked_transition) =
+    check_production_durable_intent_transition(durable_intent_trace)
+else {
+    return Err(ReducerError::RefinementViolation);
+};
+""",
                 "Reducer::step must acquire the source-shared durable-intent "
                 "authorization token",
             ),
@@ -1827,9 +1829,34 @@ if decision_round.context_id != self.context.id()
         "durable Decision is outside the frozen height context".to_owned(),
     ));
 }
+let projected_recovered_decision_seal = self
+    .durable_validate_retry_seals
+    .get(&decision_body)
+    .map(|seal| seal.project_recovered_commitment_ceiling(decision_commitment))
+    .transpose()
+    .map_err(EffectExecutorError::Contract)?
+    .flatten();
 match self.protected_decision {
 """,
-                "effect reconciliation must let the first durable Decision supersede any protected Prepare lock",
+                "effect reconciliation must project the recovered commitment ceiling before classifying the protected Decision",
+            ),
+            (
+                """
+if let Some(seal) = projected_recovered_decision_seal
+    && (!drain_decision_body || seal.lifecycle_ordinal().is_some())
+{
+    self.durable_validate_retry_seals
+        .insert(decision_body, seal);
+}
+self.durable_validate_retry_seals.retain(|key, seal| {
+    seal.lifecycle_ordinal().is_some() || (!drain_decision_body && *key == decision_body)
+});
+self.published_lifecycle_validate_retry_markers
+    .retain(|key, marker| {
+        marker.owns_live_lifecycle_row() || (!drain_decision_body && *key == decision_body)
+    });
+""",
+                "effect reconciliation must commit the projected recovered ceiling before preserving exact live rows and the selected inert tombstone",
             ),
             (
                 """
@@ -2022,6 +2049,49 @@ if facts.install_view_unchanged {
             _require_rust_source_token_sequence(
                 path, source, sequence, description, errors
             )
+    effects_source = sources.get("crates/iroha_core/src/sumeragi/v2_effects.rs")
+    if effects_source is not None:
+        effects_path, effects_text = effects_source
+        decision_reconciliation = _require_rust_item(
+            effects_path,
+            effects_text,
+            "reconcile_decision_work",
+            errors,
+        )
+        if decision_reconciliation is not None:
+            decision_tokens = rust_code_tokens(decision_reconciliation.source)
+            ordered_fragments = tuple(
+                rust_code_tokens(fragment)
+                for fragment in (
+                    "let projected_recovered_decision_seal = self",
+                    "match self.protected_decision",
+                    "self.preflight_remote_proposal_replay_indexes()?",
+                    "retire_proposal_work_after_decision(",
+                    "if let Some(seal) = projected_recovered_decision_seal",
+                    ".insert(decision_body, seal)",
+                    "self.durable_validate_retry_seals.retain(",
+                    "self.published_lifecycle_validate_retry_markers.retain(",
+                    "self.protected_decision = Some(durable_decision)",
+                    "self.protected_lock = Some(decision_body)",
+                    "self.decision_body_drained |= drain_decision_body",
+                )
+            )
+            positions = [
+                _token_sequence_positions(decision_tokens, fragment)
+                for fragment in ordered_fragments
+            ]
+            if not (
+                all(len(found) == 1 for found in positions)
+                and [found[0] for found in positions]
+                == sorted(found[0] for found in positions)
+            ):
+                errors.append(
+                    f"{effects_path}:{decision_reconciliation.line}: Decision "
+                    "reconciliation must project the recovered ceiling before "
+                    "protected-decision classification, commit it after fallible "
+                    "retirement, preserve exact retry rows, and only then rebind "
+                    "terminal protection"
+                )
     prepare_tests_path, prepare_tests_source = _read_reviewed_rust_source(
         repo_root,
         "crates/iroha_core/src/sumeragi/v2_core/tests.rs",

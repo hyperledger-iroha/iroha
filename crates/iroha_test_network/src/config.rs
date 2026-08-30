@@ -72,6 +72,12 @@ use std::{
     sync::Arc,
 };
 use toml::Table;
+/// Aggregate Nexus storage cap for each disposable test-network peer (1 GiB).
+///
+/// Production nodes derive a filesystem-aware budget with reserved headroom. Test peers own
+/// short-lived storage under their temporary directories, so an explicit small cap avoids
+/// applying that host-wide production policy to a throwaway network.
+const TEST_NETWORK_NEXUS_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 /// Exact policy commitments derived by isolated genesis pre-execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StagedGenesisPolicyHashes {
@@ -127,6 +133,10 @@ pub fn base_iroha_config() -> Table {
         // There is no need in persistence in tests.
         .write(["snapshot", "mode"], "disabled")
         .write(["kura", "store_dir"], "./storage")
+        .write(
+            ["nexus", "storage", "local_budget_bytes"],
+            TEST_NETWORK_NEXUS_STORAGE_BUDGET_BYTES,
+        )
         .write(
             ["kura", "lane_history_retention"],
             i64::try_from(defaults::kura::LANE_HISTORY_RETENTION.get())
@@ -1357,6 +1367,21 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("extended"),
             "test networks should expose expensive telemetry metrics"
+        );
+    }
+    #[test]
+    fn base_config_uses_explicit_disposable_nexus_storage_budget() {
+        let table = super::base_iroha_config();
+        assert_eq!(
+            table
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("local_budget_bytes"))
+                .and_then(toml::Value::as_integer),
+            Some(TEST_NETWORK_NEXUS_STORAGE_BUDGET_BYTES),
+            "throwaway test peers must not inherit host-wide production budget derivation"
         );
     }
     #[test]

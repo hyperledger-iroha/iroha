@@ -102,12 +102,16 @@ def test_bounded_python_validator_finishes_naturally_before_timeout_failure(
     monkeypatch.setattr(module, "_REPLAY_TIMEOUT_SECONDS", 0)
     sentinel = tmp_path / "validator-natural-completion"
     sentinel.write_text("pending", encoding="utf-8")
+    (tmp_path / "validator_support.py").write_text(
+        "VALUE = 'complete'\n", encoding="utf-8"
+    )
     checker = tmp_path / "validator.py"
     checker.write_text(
+        "import validator_support\n"
         "import time\n"
         "from pathlib import Path\n"
         "time.sleep(0.05)\n"
-        f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')\n",
+        f"Path({str(sentinel)!r}).write_text(validator_support.VALUE, encoding='utf-8')\n",
         encoding="utf-8",
     )
 
@@ -121,6 +125,7 @@ def test_bounded_python_validator_finishes_naturally_before_timeout_failure(
         )
 
     assert sentinel.read_text(encoding="utf-8") == "complete"
+    assert not (tmp_path / "__pycache__").exists()
 
 
 def test_bounded_replay_latches_supervisor_cancellation_until_natural_exit(

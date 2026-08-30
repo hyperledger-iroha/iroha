@@ -534,7 +534,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "resolve_body_pipeline_completion_owner",
-                "ee5d029fdce1e171ed6f98b287d662a014d3fb7b698a545a0a8617e311640554",
+                "3e6f9c6bc473b48d30d6978ab5acacc240327ad84c7e34e346e3b39f07f4edb9",
                 (
                     ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
                 ),
@@ -849,7 +849,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "d2f24737c0a9ed5fddc579101ab48ea8a1820ef83508319b9942f6381a65109b",
-    "effect_candidate_retain": "2d7cbd5e2c9bcd323c60925770d8a9406ea85877cacac7b6a323729df07e3bde",
+    "effect_candidate_retain": "dca30534cda4a54e10f9a61c586ebb6c5c76cd8820c0fffec8e743c5851728a8",
     "relay_retry": "052e90cc19d9416a0546c0938c57592da456a5bf98d9c9d64939dc4469d258ac",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -54413,11 +54413,18 @@ let retained = effects
             effects_path,
             retain,
             """
-self.durable_validate_retry_seals = retained_validate_retry_seals;
-self.published_lifecycle_validate_retry_markers =
-    retained_published_validate_retry_markers;
+for (key, seal) in validate_retry_seal_updates {
+    let previous = self.durable_validate_retry_seals.insert(key, seal);
+    debug_assert!(previous.is_some());
+}
+for (key, marker) in published_validate_retry_marker_updates {
+    let previous = self
+        .published_lifecycle_validate_retry_markers
+        .insert(key, marker);
+    debug_assert!(previous.is_some());
+}
 """,
-            "retained Validate retry projection must atomically commit both retry-owner maps",
+            "retained Validate retry projection must publish only touched keys after complete preflight",
             errors,
         )
 
@@ -57883,9 +57890,9 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         effects_source,
         "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its twenty-two reviewed runtime and lifecycle uses and no additional mutation surface",
+        "the durable Apply completion tombstone field must have exactly its twenty-one reviewed runtime and lifecycle uses and no additional mutation surface",
         errors,
-        count=22,
+        count=21,
     )
     for expected, description in (
         (
@@ -57936,11 +57943,9 @@ self.finality_completion
         _require_rust_item_context(effects_path, item, (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),), f"lifecycle Decision Apply finality {description}", errors)
     _require_rust_token_sequence(
         effects_path, prepare_lifecycle_finality,
-        """let recovered_requires_empty_ingress =
-authority.lineage() == LifecycleDecisionApplyLineageV1::Recovered;
-let lineage_owner_is_exact = match authority.lineage() {
+        """let lineage_owner_is_exact = match authority.lineage() {
 LifecycleDecisionApplyLineageV1::Live => self.live_lifecycle_decision_apply.as_ref().is_some_and(|owner|
-owner.exactly_matches_completion(authority.dispatch_key(), authority.tag(), authority.subject(), authority.receipt(), authority.artifact(),)),
+{ owner.exactly_matches_completion(authority.dispatch_key(), authority.tag(), authority.subject(), authority.receipt(), authority.artifact(),) }),
 LifecycleDecisionApplyLineageV1::Recovered => { self.live_lifecycle_decision_apply.is_none() }
 };""",
         "lifecycle Decision Apply completion must join the exact live owner or prove recovered non-substitution",
@@ -57965,7 +57970,7 @@ authority.exactly_matches_pending_kura_recovery(&self.context, evidence)
         effects_path, commit_lifecycle_finality,
         """let lineage_owner_is_exact = match dispatch_key.lineage() {
 LifecycleDecisionApplyLineageV1::Live => self.live_lifecycle_decision_apply.take().is_some_and(|owner|
-owner.exactly_matches_completion(dispatch_key, tag, receipt.subject(), &receipt, &artifact,)),
+{ owner.exactly_matches_completion(dispatch_key, tag, receipt.subject(), &receipt, &artifact,) }),
 LifecycleDecisionApplyLineageV1::Recovered => { self.live_lifecycle_decision_apply.is_none() }
 };""",
         "lifecycle Decision Apply finality must consume the exact live owner or prove recovered non-substitution",
@@ -57973,8 +57978,10 @@ LifecycleDecisionApplyLineageV1::Recovered => { self.live_lifecycle_decision_app
     _require_rust_token_sequence(
         effects_path, commit_lifecycle_finality,
         """let pending_recovery_is_exact = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
-    evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched
+    dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered
+        && evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched
         && evidence.is_exact(&self.context)
+        && dispatch_key.lifecycle_ordinal() == evidence.recovered_apply_ordinal()
         && tag == evidence.replay_tag()
         && artifact.subject == evidence.commit_subject()
         && &artifact.commit_qc == evidence.commit_qc()

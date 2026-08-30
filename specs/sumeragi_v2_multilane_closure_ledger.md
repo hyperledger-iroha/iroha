@@ -1731,12 +1731,12 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 5, Kotlin 7, and Java 6 tests. The current recursive mutable-tree closure
-  contains exactly 1,400 grouped and 1,402 diagnostics records. Its grouped and
+  contains exactly 1,439 grouped and 1,448 diagnostics records. Its grouped and
 diagnostics
 suite-source SHA-256 values are
-  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+  `eb1d601404a3a978512fb3e883de9100fb0f74a2e41afe8b24a2732d79019b96`
 and
-  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
+  `9f484d9a8aab925a578ede59363dec9d88aa07f226782a2f8f3eb4f0528ad6a6`.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -2041,11 +2041,11 @@ browser JavaScript distribution, SoraFS orderbook JavaScript implementation
 and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
-  mutable-tree closure contains exactly 1,400 grouped and 1,402 diagnostics
+  mutable-tree closure contains exactly 1,439 grouped and 1,448 diagnostics
 records, with grouped and diagnostics suite-source SHA-256 values
-  `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`
+  `eb1d601404a3a978512fb3e883de9100fb0f74a2e41afe8b24a2732d79019b96`
 and
-  `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
+  `9f484d9a8aab925a578ede59363dec9d88aa07f226782a2f8f3eb4f0528ad6a6`.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and

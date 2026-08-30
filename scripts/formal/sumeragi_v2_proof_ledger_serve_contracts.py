@@ -1358,7 +1358,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "61dab9fb549388aaff80edf3ae6b568c9d806b1d59469bff831ab85ae67b93b6"
+        "e03c0c18c92f903db9776f1bd43f1a3de0e99d9f4c518142800b6a2c18134731"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1412,7 +1412,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "e198c896e7ea6c3cc6862b48d6dc9432f578dc4e95231f621c3079d79855c77d"
     ),
     "step_with_defer_policy": (
-        "f61873fdbedf7727cc0c0575a67721e089fda4c9aac2d7e31eb45bbb096befc6"
+        "d77f689df1bae02017c80599ccc59363a448964cb64c8ee6faf65a67bfe0e0d9"
     ),
     "drain_deferred_with_handoff_for_ordinals": (
         "b0f80b64612e436979c51bef1a607147f2fcc3c4c5b127a3738a4ca3410cc40f"
@@ -1455,7 +1455,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "9153d6ea1ec623e67ceb28226b5eaa65a36c0a7a5522e220f3e3646ccb41cc1e"
+        "1696486255d16af1779a46c10dee8e213104aa4c900d089f3ab0f962b11607eb"
     ),
     "freeze_due_clock_owners": (
         "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
@@ -1490,7 +1490,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
-    "launch": "93b7ee656bf767b3e41bb2a6d4436a770bccbe8b7c7f41155a2ab4fa76188f88",
+    "launch": "67bdba25b44afead30f811818f89bf289f2f7e80dc963972d16ba66eed63ba93",
     "into_serialized_runtime": "e895a7575f49a1f4e5247abda656b4ad6618bf1aefb6cd98f73cd3f6c5245b03",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {

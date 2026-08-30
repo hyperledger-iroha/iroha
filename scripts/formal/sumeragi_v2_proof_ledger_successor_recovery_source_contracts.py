@@ -1,9 +1,611 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+def _cold_ready_validate_completion_source_fidelity_errors(
+    repo_root: Path,
+) -> list[str]:
+    """Bind completion-carried cold retry owners and exact successor release."""
+
+    errors: list[str] = []
+
+    def load(relative: str) -> tuple[Path, str]:
+        return _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "cold Ready Validate completion source",
+        )
+
+    registry_impl_path, registry_impl_source = load(
+        "crates/iroha_core/src/sumeragi/"
+        "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"
+    )
+    effects_path, effects_source = load(
+        "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    )
+    registry_path, registry_source = load(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"
+    )
+    recovery_path, recovery_source = load(
+        "crates/iroha_core/src/sumeragi/"
+        "v2_lifecycle_work_registry_validate_recovery.rs"
+    )
+    adapter_path, adapter_source = load(
+        "crates/iroha_core/src/sumeragi/v2.rs"
+    )
+
+    manifest_binding = _require_rust_item(
+        recovery_path,
+        recovery_source,
+        "bind_authenticated_manifest",
+        errors,
+    )
+    _require_rust_item_context(
+        recovery_path,
+        manifest_binding,
+        (
+            (
+                "impl",
+                "<",
+                "'",
+                "registry",
+                ">",
+                "PreparedReadyDurableValidateExecution",
+                "<",
+                "'",
+                "registry",
+                ">",
+            ),
+        ),
+        "authenticated recovered Ready Validate manifest binding",
+        errors,
+    )
+    for required, description in (
+        (
+            """
+completion.incumbent.durable_receipt == *durable_receipt
+    && completion.outcome.durable_body() == durable_receipt
+    && completion.incumbent.expected_manifest_hash == HashOf::new(manifest)
+    && durable_receipt.manifest_hash() == HashOf::new(manifest)
+    && manifest.round == *round
+    && manifest.subject == *subject
+    && Self::local_origin_manifest(completion)
+        .is_none_or(|local| local == *manifest)
+""",
+            "manifest binding must authenticate the completion, receipt, hash, body key, and optional local origin",
+        ),
+        (
+            """
+if !matches_completion {
+    return false;
+}
+match self.authenticated_manifest.as_ref() {
+    Some(existing) => existing == manifest,
+    None => {
+        self.authenticated_manifest = Some(manifest.clone());
+        true
+    }
+}
+""",
+            "manifest binding must reject disagreement and install only the exact first authority",
+        ),
+    ):
+        _require_rust_token_sequence(
+            recovery_path,
+            manifest_binding,
+            required,
+            description,
+            errors,
+        )
+    _require_rust_item_token_sha256(
+        recovery_path,
+        manifest_binding,
+        _COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+            "bind_authenticated_manifest"
+        ],
+        "authenticated recovered Ready Validate manifest binding",
+        errors,
+    )
+
+    adapter_preview = _require_rust_item(
+        effects_path,
+        effects_source,
+        "prepare_ready_durable_validate_adapter_preview",
+        errors,
+    )
+    production_executor_context = (
+        ("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),
+    )
+    _require_rust_item_context(
+        effects_path,
+        adapter_preview,
+        production_executor_context,
+        "body-store-authenticated recovered Ready Validate adapter preview",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        adapter_preview,
+        """
+let Some(key) = execution.validate_retry_key() else {
+    return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
+        execution,
+        AdapterError::ReadyDurableValidatePublicationContractViolation,
+    ));
+};
+let Some((authenticated_manifest, durable_receipt)) =
+    self.recovered_bodies.get(&key).cloned()
+else {
+    return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
+        execution,
+        AdapterError::ReadyDurableValidatePublicationContractViolation,
+    ));
+};
+if self.durable_bodies.get(&key) != Some(&durable_receipt)
+    || !execution.bind_authenticated_manifest(&authenticated_manifest, &durable_receipt)
+{
+    return Err(super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError::runtime_gate(
+        execution,
+        AdapterError::ReadyDurableValidatePublicationContractViolation,
+    ));
+}
+let validated_catalog_authority = execution.take_validated_catalog_authority();
+""",
+        "adapter preview must derive the exact key, join both body catalogs, and bind their manifest before consuming validated authority",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        effects_path,
+        adapter_preview,
+        _COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+            "prepare_ready_durable_validate_adapter_preview"
+        ],
+        "body-store-authenticated recovered Ready Validate adapter preview",
+        errors,
+    )
+
+    registry_staging = _require_rust_item(
+        adapter_path,
+        adapter_source,
+        "stage_direct_validation_registry",
+        errors,
+    )
+    _require_rust_item_context(
+        adapter_path,
+        registry_staging,
+        (("impl", "SumeragiV2Adapter"),),
+        "authenticated-manifest direct validation registry staging",
+        errors,
+    )
+    for required, description in (
+        (
+            """
+if durable_receipt.context_id() != self.wire_context.id()
+    || durable_receipt.round() != round
+    || durable_receipt.subject() != subject
+{
+    return Err(AdapterError::DurableBodyMismatch);
+}
+let mut next_registry = self.registry.clone();
+""",
+            "direct validation staging must authenticate the durable receipt before cloning staged registry state",
+        ),
+        (
+            """
+if let Some(manifest) = manifest_authority {
+    if manifest.round != round
+        || manifest.subject != subject
+        || durable_receipt.manifest_hash() != HashOf::new(manifest)
+    {
+        return Err(AdapterError::DurableBodyMismatch);
+    }
+    let core_manifest = next_registry.manifest_to_core(manifest, &self.wire_context)?;
+    if core_manifest.subject() != core_subject {
+        return Err(AdapterError::DurableBodyMismatch);
+    }
+}
+""",
+            "direct validation staging must register only an exact body-key and hash authenticated manifest",
+        ),
+        (
+            """
+let manifest = next_registry
+    .manifests
+    .get(&(core_round, core_subject))
+    .ok_or(AdapterError::MissingManifest)?;
+if durable_receipt.manifest_hash() != HashOf::new(manifest) {
+    return Err(AdapterError::DurableBodyMismatch);
+}
+Ok((next_registry, core_round, core_subject))
+""",
+            "direct validation staging must re-read and hash-check the staged manifest before returning it",
+        ),
+    ):
+        _require_rust_token_sequence(
+            adapter_path,
+            registry_staging,
+            required,
+            description,
+            errors,
+        )
+    _require_rust_item_token_sha256(
+        adapter_path,
+        registry_staging,
+        _COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+            "stage_direct_validation_registry"
+        ],
+        "authenticated-manifest direct validation registry staging",
+        errors,
+    )
+
+    projection = _require_rust_item(
+        registry_impl_path,
+        registry_impl_source,
+        "project_recovered_durable_validate_retry_census",
+        errors,
+    )
+    _require_rust_item_context(
+        registry_impl_path,
+        projection,
+        (("impl", "ConcreteLifecycleWorkRegistry"),),
+        "completion-complete cold Ready Validate census",
+        errors,
+    )
+    for required, description, count in (
+        (
+            """
+ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => {
+    if !completion.validates(work.digest) {
+        return Err(RecoveredDurableValidateRetryOwnerErrorV1::InvalidCarrier);
+    }
+    &completion.incumbent
+}
+""",
+            "the first census pass must authenticate a completion digest before using its incumbent",
+            1,
+        ),
+        (
+            """
+ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) => (
+    &completion.incumbent,
+    completion.matches_recovered_record(
+""",
+            "the owner pass must bridge the completion outcome and digest to its incumbent",
+            1,
+        ),
+        (
+            "|| !carrier_matches_record",
+            "the census must reject either a body or completion carrier that disagrees with LedgerV1",
+            1,
+        ),
+    ):
+        _require_rust_token_sequence(
+            registry_impl_path,
+            projection,
+            required,
+            description,
+            errors,
+            count=count,
+        )
+    for required, description, count in (
+        (
+            "ConcreteLifecycleWorkKind::DurableValidateBody(validate)",
+            "the complete census must inspect both body and completion carriers",
+            2,
+        ),
+        (
+            "ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)",
+            "the complete census must inspect completions in both passes",
+            2,
+        ),
+        (
+            "&completion.incumbent",
+            "both completion passes must retain the exact incumbent Validate owner",
+            2,
+        ),
+        (
+            "completion.matches_recovered_record(",
+            "the owner pass must authenticate exactly one completion carrier",
+            1,
+        ),
+    ):
+        _require_rust_token_sequence(
+            registry_impl_path,
+            projection,
+            required,
+            description,
+            errors,
+            count=count,
+        )
+    _require_rust_item_token_sha256(
+        registry_impl_path,
+        projection,
+        _COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+            "project_recovered_durable_validate_retry_census"
+        ],
+        "completion-complete cold Ready Validate census",
+        errors,
+    )
+
+    release = _require_rust_item(
+        effects_path,
+        effects_source,
+        "release_live_lifecycle_validate_successor",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        release,
+        production_executor_context,
+        "identity-exact live Validate successor release",
+        errors,
+    )
+    for required, description in (
+        (
+            """
+let Some(owner) = self.live_lifecycle_validate_successor.take() else {
+    return Ok(false);
+};
+""",
+            "successor release must consume the move-only owner before classifying identity",
+        ),
+        (
+            """
+if !ordinal_matches && !key_matches {
+    self.live_lifecycle_validate_successor = Some(owner);
+    return Ok(false);
+}
+""",
+            "a wholly unrelated terminal row must restore the selected owner and stutter",
+        ),
+        (
+            """
+if ordinal_matches != key_matches {
+    self.live_lifecycle_validate_successor = Some(owner);
+    return Err(EffectExecutorError::Contract(
+        "resolved Validate changed its preliminary retransmit owner".to_owned(),
+    ));
+}
+""",
+            "a partial key/ordinal collision must restore the owner and fail closed",
+        ),
+        (
+            """
+if self.live_lifecycle_decision_apply.is_some() {
+    self.live_lifecycle_validate_successor = Some(owner);
+    return Err(EffectExecutorError::Contract(
+        "non-Apply Validate successor found a full live Apply owner".to_owned(),
+    ));
+}
+Ok(true)
+""",
+            "only the exact owner may be consumed, and never beside a full Apply owner",
+        ),
+    ):
+        _require_rust_token_sequence(
+            effects_path,
+            release,
+            required,
+            description,
+            errors,
+        )
+    _require_rust_token_sequence(
+        effects_path,
+        release,
+        "self.live_lifecycle_validate_successor = Some(owner)",
+        "successor release must restore ownership on exactly the three non-consuming collision paths",
+        errors,
+        count=3,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        release,
+        "Ok(true)",
+        "successor release must expose exactly one consuming result",
+        errors,
+        count=1,
+    )
+    _require_rust_item_token_sha256(
+        effects_path,
+        release,
+        _COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+            "release_live_lifecycle_validate_successor"
+        ],
+        "identity-exact live Validate successor release",
+        errors,
+    )
+
+    test_context = (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),)
+    completion_regression = _require_rust_item(
+        registry_path,
+        registry_source,
+        "cold_launch_census_restores_retry_owner_from_published_validate_completion",
+        errors,
+    )
+    _require_rust_item_context(
+        registry_path,
+        completion_regression,
+        test_context,
+        "validated/rejected completion cold-census regression",
+        errors,
+        expected_attributes=("#[cfg(feature = \"bls\")]", "#[test]"),
+    )
+    for required, description in (
+        (
+            "ReadyDurableValidateFixtureOutcome::Validated",
+            "the cold completion regression must exercise a validated completion",
+        ),
+        (
+            "ReadyDurableValidateFixtureOutcome::Rejected",
+            "the cold completion regression must exercise a rejected completion",
+        ),
+        (
+            "project_recovered_durable_validate_retry_census(&coordinator, None)",
+            "the cold completion regression must project the opaque census from the published completion",
+        ),
+        (
+            "V2EffectExecutor::open_with_body_store_and_validate_retry_census_for_test(",
+            "the cold completion regression must consume the projected census through real open",
+        ),
+        (
+            "!executor.recovered_validated_body_was_bound_for_test(key)",
+            "the cold completion regression must keep Ready completion markers lifecycle-owned",
+        ),
+    ):
+        _require_rust_token_sequence(
+            registry_path,
+            completion_regression,
+            required,
+            description,
+            errors,
+        )
+    _require_rust_item_token_sha256(
+        registry_path,
+        completion_regression,
+        _COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+            "cold_launch_completion_census_regression"
+        ],
+        "validated/rejected completion cold-census regression",
+        errors,
+    )
+
+    plural_regression = _require_rust_item(
+        registry_path,
+        registry_source,
+        "recovered_ready_validate_plural_open_fixture",
+        errors,
+    )
+    _require_rust_item_context(
+        registry_path,
+        plural_regression,
+        test_context,
+        "plural recovered Ready Validate completion and scheduler regression",
+        errors,
+        expected_attributes=(
+            "#[cfg(feature = \"bls\")]",
+            "#[allow(clippy::too_many_lines)]",
+        ),
+    )
+    for required, description, count in (
+        (
+            "release_live_lifecycle_validate_successor(",
+            "the plural regression must classify absent, unrelated, partial, and exact successor release",
+            5,
+        ),
+        (
+            "ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal }",
+            "the plural regression must terminalize the unrelated losing Validate row",
+            1,
+        ),
+        (
+            "child: LifecycleWorkClass::Apply",
+            "the plural regression must advance the selected Validate into Apply",
+            1,
+        ),
+        (
+            "ProductionCompletionDispatchV1::ApplyQueued",
+            "the plural scheduler regression must queue the selected Apply row",
+            1,
+        ),
+        (
+            "executor.commit_lifecycle_decision_apply_finality(finality)",
+            "the plural scheduler regression must commit finality after durable Apply settlement",
+            1,
+        ),
+        (
+            "TurnPlan::Idle",
+            "the plural scheduler regression must reach an exact empty Ready census",
+            1,
+        ),
+        (
+            "executor.ready_to_finish()",
+            "the plural scheduler regression must reach the finalized lifecycle cut",
+            1,
+        ),
+    ):
+        _require_rust_token_sequence(
+            registry_path,
+            plural_regression,
+            required,
+            description,
+            errors,
+            count=count,
+        )
+    _require_rust_item_token_sha256(
+        registry_path,
+        plural_regression,
+        _COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+            "plural_open_reconciliation_regression"
+        ],
+        "plural recovered Ready Validate completion and scheduler regression",
+        errors,
+    )
+
+    atomic_failure = _require_rust_item(
+        registry_path,
+        registry_source,
+        "recovered_ready_validate_plural_late_corruption_fixture",
+        errors,
+    )
+    _require_rust_item_context(
+        registry_path,
+        atomic_failure,
+        test_context,
+        "plural recovered Ready Validate late-corruption regression",
+        errors,
+        expected_attributes=("#[cfg(feature = \"bls\")]",),
+    )
+    for required, description, count in (
+        (
+            "direct_census.install_into_executor(&mut direct_executor)",
+            "the late-corruption regression must reject the direct atomic census sink",
+            1,
+        ),
+        (
+            "direct_executor.recovered_durable_validate_retry_keys_for_test().is_empty()",
+            "a late invalid owner must install no earlier prepared authority",
+            1,
+        ),
+        (
+            "Ok(_) => panic!(\"a late invalid plural owner cannot cross real executor open\")",
+            "the late-corruption regression must reject the by-value real-open corridor",
+            1,
+        ),
+        (
+            "regular_file_state_below(body_directory.path()), baseline_files",
+            "late census rejection must preserve persistent body-store bytes",
+            2,
+        ),
+        (
+            "open_guard.restart_required()",
+            "failed cold open must close the output guard",
+            1,
+        ),
+    ):
+        _require_rust_token_sequence(
+            registry_path,
+            atomic_failure,
+            required,
+            description,
+            errors,
+            count=count,
+        )
+    _require_rust_item_token_sha256(
+        registry_path,
+        atomic_failure,
+        _COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+            "plural_late_corruption_regression"
+        ],
+        "plural recovered Ready Validate late-corruption regression",
+        errors,
+    )
+
+    return errors
+
+
 def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Bind recovered-height storage, lifecycle, and ingress sources."""
 
-    errors: list[str] = []
+    errors = _cold_ready_validate_completion_source_fidelity_errors(repo_root)
 
     def load(relative: str) -> tuple[Path, str]:
         return _read_reviewed_rust_source(repo_root, relative, errors, "production successor-refinement source")
@@ -441,8 +1043,10 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "struct BoundRecoveredCompleteTipSuccessorOwnerV1 { owner: ProductionLifecycleOwnerV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
                     "impl BoundRecoveredCompleteTipSuccessorOwnerV1",
                     "fn launch( self, inputs: super::launch::ProductionLifecycleLaunchInputsV1, )",
-                    "let Self { owner, retirement } = self",
-                    "let launched = owner.launch(inputs)?",
+                    "let Self { owner, mut retirement, } = self",
+                    "let mut launched = owner.launch(inputs)?",
+                    "launched.reauthenticate_recovered_complete_tip_successor(&mut retirement)",
+                    ".map_err(|_| super::launch::ProductionLifecycleLaunchErrorV1::InvalidOwner)?",
                     "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched, retirement, }",
                     "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: Box<super::launch::LaunchedProductionLifecycleV1>, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
                     "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
@@ -1052,11 +1656,19 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "let mut logical_keys = std::collections::BTreeSet::new()",
                         "for work in self.entries.values()",
                         "ConcreteLifecycleWorkKind::DurableValidateBody(validate)",
+                        "ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)",
+                        "if !completion.validates(work.digest)",
+                        "&completion.incumbent",
                         "candidate_statement()",
                         "logical_keys.insert((statement.proposal_round(), subject))",
                         "RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers",
                         "let mut owners = BTreeMap::new()",
                         "for (address, work) in &self.entries",
+                        "let (validate, carrier_matches_record) = match &work.kind",
+                        "validate.matches_recovered_record(",
+                        "ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)",
+                        "&completion.incumbent",
+                        "completion.matches_recovered_record(",
                         "let expected_key = LifecycleKey::new(",
                         "let matching_decision = decision.filter(",
                         "Some(wire::GlobalPhase::Commit), Some(commitment)",
@@ -1068,7 +1680,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "record.key != expected_key",
                         "record.physical_slots != BTreeMap::from([(address.slot, work.digest)])",
                         "coordinator.ready_index.contains(&record.ordinal)",
-                        "validate.matches_recovered_record(",
+                        "!carrier_matches_record",
                         "project_recovered_durable_validate_retry_binding(",
                         "matching_decision",
                         "owners.insert(key, owner).is_some()",
@@ -1158,7 +1770,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     cold_validate_binding.source,
                     (
                         "frontier_tag != recovered_tag",
-                        "incoming_tag != frontier_tag",
+                        "incoming_tag.height() != frontier_tag.height()",
                         "frontier_round != recovered_round",
                         "frontier_subject != recovered_subject",
                         "incoming_round != recovered_round",
@@ -1176,10 +1788,21 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "candidate.statement != Some(incoming_statement)",
                         "RuntimeEffectOwnership::new_bound(",
                         "Ok((",
-                        "effect: effect.clone()",
+                        "effect: if incoming_tag.strictly_advances(*frontier_tag)",
+                        "effect.clone()",
+                        "frontier.effect.clone()",
                         "statement: retained_statement",
                         ".authority_ceiling_commitment.or(incoming_commitment)",
                     ),
+                )
+                _require_rust_item_token_sha256(
+                    runtime_path,
+                    cold_validate_binding,
+                    _DURABLE_VALIDATE_RETRY_FRONTIER_RUST_ITEM_SHA256[
+                        "recovered_retry_projection"
+                    ],
+                    "exact cold Ready Validate retry binding",
+                    errors,
                 )
                 reject_tokens(
                     runtime_path,
@@ -1202,8 +1825,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "lineage-separated durable Validate retry seal",
                 cold_validate_seal,
                 (
-                    "Live { effect: AdapterEffect, ownership: RuntimeEffectOwnership, }",
-                    "Recovered { owner: Arc<RecoveredDurableValidateRetryOwnerV1>, frontier: RecoveredDurableValidateRetryFrontierV1, }",
+                    "Live { effect: AdapterEffect, ownership: RuntimeEffectOwnership, lifecycle_ordinal: Option<u128>, }",
+                    "Recovered { owner: Arc<RecoveredDurableValidateRetryOwnerV1>, frontier: RecoveredDurableValidateRetryFrontierV1, lifecycle_ordinal: Option<u128>, }",
                 ),
             )
             reject_tokens(
@@ -1212,11 +1835,13 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 cold_validate_seal,
                 ("Recovered(Arc<RecoveredDurableValidateRetryOwnerV1>)",),
             )
-            cold_validate_retry_projection = _require_rust_item(
+            cold_validate_retry_projection = _require_qualified_rust_item(
                 effects_path,
                 effects_source,
+                "DurableValidateRetrySealV1",
                 "project_retry",
                 errors,
+                "non-substitutable live and recovered Validate retry projection",
             )
             if cold_validate_retry_projection is not None:
                 require_order(
@@ -1224,21 +1849,72 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "non-substitutable live and recovered Validate retry projection",
                     cold_validate_retry_projection.source,
                     (
-                        "Self::Live { effect: incumbent_effect, ownership: incumbent_ownership, }",
+                        "Self::Live { effect: incumbent_effect, ownership: incumbent_ownership, lifecycle_ordinal, }",
+                        "incoming_tag.height() != incumbent_tag.height()",
                         "adopt_incumbent_body_stage_for_retry_or_authority(incoming, effect)",
-                        "seal: Self::Live",
-                        "Self::Recovered { owner, frontier }",
+                        "let (retained_effect, retained_ownership)",
+                        "if incoming_tag.strictly_advances(*incumbent_tag)",
+                        "effect.clone(), ownership.clone()",
+                        "rebind_same_adapter_effect(incumbent_effect)",
+                        "incumbent_effect.clone(), retained",
+                        "seal: Self::Live { effect: retained_effect, ownership: retained_ownership, lifecycle_ordinal: *lifecycle_ordinal, }",
+                        "Self::Recovered { owner, frontier, lifecycle_ordinal, }",
                         "owner.exactly_matches_retry(frontier, effect, incoming)",
                         "seal: Self::Recovered {",
                         "owner: Arc::clone(owner)",
                         "frontier",
+                        "lifecycle_ordinal: *lifecycle_ordinal",
                     ),
+                )
+                _require_rust_item_token_sha256(
+                    effects_path,
+                    cold_validate_retry_projection,
+                    _DURABLE_VALIDATE_RETRY_FRONTIER_RUST_ITEM_SHA256[
+                        "live_retry_projection"
+                    ],
+                    "non-substitutable live and recovered Validate retry projection",
+                    errors,
                 )
                 reject_tokens(
                     effects_path,
                     "non-substitutable recovered Validate retry projection",
                     cold_validate_retry_projection.source,
                     ("owner: Arc::new(incoming",),
+                )
+            published_validate_retry_projection = _require_qualified_rust_item(
+                effects_path,
+                effects_source,
+                "PublishedLifecycleValidateRetryMarkerV1",
+                "project_retry",
+                errors,
+                "monotonic published lifecycle Validate retry projection",
+            )
+            if published_validate_retry_projection is not None:
+                require_order(
+                    effects_path,
+                    "monotonic published lifecycle Validate retry projection",
+                    published_validate_retry_projection.source,
+                    (
+                        "incoming_tag.height() != incumbent_tag.height()",
+                        "incoming_round != incumbent_round",
+                        "incoming_subject != incumbent_subject",
+                        "self.statement.body_stage_authority_relation_to(incoming_statement)",
+                        "RuntimeFetchAuthorityRelation::Upgrade => incoming_statement",
+                        "RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale",
+                        "effect: if incoming_tag.strictly_advances(*incumbent_tag)",
+                        "effect.clone()",
+                        "self.effect.clone()",
+                        "statement",
+                    ),
+                )
+                _require_rust_item_token_sha256(
+                    effects_path,
+                    published_validate_retry_projection,
+                    _DURABLE_VALIDATE_RETRY_FRONTIER_RUST_ITEM_SHA256[
+                        "published_retry_projection"
+                    ],
+                    "monotonic published lifecycle Validate retry projection",
+                    errors,
                 )
             cold_validate_durable_commitment_join = _require_rust_item(
                 effects_path,
@@ -1253,10 +1929,11 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     cold_validate_durable_commitment_join.source,
                     (
                         "Self::Live { .. } => Ok(None)",
-                        "Self::Recovered { owner, frontier }",
+                        "Self::Recovered { owner, frontier, lifecycle_ordinal, }",
                         "frontier.project_commitment_ceiling(commitment)",
                         "owner: Arc::clone(owner)",
                         "frontier",
+                        "lifecycle_ordinal: *lifecycle_ordinal",
                     ),
                 )
             cold_validate_install = region(
@@ -1272,8 +1949,9 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 cold_validate_install,
                 (
                     "owner.exactly_matches_validated_marker(key, validated)",
+                    "let frontier = owner.initial_retry_frontier().ok_or_else(|| {",
                     "DurableValidateRetrySealV1::Recovered {",
-                    "frontier: owner.initial_retry_frontier()",
+                    "frontier,",
                     "owner: Arc::new(owner)",
                 ),
             )
@@ -1301,6 +1979,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "for (key, validated_receipt) in &recovered_validations",
                         "validated_receipt.durable() != durable_receipt",
                         "recovered_validate_retry_census.classify_and_bind_validated_marker(",
+                        "if !ready_validate_deferred",
                         "runtime.recover_validated_body(manifest, validated_receipt)",
                         "Self::with_runtime_and_guard(",
                         "install_recovered_validation_catalog(",
@@ -1328,6 +2007,15 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     cold_validate_catalog_open.source,
                     "mut recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1",
                     1,
+                )
+                _require_rust_item_token_sha256(
+                    effects_path,
+                    cold_validate_catalog_open,
+                    _COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+                        "open_with_body_store"
+                    ],
+                    "owner-exact cold Ready Validate marker deferral",
+                    errors,
                 )
             cold_validate_record_marker = _require_rust_item(
                 effects_path,
@@ -1358,7 +2046,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             )
             if retain_effect_batch is not None:
                 retry_start = retain_effect_batch.source.find(
-                    "if let AdapterEffect::ValidateBody { round, subject, .. } = effect"
+                    "if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n"
+                    "                && let Some(seal) = validate_retry_seal_updates"
                 )
                 retry_end = retain_effect_batch.source.find(
                     "let mut candidate_semantic_identity = evidence.candidate_semantic_identity()",
@@ -1376,12 +2065,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "exact cold Ready Validate retry stutter",
                         retry_stutter,
                         (
-                            "retained_validate_retry_seals.get(&(*round, *subject)).cloned()",
+                            "validate_retry_seal_updates",
+                            ".get(&(*round, *subject))",
+                            "self.durable_validate_retry_seals.get(&(*round, *subject))",
                             "seal.project_retry(effect, evidence)",
                             "RuntimeCandidateAdmissionDisposition::CoalescedRetry",
                             "production_adapter_effect_candidate_trace_projection(",
                             "check_production_effect_to_candidate_transition(",
-                            "retained_validate_retry_seals.insert((*round, *subject), projected.seal)",
+                            "validate_retry_seal_updates.insert((*round, *subject), projected.seal)",
                             "retain_effect.push(false)",
                             "continue",
                         ),
@@ -1419,7 +2110,11 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "self.runtime.retire_proposal_work_after_decision(",
                         "let Some(seal) = projected_recovered_decision_seal",
                         "self.durable_validate_retry_seals.insert(decision_body, seal)",
-                        "self.durable_validate_retry_seals.retain(|key, _| !drain_decision_body && *key == decision_body)",
+                        "self.durable_validate_retry_seals.retain(|key, seal| {",
+                        "seal.lifecycle_ordinal().is_some() || (!drain_decision_body && *key == decision_body)",
+                        "self.published_lifecycle_validate_retry_markers",
+                        ".retain(|key, marker| {",
+                        "marker.owns_live_lifecycle_row() || (!drain_decision_body && *key == decision_body)",
                         "self.protected_decision = Some(durable_decision)",
                     ),
                 )
@@ -2349,6 +3044,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "ingress_ready: Arc<AtomicBool>",
                     "block_ingress: Arc<FairV2Ingress>",
                     "impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1",
+                    "fn close_ingress(",
                     "fn retire(",
                     "self.ingress_ready.store(false, Ordering::Release)",
                     "self.block_ingress.close()",
@@ -2373,14 +3069,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "activated runner readiness retirement",
                 activated_runner_authority,
                 "self.ingress_ready.store(false, Ordering::Release)",
-                1,
+                2,
             )
             require_token_count(
                 runner_dependency_path,
                 "activated runner ingress retirement",
                 activated_runner_authority,
                 "self.block_ingress.close()",
-                1,
+                2,
             )
             shared_runner_ingress_retirement = region(
                 runner_dependency_path,
@@ -4008,10 +4704,15 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "staged recovered Broadcast registry binding",
                 single_broadcast_bind,
                 (
+                    "exact_staged_recovered_lifecycle_broadcast_address(",
+                    "Ok(BoundRecoveredLifecycleSignBroadcastSuccessor",
+                    "pub(super) fn exact_staged_recovered_lifecycle_broadcast_address(",
                     "coordinator.records.get(&child_ordinal)",
                     "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-                    "self.registry.entries.contains_key(&broadcast_address)",
-                    ".validates_at(&self.verified, broadcast_address, child_digest)",
+                    "broadcast.matches_current_ready_record(",
+                    ".validates_at(verified, broadcast_address, child_digest)",
+                    "registry.entries.contains_key(&broadcast_address)",
+                    "Ok(broadcast_address)",
                 ),
             )
             single_broadcast_transition = region(
@@ -4061,7 +4762,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "adjacent fresh Certified-Serve pair after a shared gap",
                 fresh_serve_pair,
                 (
-                    "current.high_water >= serve",
+                    "serve <= current.high_water",
                     "serve.checked_add(1) != Some(producer)",
                     "producer != staged.high_water",
                 ),
@@ -4896,7 +5597,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 selector_source,
                 "queue-owned recovered Decision Fetch selector",
                 "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-                "/// Decide whether an already selected exact cut is the recovered Fetch owner.",
+                "/// Classify the exact selected certified-response occurrence without mutation.",
             )
             require_order(
                 selector_path,
@@ -5148,10 +5849,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "staged recovered Store registry binding",
                 single_store_bind,
                 (
+                    "exact_staged_recovered_decision_store_address(",
+                    "self.registry.entries.contains_key(&store_address)",
+                    "Ok(BoundRecoveredDecisionFetchStoreSuccessor",
+                    "pub(super) fn exact_staged_recovered_decision_store_address(",
                     "coordinator.records.get(&child_ordinal)",
                     "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-                    "self.registry.entries.contains_key(&store_address)",
-                    ".validates_at(coordinator.active_context, store_address, child_digest)",
+                    "store.matches_current_ready_record(",
+                    "Ok(store_address)",
                 ),
             )
             single_store_transition = region(
@@ -5598,8 +6303,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "runner lifecycle finalization preflight",
                 lifecycle_run_inner_source,
                 (
-                    "if !ready_to_finish || producer_turn.is_some()",
+                    "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
+                    "if apply_terminal_settled && !ready_to_finish",
+                    "let producer_turn = if apply_terminal_settled",
+                    "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
                     "schedule_local_proposal(",
+                    "claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner))",
                     "let finalization_ready = ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner)",
                     "let rollover_ready = if finalization_ready",
                     "preflight_finalized_lane_rollover(",

@@ -210,7 +210,7 @@ impl VerifiedAnonymousPgcLedgerEffectV1 {
         &self.accounts
     }
 }
-/// Exact transparent mutation produced by the disabled native ZK-ACE candidate.
+/// Exact transparent mutation produced by the native ZK-ACE authorization engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VerifiedZkAceAuthorizationV1 {
     pub(crate) policy_id: PrivacyPolicyIdV1,
@@ -4287,15 +4287,18 @@ mod tests {
     }
     #[cfg(feature = "zk-stark")]
     #[test]
-    fn zk_ace_production_dispatch_has_no_activatable_profile() {
+    fn zk_ace_production_dispatch_has_the_compiled_exact12_profile() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        let profile = compiled_privacy_profile_v1(protocol_id)
+            .expect("the complete native ZK-ACE engine must expose its Exact12 profile");
+        assert_eq!(profile.protocol_id, protocol_id);
         assert_eq!(
-            compiled_privacy_profile_v1(protocol_id),
-            Err(
-                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                    protocol_id,
-                }
-            )
+            profile.proof_system_id,
+            PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
+        );
+        assert_eq!(
+            profile.engine_id,
+            PrivacyEngineIdV1::NativeGoldilocksStarkFri
         );
     }
     #[test]

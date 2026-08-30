@@ -297,6 +297,23 @@ def _validation_ack(
             )
         return item
 
+    def receipt_text(*names: str) -> str:
+        item: object = receipt_document
+        try:
+            for name in names:
+                if not isinstance(item, dict):
+                    raise KeyError(name)
+                item = item[name]
+        except KeyError as error:
+            raise CacheCopyError(
+                "aggregate receipt lacks a validator invocation text value"
+            ) from error
+        if not isinstance(item, str):
+            raise CacheCopyError(
+                "aggregate receipt validator invocation text is malformed"
+            )
+        return item
+
     try:
         authentication = receipt_document["authentication"]
         authentication["bootstrap"]
@@ -396,6 +413,32 @@ def _validation_ack(
         ),
         "--formal-completion": (
             "path", receipt_path("evidence", "formal_completion")
+        ),
+        "--formal-replay-source-receipt": (
+            "path",
+            receipt_path(
+                "evidence", "formal_replay_release", "source_receipt"
+            ),
+        ),
+        "--formal-replay-release-root": (
+            "path",
+            str(
+                Path(
+                    receipt_path(
+                        "evidence", "formal_replay_release", "receipt"
+                    )
+                ).parent
+            ),
+        ),
+        "--expected-formal-replay-signature-sha256": (
+            "text",
+            receipt_text(
+                "evidence", "formal_replay_release", "signature", "sha256"
+            ),
+        ),
+        "--formal-replay-principal": (
+            "text",
+            receipt_text("evidence", "formal_replay_release", "principal"),
         ),
         "--seed-completion": (
             "path", receipt_path("evidence", "seed_matrix_completion")

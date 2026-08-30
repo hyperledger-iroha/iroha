@@ -20,6 +20,57 @@ private final class ToriiRejectRedirectTaskDelegate: NSObject, URLSessionTaskDel
     }
 }
 
+final class ToriiCredentialFreeSessionDelegate: NSObject,
+    URLSessionDelegate,
+    URLSessionTaskDelegate,
+    @unchecked Sendable {
+    static let shared = ToriiCredentialFreeSessionDelegate()
+
+    static func disposition(
+        for authenticationMethod: String
+    ) -> URLSession.AuthChallengeDisposition {
+        authenticationMethod == NSURLAuthenticationMethodServerTrust
+            ? .performDefaultHandling
+            : .cancelAuthenticationChallenge
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        completionHandler(
+            Self.disposition(for: challenge.protectionSpace.authenticationMethod),
+            nil
+        )
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        completionHandler(.cancelAuthenticationChallenge, nil)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
 public struct ToriiClientAuthentication: Equatable, Sendable {
     public let headers: [String: String]
 
@@ -8834,7 +8885,34 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
     }
 }
 
-public struct ToriiVerifyingKeyId: Decodable, Sendable, Equatable {
+fileprivate func verifyingKeyIdFieldIsPortable(_ value: String) -> Bool {
+    let bytes = Array(value.utf8)
+    guard !bytes.isEmpty, bytes.count <= 256 else { return false }
+    let isEdge: (UInt8) -> Bool = { byte in
+        (byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z"))
+            || (byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9"))
+    }
+    guard let first = bytes.first,
+          let last = bytes.last,
+          isEdge(first),
+          isEdge(last) else {
+        return false
+    }
+    for forbidden in ["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"]
+    where value.contains(forbidden) {
+        return false
+    }
+    return bytes.allSatisfy { byte in
+        isEdge(byte)
+            || byte == UInt8(ascii: "-")
+            || byte == UInt8(ascii: "_")
+            || byte == UInt8(ascii: "/")
+            || byte == UInt8(ascii: ":")
+            || byte == UInt8(ascii: ".")
+    }
+}
+
+public struct ToriiVerifyingKeyId: Decodable, Sendable, Equatable, Hashable {
     public let backend: String
     public let name: String
 
@@ -8860,11 +8938,11 @@ public struct ToriiVerifyingKeyId: Decodable, Sendable, Equatable {
         let normalizedName = try ToriiValidation.normalizedExactNonEmpty(rawName,
                                                                          field: "name",
                                                                          codingPath: container.codingPath + [CodingKeys.name])
-        if normalizedName.contains(":") {
+        guard verifyingKeyIdFieldIsPortable(normalizedName) else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(
                     codingPath: container.codingPath + [CodingKeys.name],
-                    debugDescription: "name must not contain ':' characters"
+                    debugDescription: "name must use the bounded portable verifying-key identifier grammar"
                 )
             )
         }
@@ -11000,9 +11078,10 @@ fileprivate enum ToriiVerifyingKeyDraftValidation {
         case .withdrawn:
             status = 2
         }
-        let backendTag: UInt32 = request.backend.hasPrefix("stark/")
-            ? VerifyingKeyBackendTag.stark.noritoDiscriminant
-            : VerifyingKeyBackendTag.halo2IpaPasta.noritoDiscriminant
+        guard let backendTag = VerifyingKeyBackendTag
+            .verifierBackendRegistryTagV1(request.backend)?.noritoDiscriminant else {
+            throw invalid("request backend is not an exact verifier-registry label")
+        }
         return ToriiVerifyingKeyExpectedRecord(
             version: request.version,
             circuitId: request.circuitId,
@@ -21815,6 +21894,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// Wire-format preference used for dual-format Torii routes.
     public let wireFormatPreference: ToriiWireFormatPreference
     private let session: URLSession
+    private let credentialFreeSession: URLSession
     private let currentTimeMilliseconds: @Sendable () -> UInt64
     private let currentMonotonicMilliseconds: @Sendable () -> UInt64
     private let serverClockCacheKey: String
@@ -21829,7 +21909,30 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private static let sccpDiscoveryResponseMaximumBytes = 64 * 1024 * 1024
     private static let contractCallResponseMaximumBytes = 32 * 1_024 * 1_024
     private static let assetTransferResponseMaximumBytes = 32 * 1_024 * 1_024
+    private static let activeVerifyingKeyIdsResponseMaximumBytes = 512 * 1_024
+    private static let publicReadCredentialHeaders = [
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie",
+        "X-API-Token",
+        ToriiAccountOnboardingTokenHeader,
+        "X-Account-Id",
+        "X-Dataspace-Id",
+        "X-Iroha-Account",
+        "X-Iroha-Signature",
+        "X-Iroha-Timestamp-Ms",
+        "X-Iroha-Nonce",
+        "X-Iroha-Witness",
+        "X-Iroha-Operator-Public-Key",
+        "X-Iroha-Operator-Timestamp-Ms",
+        "X-Iroha-Operator-Nonce",
+        "X-Iroha-Operator-Signature",
+    ]
 
+    /// Creates a client over `session`. Active verifying-key discovery uses a separately sanitized
+    /// session that does not retain the caller's headers, cookies, credential store, proxy, or
+    /// delegate. Custom `URLProtocol` classes are preserved for transport injection and form an
+    /// explicit trust boundary: they must not add credentials to credential-free public reads.
     public init(baseURL: URL,
                 session: URLSession = .shared,
                 defaultHeaders: [String: String] = [:],
@@ -21852,6 +21955,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         self.operatorSigningContext = operatorSigningContext
         self.serverClockCacheKey = Self.serverClockCacheKey(for: self.baseURL)
         self.session = session
+        self.credentialFreeSession = Self.makeCredentialFreeSession(from: session)
         self.currentTimeMilliseconds = currentTimeMilliseconds
         self.currentMonotonicMilliseconds = currentMonotonicMilliseconds
         self.defaultHeaders = ToriiClientAuthentication.normalizedHeaders(defaultHeaders).filter {
@@ -21882,6 +21986,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// Call this method when you are done using the client to release resources.
     public func invalidateAndCancel() {
         session.invalidateAndCancel()
+        credentialFreeSession.invalidateAndCancel()
+    }
+
+    static func makeCredentialFreeSession(from session: URLSession) -> URLSession {
+        let configuration = session.configuration
+        configuration.httpAdditionalHeaders = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCredentialStorage = nil
+        configuration.connectionProxyDictionary = nil
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(
+            configuration: configuration,
+            delegate: ToriiCredentialFreeSessionDelegate.shared,
+            delegateQueue: nil
+        )
     }
 
     /// Returns a creation timestamp that tracks observed server time when available and
@@ -26284,6 +26406,89 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
+    /// Return Torii's exact, bounded, ascending projection of active verifying-key identifiers.
+    ///
+    /// This discovery route is intentionally stricter than the generic registry list: the
+    /// response must be an `application/json` array containing at most 1,000 exact
+    /// `{backend,name}` objects, without duplicate keys, identifiers, unknown fields, or
+    /// ordering drift.
+    public func listActiveVerifyingKeyIds() async throws -> [ToriiVerifyingKeyId] {
+        var request = try makeRequest(
+            path: "/v1/zk/vk",
+            queryItems: [
+                URLQueryItem(name: "status", value: ToriiVerifyingKeyStatus.active.rawValue),
+                URLQueryItem(name: "ids_only", value: "true"),
+                URLQueryItem(name: "limit", value: "1000"),
+                URLQueryItem(name: "order", value: ToriiVerifyingKeyListQuery.Order.ascending.rawValue),
+            ],
+            headers: [
+                "Accept": "application/json",
+                "Accept-Encoding": "identity",
+            ],
+            excludingHeaders: Self.publicReadCredentialHeaders,
+            excludingHeaderPrefixes: ["X-Iroha-Operator-"]
+        )
+        guard baseURL.user == nil,
+              baseURL.password == nil,
+              request.url?.user == nil,
+              request.url?.password == nil else {
+            throw ToriiClientError.invalidPayload(
+                "active verifying-key ids reject URL user-info"
+            )
+        }
+        request.httpShouldHandleCookies = false
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "active verifying-key ids",
+            maximumBytes: Self.activeVerifyingKeyIdsResponseMaximumBytes,
+            sessionOverride: credentialFreeSession,
+            taskDelegate: ToriiCredentialFreeSessionDelegate.shared
+        )
+        try ensureStatus(response, equals: 200, responseBody: data)
+        let contentEncoding = response.value(forHTTPHeaderField: "Content-Encoding")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard contentEncoding == nil || contentEncoding?.isEmpty == true
+            || contentEncoding == "identity" else {
+            throw ToriiClientError.invalidPayload(
+                "active verifying-key ids response must preserve the identity representation"
+            )
+        }
+        guard response.value(forHTTPHeaderField: "Content-Type") == "application/json" else {
+            throw ToriiClientError.invalidPayload(
+                "active verifying-key ids response Content-Type must be exactly application/json"
+            )
+        }
+        guard !data.isEmpty else { throw ToriiClientError.emptyBody }
+        try rejectDuplicateJSONKeys(data, context: "active verifying-key ids response")
+
+        let ids = try decodeJSON([ToriiVerifyingKeyId].self, from: data)
+        guard ids.count <= 1_000 else {
+            throw ToriiClientError.invalidPayload(
+                "active verifying-key ids response exceeds 1000 identifiers"
+            )
+        }
+
+        var unique = Set<ToriiVerifyingKeyId>()
+        var previous: ToriiVerifyingKeyId?
+        for id in ids {
+            guard unique.insert(id).inserted else {
+                throw ToriiClientError.invalidPayload(
+                    "active verifying-key ids response contains a duplicate identifier"
+                )
+            }
+            if let previous,
+               previous.name > id.name
+                   || (previous.name == id.name && previous.backend > id.backend) {
+                throw ToriiClientError.invalidPayload(
+                    "active verifying-key ids response is not in requested ascending order"
+                )
+            }
+            previous = id
+        }
+        return ids
+    }
+
     public func registerVerifyingKey(
         _ requestBody: ToriiVerifyingKeyRegisterRequest
     ) async throws -> ToriiVerifyingKeyTransactionDraft {
@@ -26990,7 +27195,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private func sendBoundedSccpResponse(
         _ request: URLRequest,
         context: String,
-        maximumBytes: Int
+        maximumBytes: Int,
+        sessionOverride: URLSession? = nil,
+        taskDelegate: URLSessionTaskDelegate = ToriiRejectRedirectTaskDelegate.shared
     ) async throws -> (Data, HTTPURLResponse) {
         precondition(maximumBytes > 0)
         if let url = request.url,
@@ -27007,9 +27214,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
         do {
             let observedAtLocalMs = currentEpochMs()
-            let (bytes, response) = try await session.bytes(
+            let transportSession = sessionOverride ?? session
+            let (bytes, response) = try await transportSession.bytes(
                 for: request,
-                delegate: ToriiRejectRedirectTaskDelegate.shared
+                delegate: taskDelegate
             )
             guard let http = response as? HTTPURLResponse else {
                 bytes.task.cancel()
@@ -27649,7 +27857,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                              method: HTTPMethod = .get,
                              queryItems: [URLQueryItem]? = nil,
                              body: Data? = nil,
-                             headers: [String: String] = [:]) throws -> URLRequest {
+                             headers: [String: String] = [:],
+                             excludingHeaders: [String] = [],
+                             excludingHeaderPrefixes: [String] = []) throws -> URLRequest {
         // Remove leading slash to make path relative (required for URL(string:relativeTo:))
         let relativePath = path.hasPrefix("/") ? String(path.dropFirst()) : path
 
@@ -27673,6 +27883,18 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         var finalHeaders = defaultHeaders
         headers.forEach { key, value in
             ToriiClientAuthentication.setHeader(&finalHeaders, key: key, value: value)
+        }
+        if !excludingHeaders.isEmpty || !excludingHeaderPrefixes.isEmpty {
+            finalHeaders = finalHeaders.filter { candidate, _ in
+                !excludingHeaders.contains {
+                    $0.caseInsensitiveCompare(candidate) == .orderedSame
+                } && !excludingHeaderPrefixes.contains { prefix in
+                    candidate.range(
+                        of: prefix,
+                        options: [.anchored, .caseInsensitive]
+                    ) != nil
+                }
+            }
         }
         finalHeaders.forEach { key, value in
             request.setValue(value, forHTTPHeaderField: key)

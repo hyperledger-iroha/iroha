@@ -3321,6 +3321,11 @@ for await (const item of torii.iterateVerifyingKeys({ backend: "halo2/ipa", page
   console.log(item.id.name);
 }
 
+// Node and browser clients expose the same fail-closed public discovery read.
+// Its Active/ids-only/limit/order query cannot be overridden by callers.
+const activeIds = await torii.listActiveVerifyingKeyIds();
+console.log(activeIds[0]?.backend, activeIds[0]?.name);
+
 const detail = await torii.getVerifyingKeyTyped("halo2/ipa", "vk_main");
 console.log(detail.record.status); // "Active"
 

@@ -221,6 +221,7 @@ def _fixture_receipt_for_validator(
     values: dict[str, tuple[str, str | bool]],
 ) -> dict[str, object]:
     path = lambda name: {"path": values[name][1], "sha256": "1" * 64}
+    formal_replay_root = Path(str(values["--formal-replay-release-root"][1]))
     return {
         "identity": {
             "sealed_source_manifest_sha256": values["--source-manifest-sha256"][1]
@@ -260,6 +261,20 @@ def _fixture_receipt_for_validator(
             "release_signature_ssh_keygen": path("--signature-ssh-keygen"),
             "corridor_completion": path("--corridor-completion"),
             "formal_completion": path("--formal-completion"),
+            "formal_replay_release": {
+                "source_receipt": path("--formal-replay-source-receipt"),
+                "receipt": {
+                    "path": str(formal_replay_root / "receipt.json"),
+                    "sha256": "1" * 64,
+                },
+                "signature": {
+                    "path": str(formal_replay_root / "receipt.json.sig"),
+                    "sha256": values[
+                        "--expected-formal-replay-signature-sha256"
+                    ][1],
+                },
+                "principal": values["--formal-replay-principal"][1],
+            },
             "seed_matrix_completion": path("--seed-completion"),
             "chaos_completion": path("--chaos-completion"),
             "g4p_multilane": {"completion": path("--g4p-completion")},
@@ -508,10 +523,37 @@ def exercise_release_helper_fail_atomicity(
         expected_signer_fingerprint=expected_signer_fingerprint,
         scaling_digests=scaling_digests,
     )
-    receipt.chmod(0o600)
-    receipt.write_bytes(
-        canonical_json(_fixture_receipt_for_validator(expected_invocation_values))
+    formal_replay_options = (
+        "--formal-replay-source-receipt",
+        "--formal-replay-release-root",
+        "--expected-formal-replay-signature-sha256",
+        "--formal-replay-principal",
     )
+    formal_replay_offset = helper.VALIDATOR_OPTION_ORDER.index(
+        formal_replay_options[0]
+    )
+    assert helper.VALIDATOR_OPTION_ORDER[
+        formal_replay_offset : formal_replay_offset + len(formal_replay_options)
+    ] == formal_replay_options
+    assert (
+        helper.VALIDATOR_OPTION_ORDER[formal_replay_offset - 1]
+        == "--formal-completion"
+    )
+    assert (
+        helper.VALIDATOR_OPTION_ORDER[
+            formal_replay_offset + len(formal_replay_options)
+        ]
+        == "--seed-completion"
+    )
+    assert set(formal_replay_options) & helper.VALIDATOR_PATH_OPTIONS == set(
+        formal_replay_options[:2]
+    )
+    assert tuple(
+        expected_invocation_values[name][0] for name in formal_replay_options
+    ) == ("path", "path", "text", "text")
+    receipt_value = _fixture_receipt_for_validator(expected_invocation_values)
+    receipt.chmod(0o600)
+    receipt.write_bytes(canonical_json(receipt_value))
     receipt.chmod(0o400)
     ack_value = {
         "format": "iroha-sumeragi-v2-receipt-validation-ack", "schema_version": 3,
@@ -551,36 +593,106 @@ def exercise_release_helper_fail_atomicity(
     helper._validate_validator_invocation(
         ack_value["invocation"], expected_values=expected_invocation_values
     )
-    changed_invocation = json.loads(json.dumps(ack_value["invocation"]))
-    previously_unchecked = next(
-        binding
-        for binding in changed_invocation["ordered_options"]
-        if binding["name"] == "--signature-transcript"
-    )
-    previously_unchecked["normalized_value_sha256"] = hashlib.sha256(
-        json.dumps(
-            {"kind": "path", "value": str(invocation / "attacker-transcript")},
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
-    changed_core = {
-        key: changed_invocation[key]
-        for key in (
-            "profile", "operation", "python_flags", "validator", "ordered_options"
+    for changed_name in ("--signature-transcript", *formal_replay_options):
+        changed_invocation = json.loads(json.dumps(ack_value["invocation"]))
+        changed_binding = next(
+            binding
+            for binding in changed_invocation["ordered_options"]
+            if binding["name"] == changed_name
         )
-    }
-    changed_invocation["invocation_sha256"] = hashlib.sha256(
-        json.dumps(
-            changed_core, sort_keys=True, separators=(",", ":")
-        ).encode()
-    ).hexdigest()
-    with pytest.raises(helper.CacheCopyError, match="normalized option value"):
-        helper._validate_validator_invocation(
-            changed_invocation, expected_values=expected_invocation_values
+        changed_kind = expected_invocation_values[changed_name][0]
+        changed_value = (
+            str(invocation / f"attacker-{changed_name[2:]}")
+            if changed_kind == "path"
+            else f"attacker:{changed_name}"
         )
+        changed_binding["normalized_value_sha256"] = hashlib.sha256(
+            json.dumps(
+                {"kind": changed_kind, "value": changed_value},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        changed_core = {
+            key: changed_invocation[key]
+            for key in (
+                "profile",
+                "operation",
+                "python_flags",
+                "validator",
+                "ordered_options",
+            )
+        }
+        changed_invocation["invocation_sha256"] = hashlib.sha256(
+            json.dumps(
+                changed_core, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        with pytest.raises(helper.CacheCopyError, match="normalized option value"):
+            helper._validate_validator_invocation(
+                changed_invocation, expected_values=expected_invocation_values
+            )
     ack.write_bytes(canonical_json(ack_value)); ack.chmod(0o400)
+    formal_replay_receipt = receipt_value["evidence"]["formal_replay_release"]
+    assert isinstance(formal_replay_receipt, dict)
+
+    def reject_receipt_projection(
+        changed_receipt: dict[str, object], error: str,
+    ) -> None:
+        receipt.chmod(0o600)
+        receipt.write_bytes(canonical_json(changed_receipt))
+        receipt.chmod(0o400)
+        try:
+            with pytest.raises(helper.CacheCopyError, match=error):
+                helper.seal_release_result(
+                    invocation, bootstrap, manifest_digest, candidate_root,
+                    scaling_manifest, expected_signer_fingerprint,
+                    scaling_digests["trial_harness"],
+                    scaling_digests["configuration"],
+                    scaling_digests["irohad"], scaling_digests["iroha_cli"],
+                )
+        finally:
+            receipt.chmod(0o600)
+            receipt.write_bytes(canonical_json(receipt_value))
+            receipt.chmod(0o400)
+
+    replay_projection_mutations = (
+        (("source_receipt", "path"), str(invocation / "attacker-source.json")),
+        (
+            ("receipt", "path"),
+            str(invocation / "attacker-release" / "receipt.json"),
+        ),
+        (("signature", "sha256"), "f" * 64),
+        (("principal",), "attacker-principal"),
+    )
+    for mutation_path, mutation_value in replay_projection_mutations:
+        changed_receipt = json.loads(json.dumps(receipt_value))
+        changed_item = changed_receipt["evidence"]["formal_replay_release"]
+        for name in mutation_path[:-1]:
+            changed_item = changed_item[name]
+        changed_item[mutation_path[-1]] = mutation_value
+        reject_receipt_projection(changed_receipt, "normalized option value")
+    ambient_replay_values = {
+        "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT": str(
+            invocation / "ambient-source.json"
+        ),
+        "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT": str(
+            invocation / "ambient-release"
+        ),
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256": "e" * 64,
+        "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL": "ambient-principal",
+    }
+    missing_replay_receipt = json.loads(json.dumps(receipt_value))
+    del missing_replay_receipt["evidence"]["formal_replay_release"][
+        "source_receipt"
+    ]
+    with pytest.MonkeyPatch.context() as ambient:
+        for name, value in ambient_replay_values.items():
+            ambient.setenv(name, value)
+        reject_receipt_projection(
+            missing_replay_receipt, "lacks a validator invocation path"
+        )
     for secret_path in (
         invocation, bootstrap, source, candidate_root, scaling_root, validator,
     ):
@@ -1410,6 +1522,17 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     assert helper_spec is not None and helper_spec.loader is not None
     helper_module = importlib.util.module_from_spec(helper_spec)
     helper_spec.loader.exec_module(helper_module)
+    dependency_root = tmp_path / "copied-framework-dependency-root"
+    dependency_root.mkdir(mode=0o500)
+    helper_module._prepare_framework_dependency_root(dependency_root)
+    assert stat.S_IMODE(dependency_root.stat().st_mode) == 0o700
+    unsafe_dependency_root = tmp_path / "unsafe-framework-dependency-root"
+    unsafe_dependency_root.symlink_to(dependency_root, target_is_directory=True)
+    with pytest.raises(
+        helper_module.CacheCopyError,
+        match="dependency root is unsafe",
+    ):
+        helper_module._prepare_framework_dependency_root(unsafe_dependency_root)
     if framework_python:
         source_framework_root = ordinary["python3"].parent.parent
         with pytest.raises(

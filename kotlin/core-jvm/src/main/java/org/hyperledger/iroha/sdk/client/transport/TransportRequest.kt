@@ -14,6 +14,8 @@ class TransportRequest(
     @JvmField val timeout: Duration? = null,
     /** Optional inclusive buffered response-body limit. A `null` value uses the executor limit. */
     @JvmField val maximumResponseBytes: Long? = null,
+    /** Whether the executor may consult ambient cookie or origin/proxy authentication sources. */
+    @JvmField val allowAmbientCredentials: Boolean = true,
 ) {
     private val _headers: Map<String, List<String>> = copyHeaders(headers)
     private val _body: ByteArray = body.copyOf()
@@ -92,6 +94,7 @@ class TransportRequest(
         private var body: ByteArray = ByteArray(0)
         private var timeout: Duration? = null
         private var maximumResponseBytes: Long? = null
+        private var allowAmbientCredentials: Boolean = true
 
         fun setMethod(method: String): Builder {
             this.method = method
@@ -140,6 +143,12 @@ class TransportRequest(
             return this
         }
 
+        /** Controls whether the executor may inherit ambient credential sources. */
+        fun setAllowAmbientCredentials(allowAmbientCredentials: Boolean): Builder {
+            this.allowAmbientCredentials = allowAmbientCredentials
+            return this
+        }
+
         fun build(): TransportRequest {
             val headersCopy = LinkedHashMap<String, List<String>>()
             for ((key, value) in headers) {
@@ -152,6 +161,7 @@ class TransportRequest(
                 body,
                 timeout,
                 maximumResponseBytes,
+                allowAmbientCredentials,
             )
         }
     }

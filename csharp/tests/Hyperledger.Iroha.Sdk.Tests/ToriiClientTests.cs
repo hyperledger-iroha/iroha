@@ -10,6 +10,7 @@ using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Queries;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
+using Hyperledger.Iroha.Zk;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
@@ -28771,7 +28772,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VkString(values.CircuitId),
             VkOption(null),
             VkString("core"),
-            VkUInt32(values.Backend.StartsWith("stark/", StringComparison.Ordinal) ? 1U : 0U),
+            VkUInt32(
+                VerifierBackendRegistryLabels
+                    .RequireBackendTag(values.Backend)
+                    .NoritoDiscriminant()),
             VkString(values.Curve ?? "unknown"),
             schemaHash,
             commitment,

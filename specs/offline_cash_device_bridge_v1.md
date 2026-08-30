@@ -1,12 +1,15 @@
 # Offline Cash V1 secure-device bridge
 
-This note fixes the optional mobile ABI between the Offline Cash V1 Core adapter
-and a platform service that owns rollback-resistant wallet state. It does not
+This note fixes the candidate mobile contract between the Offline Cash V1 Core adapter
+and a future platform service that owns rollback-resistant wallet state. It does not
 make ordinary Android KeyMint or iOS App Attest sufficient for offline cash.
 Those APIs already authenticate one-use or online assertions, but they do not
 provide the complete atomic journal, counter, trusted-time, and outbox contract.
-When the optional backend is absent or reports anything other than this exact
-profile, the SDK remains online-only. There is no software fallback.
+The current Swift and Kotlin production factories are unconditionally
+online-only: they do not discover optional symbols or accept a capability
+frame. The frame codec and endpoint injection exist only for tests until a
+separately reviewed compile-time backend gate is added. There is no software
+fallback.
 
 All integers are unsigned little-endian. Digests are SHA-256. Reserved bytes
 must be zero. Every frame version is exactly `1`; values `4` and `5` are not
@@ -111,10 +114,9 @@ the exact terminal or outbox binding. Kotlin and Swift wipe their temporary
 framed command and response buffers after each call; callers still own and must
 dispose of the original canonical command according to its secret policy.
 
-## Platform entry points
+## Reserved future platform entry points
 
-Swift discovers two optional C symbols in the already authenticated
-`NoritoBridge` image:
+A future reviewed compile-time backend gate may reserve two C entry points:
 
 ```c
 int32_t connect_norito_offline_cash_device_capabilities_v1(
@@ -131,15 +133,23 @@ int32_t connect_norito_offline_cash_device_execute_v1(
 );
 ```
 
-Android declares equivalent optional JNI methods on the Kotlin bridge. A
-reviewed Android build may bind them with `RegisterNatives` or the corresponding
-generated JNI names. A missing method, linkage error, malformed frame, platform
-mismatch, partial feature mask, or native non-zero status produces online-only
-discovery or a failed call; none triggers KeyMint/TEE/software downgrade.
+The current Swift SDK does not resolve these names, and the current Kotlin SDK
+does not declare equivalent JNI methods. Merely adding either symbol pair to a
+native image cannot change `production()` from online-only. A future reviewed
+build must bind the backend behind an explicit compile-time gate and must treat
+any malformed frame, platform mismatch, partial feature mask, or native non-zero
+status as failure; none may trigger KeyMint/TEE/software downgrade.
 
 The Java Android SDK delegates to the Kotlin implementation so there is one
 codec and one production decision. The current stock-platform build exposes no
-qualifying backend. Closing that physical gate requires an audited device/OEM
+qualifying backend and the production decision is hard-disabled. Closing that physical gate requires an audited device/OEM
 service and device evidence for journal rollback resistance, atomic outbox
 publication, trusted-time expiry, exact-next concurrency, crash recovery, and
 attestation-policy binding.
+
+ABI22 also exposes a deliberately separate `wallet_runtime_session` C/JNI
+status boundary for API honesty. `open` always clears its output handle to zero
+and fails, `status` can report only status `0` and state `0` (both unavailable),
+and `attempt`/`close` always fail. It never reads the verifier-session registry.
+The historical C/JNI `wallet_session` names remain deprecated verifier-only ABI
+aliases; their presence is not wallet-runtime availability.

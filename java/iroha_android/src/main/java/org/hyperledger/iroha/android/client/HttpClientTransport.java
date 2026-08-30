@@ -519,6 +519,21 @@ public final class HttpClientTransport implements IrohaClient {
         .thenApply(PrivacyNativeBridge::decodeExact12CapabilityManifestV1);
   }
 
+  /** Fetches only active verifying-key ids with a fixed, bounded Torii projection. */
+  @Override
+  public CompletableFuture<List<VerifyingKeyId>> listActiveVerifyingKeyIds() {
+    final Map<String, String> query = new LinkedHashMap<>();
+    query.put("status", "Active");
+    query.put("ids_only", "true");
+    query.put("limit", "1000");
+    query.put("order", "asc");
+    return fetchExactJson(
+        buildPublicExactJsonGetRequest(
+            "/v1/zk/vk", query, VERIFYING_KEY_IDS_RESPONSE_MAX_BYTES),
+        VerifyingKeyJsonParser::parseActiveIds,
+        "active verifying-key ids");
+  }
+
   /**
    * Require committed/native tuple agreement before retained privacy construction, authenticated
    * against the exact locally configured network. This is the sole capability-admission entry
@@ -1438,6 +1453,14 @@ public final class HttpClientTransport implements IrohaClient {
     return new HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config);
   }
 
+  /**
+   * Creates a transport over a caller-supplied trusted executor.
+   *
+   * <p>The executor must enforce {@link TransportRequest#allowAmbientCredentials()} when false
+   * without adding cookies, authentication, proxy credentials, redirects, or retries. SDK-owned
+   * platform executors enforce or fail closed on that policy; arbitrary implementations are an
+   * explicit extension trust boundary, including its transport and TLS identity configuration.
+   */
   public static HttpClientTransport withExecutor(
       final HttpTransportExecutor executor, final ClientConfig config) {
     return new HttpClientTransport(executor, config);
@@ -1952,23 +1975,77 @@ public final class HttpClientTransport implements IrohaClient {
 
   private TransportRequest buildExactJsonGetRequest(
       final String path, final long maximumResponseBytes) {
+    return buildExactJsonGetRequest(path, Collections.emptyMap(), maximumResponseBytes);
+  }
+
+  private TransportRequest buildExactJsonGetRequest(
+      final String path,
+      final Map<String, String> queryParams,
+      final long maximumResponseBytes) {
+    return buildExactJsonGetRequest(path, queryParams, maximumResponseBytes, false);
+  }
+
+  private TransportRequest buildPublicExactJsonGetRequest(
+      final String path,
+      final Map<String, String> queryParams,
+      final long maximumResponseBytes) {
+    return buildExactJsonGetRequest(path, queryParams, maximumResponseBytes, true);
+  }
+
+  private TransportRequest buildExactJsonGetRequest(
+      final String path,
+      final Map<String, String> queryParams,
+      final long maximumResponseBytes,
+      final boolean credentialFree) {
     for (final String name : config.defaultHeaders().keySet()) {
       if (name.equalsIgnoreCase("Accept")) {
         throw new IllegalArgumentException(
             "Accept must not be overridden for exact JSON requests");
       }
+      if (credentialFree && name.equalsIgnoreCase("Accept-Encoding")) {
+        throw new IllegalArgumentException(
+            "Accept-Encoding must not be overridden for credential-free exact JSON requests");
+      }
+    }
+    final URI target = appendQuery(resolvePath(path), queryParams);
+    if (credentialFree && target.getRawUserInfo() != null) {
+      throw new IllegalArgumentException(
+          "credential-free public reads reject URI user-info");
     }
     final TransportRequest.Builder builder =
         TransportRequest.builder()
-            .setUri(resolvePath(path))
+            .setUri(target)
             .setMethod("GET")
             .addHeader("Accept", APPLICATION_JSON)
             .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
+            .setAllowAmbientCredentials(!credentialFree)
             .setTimeout(config.requestTimeout());
+    if (credentialFree) {
+      builder.addHeader("Accept-Encoding", "identity");
+    }
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
-      builder.addHeader(entry.getKey(), entry.getValue());
+      if (!credentialFree || !isCredentialHeader(entry.getKey())) {
+        builder.addHeader(entry.getKey(), entry.getValue());
+      }
     }
     return builder.build();
+  }
+
+  private static boolean isCredentialHeader(final String name) {
+    return name.equalsIgnoreCase("Authorization")
+        || name.equalsIgnoreCase("Proxy-Authorization")
+        || name.equalsIgnoreCase("Cookie")
+        || name.equalsIgnoreCase("X-API-Token")
+        || name.equalsIgnoreCase("X-Account-Id")
+        || name.equalsIgnoreCase("X-Dataspace-Id")
+        || name.equalsIgnoreCase("X-Iroha-Onboarding-Token")
+        || name.equalsIgnoreCase("X-Iroha-Account")
+        || name.equalsIgnoreCase("X-Iroha-Signature")
+        || name.equalsIgnoreCase("X-Iroha-Timestamp-Ms")
+        || name.equalsIgnoreCase("X-Iroha-Nonce")
+        || name.equalsIgnoreCase("X-Iroha-Witness")
+        || name.regionMatches(
+            true, 0, "X-Iroha-Operator-", 0, "X-Iroha-Operator-".length());
   }
 
   private TransportRequest buildExactOperatorJsonGetRequest(
@@ -2434,6 +2511,9 @@ public final class HttpClientTransport implements IrohaClient {
               try {
                 requireExactJsonResponse(
                     response, body, maximumResponseBytes.longValue(), errorContext);
+                if (!request.allowAmbientCredentials()) {
+                  requireIdentityContentEncoding(response.headers(), errorContext);
+                }
                 final T parsed = parser.apply(body);
                 notifyResponse(request, clientResponse);
                 future.complete(parsed);
@@ -2559,6 +2639,23 @@ public final class HttpClientTransport implements IrohaClient {
       }
     }
     return values;
+  }
+
+  private static void requireIdentityContentEncoding(
+      final Map<String, List<String>> headers, final String errorContext) {
+    final List<String> values = headerValues(headers, "Content-Encoding");
+    if (values.isEmpty()) {
+      return;
+    }
+    if (values.size() != 1) {
+      throw new IllegalStateException(
+          errorContext + " response must preserve the identity representation");
+    }
+    final String value = values.get(0).trim();
+    if (!value.isEmpty() && !value.equalsIgnoreCase("identity")) {
+      throw new IllegalStateException(
+          errorContext + " response must preserve the identity representation");
+    }
   }
 
   private static boolean isCanonicalUnsignedDecimal(final String value) {
@@ -3198,6 +3295,39 @@ public final class HttpClientTransport implements IrohaClient {
     return normalized;
   }
 
+  static boolean isPortableVerifyingKeyIdField(final String value) {
+    if (value.isEmpty() || value.length() > 256) {
+      return false;
+    }
+    final char first = value.charAt(0);
+    final char last = value.charAt(value.length() - 1);
+    if (!isPortableVerifyingKeyIdEdge(first) || !isPortableVerifyingKeyIdEdge(last)) {
+      return false;
+    }
+    for (final String forbidden :
+        List.of("..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:")) {
+      if (value.contains(forbidden)) {
+        return false;
+      }
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char candidate = value.charAt(index);
+      if (!isPortableVerifyingKeyIdEdge(candidate)
+          && candidate != '-'
+          && candidate != '_'
+          && candidate != '/'
+          && candidate != ':'
+          && candidate != '.') {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean isPortableVerifyingKeyIdEdge(final char value) {
+    return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9');
+  }
+
   static String normalizeVerifyingKeyAuthority(final String value) {
     final String normalized = normalizeNonBlank(value, "authority");
     final Integer discriminant = AccountAddress.detectI105Discriminant(normalized);
@@ -3700,6 +3830,7 @@ public final class HttpClientTransport implements IrohaClient {
           "creation_time_ms");
   private static final long SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
+  private static final long VERIFYING_KEY_IDS_RESPONSE_MAX_BYTES = 512L * 1024L;
   private static final long SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L;
   private static final long SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L;
   private static final long EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L;

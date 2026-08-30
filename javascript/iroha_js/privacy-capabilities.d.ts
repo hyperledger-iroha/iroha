@@ -202,9 +202,10 @@ export interface PrivacyCapabilitiesBrowserClientV1 {
 }
 
 /**
- * Fetch and validate the legacy JSON inspection response through the supplied
- * configured package client. The result is diagnostic only; Exact12 admission
- * requires the canonical Norito manifest and ABI22 native validation.
+ * Fetch and validate Torii's current Exact12 JSON response through the supplied
+ * configured package client, returning its legacy read-only projection. The
+ * result is diagnostic only; Exact12 admission requires the canonical Norito
+ * manifest and ABI22 native validation.
  */
 export function getLegacyPrivacyCapabilityInspectionV1(
   client: PrivacyCapabilitiesBrowserClientV1,

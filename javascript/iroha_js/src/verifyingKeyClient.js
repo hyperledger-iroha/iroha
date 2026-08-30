@@ -7,6 +7,11 @@ import {
   createValidationError,
   ValidationErrorCode,
 } from "./validationError.js";
+import {
+  isVerifierBackendRegistryLabelV1,
+  verifierBackendRegistryTagV1,
+} from "./verifierBackendRegistry.js";
+import { requestActiveVerifyingKeyIds } from "./activeVerifyingKeyIds.js";
 
 const VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024;
 const VERIFYING_KEY_STATUS_VALUES = new Set([
@@ -17,27 +22,6 @@ const VERIFYING_KEY_STATUS_VALUES = new Set([
 const VERIFYING_KEY_STATUS_ALIASES = new Map(
   [...VERIFYING_KEY_STATUS_VALUES].map((value) => [value.toLowerCase(), value]),
 );
-const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
-  "halo2/ipa",
-  "halo2/pasta/kaigi-roster-v1",
-  "halo2/pasta/kaigi-usage-v1",
-  "halo2/pasta/ivm-execution-v1",
-  "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-  "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-  "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-  "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-  "stark/fri",
-  "stark/fri/sha256-goldilocks",
-  "stark/fri/poseidon2-goldilocks",
-  "stark/fri/sha256_goldilocks.v1",
-]);
-const STARK_VERIFY_BACKEND_LABELS_V1 = new Set([
-  "stark/fri",
-  "stark/fri/sha256-goldilocks",
-  "stark/fri/poseidon2-goldilocks",
-  "stark/fri/sha256_goldilocks.v1",
-]);
-
 /**
  * Create the lazily loaded verifying-key registry validator.
  *
@@ -100,7 +84,7 @@ export function createVerifyingKeyClient(
         context,
       );
     }
-    if (!PRODUCTION_VERIFY_BACKEND_LABELS_V1.has(backend)) {
+    if (!isVerifierBackendRegistryLabelV1(backend)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,
         `${context} uses unsupported production verifier backend ${backend}`,
@@ -570,9 +554,7 @@ export function createVerifyingKeyClient(
       circuit_id: request.circuit_id,
       owner_manifest_id: null,
       namespace: "core",
-      backend: STARK_VERIFY_BACKEND_LABELS_V1.has(request.backend)
-        ? "stark"
-        : "halo2-ipa-pasta",
+      backend: verifierBackendRegistryTagV1(request.backend),
       curve: request.curve ?? "unknown",
       public_inputs_schema_hash: Array.from(
         Buffer.from(request.public_inputs_schema_hash_hex, "hex"),
@@ -731,6 +713,7 @@ export function createVerifyingKeyClient(
   }
 
   return Object.freeze({
+    activeIds: requestActiveVerifyingKeyIds,
     backend: assertProductionVerifyBackendLabel,
     detail: normalizeVerifyingKeyDetail,
     draft: normalizeVerifyingKeyTransactionDraft,

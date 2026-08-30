@@ -1850,7 +1850,13 @@ match relation {
     RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
     RuntimeFetchAuthorityRelation::Same => None,
     RuntimeFetchAuthorityRelation::Stale => {
-        if retained_owner != *ownership.owner() {
+        let stale_ordinary_fetch_completion = matches!(
+            candidate,
+            BodyPipelineCompletionEvidence::BodyAvailable { .. }
+        ) && incoming_statement.is_some_and(|statement| {
+            statement.phase().is_none() && statement.execution_commitment().is_none()
+        });
+        if retained_owner != *ownership.owner() && !stale_ordinary_fetch_completion {
             self.latch_fail_closed(
                 "coalesced body completion changed its exact lifecycle owner",
             );
@@ -1860,7 +1866,7 @@ match relation {
     }
 }
 """,
-            "stale terminal retries must reject a foreign owner while same authority stutters and upgrades remain separately reviewed",
+            "only a stale ordinary Fetch may rejoin a foreign-owned BodyAvailable terminal while Store, Validate, and certified stale carriers remain owner-strict",
             errors,
         )
 

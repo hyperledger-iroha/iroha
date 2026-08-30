@@ -1122,7 +1122,7 @@ fn local_ready_validate_rejection_preflight_stages_manifest_drop_inertly() {
 
 #[cfg(feature = "bls")]
 #[test]
-fn remote_ready_validate_preflight_still_requires_registered_manifest() {
+fn remote_ready_validate_preflight_requires_and_accepts_authenticated_manifest() {
     let ReadyDurableValidateFixture {
         fixture,
         _directory,
@@ -1160,6 +1160,13 @@ fn remote_ready_validate_preflight_still_requires_registered_manifest() {
         prepared.preflight_adapter_publication_kind(&mut adapter),
         Err(AdapterError::MissingManifest)
     ));
+    assert!(prepared.bind_authenticated_manifest(&fixture.manifest, &durable));
+    assert_eq!(
+        prepared
+            .preflight_adapter_publication_kind(&mut adapter)
+            .expect("stage the authenticated remote manifest for validated preflight"),
+        ReadyDurableValidateAdapterPublicationKind::ValidatedInactive
+    );
     drop(prepared);
     assert_empty_ready_validate_adapter_unchanged(
         &mut adapter,
@@ -2014,7 +2021,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     );
     let replay_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (replay_executor, body_store) =
-        crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
+        crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store_and_validate_retry_census_for_test(
             replay_runtime,
             body_store,
             terminal_census,
@@ -2223,9 +2230,10 @@ fn recovered_ready_validate_plural_open_installs_and_reconciles_atomically() {
 }
 
 #[cfg(feature = "bls")]
+#[allow(clippy::too_many_lines)]
 fn recovered_ready_validate_plural_open_fixture() {
     let (mut fixtures, body_directory, mut body_store, durables, mut coordinator) =
-        plural_recovered_ready_validate_store_fixture(0x35, &[2, 3, 4]);
+        plural_recovered_ready_validate_store_fixture(0x35, &[2, 3, 0]);
     let markers = durables
         .iter()
         .map(|durable| persist_exact_recovered_validate_marker(&mut body_store, durable))
@@ -2264,63 +2272,225 @@ fn recovered_ready_validate_plural_open_fixture() {
             .remove(&terminal_address)
             .is_some()
     );
-    let census = fixtures[0]
+    let projected_census = fixtures[0]
         .registry
         .project_recovered_durable_validate_retry_census(&coordinator, None)
         .expect("project both surviving Ready Validate owners");
-    assert_eq!(census.len_for_test(), 2);
+    assert_eq!(projected_census.len_for_test(), 2);
+    drop(projected_census);
 
-    let runtime_directory = TempDir::new().expect("temporary plural Validate runtime");
-    let runtime = empty_recovered_validate_runtime_for_test(
-        &fixtures[0],
-        runtime_directory.path(),
-        "plural-open.wal",
+    let losing_ordinal = fixtures[1].lease.ordinal();
+    let selected_ordinal = fixtures[2].lease.ordinal();
+    let losing_key = (durables[1].round(), durables[1].subject());
+    let selected_key = (durables[2].round(), durables[2].subject());
+    let holder = take_dispatch_registry(&mut fixtures[0]);
+    let selected_validate_dispatch_key = coordinator
+        .attest_ready_validate_demand(&holder, selected_ordinal)
+        .expect("attest the selected Ready Validate before launch")
+        .dispatch_key();
+
+    let ledger_directory = TempDir::new().expect("temporary plural Validate lifecycle ledger");
+    coordinator
+        .attach_empty_test_ledger(ledger_directory.path())
+        .expect("attach the plural Ready Validate LedgerV1 floor");
+    let (runtime_ordinal_authority, coordinator_ordinal_authority) =
+        authority::lifecycle_ordinal_authorities_after_high_watermark(coordinator.high_water());
+    coordinator
+        .bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)
+        .expect("bind the coordinator half of the plural actor-global ordinal authority");
+    let lifecycle_ordinals =
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+            runtime_ordinal_authority,
+        );
+
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = fixtures[2].effect.clone()
+    else {
+        unreachable!("selected plural fixture retains one Validate effect")
+    };
+    let adapter_directory = TempDir::new().expect("temporary plural Decision adapter");
+    let (mut adapter, startup) = SumeragiV2Adapter::open(
+        adapter_directory.path().join("safety.wal"),
+        fixtures[2].verified.clone(),
+        Some(0),
+        tag.generation(),
+        [0x35; 32],
+        AdapterFingerprints {
+            node: Hash::new(b"plural Ready Validate Decision node"),
+            build: Hash::new(b"plural Ready Validate Decision build"),
+            config: Hash::new(b"plural Ready Validate Decision config"),
+        },
+        DeferredAdmissionOrdinalSource::new(0),
+    )
+    .expect("open plural Ready Validate Decision adapter");
+    assert!(startup.is_empty());
+    let proposal = wire::Proposal {
+        round,
+        proposer: fixtures[2].verified.context().leader(round.view),
+        subject,
+        manifest: fixtures[2].manifest.clone(),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
+        signature: vec![0x35],
+    };
+    assert!(matches!(
+        adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+                    proposal,
+                )),
+            ))
+            .expect("admit the selected plural proposal")
+            .into_effects()
+            .as_slice(),
+        [AdapterEffect::FetchBody {
+            tag: effect_tag,
+            round: effect_round,
+            subject: effect_subject,
+            ..
+        }] if *effect_tag == tag && *effect_round == round && *effect_subject == subject
+    ));
+    assert!(matches!(
+        adapter
+            .body_available(tag, fixtures[2].manifest.clone())
+            .expect("advance the selected plural body to Store")
+            .into_effects()
+            .as_slice(),
+        [AdapterEffect::StoreBody {
+            tag: effect_tag,
+            round: effect_round,
+            subject: effect_subject,
+        }] if *effect_tag == tag && *effect_round == round && *effect_subject == subject
+    ));
+    assert!(matches!(
+        adapter
+            .body_stored(tag, round, subject, &durables[2])
+            .expect("advance the selected plural body to Validate")
+            .into_effects()
+            .as_slice(),
+        [AdapterEffect::ValidateBody {
+            tag: effect_tag,
+            round: effect_round,
+            subject: effect_subject,
+        }] if *effect_tag == tag && *effect_round == round && *effect_subject == subject
+    ));
+    let prepare = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject,
+        execution_commitment: markers[2].execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0x35; 96],
+    };
+    assert!(
+        adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    prepare
+                ),),
+            ))
+            .expect("retain the selected plural PrepareQC")
+            .effects()
+            .is_empty()
     );
-    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    let (mut executor, body_store) =
-        crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
-            runtime,
-            body_store,
-            census,
-            fixtures[0].verified.context().clone(),
-            fixtures[0].verified.context().roster[0].validator.clone(),
-            Some(0),
-            std::sync::Arc::clone(&output_guard),
-            crate::sumeragi::v2_effects::EffectQueueConfig::default(),
+    let decision = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment: markers[2].execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0x35; 96],
+    };
+    assert!(
+        adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    decision.clone()
+                ),),
+            ))
+            .expect("retain the selected plural durable Decision")
+            .effects()
+            .is_empty()
+    );
+
+    let now = std::time::Instant::now();
+    let (runtime, startup) =
+        crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+            adapter,
+            startup,
+            now,
+            std::time::Duration::from_secs(10),
+            crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+            lifecycle_ordinals,
         )
-        .expect("consume the plural Ready Validate census during real executor open");
+        .expect("wrap the plural Ready Validate Decision runtime");
+    assert!(startup.is_empty());
+
+    let payload_directory = TempDir::new().expect("temporary plural Validate payload store");
+    let (payload_store, serve_payloads) =
+        CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+            payload_directory.path(),
+            fixtures[0].verified.context(),
+        )
+        .expect("open the plural Validate Serve payload owner");
+    let mut owner = super::super::ProductionLifecycleOwnerV1 {
+        verified: fixtures[0].verified.clone(),
+        coordinator,
+        registry: holder,
+        recovered_lifecycle_outputs: None,
+        payload_store,
+        serve_payloads,
+        body_store: Some(body_store),
+        body_store_identity: None,
+        kura_binding: None,
+        apply_service: None,
+        adapter_startup: None,
+        timeout_supersession_successor: None,
+    };
+    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+    let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    let (mut executor, mut planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+        &mut services,
+        runtime,
+        std::sync::Arc::clone(&output_guard),
+        0,
+        2,
+    );
     let terminal_key = (durables[0].round(), durables[0].subject());
-    let mut ready_keys = durables[1..]
-        .iter()
-        .map(|durable| (durable.round(), durable.subject()))
-        .collect::<Vec<_>>();
+    let mut ready_keys = vec![losing_key, selected_key];
     ready_keys.sort_unstable();
     assert_eq!(
         executor.recovered_durable_validate_retry_keys_for_test(),
         ready_keys
     );
-    let first_ready_snapshot = executor
-        .recovered_durable_validate_retry_snapshot_for_test(ready_keys[0])
-        .expect("first Ready key retains one recovered owner");
-    let second_ready_snapshot = executor
-        .recovered_durable_validate_retry_snapshot_for_test(ready_keys[1])
-        .expect("second Ready key retains one recovered owner");
+    let losing_ready_snapshot = executor
+        .recovered_durable_validate_retry_snapshot_for_test(losing_key)
+        .expect("losing Ready key retains one recovered owner");
+    let selected_ready_snapshot = executor
+        .recovered_durable_validate_retry_snapshot_for_test(selected_key)
+        .expect("selected Ready key retains one recovered owner");
     assert_ne!(
-        first_ready_snapshot.causal_lifecycle_key(),
-        second_ready_snapshot.causal_lifecycle_key()
+        losing_ready_snapshot.causal_lifecycle_key(),
+        selected_ready_snapshot.causal_lifecycle_key()
     );
-    assert!(!first_ready_snapshot.same_owner(&second_ready_snapshot));
+    assert!(!losing_ready_snapshot.same_owner(&selected_ready_snapshot));
     assert_eq!(
-        first_ready_snapshot.commitment_ceiling(),
+        losing_ready_snapshot.commitment_ceiling(),
         Some(markers[1].execution_commitment())
     );
     assert_eq!(
-        second_ready_snapshot.commitment_ceiling(),
+        selected_ready_snapshot.commitment_ceiling(),
         Some(markers[2].execution_commitment())
     );
     assert_ne!(
-        first_ready_snapshot.commitment_ceiling(),
-        second_ready_snapshot.commitment_ceiling()
+        losing_ready_snapshot.commitment_ceiling(),
+        selected_ready_snapshot.commitment_ceiling()
     );
     assert!(executor.recovered_validated_body_was_bound_for_test(terminal_key));
     for key in &ready_keys {
@@ -2333,24 +2503,69 @@ fn recovered_ready_validate_plural_open_fixture() {
     assert!(executor.recovered_validate_retry_corridor_is_inert_for_test());
     assert!(!output_guard.restart_required());
 
-    let selected = (
-        durables[1].round(),
-        durables[1].round(),
-        durables[1].subject(),
-        markers[1].execution_commitment(),
+    executor
+        .arm_live_clocks(
+            super::super::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            now,
+        )
+        .expect("arm plural Ready Validate clocks after service construction");
+    executor
+        .arm_live_lifecycle_validate_successor(selected_validate_dispatch_key, round, subject, true)
+        .expect("restore the selected plural Validate successor before Decision import");
+    assert_eq!(
+        executor
+            .release_live_lifecycle_validate_successor(losing_key, losing_ordinal)
+            .expect("an unrelated losing row cannot consume the selected successor"),
+        false
     );
-    let selected_key = (selected.1, selected.2);
+    assert!(matches!(
+        executor.release_live_lifecycle_validate_successor(selected_key, losing_ordinal),
+        Err(crate::sumeragi::v2_effects::EffectExecutorError::Contract(reason))
+            if reason.contains("preliminary retransmit owner")
+    ));
+    assert!(matches!(
+        executor.release_live_lifecycle_validate_successor(losing_key, selected_ordinal),
+        Err(crate::sumeragi::v2_effects::EffectExecutorError::Contract(reason))
+            if reason.contains("preliminary retransmit owner")
+    ));
+    assert!(
+        executor
+            .release_live_lifecycle_validate_successor(selected_key, selected_ordinal)
+            .expect("the exact selected row consumes its preliminary successor")
+    );
+    assert_eq!(
+        executor
+            .release_live_lifecycle_validate_successor(selected_key, selected_ordinal)
+            .expect("the selected successor is move-only"),
+        false
+    );
+    executor
+        .arm_live_lifecycle_validate_successor(selected_validate_dispatch_key, round, subject, true)
+        .expect("restore the exact selected successor after identity classification");
+
     let selected_before = executor
         .recovered_durable_validate_retry_snapshot_for_test(selected_key)
         .expect("selected Ready key retains its pre-Decision recovered owner");
-    let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
-    executor
-        .reconcile_recovered_validate_retry_decision_for_test(selected, false, &mut services)
-        .expect("Decision cleanup retains only the selected recovered retry seal");
+    assert_eq!(
+        executor
+            .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut services)
+            .expect("import the plural adapter's durable Decision"),
+        (
+            decision.round,
+            decision.proposal_round,
+            decision.subject,
+            decision.execution_commitment,
+        )
+    );
     assert_eq!(
         executor.recovered_durable_validate_retry_keys_for_test(),
-        vec![selected_key]
+        ready_keys,
+        "Decision cleanup must preserve both ordinal-bound lifecycle authorities"
     );
+    let losing_after = executor
+        .recovered_durable_validate_retry_snapshot_for_test(losing_key)
+        .expect("Decision cleanup retains the losing live retry owner");
+    assert!(losing_after.same_owner(&losing_ready_snapshot));
     let selected_after = executor
         .recovered_durable_validate_retry_snapshot_for_test(selected_key)
         .expect("selected Decision retains its recovered owner");
@@ -2359,19 +2574,189 @@ fn recovered_ready_validate_plural_open_fixture() {
         selected_after.commitment_ceiling(),
         selected_before.commitment_ceiling()
     );
-    executor
-        .reconcile_recovered_validate_retry_decision_for_test(selected, true, &mut services)
-        .expect("terminal Decision cleanup drains the selected recovered retry seal");
-    assert!(
-        executor
-            .recovered_durable_validate_retry_keys_for_test()
-            .is_empty()
+
+    let mut apply_ordinal = None;
+    for (ordinal, key, commitment, selected) in [
+        (
+            losing_ordinal,
+            losing_key,
+            markers[1].execution_commitment(),
+            false,
+        ),
+        (
+            selected_ordinal,
+            selected_key,
+            markers[2].execution_commitment(),
+            true,
+        ),
+    ] {
+        assert_eq!(
+            owner
+                .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                .expect("queue the next post-Decision Validate worker"),
+            super::super::ProductionCompletionDispatchV1::ValidateQueued { ordinal }
+        );
+        planner_io.activate_one_lifecycle_validate();
+        assert_eq!(
+            planner_io.execute_held_lifecycle_validate_fixture(
+                commitment,
+                std::sync::Arc::clone(&output_guard),
+            ),
+            0,
+            "the persisted marker must bypass the validator callback"
+        );
+        let completion = match services
+            .take_next_lifecycle_completion()
+            .expect("take the exact guarded plural Validate completion")
+        {
+            crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::Validate(completion) => {
+                completion
+            }
+            _ => panic!("plural Validate worker published a foreign completion class"),
+        };
+        let (executed, ack) = completion.into_publication_parts();
+        let published = owner
+            .coordinator
+            .complete_durable_validate_dispatch(&mut owner.registry, executed)
+            .expect("publish the marker-backed plural Validate completion");
+        let super::super::DurableValidateCompletionPublication::PublishedValidated(published) =
+            published
+        else {
+            panic!("persisted plural marker must publish a validated replacement")
+        };
+        assert_eq!(published.lifecycle_ordinal(), ordinal);
+        drop(published);
+        ack.acknowledge_after_publication();
+
+        let resolved = owner
+            .dispatch_completion_for_test(&mut services, &mut executor, 0)
+            .expect("settle the marker-backed post-Decision Validate row");
+        if selected {
+            let super::super::ProductionCompletionDispatchV1::BodyStageAdvanced {
+                parent_ordinal,
+                child_ordinal,
+                child: LifecycleWorkClass::Apply,
+            } = resolved
+            else {
+                panic!("selected Validate must resolve to its live Apply child: {resolved:?}")
+            };
+            assert_eq!(parent_ordinal, ordinal);
+            apply_ordinal = Some(child_ordinal);
+            assert_eq!(
+                executor.recovered_durable_validate_retry_keys_for_test(),
+                vec![selected_key],
+                "selected resolution may retain only its unbound idempotence tombstone"
+            );
+            assert!(executor.recovered_validate_retry_corridor_is_inert_for_test());
+        } else {
+            assert_eq!(
+                resolved,
+                super::super::ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal }
+            );
+            assert_eq!(
+                executor.recovered_durable_validate_retry_keys_for_test(),
+                vec![selected_key],
+                "losing settlement must release only its exact ordinal-bound retry owner"
+            );
+            assert!(
+                !owner
+                    .registry
+                    .registry_for_test()
+                    .entries
+                    .contains_key(&fixtures[1].address),
+                "the losing concrete lifecycle carrier must terminalize"
+            );
+            assert_eq!(
+                owner.coordinator.records[&ordinal].state,
+                LifecycleState::Terminal(TerminalOutcome::Advanced)
+            );
+        }
+        assert!(
+            !executor
+                .recovered_durable_validate_retry_keys_for_test()
+                .contains(&key)
+                || selected
+        );
+    }
+
+    let apply_ordinal = apply_ordinal.expect("selected Validate installs one Apply child");
+    assert_eq!(
+        owner
+            .dispatch_completion_for_test(&mut services, &mut executor, 0)
+            .expect("claim and queue the selected live Apply carrier"),
+        super::super::ProductionCompletionDispatchV1::ApplyQueued {
+            ordinal: apply_ordinal,
+        }
     );
+    planner_io.execute_one_lifecycle_decision_apply_fixture(std::sync::Arc::clone(&output_guard));
+    let completion = match services
+        .take_next_lifecycle_completion()
+        .expect("take the selected live Apply completion")
+    {
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::Apply(completion) => completion,
+        _ => panic!("selected live Apply published a foreign completion class"),
+    };
+    let crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Applied(applied) =
+        completion.result()
+    else {
+        panic!("selected live Apply fixture must produce an applied terminal")
+    };
+    let lease = owner
+        .coordinator
+        .active_lease
+        .clone()
+        .expect("queued selected Apply retains its exact active lease");
+    let (transition, authority) = owner
+        .registry
+        .prepare_lifecycle_decision_apply_terminal_transition(&owner.coordinator, &lease, applied)
+        .expect("join the selected Apply worker result to its carrier");
+    let adapter = executor
+        .prepare_lifecycle_decision_apply_completion(authority)
+        .expect("preview selected Apply completion on the serialized adapter");
+    let mut staged = owner.coordinator.stage_durable_transaction();
+    staged.reduce_settle_turn(lease.clone(), super::super::TurnOutcome::Advanced, None);
+    assert!(staged.fault.is_none());
+    owner
+        .registry
+        .publish_lifecycle_decision_apply_terminal_transition(
+            transition,
+            &owner.coordinator,
+            &staged,
+            &lease,
+            || owner.coordinator.persist_exact_staged_successor(&staged),
+        )
+        .unwrap_or_else(|_| panic!("publish selected Apply terminal through LedgerV1"));
+    owner.coordinator = staged;
+    let finality = adapter.commit_after_durable_settlement();
+    let status = executor.commit_lifecycle_decision_apply_finality(finality);
+    let settled = completion.acknowledge_after_owner_settlement();
+    assert!(matches!(
+        settled,
+        crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Applied(_)
+    ));
+    assert_eq!(status.height, fixtures[0].verified.context().height);
+    assert!(owner.registry.registry_for_test().entries.is_empty());
+    assert!(matches!(
+        owner
+            .plan_direct_registry_turn()
+            .expect("the completed lifecycle has an exact empty scheduler census"),
+        super::super::TurnPlan::Idle
+    ));
     assert!(executor.recovered_validate_retry_corridor_is_inert_for_test());
+    assert!(executor.ready_to_finish());
     assert!(!output_guard.restart_required());
-    drop(executor);
-    drop(body_store);
-    drop(runtime_directory);
+    planner_io.detach(&mut services);
+    let (_runtime, receipt, artifact) = executor
+        .into_finalized_parts()
+        .expect("the settled plural lifecycle completes its explicit finalization cut");
+    assert_eq!(receipt.subject(), selected_key.1);
+    assert_eq!(artifact.subject, selected_key.1);
+    crate::sumeragi::status::clear_v2_status();
+    drop(services);
+    drop(owner);
+    drop(payload_directory);
+    drop(adapter_directory);
+    drop(ledger_directory);
     drop(body_directory);
 }
 
@@ -2430,7 +2815,7 @@ fn recovered_ready_validate_plural_late_corruption_fixture() {
     );
     let direct_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut direct_executor, body_store) =
-        crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
+        crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store_and_validate_retry_census_for_test(
             direct_runtime,
             body_store,
             RecoveredDurableValidateRetryCensusV1::empty_for_test(),
@@ -2485,7 +2870,7 @@ fn recovered_ready_validate_plural_late_corruption_fixture() {
         "plural-failing-open.wal",
     );
     let open_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
-    let open_error = match crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
+    let open_error = match crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store_and_validate_retry_census_for_test(
         open_runtime,
         body_store,
         open_census,
@@ -4439,7 +4824,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
         .expect("project empty recovered Validate census beside live Apply");
     let live_output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut live_executor, live_body_store) =
-        crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
+        crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store_and_validate_retry_census_for_test(
             live_runtime,
             live_body_store,
             recovered_validate_retry_census,

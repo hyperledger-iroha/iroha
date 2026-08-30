@@ -48,6 +48,15 @@ export { NetworkId } from "./networkId.js";
 export { OperatorSigningContext } from "./operatorRequest.browser.js";
 
 export {
+  OPEN_VERIFY_BACKEND_TAGS_V1,
+  VERIFIER_BACKEND_REGISTRY_BINDINGS_V1,
+  VERIFIER_BACKEND_REGISTRY_LABELS_V1,
+  isVerifierBackendRegistryLabelV1,
+  requireVerifierBackendRegistryLabelV1,
+  verifierBackendRegistryTagV1,
+} from "./verifierBackendRegistry.js";
+
+export {
   computeIvmArtifactHashes,
   IVM_ARTIFACT_MAX_BYTES,
   IVM_PROGRAM_HEADER_LENGTH,

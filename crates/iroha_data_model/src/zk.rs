@@ -964,19 +964,47 @@ mod tests {
     }
     #[test]
     fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
-        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 12);
+        let expected_bindings = [
+            ("halo2/ipa", BackendTag::Halo2IpaPasta),
+            ("halo2/pasta/kaigi-roster-v1", BackendTag::Halo2IpaPasta),
+            ("halo2/pasta/kaigi-usage-v1", BackendTag::Halo2IpaPasta),
+            ("halo2/pasta/ivm-execution-v1", BackendTag::Halo2IpaPasta),
+            (
+                "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+                BackendTag::Halo2IpaPasta,
+            ),
+            ("stark/fri", BackendTag::Stark),
+            ("stark/fri/sha256-goldilocks", BackendTag::Stark),
+            ("stark/fri/poseidon2-goldilocks", BackendTag::Stark),
+            ("stark/fri/sha256_goldilocks.v1", BackendTag::Stark),
+        ];
+        assert_eq!(
+            ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(),
+            expected_bindings.len()
+        );
         let mut unique = std::collections::BTreeSet::new();
-        for &label in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
+        for (&label, (expected_label, expected_tag)) in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1
+            .iter()
+            .zip(expected_bindings)
+        {
+            assert_eq!(label, expected_label);
             assert!(unique.insert(label), "duplicate registry label: {label}");
             let tag = verifier_backend_registry_tag_v1(label)
                 .unwrap_or_else(|| panic!("listed registry label must resolve: {label}"));
             assert!(is_verifier_backend_registry_label_v1(label));
-            if label.starts_with("halo2/") {
-                assert_eq!(tag, BackendTag::Halo2IpaPasta, "{label}");
-            } else {
-                assert!(label.starts_with("stark/fri"), "{label}");
-                assert_eq!(tag, BackendTag::Stark, "{label}");
-            }
+            assert_eq!(tag, expected_tag, "{label}");
         }
         for rejected in [
             "",

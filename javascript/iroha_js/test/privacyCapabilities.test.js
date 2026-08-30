@@ -51,6 +51,21 @@ const CLIENT_SURFACES = Object.freeze([
   }),
 ]);
 
+const OPERATION_TUPLES = Object.freeze([
+  ["zk_ace_authorization_action_v1", "authorization_action", 0],
+  ["anonymous_pgc_payment_action_v1", "payment_action", 6],
+  ["verange_range_proof_v1", "component", 1],
+  ["zk_ams_admission_and_provisioning_v1", "admission_action", 2],
+  ["vega_credential_presentation_v1", "presentation_action", 2],
+  ["zk_x509_identity_presentation_v1", "presentation_action", 2],
+  ["jindo_polynomial_evaluation_v1", "component", 0],
+  ["bootle_lantern_credential_presentation_v1", "presentation_action", 2],
+  ["orchard_note_action_v1", "note_action", 7],
+  ["fcmp_membership_payment_v1", "payment_action", 2],
+  ["ivm_private_note_action_v1", "note_action", 7],
+  ["pq_masp_note_action_v1", "note_action", 31],
+]);
+
 function privacyClient(surface, Client, fetchImpl) {
   return new Client(BASE_URL, {
     fetchImpl,
@@ -116,6 +131,36 @@ function snapshot() {
   };
 }
 
+function exact12InspectionSnapshot() {
+  const legacy = snapshot();
+  return {
+    ...legacy,
+    protocols: legacy.protocols.map((row, index) => {
+      const [operationSchema, executionMode, featureMask] = OPERATION_TUPLES[index];
+      return {
+        protocol_id: row.protocol_id,
+        operation_schema: { operation_schema: operationSchema, value: null },
+        execution_mode: { execution_mode: executionMode, value: null },
+        privacy_feature_mask: featureMask,
+        compiled_profile: row.compiled_profile,
+        readiness: {
+          readiness: "unavailable",
+          detail: clone(row.compiled_profile.value),
+        },
+        activation_state: { activation_state: "not-registered", detail: null },
+        activation: row.activation,
+        limitation: index === 6
+          ? {
+              limitation: "missing-distribution-wide-knowledge-soundness-evidence",
+              detail: null,
+            }
+          : null,
+      };
+    }),
+    manifest_digest: Array(32).fill(0xa5),
+  };
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -136,7 +181,7 @@ function rawJsonResponse(text) {
 
 function rawSnapshotWithCommittedHeight(integerToken) {
   const placeholder = "__COMMITTED_HEIGHT_INTEGER_TOKEN__";
-  const payload = snapshot();
+  const payload = exact12InspectionSnapshot();
   payload.committed_height = placeholder;
   return JSON.stringify(payload).replace(JSON.stringify(placeholder), integerToken);
 }
@@ -308,12 +353,12 @@ test("rejects forged governance activation and malformed delayed transitions", (
   assert.throws(() => parseLegacyPrivacyCapabilityInspectionSnapshotV1(schedule), /strict tightening/);
 });
 
-test("node and browser clients request and validate the legacy inspection route", async () => {
+test("node and browser clients validate the current Exact12 route as a legacy inspection projection", async () => {
   for (const surface of CLIENT_SURFACES) {
     const calls = [];
     const fetchImpl = async (url, init) => {
       calls.push({ url: String(url), headers: new Headers(init?.headers) });
-      return jsonResponse(snapshot());
+      return jsonResponse(exact12InspectionSnapshot());
     };
     const node = privacyClient(surface, surface.NodeClient, fetchImpl);
     const browser = privacyClient(surface, surface.BrowserClient, fetchImpl);
@@ -327,14 +372,21 @@ test("node and browser clients request and validate the legacy inspection route"
       false,
       `${surface.label} browser client`,
     );
-    assert.equal((await surface.get(
+    const nodeInspection = await surface.get(
       node,
       canonicalRequestOptions(surface, surface.NodeClient),
-    )).version, 1);
-    assert.equal((await surface.get(
+    );
+    const browserInspection = await surface.get(
       browser,
       canonicalRequestOptions(surface, surface.BrowserClient),
-    )).version, 1);
+    );
+    assert.equal(nodeInspection.version, 1);
+    assert.equal(browserInspection.version, 1);
+    assert.equal(Object.hasOwn(nodeInspection, "manifest_digest"), false);
+    assert.deepEqual(
+      Object.keys(nodeInspection.protocols[0]).sort(),
+      ["activation", "compiled_profile", "protocol_id"],
+    );
     assert.deepEqual(calls.map(({ url }) => url), [
       `${BASE_URL}/v1/privacy/capabilities`,
       `${BASE_URL}/v1/privacy/capabilities`,
@@ -348,6 +400,25 @@ test("node and browser clients request and validate the legacy inspection route"
       if (surface.label === "source" || signed) {
         assert.equal(accountId, CANONICAL_AUTH.accountId, surface.label);
       }
+    }
+  }
+});
+
+test("legacy inspection helper rejects stale and malformed Exact12 route projections", async () => {
+  for (const surface of CLIENT_SURFACES) {
+    for (const Client of [surface.NodeClient, surface.BrowserClient]) {
+      await assert.rejects(
+        requestPrivacy(surface, Client, async () => jsonResponse(snapshot())),
+        /must contain exactly/u,
+        `${surface.label} ${Client.name}: retired pre-Exact12 response`,
+      );
+      const invalid = exact12InspectionSnapshot();
+      invalid.protocols[0].readiness = { readiness: "available", detail: null };
+      await assert.rejects(
+        requestPrivacy(surface, Client, async () => jsonResponse(invalid)),
+        /evidence-derived unavailable/u,
+        `${surface.label} ${Client.name}: forged readiness`,
+      );
     }
   }
 });
@@ -410,7 +481,7 @@ test("node and browser clients reject hostile privacy response transport", async
       [surface.NodeClient, surface.BrowserClient].map((Client) =>
         requestPrivacy(surface, Client, async () => responseFactory()));
 
-    for (const request of requestsFor(() => new Response(JSON.stringify(snapshot()), {
+    for (const request of requestsFor(() => new Response(JSON.stringify(exact12InspectionSnapshot()), {
       status: 200,
       headers: { "content-type": "application/problem+json" },
     }))) {

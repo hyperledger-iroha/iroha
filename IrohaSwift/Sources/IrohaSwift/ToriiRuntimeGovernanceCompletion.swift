@@ -231,6 +231,13 @@ extension ToriiClient {
     }
 
     @discardableResult
+    public func listActiveVerifyingKeyIds(
+        completion: @escaping (Result<[ToriiVerifyingKeyId], Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) { try await self.listActiveVerifyingKeyIds() }
+    }
+
+    @discardableResult
     public func registerVerifyingKey(
         _ requestBody: ToriiVerifyingKeyRegisterRequest,
         completion: @escaping (Result<ToriiVerifyingKeyTransactionDraft, Swift.Error>) -> Void

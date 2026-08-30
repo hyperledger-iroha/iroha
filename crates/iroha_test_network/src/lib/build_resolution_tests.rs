@@ -940,6 +940,91 @@ fn first_existing_candidate_skips_missing_paths() {
     );
 }
 #[test]
+fn configured_cargo_target_rejects_repo_fallback_without_prebuilt_daemon() {
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let _reentrant_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
+    assert!(
+        !allow_reentrant_build(true, false),
+        "reentrant builds must be disabled for this regression scenario"
+    );
+    assert!(!repo_target_fallback_allowed(true, true));
+
+    let temp = tempdir().expect("temporary workspace");
+    let repo = temp.path().join("repo");
+    let cargo_target = temp.path().join("cargo-target");
+    let guarded_target = cargo_target.join(IROHA_TEST_TARGET_SUBDIR);
+    let stale_repo_binary = repo.join("target/debug/iroha3d");
+    fs::create_dir_all(stale_repo_binary.parent().expect("repo target parent"))
+        .expect("create repo target");
+    fs::write(&stale_repo_binary, b"stale repo daemon").expect("write stale repo daemon");
+
+    let strict_candidates = program_candidate_paths(
+        &repo,
+        Some(&cargo_target),
+        &guarded_target,
+        "debug",
+        "iroha3d",
+        None,
+        None,
+        repo_target_fallback_allowed(true, true),
+    );
+    assert!(
+        first_existing_candidate(
+            strict_candidates
+                .iter()
+                .map(|path| Cow::Borrowed(path.as_path()))
+        )
+        .is_none(),
+        "a repo-local daemon must not satisfy a configured Cargo target lane"
+    );
+    assert!(
+        !strict_candidates.contains(&stale_repo_binary),
+        "the stale repo fallback must not enter the candidate set"
+    );
+
+    let ordinary_candidates = program_candidate_paths(
+        &repo,
+        Some(&cargo_target),
+        &guarded_target,
+        "debug",
+        "iroha3d",
+        None,
+        None,
+        repo_target_fallback_allowed(false, true),
+    );
+    assert_eq!(
+        first_existing_candidate(
+            ordinary_candidates
+                .iter()
+                .map(|path| Cow::Borrowed(path.as_path()))
+        ),
+        Some(
+            stale_repo_binary
+                .canonicalize()
+                .expect("canonical stale repo daemon")
+        ),
+        "ordinary non-Cargo discovery must retain the repo fallback"
+    );
+
+    let active_binary = cargo_target.join("debug/iroha3d");
+    fs::create_dir_all(active_binary.parent().expect("active target parent"))
+        .expect("create active target");
+    fs::write(&active_binary, b"active target daemon").expect("write active target daemon");
+    assert_eq!(
+        first_existing_candidate(
+            strict_candidates
+                .iter()
+                .map(|path| Cow::Borrowed(path.as_path()))
+        ),
+        Some(
+            active_binary
+                .canonicalize()
+                .expect("canonical active target daemon")
+        ),
+        "a prebuilt daemon in the configured Cargo target must remain eligible"
+    );
+}
+#[test]
 fn colocated_binary_candidate_for_resolves_sibling_binary() {
     let temp = tempdir().expect("temporary workspace");
     let current_exe = temp.path().join("release/izanami");

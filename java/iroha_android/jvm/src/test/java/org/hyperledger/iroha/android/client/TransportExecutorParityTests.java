@@ -3,11 +3,16 @@ package org.hyperledger.iroha.android.client;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.Authenticator;
+import java.net.CookieHandler;
+import java.net.CookieManager;
 import java.net.InetAddress;
+import java.net.PasswordAuthentication;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -143,6 +148,160 @@ public final class TransportExecutorParityTests {
         assert expected.getMessage().contains("redirects disabled");
       }
       assert server.getRequestCount() == 0 : "unsafe client must fail before network dispatch";
+    }
+  }
+
+  @Test
+  public void jdkExecutorRejectsAmbientCredentialProvidersBeforeDispatch() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(server.url("/v1/zk/vk").uri())
+              .setAllowAmbientCredentials(false)
+              .build();
+      final java.net.http.HttpClient cookieClient =
+          java.net.http.HttpClient.newBuilder().cookieHandler(new CookieManager()).build();
+      final java.net.http.HttpClient authenticatorClient =
+          java.net.http.HttpClient.newBuilder()
+              .authenticator(
+                  new Authenticator() {
+                    @Override
+                    protected PasswordAuthentication getPasswordAuthentication() {
+                      return new PasswordAuthentication(
+                          "ambient", "must-not-leak".toCharArray());
+                    }
+                  })
+              .build();
+      final java.net.http.HttpClient redirectClient =
+          java.net.http.HttpClient.newBuilder()
+              .followRedirects(java.net.http.HttpClient.Redirect.ALWAYS)
+              .build();
+
+      for (final JavaHttpExecutor executor :
+          List.of(
+              new JavaHttpExecutor(cookieClient),
+              new JavaHttpExecutor(authenticatorClient),
+              new JavaHttpExecutor(redirectClient))) {
+        try {
+          executor.execute(request);
+          throw new AssertionError("ambient credential provider must fail before dispatch");
+        } catch (final IllegalArgumentException expected) {
+          assert expected.getMessage().contains("credential-free requests require");
+        }
+      }
+      assert server.getRequestCount() == 0 : "unsafe JDK clients must fail before network dispatch";
+    }
+  }
+
+  @Test
+  public void jdkDefaultExecutorDoesNotInheritJvmCookieHandlerOrAuthenticator() throws Exception {
+    final CookieHandler previousCookieHandler = CookieHandler.getDefault();
+    final Authenticator previousAuthenticator = Authenticator.getDefault();
+    final java.util.concurrent.atomic.AtomicInteger cookieHandlerCalls =
+        new java.util.concurrent.atomic.AtomicInteger();
+    final java.util.concurrent.atomic.AtomicInteger authenticatorCalls =
+        new java.util.concurrent.atomic.AtomicInteger();
+    try {
+      CookieHandler.setDefault(
+          new CookieHandler() {
+            @Override
+            public Map<String, List<String>> get(
+                final URI uri, final Map<String, List<String>> requestHeaders) {
+              cookieHandlerCalls.incrementAndGet();
+              return Map.of("Cookie", List.of("ambient-session=must-not-leak"));
+            }
+
+            @Override
+            public void put(
+                final URI uri, final Map<String, List<String>> responseHeaders) {}
+          });
+      Authenticator.setDefault(
+          new Authenticator() {
+            @Override
+            protected PasswordAuthentication getPasswordAuthentication() {
+              authenticatorCalls.incrementAndGet();
+              return new PasswordAuthentication(
+                  "ambient", "must-not-leak".toCharArray());
+            }
+          });
+      try (MockWebServer server = new MockWebServer()) {
+        server.enqueue(
+            new MockResponse()
+                .setResponseCode(401)
+                .setHeader("WWW-Authenticate", "Basic realm=ambient"));
+        server.start(InetAddress.getByName("127.0.0.1"), 0);
+        final TransportRequest request =
+            TransportRequest.builder()
+                .setMethod("GET")
+                .setUri(server.url("/v1/zk/vk").uri())
+                .setAllowAmbientCredentials(false)
+                .build();
+
+        final TransportResponse response =
+            JavaHttpExecutorFactory.createDefault()
+                .execute(request)
+                .get(5, TimeUnit.SECONDS);
+
+        assert response.statusCode() == 401 : "expected the original authentication challenge";
+        final okhttp3.mockwebserver.RecordedRequest received =
+            server.takeRequest(5, TimeUnit.SECONDS);
+        assert received != null : "expected one credential-free request";
+        assert received.getHeader("Authorization") == null : "origin credentials must not leak";
+        assert received.getHeader("Proxy-Authorization") == null
+            : "proxy credentials must not leak";
+        assert received.getHeader("Cookie") == null : "ambient cookies must not leak";
+        assert server.getRequestCount() == 1 : "401 challenge must not trigger an authenticated retry";
+        assert cookieHandlerCalls.get() == 0 : "JVM-global CookieHandler must not be consulted";
+        assert authenticatorCalls.get() == 0 : "JVM-global Authenticator must not be consulted";
+      }
+    } finally {
+      Authenticator.setDefault(previousAuthenticator);
+      CookieHandler.setDefault(previousCookieHandler);
+    }
+  }
+
+  @Test
+  public void jdkCredentialFreeStreamingAndUriUserInfoFailBeforeDispatch() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
+      final JavaHttpExecutor executor = new JavaHttpExecutor(JDK_CLIENT);
+      final TransportRequest streaming =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(server.url("/stream").uri())
+              .setAllowAmbientCredentials(false)
+              .build();
+      try {
+        executor.openStream(streaming);
+        throw new AssertionError("credential-free streaming must be rejected");
+      } catch (final IllegalArgumentException expected) {
+        assert expected.getMessage().contains("streaming is unsupported");
+      }
+
+      final URI endpoint = server.url("/v1/zk/vk").uri();
+      final TransportRequest userInfo =
+          TransportRequest.builder()
+              .setMethod("GET")
+              .setUri(
+                  new URI(
+                      endpoint.getScheme(),
+                      "ambient:must-not-leak",
+                      endpoint.getHost(),
+                      endpoint.getPort(),
+                      endpoint.getPath(),
+                      null,
+                      null))
+              .setAllowAmbientCredentials(false)
+              .build();
+      try {
+        executor.execute(userInfo);
+        throw new AssertionError("credential-free URI user-info must be rejected");
+      } catch (final IllegalArgumentException expected) {
+        assert expected.getMessage().contains("reject URI user-info");
+      }
+      assert server.getRequestCount() == 0 : "policy rejection must happen before dispatch";
     }
   }
 

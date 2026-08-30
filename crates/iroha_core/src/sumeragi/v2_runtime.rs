@@ -15048,7 +15048,23 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
             RuntimeFetchAuthorityRelation::Same => None,
             RuntimeFetchAuthorityRelation::Stale => {
-                if retained_owner != *ownership.owner() {
+                // A cached or newly reconstructed exact body can make a later
+                // ordinary Fetch retry race a BodyAvailable completion that
+                // already retained Prepare/Commit authority. The full
+                // manifest and typed authority relation above prove that this
+                // is the same immutable fetch result, so stutter under the
+                // stronger incumbent instead of treating the fresh reducer
+                // ordinal as a replacement owner. Store/Validate terminals
+                // still require their move-only replay owner to have been
+                // rejoined by the executor before this boundary.
+                let stale_ordinary_fetch_completion =
+                    matches!(
+                        candidate,
+                        BodyPipelineCompletionEvidence::BodyAvailable { .. }
+                    ) && incoming_statement.is_some_and(|statement| {
+                        statement.phase().is_none() && statement.execution_commitment().is_none()
+                    });
+                if retained_owner != *ownership.owner() && !stale_ordinary_fetch_completion {
                     self.latch_fail_closed(
                         "coalesced body completion changed its exact lifecycle owner",
                     );

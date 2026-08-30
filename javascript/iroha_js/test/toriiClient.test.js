@@ -53,6 +53,7 @@ import { sorafsGatewayFetch } from "../src/sorafs.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { buildBrowserVerifyingKeyTransactionPayload } from "../src/transactionCodec.js";
+import { verifierBackendRegistryTagV1 } from "../src/verifierBackendRegistry.js";
 import {
   parseStrictLosslessIntegerJson,
   stringifyStrictLosslessIntegerJson,
@@ -1319,9 +1320,7 @@ function verifyingKeyInstructionForRequest(
           circuit_id: request.circuit_id,
           owner_manifest_id: null,
           namespace: "core",
-          backend: request.backend.startsWith("stark/")
-            ? "stark"
-            : "halo2-ipa-pasta",
+          backend: verifierBackendRegistryTagV1(request.backend),
           curve: request.curve ?? "unknown",
           public_inputs_schema_hash: Array.from(
             Buffer.from(request.public_inputs_schema_hash_hex, "hex"),

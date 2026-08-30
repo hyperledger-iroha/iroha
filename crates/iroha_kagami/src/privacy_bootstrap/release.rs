@@ -52,7 +52,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "0ebbd90983ae656f302e12bb3271a32b80fe4c72e02ef762a503cf9e664f0824";
+    "745dcc83737b0c501cdc1584a1a49351da8e3519546e8108b4bf80fa284eab01";
 const CANONICAL_PLAN_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
 const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
@@ -390,7 +390,7 @@ fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<
     }
     let mut token_hashes = Vec::with_capacity(2);
     let mut distinct_token_hashes = BTreeSet::new();
-    for (binding, dataspace) in bindings.iter().zip(["is2", "dpn"]) {
+    for (binding, dataspace) in bindings.iter().zip(["is2", "bpng"]) {
         let binding = object_v1(binding, "Taira NEVO credential binding")?;
         expect_exact_keys_v1(
             binding,
@@ -432,10 +432,10 @@ fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<
         "transaction_count": (1_u64),
         "instruction_count": (27_u64),
         "dataspace_roots": [
-            {"alias": "dpn", "id": (10_u64)},
+            {"alias": "bpng", "id": (10_u64)},
             {"alias": "is2", "id": (8_477_022_798_449_861_195_u64)},
         ],
-        "domain": "nevo.dpn",
+        "domain": "nevo.bpng",
         "fee_asset_definition_id": NEVO_FEE_ASSET_DEFINITION_ID_V1,
         "account_funding_amount": "1000000",
         "fee_sponsor_program_id": (expected_program_id),

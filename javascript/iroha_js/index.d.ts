@@ -1256,7 +1256,22 @@ export type BinaryLike =
 export type VerifyingKeyIdLike = string | { backend: string; name: string };
 
 /** Exact JSON labels for the two generic OpenVerify engines in Norito order. */
-export type OpenVerifyBackendTag = "halo2-ipa-pasta" | "stark";
+export type OpenVerifyBackendTag =
+  import("./verifier-backend-registry.js").OpenVerifyBackendTagV1;
+
+export {
+  OPEN_VERIFY_BACKEND_TAGS_V1,
+  VERIFIER_BACKEND_REGISTRY_BINDINGS_V1,
+  VERIFIER_BACKEND_REGISTRY_LABELS_V1,
+  isVerifierBackendRegistryLabelV1,
+  requireVerifierBackendRegistryLabelV1,
+  verifierBackendRegistryTagV1,
+} from "./verifier-backend-registry.js";
+export type {
+  OpenVerifyBackendTagV1,
+  VerifierBackendRegistryBindingV1,
+  VerifierBackendRegistryLabelV1,
+} from "./verifier-backend-registry.js";
 
 export interface OpenVerifyEnvelope {
   backend: OpenVerifyBackendTag;
@@ -2259,18 +2274,7 @@ export type ToriiVerifyingKeyStatus = "Proposed" | "Active" | "Withdrawn";
 
 /** Exact verifier-registry labels admitted by the native Rust dispatcher. */
 export type ToriiVerifierBackendLabelV1 =
-  | "halo2/ipa"
-  | "halo2/pasta/kaigi-roster-v1"
-  | "halo2/pasta/kaigi-usage-v1"
-  | "halo2/pasta/ivm-execution-v1"
-  | "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
-  | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
-  | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
-  | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
-  | "stark/fri"
-  | "stark/fri/sha256-goldilocks"
-  | "stark/fri/poseidon2-goldilocks"
-  | "stark/fri/sha256_goldilocks.v1";
+  import("./verifier-backend-registry.js").VerifierBackendRegistryLabelV1;
 
 export interface ToriiVerifyingKeyInline {
   backend: ToriiVerifierBackendLabelV1;
@@ -9958,6 +9962,10 @@ export declare class ToriiBrowserClient {
   getOfflineCapability(
     options?: { signal?: AbortSignal },
   ): Promise<OfflineStatus>;
+  /** Exact, bounded, credential-free projection of active verifying-key ids. */
+  listActiveVerifyingKeyIds(
+    options?: { signal?: AbortSignal },
+  ): Promise<ReadonlyArray<Readonly<ToriiVerifyingKeyId>>>;
   submitKagemushaTopUpV4(
     request: KagemushaNoritoRequestV4,
     options?: { signal?: AbortSignal },
@@ -10503,6 +10511,10 @@ export declare class ToriiClient {
   listVerifyingKeysTyped(
     options?: ToriiVerifyingKeyListOptions,
   ): Promise<ReadonlyArray<ToriiVerifyingKeyListItem>>;
+  /** Exact, bounded, credential-free projection of active verifying-key ids. */
+  listActiveVerifyingKeyIds(
+    options?: { signal?: AbortSignal },
+  ): Promise<ReadonlyArray<Readonly<ToriiVerifyingKeyId>>>;
   iterateVerifyingKeys(
     options?: ToriiVerifyingKeyListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<ToriiVerifyingKeyListItem, void, unknown>;

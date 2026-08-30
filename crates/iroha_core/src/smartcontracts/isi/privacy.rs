@@ -8331,7 +8331,7 @@ mod tests {
         let budget_before = transaction.privacy_budget_for_testing();
         let error = RegisterPrivacyZkAcePolicyV1::new(initial)
             .execute(&ALICE_ID, &mut transaction)
-            .expect_err("unavailable ZK-ACE profile must not admit policy state");
+            .expect_err("unactivated ZK-ACE profile must not admit policy state");
         assert!(
             smart_contract_parameter_message(&error).contains("not registered"),
             "{error:?}"
@@ -8341,15 +8341,13 @@ mod tests {
     }
     #[cfg(feature = "zk-stark")]
     #[test]
-    fn zk_ace_submit_has_no_activatable_compiled_profile() {
+    fn zk_ace_submit_has_the_shipping_compiled_profile() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
         assert_eq!(
-            compiled_privacy_profile_v1(protocol_id),
-            Err(
-                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                    protocol_id,
-                }
-            )
+            compiled_privacy_profile_v1(protocol_id)
+                .expect("shipping ZK-ACE profile must be available")
+                .protocol_id,
+            protocol_id
         );
     }
     #[test]
@@ -8615,15 +8613,14 @@ mod tests {
         );
     }
     #[test]
-    fn zk_ace_policy_governance_has_no_compiled_activation_to_substitute() {
+    fn zk_ace_policy_governance_cannot_substitute_a_missing_activation() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        #[cfg(feature = "zk-stark")]
         assert_eq!(
-            compiled_privacy_profile_v1(protocol_id),
-            Err(
-                crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                    protocol_id,
-                }
-            )
+            compiled_privacy_profile_v1(protocol_id)
+                .expect("shipping ZK-ACE profile must be compiled")
+                .protocol_id,
+            protocol_id
         );
         let state = state_without_zk_ace_activation();
         let mut block = state.block(test_header());

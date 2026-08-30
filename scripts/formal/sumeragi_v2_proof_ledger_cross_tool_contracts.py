@@ -977,7 +977,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="reconcile_protected_lock",
                         item_token_sha256=(
-                            "41b00d09f09c0265f828d53726daea233b3c62c9626137117ef7f0c5f0daf63f"
+                            "74d54186fa00266b6ee9c5067f2ee091f927376ce8f02baa561963b398167e37"
                         ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",

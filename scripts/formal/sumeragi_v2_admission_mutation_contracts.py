@@ -696,18 +696,40 @@ match owner.coordinator.complete_durable_validate_dispatch(
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         """
-DurableValidateCompletionPublication::PublishedValidated(
-    _,
-)
-| crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedRejected(
-    _,
-),
-) => {
+Ok(crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedValidated(
+    published,
+)) => {
+    let ordinal = published.lifecycle_ordinal();
+    assert!(pending_lifecycle_completion.is_none());
+    *pending_lifecycle_completion = Some(
+        PendingLifecycleCompletionV1::ReadyValidateSuccessor(
+            ReadyValidateSuccessorV1::from_validated(published),
+        ),
+    );
     ack.acknowledge_after_publication();
-    ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished
+    ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal }
 }
 """,
-        "the exact guarded Validate owner must retire only after publication",
+        "the exact guarded validated owner must retire only after its successor publication",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        """
+Ok(crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedRejected(
+    published,
+)) => {
+    let ordinal = published.lifecycle_ordinal();
+    assert!(pending_lifecycle_completion.is_none());
+    *pending_lifecycle_completion = Some(
+        PendingLifecycleCompletionV1::ReadyValidateSuccessor(
+            ReadyValidateSuccessorV1::from_rejected(published),
+        ),
+    );
+    ack.acknowledge_after_publication();
+    ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal }
+}
+""",
+        "the exact guarded rejected owner must retire only after its successor publication",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",

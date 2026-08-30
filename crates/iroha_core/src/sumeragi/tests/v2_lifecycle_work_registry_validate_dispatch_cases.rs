@@ -1783,3 +1783,77 @@ fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
         coordinator,
     }
 }
+
+#[cfg(feature = "bls")]
+#[test]
+fn cold_launch_census_restores_retry_owner_from_published_validate_completion() {
+    for (marker, outcome, label) in [
+        (
+            0xE9,
+            ReadyDurableValidateFixtureOutcome::Validated,
+            "validated",
+        ),
+        (
+            0xEA,
+            ReadyDurableValidateFixtureOutcome::Rejected,
+            "rejected",
+        ),
+    ] {
+        let OwnedReadyDurableValidateFixture {
+            ready:
+                ReadyDurableValidateFixture {
+                    fixture,
+                    _directory,
+                    holder,
+                    lease: _,
+                    durable,
+                },
+            store,
+            coordinator,
+        } = owned_ready_durable_validate_fixture_from_waiting(
+            waiting_durable_validate_fixture(marker),
+            outcome,
+        );
+        let census = holder
+            .registry_for_test()
+            .project_recovered_durable_validate_retry_census(&coordinator, None)
+            .unwrap_or_else(|error| {
+                panic!("the {label} Ready completion joins the opaque retry census: {error:?}")
+            });
+        assert_eq!(census.len_for_test(), 1, "{label}");
+
+        let runtime_directory = TempDir::new().expect("temporary completed Validate runtime");
+        let runtime = empty_recovered_validate_runtime_for_test(
+            &fixture,
+            runtime_directory.path(),
+            &format!("completed-{label}-validate.wal"),
+        );
+        let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+        let key = (durable.round(), durable.subject());
+        let (executor, store) =
+            crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store_and_validate_retry_census_for_test(
+                runtime,
+                store,
+                census,
+                fixture.verified.context().clone(),
+                fixture.verified.context().roster[0].validator.clone(),
+                Some(0),
+                std::sync::Arc::clone(&output_guard),
+                crate::sumeragi::v2_effects::EffectQueueConfig::default(),
+            )
+            .unwrap_or_else(|error| panic!("cold-open the {label} Ready completion: {error:?}"));
+        assert_eq!(
+            executor.recovered_durable_validate_retry_keys_for_test(),
+            vec![key],
+            "{label}"
+        );
+        assert!(
+            !executor.recovered_validated_body_was_bound_for_test(key),
+            "a {label} Ready completion remains lifecycle-owned without runtime validation binding"
+        );
+        assert!(!output_guard.restart_required(), "{label}");
+        drop(executor);
+        drop(store);
+        drop(runtime_directory);
+    }
+}

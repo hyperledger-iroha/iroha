@@ -2935,8 +2935,11 @@ return Ok(());
         begin_fetch,
         """
 if let Some(stage) = self.authenticated_genesis_replay.get(&key) {
+    let fetch_consumer_rebind =
+        stage.exactly_authenticates_fetch_consumer_rebind(&incoming_effect, &ownership);
     if proposal_replay.is_some()
-        || !stage.exactly_authenticates_fetch_rediscovery(&incoming_effect)
+        || (!stage.exactly_authenticates_fetch_rediscovery(&incoming_effect)
+            && !fetch_consumer_rebind)
     {
         return Err(EffectExecutorError::Contract(
             "certified genesis Fetch rediscovery changed its authenticated origin"
@@ -2949,10 +2952,56 @@ if let Some(stage) = self.authenticated_genesis_replay.get(&key) {
                 .to_owned(),
         ));
     }
+    if fetch_consumer_rebind {
+        let Some(work_id) = stage.store_work_id() else {
+            return Err(EffectExecutorError::Contract(
+                "authenticated-genesis Fetch consumer rebind lost its Store work ID"
+                    .to_owned(),
+            ));
+        };
+        let pending = self.pending_stores.get(&work_id).ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "authenticated-genesis Fetch consumer rebind lost its Store task"
+                    .to_owned(),
+            )
+        })?;
+        let store_effect = AdapterEffect::StoreBody {
+            tag: pending.task.tag(),
+            round,
+            subject,
+        };
+        let exact_store_task = matches!(
+            stage,
+            AuthenticatedGenesisReplayStageV1::Store { replay, .. }
+                if replay.exactly_matches_retry(
+                    &store_effect,
+                    pending.task.ownership(),
+                )
+        );
+        if pending.consumer.is_some()
+            || (pending.task.manifest.round, pending.task.manifest.subject) != key
+            || !exact_store_task
+        {
+            return Err(EffectExecutorError::Contract(
+                "authenticated-genesis Fetch consumer rebind changed its immutable Store"
+                    .to_owned(),
+            ));
+        }
+        let store_manifest = pending.task.manifest.clone();
+        let owner_plan = self.plan_body_pipeline_owner(tag, &store_manifest)?;
+        let reservation = self
+            .runtime
+            .reserve_body_available_with_owner(tag, store_manifest, &ownership)
+            .map_err(runtime_enqueue_error)?;
+        self.runtime
+            .commit_body_available(reservation)
+            .map_err(runtime_enqueue_error)?;
+        self.commit_body_pipeline_owner(owner_plan);
+    }
     return Ok(());
 }
 """,
-        "authenticated genesis Fetch rediscovery must preserve its exact replay origin and reject a transient Store admission",
+        "authenticated genesis Fetch rediscovery or consumer rebind must preserve the exact immutable Store lineage and publish runtime BodyAvailable before local ownership",
         errors,
     )
     _require_rust_token_sequence(

@@ -1,9 +1,9 @@
 {
   "chain": "fc56984b-2be7-431d-840e-21514d1883f0",
   "chain_discriminant": 369,
-  "consensus_fingerprint": "0x6ccda6979ccf79088c0b1bb0e1728ecb5f08f25586db98944eca4f6f647afb46",
+  "consensus_fingerprint": "0x4768fb10948e5eb610d8d98aa3a1ff82a7fec3d70cc357e3707b77611686a0e2",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"E9B61F86F63F556C0A8460B3EE54C1A4DBC3FE0F0097819D99C724C68B148EAB","execution_policy_hash":"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"2C61D9F82780FDFCD0777CE71A82F1FF81DFBC48285B40A59C98645E6F461753","execution_policy_hash":"3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -153,6 +153,24 @@
             "alias": "xor#universal",
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             "lease_expiry_ms": null
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "bpng.bpng",
+              "logo": null,
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "boi.is",
+              "logo": null,
+              "metadata": {}
+            }
           }
         },
         {

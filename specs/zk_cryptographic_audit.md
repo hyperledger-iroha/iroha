@@ -1,6 +1,6 @@
 # Iroha ZK Cryptographic Audit
 
-Date: 2026-08-23
+Date: 2026-08-27
 
 This report audits Iroha-owned zero-knowledge verifier code and proof-bearing runtime
 integrations. Vendored Halo2, curve, hash, encoding, and arithmetic libraries are
@@ -24,9 +24,10 @@ Merkle opening checks, Fiat--Shamir query derivation, FRI folding checks, and
 AIR composition checks. Generic circuits bind `OpenVerifyEnvelope` metadata.
 The separate typed `PrivacyProofEnvelopeV1` path adds compiled-profile,
 governed-policy, signed-transaction-intent, trusted-genesis, transfer, and
-replay-nullifier binding. ZK-ACE activation is nevertheless unavailable: its
-current four-word public commitment has only a one-field, roughly 32-bit
-generic collision ceiling.
+replay-nullifier binding. ZK-ACE V2 derives its four commitment words through
+independent length-framed lane domains, giving the combined commitment the
+compiled 128-bit generic collision target and making the native profile
+available for governed activation.
 
 The Iroha-owned IPA/Halo2 stack is a transparent IPA verifier wrapper. Production
 IPA bases are independently mapped with domain-separated hash-to-curve; the
@@ -120,14 +121,15 @@ movement for a failed ZK-ACE proof.
 
 Evidence: the direct `SubmitZkAceAuthorizedTransfer` wire is retired. The
 canonical `zk_ace_prover` path does not expose a caller-selected backend,
-verifier key, proof attachment, or generic `OpenVerifyEnvelope`, and now fails
-with `CompiledProfileUnavailable` before proof construction. If the candidate
-is eventually requalified, `SubmitPrivacyProofV1` execution in
+verifier key, proof attachment, or generic `OpenVerifyEnvelope`; it resolves
+the compiled V2 profile, proves the governed statement, and self-verifies the
+native proof before exposing an exact-authority transaction for signing. Builds
+that exclude the native STARK feature fail closed with
+`CompiledProfileUnavailable`. `SubmitPrivacyProofV1` execution in
 [../crates/iroha_core/src/smartcontracts/isi/privacy.rs](../crates/iroha_core/src/smartcontracts/isi/privacy.rs)
 validates the signed transaction intent, compiled activation, governed policy,
 native proof, and replay state before committing the transfer effects. The
-native verifier does not consult committed-result trust and currently returns
-`EngineUnavailable` before proof parsing.
+shipping native verifier does not consult committed-result trust.
 
 Impact: the original bypass could authorize a transparent transfer and consume a
 replay nullifier if the flag were enabled during new block production, fresh
@@ -135,10 +137,12 @@ transaction admission, or uncommitted ledger execution. The remediated ZK-ACE pa
 no longer depends on that operational boundary.
 
 Regression coverage:
-`zk_ace_production_dispatch_has_no_activatable_profile` and
-`zk_ace_submit_has_no_activatable_compiled_profile` pin verifier and state
-transition fail-closure. The four-peer exact-12 lifecycle tests also reject
-ZK-ACE activation and proof submission before and after restart.
+`zk_ace_production_dispatch_has_the_compiled_exact12_profile` and
+`zk_ace_submit_has_the_shipping_compiled_profile` pin verifier and state-transition
+dispatch to the shipping profile. The four-peer retained exact-12 lifecycle test
+registers the governed ZK-ACE policy, rejects corrupted and cross-profile proofs,
+executes the canonical transfer atomically, rejects replay, and checks recovered
+active lifecycle state after restart.
 
 Residual recommendation: keep `trust_committed_execution_results` restricted to
 committed-block replay/recovery contexts for all other proof-bearing flows, and avoid
@@ -169,28 +173,24 @@ Regression coverage: `zk_subrouter_smoke` asserts that both retired routes retur
 `404 Not Found`; the existing `zk_verify_batch_*` integration suites cover the
 remaining bounded diagnostic verifier.
 
-### ZK-AUDIT-03: ZK-ACE v0 commitment does not meet its compiled security target
+### ZK-AUDIT-03: ZK-ACE v0 commitment did not meet its compiled security target
 
-Severity: Critical if activated; fail-closed in the current tree.
+Severity: Critical in the retired V1 profile.
 
-Status: Disabled pending redesign. The algebraic candidate uses a 4,096-row
+Status: Remediated and requalified in V2. The retired algebraic candidate used a 4,096-row
 masked trace, 65,536-row low-degree extension, quartic Goldilocks challenges,
 108 unique FRI queries, binary folding and SHA-256 Merkle paths. Its public
-commitment, however, exposes four sequential `state[0]` values from one
+commitment exposed four sequential `state[0]` values from one
 rate-two, capacity-one Goldilocks sponge. Multiple outputs do not raise the
 generic binding above the one-field capacity, so the end-to-end profile cannot
 inherit the STARK layer's theorem-derived 128-bit classical-ROM bound.
 
-`ZK_ACE_FULL_ENGINE_AVAILABLE_V1` is therefore false. Proving, verification,
-and compiled-profile activation return `EngineUnavailable` before processing
-proof material. The candidate relation and fixed 1,341,142-byte proof wire stay
-testable, but are not an executable privacy protocol.
-
-Required remediation: derive the four commitment words from independent
-domain-separated invocations, or replace the commitment with a construction
-having at least 128-bit collision binding. The resulting wider AIR schedule,
-trace domain, masking geometry, FRI profile, profile digest, fixtures, and
-security certificate must all be regenerated and requalified before activation.
+V2 derives each word through a separate length-framed lane domain, runs four
+parallel AIR lanes, and uses the dense-MDS Poseidon `x^7` permutation. The
+trace/LDE schedule, FRI profile, compiled descriptor, profile digest, fixtures,
+and fixed 1,427,158-byte `ZKA2` proof wire were regenerated and requalified.
+`ZK_ACE_FULL_ENGINE_AVAILABLE_V1` is true; proving, verification, the compiled
+profile, and governed activation all use this exact V2 binding.
 
 ### ZK-AUDIT-04: BN254/Halo2 naming must remain segregated from ledger-grade IPA policy
 
@@ -369,8 +369,9 @@ Descriptors now call it dense-MDS Goldilocks Poseidon `x^7`; it is not
 Poseidon2.
 
 This change removes the concrete non-permutation collision but does not upgrade
-a one-Goldilocks-element root to 128-bit collision resistance. FASTPQ remains
-release-blocked, and ZK-ACE remains unavailable under ZK-AUDIT-03.
+a one-Goldilocks-element FASTPQ root to 128-bit collision resistance. FASTPQ
+remains release-blocked. ZK-ACE separately completed the four-independent-lane
+V2 remediation recorded under ZK-AUDIT-03 and is available.
 
 ### ZK-AUDIT-14: BFV public-padding sampling did not bind hidden trace columns
 
@@ -671,10 +672,10 @@ zeroized on drop; construction rejects an all-zero component. Runtime admission
 requires the exact active compiled protocol activation, a valid active governed
 policy, an allowlisted source, the signed transaction-intent binding, trusted
 genesis, matching statement and policy epochs, a valid native proof, and an
-unused replay nullifier. The compiled profile is currently unavailable, so this
-validation shape cannot activate or execute a ZK-ACE proof.
+unused replay nullifier. The compiled V2 profile is available and this complete
+validation shape governs activation and execution of a ZK-ACE proof.
 
-The disabled candidate prover independently masks the execution trace and the
+The production prover independently masks the execution trace and the
 full FRI batching space before transcript challenges, links the AIR at a
 quartic-extension DEEP point, and self-verifies each produced proof. Adversarial
 tests mutate typed public bindings, witness relations, mask geometry, DEEP
@@ -682,18 +683,19 @@ openings, query schedules, and FRI paths.
 
 ## Parameter Security
 
-ZK-ACE v0 fixes its candidate algebraic profile in the compiled engine
+ZK-ACE V2 fixes its algebraic profile in the compiled engine
 descriptor rather than a caller- or registry-supplied VK payload. The descriptor
 commits the Goldilocks base and quartic extension, degree-two AIR, 4,096-row
 trace, 65,536-row LDE, trace and FRI masks, one DEEP point, 108 unique queries,
 twelve binary FRI rounds, SHA-256 domains, fixed proof wire, and
-work-normalized classical-ROM STARK bound. It also records the sequential
-one-field-output commitment and disabled activation state.
+work-normalized classical-ROM STARK bound. It also records the four independent
+length-framed commitment lanes; the compiled profile exposes this qualified
+engine as available.
 
-Security interpretation: the theorem-derived certificate covers the candidate
-STARK/FRI geometry, not the weaker public commitment that defines its statement.
-The complete ZK-ACE system therefore has only the commitment's roughly 32-bit
-binding ceiling and is unavailable. No qROM claim is made.
+Security interpretation: the theorem-derived certificate covers the V2
+STARK/FRI geometry, while the independent-lane commitment construction supplies
+the compiled 128-bit generic collision target for the statement binding. The
+complete profile is available. No qROM claim is made.
 
 ## IPA/Halo2 Verification
 
@@ -759,7 +761,7 @@ counterexamples.
 | STARK domain tag is bound | Satisfied | derived STARK domain tag checked against inner envelope |
 | Malformed STARK proof rejection | Satisfied by code shape and tests | decode, parameter, Merkle, AIR, and FRI checks |
 | ZK-ACE replay rejected | Satisfied; verifier-failure trust bypass remediated | signed transaction intent, governed policy, and replay-nullifier checks; see ZK-AUDIT-01 |
-| ZK-ACE privacy strength | Unavailable; candidate commitment has a roughly 32-bit binding ceiling | fail-closed engine flag, independent-lane remediation descriptor, legacy-collision regression; see ZK-AUDIT-03 and ZK-AUDIT-13 |
+| ZK-ACE privacy strength | Available; V2 combined commitment targets 128-bit generic collision binding | four independent length-framed lane domains, requalified AIR/FRI descriptor, fixed `ZKA2` wire, and legacy-collision regression; see ZK-AUDIT-03 and ZK-AUDIT-13 |
 | IPA metadata binding | Satisfied for Iroha-owned wrapper | generator DST, transcript limits, shape checks, canonical outer schema, strict ZK1 carrier, VK/envelope checks |
 | Trusted setup fail-closed | Satisfied in audited policy | registry and runtime label rejection |
 | Diagnostic endpoint not ledger-grade | Satisfied in code; documentation risk | Torii attachment/prover worker are report-only; see ZK-AUDIT-02 |

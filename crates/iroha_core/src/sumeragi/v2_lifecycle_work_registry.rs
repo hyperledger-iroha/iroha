@@ -1796,6 +1796,7 @@ pub(in crate::sumeragi) struct RecoveredDurableValidateRetryOwnerV1 {
     effect: AdapterEffect,
     durable_receipt: DurableBodyReceipt,
     binding: RecoveredDurableValidateRetryBindingV1,
+    lifecycle_ordinal: u128,
 }
 
 impl RecoveredDurableValidateRetryOwnerV1 {
@@ -1808,6 +1809,7 @@ impl RecoveredDurableValidateRetryOwnerV1 {
         effect: AdapterEffect,
         durable_receipt: DurableBodyReceipt,
         pending: PendingRuntimeEffectBinding,
+        lifecycle_ordinal: u128,
         expected_decision: Option<(
             wire::ConsensusRound,
             wire::ConsensusRound,
@@ -1815,6 +1817,9 @@ impl RecoveredDurableValidateRetryOwnerV1 {
             wire::ExecutionCommitment,
         )>,
     ) -> Option<Self> {
+        if lifecycle_ordinal == 0 {
+            return None;
+        }
         let binding =
             pending.project_recovered_durable_validate_retry_binding(&effect, expected_decision)?;
         Some(Self {
@@ -1822,7 +1827,13 @@ impl RecoveredDurableValidateRetryOwnerV1 {
             effect,
             durable_receipt,
             binding,
+            lifecycle_ordinal,
         })
+    }
+
+    /// Return the exact recovered logical row retained by the registry.
+    pub(in crate::sumeragi) const fn lifecycle_ordinal(&self) -> u128 {
+        self.lifecycle_ordinal
     }
 
     /// Return the exact replayed Decision which bounds authority refinement.
@@ -2203,6 +2214,33 @@ impl DurableValidateCompletion {
                 &self.outcome,
             ) == Some(installed_digest)
             && installed_digest != self.incumbent_digest
+    }
+
+    /// Rejoin the outcome-bound Ready replacement to the durable logical row.
+    ///
+    /// LedgerV1 names the replacement digest after worker publication, while
+    /// the retained replay envelope is authenticated against the incumbent
+    /// Validate digest. Validate both cuts and bridge them only through this
+    /// closed completion carrier.
+    fn matches_recovered_record(
+        &self,
+        active_context: LifecycleContext,
+        record: &LifecycleRecord,
+        metadata: &DurableRecordMetadata,
+        installed_digest: LifecycleDigest,
+    ) -> bool {
+        if !self.validates(installed_digest) {
+            return false;
+        }
+        let mut incumbent_record = record.clone();
+        incumbent_record.physical_slots =
+            BTreeMap::from([(self.address.slot, self.incumbent_digest)]);
+        self.incumbent.matches_recovered_record(
+            active_context,
+            &incumbent_record,
+            metadata,
+            self.incumbent_digest,
+        )
     }
 }
 // DURABLE_VALIDATE_COMPLETION_CARRIER_END
@@ -3771,31 +3809,6 @@ enum ConcreteLifecycleWorkKind {
     DurableProducerTurn(DurableProducerTurnWork),
 }
 
-impl ConcreteLifecycleWorkRegistry {
-    /// Borrow every exact durable Validate row whose executable lifecycle
-    /// owner was already published before process restart.
-    pub(super) fn recovered_published_validate_retry_markers(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            &AdapterEffect,
-            &PendingRuntimeEffectBinding,
-            &DurableBodyReceipt,
-        ),
-    > {
-        self.entries.values().filter_map(|work| {
-            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
-                return None;
-            };
-            work.validate_exact().then_some((
-                &validate.effect,
-                &validate.pending,
-                &validate.durable_receipt,
-            ))
-        })
-    }
-}
-
 /// One move-only concrete effect paired with its sealed pending authority.
 #[derive(Debug)]
 #[must_use = "dropping concrete lifecycle work abandons its exact physical owner"]
@@ -5290,6 +5303,7 @@ pub(crate) struct PreparedReadyDurableValidateExecution<'a> {
     outcome_kind: ReadyDurableValidateOutcomeKind,
     lease: TurnLease,
     validated_catalog_authority: Option<ReadyValidatedExecutorCatalogAuthorityV1>,
+    authenticated_manifest: Option<wire::PayloadManifest>,
 }
 
 /// Move-only authority to promote one fsynced successful Validate marker into

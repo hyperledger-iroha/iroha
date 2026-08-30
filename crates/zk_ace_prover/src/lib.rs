@@ -1,9 +1,8 @@
-//! Fail-closed native-Rust transaction builder for the disabled ZK-ACE candidate.
+//! Native-Rust transaction builder for the production ZK-ACE authorization profile.
 //!
-//! The typed policy, witness, and transaction shapes remain available for validation and future
-//! migration, but no compiled native verifier profile is activatable. Every otherwise valid
-//! preparation or build attempt therefore returns
-//! [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] before entropy or proof work.
+//! The builder validates the governed policy, witness, transaction intent, and canonical genesis
+//! binding before proving. Builds that deliberately exclude the native STARK profile still fail
+//! closed with [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`].
 use core::{num::NonZeroU32, time::Duration};
 pub use iroha_core::privacy_engines::zk_ace::{
     ZkAcePrivacyWitnessV1, ZkAcePrivacyWitnessValidationErrorV1,
@@ -34,7 +33,7 @@ use iroha_data_model::{
     },
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
 };
-/// Exact public-transfer input for the disabled native ZK-ACE candidate.
+/// Exact public-transfer input for the native ZK-ACE authorization profile.
 ///
 /// The governed policy is owned and validated at construction. Its asset,
 /// identity commitment, policy digest, epoch, and source allowlist become the
@@ -48,10 +47,9 @@ pub struct ZkAcePrivacyTransferV1 {
     amount: u128,
 }
 impl ZkAcePrivacyTransferV1 {
-    /// Construct a canonical candidate transparent transfer.
+    /// Construct a canonical transparent transfer authorized by ZK-ACE.
     ///
-    /// This validates the input shape only; the production preparation and
-    /// signing APIs remain fail-closed while no compiled profile is available.
+    /// This validates the governed input shape before proof preparation.
     ///
     /// # Errors
     ///
@@ -137,7 +135,7 @@ pub struct ZkAcePrivacyActionTransactionContextV1 {
     /// Exact transaction metadata.
     pub metadata: Metadata,
 }
-/// Validator-visible effect the disabled ZK-ACE candidate would authorize.
+/// Validator-visible effect authorized by a valid ZK-ACE proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAcePrivacyTransferEffectV1 {
     /// Governed policy lineage.
@@ -157,12 +155,11 @@ pub struct ZkAcePrivacyTransferEffectV1 {
     /// Replay marker consumed atomically with the transfer.
     pub replay_nullifier: PrivacyNullifierV1,
 }
-/// Candidate proving output ready for exact-authority signing.
+/// Proving output ready for exact-authority signing.
 ///
 /// The final payload remains private so callers cannot add instructions,
 /// attachments, or substitute an envelope after proving. Public preparation
-/// APIs cannot currently construct this type because the compiled profile is
-/// fail-closed.
+/// APIs construct this type only after the native proof self-verifies.
 pub struct ZkAcePreparedPrivacyTransferV1 {
     payload: TransactionPayload,
     transaction_intent_digest: [u8; 32],
@@ -227,7 +224,7 @@ impl ZkAcePreparedPrivacyTransferV1 {
         &self.effect
     }
 }
-/// Complete signed result for the disabled candidate ZK-ACE path.
+/// Complete signed result for the production ZK-ACE path.
 pub struct SignedZkAcePrivacyTransferV1 {
     signed_transaction: SignedTransaction,
     transaction_hash: [u8; 32],
@@ -679,14 +676,12 @@ where
         effect,
     })
 }
-/// Validate one direct ZK-ACE candidate transfer and fail closed before proving.
+/// Validate and prove one direct ZK-ACE transfer with caller-provided entropy.
 ///
 /// # Errors
 ///
-/// Fails closed for invalid policy, context, witness binding, or genesis. An
-/// otherwise valid request returns
-/// [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] before using
-/// `randomness` while the 128-bit commitment remediation remains incomplete.
+/// Fails closed for invalid policy, context, witness binding, genesis, entropy,
+/// proof construction, or an unavailable compiled profile.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the owning convenience API keeps transfer inputs uniform"
@@ -708,13 +703,12 @@ pub fn prepare_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 + ?Siz
         },
     )
 }
-/// Validate one direct ZK-ACE candidate transfer and fail closed before using
-/// operating-system entropy.
+/// Validate and prove one direct ZK-ACE transfer with operating-system entropy.
 ///
 /// # Errors
 ///
-/// Returns [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] for
-/// an otherwise valid request while the candidate engine is disabled.
+/// Returns an error for an invalid request, unavailable compiled profile,
+/// entropy failure, or proof-construction failure.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the owning convenience API keeps transfer inputs uniform"
@@ -782,13 +776,12 @@ pub fn sign_prepared_zk_ace_privacy_transfer_v1(
         effect: prepared.effect,
     })
 }
-/// Validate a signed ZK-ACE candidate request and fail closed before proving.
+/// Validate, prove, and sign one ZK-ACE request with caller-provided entropy.
 ///
 /// # Errors
 ///
-/// Returns [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] for
-/// an otherwise valid request after signing-authority preflight and before
-/// entropy or proof work.
+/// Returns an error for signing-authority mismatch, an invalid request,
+/// unavailable compiled profile, entropy failure, proof failure, or signing failure.
 pub fn build_signed_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 + ?Sized>(
     context: ZkAcePrivacyActionTransactionContextV1,
     transfer: ZkAcePrivacyTransferV1,
@@ -807,13 +800,12 @@ pub fn build_signed_zk_ace_privacy_transfer_with_rng_v1<R: ZkAceTryCryptoRngV1 +
     )?;
     sign_prepared_zk_ace_privacy_transfer_v1(prepared, private_key)
 }
-/// Validate a signed ZK-ACE candidate request and fail closed before proving.
+/// Validate, prove, and sign one ZK-ACE request with operating-system entropy.
 ///
 /// # Errors
 ///
-/// Returns [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] for
-/// an otherwise valid request after signing-authority preflight and before
-/// operating-system entropy or proof work.
+/// Returns an error for signing-authority mismatch, an invalid request,
+/// unavailable compiled profile, entropy failure, proof failure, or signing failure.
 pub fn build_signed_zk_ace_privacy_transfer_v1(
     context: ZkAcePrivacyActionTransactionContextV1,
     transfer: ZkAcePrivacyTransferV1,
@@ -912,16 +904,30 @@ mod tests {
     impl ZkAceTryRngCoreV1 for PanicEntropyRng {
         type Error = InjectedEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-            panic!("fail-closed ZK-ACE request reached entropy")
+            panic!("preflight-invalid ZK-ACE request reached entropy")
         }
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-            panic!("fail-closed ZK-ACE request reached entropy")
+            panic!("preflight-invalid ZK-ACE request reached entropy")
         }
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
-            panic!("fail-closed ZK-ACE request reached entropy")
+            panic!("preflight-invalid ZK-ACE request reached entropy")
         }
     }
     impl ZkAceTryCryptoRngV1 for PanicEntropyRng {}
+    struct FailingEntropyRng;
+    impl ZkAceTryRngCoreV1 for FailingEntropyRng {
+        type Error = InjectedEntropyError;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(InjectedEntropyError)
+        }
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(InjectedEntropyError)
+        }
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(InjectedEntropyError)
+        }
+    }
+    impl ZkAceTryCryptoRngV1 for FailingEntropyRng {}
     #[test]
     fn witness_is_closed_nonzero_secret_state() {
         for (root, blinding, replay, expected) in [
@@ -1069,7 +1075,7 @@ mod tests {
         ));
     }
     #[test]
-    fn otherwise_valid_preparation_fails_before_entropy() {
+    fn otherwise_valid_preparation_reaches_the_available_native_engine() {
         let (transfer, witness) = transfer_and_witness();
         assert!(matches!(
             prepare_zk_ace_privacy_transfer_with_rng_v1(
@@ -1077,9 +1083,11 @@ mod tests {
                 transfer,
                 witness,
                 [0x77; 32],
-                &mut PanicEntropyRng,
+                &mut FailingEntropyRng,
             ),
-            Err(ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)
+            Err(ZkAcePrivacyActionBuildErrorV1::Native(
+                ZkAceNativeErrorV1::RandomnessUnavailable
+            ))
         ));
         let (transfer, witness) = transfer_and_witness();
         assert!(matches!(
@@ -1089,25 +1097,26 @@ mod tests {
                 witness,
                 [0x77; 32],
                 key_pair(1).private_key(),
-                &mut PanicEntropyRng,
+                &mut FailingEntropyRng,
             ),
-            Err(ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)
+            Err(ZkAcePrivacyActionBuildErrorV1::Native(
+                ZkAceNativeErrorV1::RandomnessUnavailable
+            ))
         ));
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
-        assert!(matches!(
-            compiled_privacy_profile_v1(protocol_id),
-            Err(iroha_core::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                protocol_id: rejected,
-            }) if rejected == protocol_id
-        ));
+        assert_eq!(
+            compiled_privacy_profile_v1(protocol_id)
+                .expect("shipping ZK-ACE profile must be available")
+                .protocol_id,
+            protocol_id
+        );
     }
     #[test]
-    fn operating_system_preparation_is_also_fail_closed() {
-        let (transfer, witness) = transfer_and_witness();
-        assert!(matches!(
-            prepare_zk_ace_privacy_transfer_v1(context(account(1)), transfer, witness, [0x77; 32],),
-            Err(ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)
-        ));
+    fn operating_system_preparation_uses_the_same_available_profile() {
+        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        let profile = compiled_privacy_profile_v1(protocol_id)
+            .expect("shipping ZK-ACE profile must be available");
+        assert_eq!(profile.protocol_id, protocol_id);
     }
     #[test]
     fn explicit_policy_commitment_fixture_is_nonzero() {

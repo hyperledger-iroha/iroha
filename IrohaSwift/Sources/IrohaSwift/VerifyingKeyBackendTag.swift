@@ -34,6 +34,28 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         }
     }
 
+    /// Canonically ordered verifier-registry-v1 labels accepted by native Rust dispatch.
+    ///
+    /// These are registry identifiers, not aliases for the two-value Norito engine enum.
+    public static let verifierBackendRegistryLabelsV1: [String] =
+        halo2VerifierRegistryLabelsV1 + starkVerifierRegistryLabelsV1
+
+    /// Resolve one exact verifier-registry-v1 label to its low-level Norito proof engine.
+    ///
+    /// Unknown, noncanonical, padded, or confusable labels fail closed with `nil`.
+    public static func verifierBackendRegistryTagV1(
+        _ label: String?
+    ) -> VerifyingKeyBackendTag? {
+        guard let label else { return nil }
+        if halo2VerifierRegistryLabelSetV1.contains(label) {
+            return .halo2IpaPasta
+        }
+        if starkVerifierRegistryLabelSetV1.contains(label) {
+            return .stark
+        }
+        return nil
+    }
+
     /// Returns true only for an exact, portable production verifier label.
     public static func isProductionVerifyBackendLabel(_ raw: String?) -> Bool {
         guard let raw else {
@@ -49,9 +71,7 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         {
             return false
         }
-        return backend == "halo2/ipa"
-            || starkFriProductionBackends.contains(backend)
-            || productionNativeHalo2PastaBackends.contains(backend)
+        return verifierBackendRegistryTagV1(backend) != nil
     }
 
     /// Requires an exact production verifier label and returns it unchanged.
@@ -76,22 +96,26 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         return backend
     }
 
-    private static let starkFriProductionBackends: Set<String> = [
-        "stark/fri",
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1"
-    ]
-
-    private static let productionNativeHalo2PastaBackends: Set<String> = [
+    private static let halo2VerifierRegistryLabelsV1 = [
+        "halo2/ipa",
         "halo2/pasta/kaigi-roster-v1",
         "halo2/pasta/kaigi-usage-v1",
         "halo2/pasta/ivm-execution-v1",
         "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
+        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
     ]
+
+    private static let starkVerifierRegistryLabelsV1 = [
+        "stark/fri",
+        "stark/fri/sha256-goldilocks",
+        "stark/fri/poseidon2-goldilocks",
+        "stark/fri/sha256_goldilocks.v1",
+    ]
+
+    private static let halo2VerifierRegistryLabelSetV1 = Set(halo2VerifierRegistryLabelsV1)
+    private static let starkVerifierRegistryLabelSetV1 = Set(starkVerifierRegistryLabelsV1)
 
     private static let trustedSetupBackendSegments: Set<String> = [
         "groth16", "kzg", "bn254", "bn256", "bls12", "srs", "crs",
@@ -227,20 +251,9 @@ public enum VerifierBackendCatalogTag: Sendable, Equatable {
         }
     }
 
-    private static let productionLabels: Set<String> = [
-        "halo2/ipa",
-        "halo2/pasta/kaigi-roster-v1",
-        "halo2/pasta/kaigi-usage-v1",
-        "halo2/pasta/ivm-execution-v1",
-        "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-        "stark/fri",
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1"
-    ]
+    private static let productionLabels = Set(
+        VerifyingKeyBackendTag.verifierBackendRegistryLabelsV1
+    )
 }
 
 public enum VerifyingKeyBackendTagValidationError: Error, Equatable, LocalizedError {
@@ -273,8 +286,11 @@ public enum VerifierBackendRegistryLabelValidationError: Error, Equatable, Local
 
 /// Exact verifier-registry identifiers accepted by native Rust dispatch.
 public enum VerifierBackendRegistryLabels {
+    /// Canonical registry-v1 order shared with native Rust and the other mobile SDKs.
+    public static let orderedV1 = VerifyingKeyBackendTag.verifierBackendRegistryLabelsV1
+
     public static func isSupported(_ label: String?) -> Bool {
-        VerifyingKeyBackendTag.isProductionVerifyBackendLabel(label)
+        VerifyingKeyBackendTag.verifierBackendRegistryTagV1(label) != nil
     }
 
     @discardableResult

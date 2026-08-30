@@ -311,7 +311,7 @@ impl RecoveredDurableValidateRetryBindingV1 {
             );
         };
         if (frontier_tag != recovered_tag && !frontier_tag.strictly_advances(*recovered_tag))
-            || (incoming_tag != frontier_tag && !incoming_tag.strictly_advances(*frontier_tag))
+            || incoming_tag.height() != frontier_tag.height()
             || frontier_round != recovered_round
             || frontier_subject != recovered_subject
             || incoming_round != recovered_round
@@ -449,7 +449,11 @@ impl RecoveredDurableValidateRetryBindingV1 {
         })?;
         Ok((
             RecoveredDurableValidateRetryFrontierV1 {
-                effect: effect.clone(),
+                effect: if incoming_tag.strictly_advances(*frontier_tag) {
+                    effect.clone()
+                } else {
+                    frontier.effect.clone()
+                },
                 statement: retained_statement,
                 authority_ceiling_commitment: frontier
                     .authority_ceiling_commitment

@@ -125,13 +125,7 @@ impl LifecycleProducerClaimDispositionV1 {
 
     /// Return whether the outer height must yield before ProducerTurn planning.
     pub(in crate::sumeragi) const fn requires_yield(self) -> bool {
-        matches!(
-            self,
-            Self::AwaitingCompletion
-                | Self::AwaitingValidateSidecar
-                | Self::AwaitingApplyCompletion
-                | Self::AwaitingReplayCompletion
-        )
+        !matches!(self, Self::Eligible | Self::ApplyTerminalSettled)
     }
 
     /// Return whether this state may consume the Ready scheduler branch.
@@ -232,14 +226,23 @@ impl LifecycleProducerClaimDispositionV1 {
             (Self::AwaitingCompletion, Completion::LifecycleValidatePublished { ordinal }) => {
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
-            (Self::Eligible, Completion::LifecycleValidateSidecarWoken { ordinal }) => {
-                Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
-            }
-            (Self::AwaitingCompletion, Completion::LifecycleValidateSidecarWoken { ordinal }) => {
+            (
+                Self::Eligible | Self::AwaitingCompletion | Self::AwaitingValidateSidecar,
+                Completion::LifecycleValidateSidecarWoken { ordinal },
+            ) => {
+                // Woken retains the immutable registration that installed
+                // AwaitingValidateSidecar, so this is the same Validate row
+                // advancing back into its exact Ready-successor corridor.
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
             (
                 state @ Self::AwaitingValidateSuccessor { ordinal },
+                Completion::LifecycleValidateSuccessorCapacityPending {
+                    ordinal: pending_ordinal,
+                },
+            ) if ordinal == *pending_ordinal => Ok(state),
+            (
+                state @ Self::AwaitingValidateFence { ordinal, .. },
                 Completion::LifecycleValidateSuccessorCapacityPending {
                     ordinal: pending_ordinal,
                 },
@@ -949,6 +952,39 @@ mod tests {
             claim,
             LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 7 }
         );
+        assert!(
+            claim.requires_yield(),
+            "the retained same-address Validate successor must precede ProducerTurn"
+        );
+        let fenced = claim
+            .observe_completion(&Completion::LifecycleValidateSuccessorFencePending {
+                ordinal: 7,
+                wait: super::super::super::v2_lifecycle_coordinator::wait_token_for_test(
+                    super::super::super::v2_lifecycle_coordinator::WaitSource::External(
+                        super::super::super::v2_lifecycle_coordinator::LifecycleDigest::new(
+                            [11; 32],
+                        ),
+                    ),
+                    3,
+                ),
+            })
+            .expect("the exact reducer-fence retry retains the Validate successor");
+        assert_eq!(
+            fenced
+                .observe_completion(&Completion::LifecycleValidateSuccessorCapacityPending {
+                    ordinal: 7,
+                })
+                .expect("capacity retry retains the exact reducer-fenced Validate successor"),
+            fenced
+        );
+        assert!(
+            fenced
+                .observe_completion(&Completion::LifecycleValidateSuccessorCapacityPending {
+                    ordinal: 8,
+                })
+                .is_err(),
+            "capacity retry for another ordinal must fail closed"
+        );
         let claim = claim
             .observe_completion(&Completion::CompletionIoDispatch(Ok(
                 Dispatch::BodyStageAdvanced {
@@ -964,6 +1000,10 @@ mod tests {
                 parent_ordinal: 7,
                 child_ordinal: 13,
             }
+        );
+        assert!(
+            claim.requires_yield(),
+            "the protected live Apply child must precede ProducerTurn"
         );
         assert!(
             claim
@@ -988,7 +1028,53 @@ mod tests {
             .expect("the exact child enters its dedicated queue");
         assert_eq!(
             claim,
-            LifecycleProducerClaimDispositionV1::AwaitingCompletion
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+        );
+    }
+
+    #[test]
+    fn registered_validate_sidecar_wake_advances_the_persisted_barrier() {
+        use super::super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
+            ProductionLifecycleCompletionSelectionV1 as Completion,
+        };
+
+        let claim = LifecycleProducerClaimDispositionV1::initial()
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::ValidateQueued { ordinal: 41 },
+            )))
+            .expect("queued Validate mints its Completion target")
+            .observe_completion(&Completion::LifecycleValidateDeferred)
+            .expect("missing sidecar retains the queued Validate target")
+            .observe_completion(&Completion::LifecycleValidateSidecarWaiting)
+            .expect("registered sidecar wait installs its lane-only barrier");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+        );
+        assert!(claim.blocks_runtime());
+
+        let claim = claim
+            .observe_completion(&Completion::LifecycleValidateSidecarWoken { ordinal: 41 })
+            .expect("the registered wait wakes the same Validate row");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 41 }
+        );
+        assert_eq!(
+            claim
+                .observe_completion(&Completion::LifecycleValidateSuccessorCapacityPending {
+                    ordinal: 41,
+                })
+                .expect("capacity retry retains the exact woken successor"),
+            claim
+        );
+        assert_eq!(
+            claim.observe_completion(&Completion::LifecycleValidateSuccessorCapacityPending {
+                ordinal: 42,
+            }),
+            Err(LifecycleProducerClaimTransitionErrorV1::Completion),
+            "a different successor still fails closed"
         );
     }
 

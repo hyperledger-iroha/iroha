@@ -105,6 +105,8 @@ allowed_origins = [
   "https://bokolo-m-selen.soramitsu.io",
   "https://bokolo-ezipei.soramitsu.io",
   "https://bpng.soramitsu.io",
+  "https://mibank.soramitsu.io",
+  "https://explorer-bpng.soramitsu.io",
   "https://bokolo-explorer.soramitsu.io",
 ]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
@@ -156,7 +158,7 @@ token_hash = "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH"
 
 [[torii.account_onboarding.credentials]]
 id = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID"
-scope = { dataspace = "dpn" }
+scope = { dataspace = "bpng" }
 token_hash = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH"
 
 [torii.faucet]
@@ -408,6 +410,7 @@ dataspace = "universal"
 storage = "full_replica"
 visibility = "public"
 scheduler = { teu_capacity = 50000000 }
+metadata = {}
 
 [[nexus.lane_catalog]]
 index = 1
@@ -431,11 +434,12 @@ metadata = {}
 [[nexus.lane_catalog]]
 index = 3
 alias = "dpn"
-description = "Digital payments network traffic"
-dataspace = "dpn"
+description = "Digital payments network traffic for the BPNG Digital Kina pilot"
+dataspace = "bpng"
 storage = "full_replica"
 visibility = "restricted"
 scheduler = { teu_capacity = 25000000 }
+metadata = {}
 
 [[nexus.lane_catalog]]
 index = 4
@@ -445,6 +449,7 @@ dataspace = "is"
 storage = "full_replica"
 visibility = "restricted"
 scheduler = { teu_capacity = 25000000 }
+metadata = {}
 
 [[nexus.lane_catalog]]
 index = 5
@@ -454,6 +459,7 @@ dataspace = "is2"
 storage = "full_replica"
 visibility = "restricted"
 scheduler = { teu_capacity = 25000000 }
+metadata = {}
 
 [[nexus.lane_catalog]]
 index = 6
@@ -463,6 +469,7 @@ dataspace = "cbsi"
 storage = "full_replica"
 visibility = "restricted"
 scheduler = { teu_capacity = 25000000 }
+metadata = {}
 
 # Physical data spaces only. Namespace, governance-module, and workload names
 # must not be promoted into this catalog.
@@ -473,10 +480,10 @@ description = "Shared public data space for core, governance, and zero-knowledge
 fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 
 [[nexus.dataspace_catalog]]
-alias = "dpn"
+alias = "bpng"
 id = 10
 manifest_hash = "0a00000000000000000000000000000000000000000000000000000000000000"
-description = "Digital payments network data space"
+description = "Bank of Papua New Guinea Digital Kina data space"
 
 [[nexus.dataspace_catalog]]
 alias = "is"
@@ -519,10 +526,17 @@ default_dataspace = "universal"
 
 [[nexus.routing_policy.rules]]
 lane = 3
-dataspace = "dpn"
+dataspace = "bpng"
 [nexus.routing_policy.rules.matcher]
-account = "*@dpn"
-description = "Route DPN authorities to the DPN dataspace"
+account = "*@bpng"
+description = "Route BPNG authorities to the DPN workload lane"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "bpng"
+[nexus.routing_policy.rules.matcher]
+account = "*@mibank.bpng"
+description = "Route MiBank authorities to the BPNG Digital Kina dataspace"
 
 [[nexus.routing_policy.rules]]
 lane = 4

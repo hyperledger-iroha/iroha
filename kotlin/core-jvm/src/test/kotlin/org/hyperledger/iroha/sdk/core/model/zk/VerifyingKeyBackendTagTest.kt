@@ -9,20 +9,25 @@ import kotlin.test.assertTrue
 
 class VerifyingKeyBackendTagTest {
 
-    private val registry = linkedSetOf(
-        "halo2/ipa",
-        "halo2/pasta/kaigi-roster-v1",
-        "halo2/pasta/kaigi-usage-v1",
-        "halo2/pasta/ivm-execution-v1",
-        "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-        "stark/fri",
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1",
+    private val registryBindings = linkedMapOf(
+        "halo2/ipa" to VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+        "halo2/pasta/kaigi-roster-v1" to VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+        "halo2/pasta/kaigi-usage-v1" to VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+        "halo2/pasta/ivm-execution-v1" to VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+        "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3" to
+            VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3" to
+            VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3" to
+            VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" to
+            VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+        "stark/fri" to VerifyingKeyBackendTag.STARK,
+        "stark/fri/sha256-goldilocks" to VerifyingKeyBackendTag.STARK,
+        "stark/fri/poseidon2-goldilocks" to VerifyingKeyBackendTag.STARK,
+        "stark/fri/sha256_goldilocks.v1" to VerifyingKeyBackendTag.STARK,
     )
+    private val registry = registryBindings.keys.toCollection(linkedSetOf())
 
     @Test
     fun `backend enum contains only canonical low-level engines`() {
@@ -81,11 +86,7 @@ class VerifyingKeyBackendTagTest {
     @Test
     fun `every registry label resolves to one exact engine`() {
         for (label in registry) {
-            val expected = if (label.startsWith("halo2/")) {
-                VerifyingKeyBackendTag.HALO2_IPA_PASTA
-            } else {
-                VerifyingKeyBackendTag.STARK
-            }
+            val expected = registryBindings.getValue(label)
             assertEquals(
                 expected,
                 VerifyingKeyBackendTag.verifierBackendRegistryTagV1(label),

@@ -1763,8 +1763,9 @@ fn concrete_work_location(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        OwnerId, PhysicalSlotId,
+        InstalledAuthenticatedGenesisReplayAuthorityV1, OwnerId, PhysicalSlotId,
         work_registry::{
+            PreparedAuthenticatedGenesisFetchReplayPreAdmission,
             PreparedLocalBodyValidateReplayPreAdmission,
             PreparedRemoteProposalFetchReplayPreAdmission,
         },
@@ -1793,11 +1794,14 @@ mod tests {
         tag: EventTag,
         keys: Vec<KeyPair>,
     }
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     enum DurableValidateOriginFixture {
         LocalBody,
         RemoteProposal,
         RefinedRemoteProposal(wire::GlobalPhase),
+        LateViewRefinedRemoteProposal(wire::GlobalPhase),
+        LateViewAuthenticatedGenesis(wire::GlobalPhase),
+        FutureViewAuthenticatedGenesisCommit,
     }
     impl Fixture {
         fn new() -> Self {
@@ -1883,6 +1887,8 @@ mod tests {
         fn quorum_certificate(
             &self,
             phase: wire::GlobalPhase,
+            round: wire::ConsensusRound,
+            proposal_round: wire::ConsensusRound,
             subject: wire::BlockSubject,
             marker: u8,
         ) -> wire::QuorumCertificate {
@@ -1894,8 +1900,8 @@ mod tests {
                 Hash::new([marker, 0xA4]),
             );
             let unsigned_vote = wire::Vote {
-                round: self.round,
-                proposal_round: self.round,
+                round,
+                proposal_round,
                 phase,
                 subject,
                 execution_commitment,
@@ -1912,8 +1918,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             wire::QuorumCertificate {
-                round: self.round,
-                proposal_round: self.round,
+                round,
+                proposal_round,
                 phase,
                 subject,
                 execution_commitment,
@@ -2127,19 +2133,33 @@ mod tests {
         ) -> (PendingDurableValidateAdmissionV1, AdapterEffect) {
             let leader = self.context.leader(self.round.view);
             let leader_index = usize::try_from(leader).expect("fixture leader fits usize");
+            let block_view = if matches!(
+                origin,
+                DurableValidateOriginFixture::LateViewAuthenticatedGenesis(_)
+                    | DurableValidateOriginFixture::FutureViewAuthenticatedGenesisCommit
+            ) {
+                0
+            } else {
+                self.round.view
+            };
+            let block_signer = self.context.leader(block_view);
+            let block_signer_index =
+                usize::try_from(block_signer).expect("fixture block signer fits usize");
             let header = BlockHeader::new(
                 NonZeroU64::new(self.context.height).expect("fixture height is non-zero"),
                 None,
                 None,
                 None,
                 5_000 + u64::from(marker),
-                self.round.view,
+                block_view,
             );
-            let signature =
-                SignatureOf::try_from_hash(self.keys[leader_index].private_key(), header.hash())
-                    .expect("sign durable Validate fixture block");
+            let signature = SignatureOf::try_from_hash(
+                self.keys[block_signer_index].private_key(),
+                header.hash(),
+            )
+            .expect("sign durable Validate fixture block");
             let block = SignedBlock::presigned(
-                BlockSignature::new(u64::from(leader), signature),
+                BlockSignature::new(u64::from(block_signer), signature),
                 header,
                 Vec::new(),
             );
@@ -2167,13 +2187,39 @@ mod tests {
             let durable_receipt = body_store
                 .store(manifest.clone(), body)
                 .expect("fsync durable Validate fixture body");
+            let body_stage_tag = if matches!(
+                origin,
+                DurableValidateOriginFixture::FutureViewAuthenticatedGenesisCommit
+            ) {
+                EventTag::new(
+                    self.tag.height(),
+                    self.tag.view() - 1,
+                    self.tag.generation(),
+                )
+            } else {
+                self.tag
+            };
             let store_effect = AdapterEffect::StoreBody {
-                tag: self.tag,
+                tag: body_stage_tag,
                 round: self.round,
                 subject,
             };
+            let validate_tag = match origin {
+                DurableValidateOriginFixture::LateViewRefinedRemoteProposal(_)
+                | DurableValidateOriginFixture::LateViewAuthenticatedGenesis(_) => EventTag::new(
+                    self.tag.height(),
+                    self.tag.view() + 1,
+                    Generation::new(self.tag.generation().get() + 1),
+                ),
+                DurableValidateOriginFixture::LocalBody
+                | DurableValidateOriginFixture::RemoteProposal
+                | DurableValidateOriginFixture::RefinedRemoteProposal(_) => body_stage_tag,
+                DurableValidateOriginFixture::FutureViewAuthenticatedGenesisCommit => {
+                    body_stage_tag
+                }
+            };
             let validate_effect = AdapterEffect::ValidateBody {
-                tag: self.tag,
+                tag: validate_tag,
                 round: self.round,
                 subject,
             };
@@ -2219,8 +2265,78 @@ mod tests {
                     .unwrap_or_else(|_| panic!("seal local Validate pre-admission"))
                     .into_pending_durable_validate_admission()
                 }
+                DurableValidateOriginFixture::LateViewAuthenticatedGenesis(_)
+                | DurableValidateOriginFixture::FutureViewAuthenticatedGenesisCommit => {
+                    let phase = match origin {
+                        DurableValidateOriginFixture::LateViewAuthenticatedGenesis(phase) => phase,
+                        DurableValidateOriginFixture::FutureViewAuthenticatedGenesisCommit => {
+                            wire::GlobalPhase::Commit
+                        }
+                        DurableValidateOriginFixture::LocalBody
+                        | DurableValidateOriginFixture::RemoteProposal
+                        | DurableValidateOriginFixture::RefinedRemoteProposal(_)
+                        | DurableValidateOriginFixture::LateViewRefinedRemoteProposal(_) => {
+                            unreachable!()
+                        }
+                    };
+                    let certificate =
+                        self.quorum_certificate(phase, self.round, self.round, subject, marker);
+                    let fetch_effect = AdapterEffect::FetchBody {
+                        tag: body_stage_tag,
+                        round: self.round,
+                        subject,
+                        manifest: Some(manifest.clone()),
+                        certified_sources: self
+                            .context
+                            .roster
+                            .iter()
+                            .map(|entry| entry.validator.clone())
+                            .collect(),
+                        certificate: Some(certificate.clone()),
+                    };
+                    let fetch_ownership = bind_adapter_effect_batch_ownership(
+                        core::slice::from_ref(&fetch_effect),
+                        vec![RuntimeEffectOwnership::fresh_for_test(
+                            body_stage_tag,
+                            source_ordinal,
+                        )],
+                    )
+                    .expect("bind authenticated-genesis Fetch owner")
+                    .pop()
+                    .expect("one authenticated-genesis Fetch owner");
+                    let store_ownership = fetch_ownership
+                        .rebind_as_inherited_adapter_effect(&store_effect)
+                        .expect("project authenticated-genesis Store owner");
+                    let validate_ownership = store_ownership
+                        .rebind_as_inherited_adapter_effect(&validate_effect)
+                        .expect("project later-view authenticated-genesis Validate owner");
+                    let installed = InstalledAuthenticatedGenesisReplayAuthorityV1::for_test(
+                        &block,
+                        &self.context,
+                    )
+                    .expect("install authenticated-genesis replay authority");
+                    PreparedAuthenticatedGenesisFetchReplayPreAdmission::seal_exact_fetch(
+                        &installed,
+                        fetch_effect,
+                        fetch_ownership,
+                        manifest,
+                    )
+                    .unwrap_or_else(|_| panic!("seal authenticated-genesis Fetch pre-admission"))
+                    .project_store(store_effect, store_ownership)
+                    .unwrap_or_else(|_| panic!("project authenticated-genesis Store pre-admission"))
+                    .bind_durable_body(durable_receipt)
+                    .unwrap_or_else(|_| panic!("bind authenticated-genesis durable body"))
+                    .project_validate(
+                        validate_effect.clone(),
+                        validate_ownership,
+                        Some(&certificate),
+                    )
+                    .unwrap_or_else(|_| panic!("project later-view authenticated-genesis Validate"))
+                    .into_pending_durable_validate_admission()
+                }
                 DurableValidateOriginFixture::RemoteProposal
-                | DurableValidateOriginFixture::RefinedRemoteProposal(_) => {
+                | DurableValidateOriginFixture::RefinedRemoteProposal(_)
+                | DurableValidateOriginFixture::LateViewRefinedRemoteProposal(_) => {
                     let mut proposal = wire::Proposal {
                         round: self.round,
                         proposer: leader,
@@ -2284,10 +2400,12 @@ mod tests {
                                 None,
                             )
                             .unwrap_or_else(|_| panic!("project remote Validate pre-admission")),
-                        DurableValidateOriginFixture::RefinedRemoteProposal(phase) => {
-                            let certificate = self.quorum_certificate(phase, subject, marker);
+                        DurableValidateOriginFixture::RefinedRemoteProposal(phase)
+                        | DurableValidateOriginFixture::LateViewRefinedRemoteProposal(phase) => {
+                            let certificate = self
+                                .quorum_certificate(phase, self.round, self.round, subject, marker);
                             let certified_fetch = AdapterEffect::FetchBody {
-                                tag: self.tag,
+                                tag: validate_tag,
                                 round: self.round,
                                 subject,
                                 manifest: Some(manifest.clone()),
@@ -2302,7 +2420,7 @@ mod tests {
                             let certified_validate_ownership = bind_adapter_effect_batch_ownership(
                                 core::slice::from_ref(&certified_fetch),
                                 vec![RuntimeEffectOwnership::fresh_for_test(
-                                    self.tag,
+                                    validate_tag,
                                     source_ordinal + 1,
                                 )],
                             )
@@ -2339,6 +2457,12 @@ mod tests {
                             }
                         }
                         DurableValidateOriginFixture::LocalBody => unreachable!(),
+                        DurableValidateOriginFixture::LateViewAuthenticatedGenesis(_) => {
+                            unreachable!()
+                        }
+                        DurableValidateOriginFixture::FutureViewAuthenticatedGenesisCommit => {
+                            unreachable!()
+                        }
                     }
                     .into_pending_durable_validate_admission()
                 }
@@ -2490,16 +2614,42 @@ mod tests {
                     DurableValidateOriginFixture::RefinedRemoteProposal(wire::GlobalPhase::Commit),
                     true,
                 ),
+                (
+                    DurableValidateOriginFixture::LateViewRefinedRemoteProposal(
+                        wire::GlobalPhase::Prepare,
+                    ),
+                    true,
+                ),
+                (
+                    DurableValidateOriginFixture::LateViewRefinedRemoteProposal(
+                        wire::GlobalPhase::Commit,
+                    ),
+                    true,
+                ),
+                (
+                    DurableValidateOriginFixture::LateViewAuthenticatedGenesis(
+                        wire::GlobalPhase::Prepare,
+                    ),
+                    false,
+                ),
+                (
+                    DurableValidateOriginFixture::LateViewAuthenticatedGenesis(
+                        wire::GlobalPhase::Commit,
+                    ),
+                    false,
+                ),
             ] {
                 let mut owner = fixture.production_owner(64);
                 let (pending, effect) = fixture.pending_durable_validate(0xB1, origin);
                 assert!(pending.exactly_retains_for_test(&effect, remote_proposal));
-                let ProductionDurableValidateAdmissionSettlementV1::Admitted(
-                    AdmissionDecision::Admitted { ordinal: 1, .. },
-                ) = owner.settle_durable_validate_admission(pending)
-                else {
-                    panic!("exact durable Validate origin must commit one fresh admission")
-                };
+                match owner.settle_durable_validate_admission(pending) {
+                    ProductionDurableValidateAdmissionSettlementV1::Admitted(
+                        AdmissionDecision::Admitted { ordinal: 1, .. },
+                    ) => {}
+                    outcome => panic!(
+                        "exact durable Validate origin {origin:?} must commit one fresh admission: {outcome:?}"
+                    ),
+                }
                 assert_eq!(owner.coordinator.high_water(), 1);
                 assert_eq!(owner.coordinator.records.len(), 1);
                 assert_eq!(owner.registry.registry.len(), 1);
@@ -2511,6 +2661,38 @@ mod tests {
             }
         });
     }
+
+    #[test]
+    fn future_view_authenticated_genesis_commit_validate_settles_under_current_owner() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let (pending, effect) = fixture.pending_durable_validate(
+                0xB4,
+                DurableValidateOriginFixture::FutureViewAuthenticatedGenesisCommit,
+            );
+            let AdapterEffect::ValidateBody { tag, .. } = &effect else {
+                unreachable!("authenticated-genesis fixture projects ValidateBody")
+            };
+            assert!(tag.view() < fixture.round.view);
+            assert!(pending.exactly_retains_for_test(&effect, false));
+            assert!(matches!(
+                owner.settle_durable_validate_admission(pending),
+                ProductionDurableValidateAdmissionSettlementV1::Admitted(
+                    AdmissionDecision::Admitted { ordinal: 1, .. }
+                )
+            ));
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.records.len(), 1);
+            assert_eq!(owner.registry.registry.len(), 1);
+            assert_eq!(
+                owner.coordinator.records[&1].work_class,
+                LifecycleWorkClass::Validate
+            );
+            assert_eq!(owner.coordinator.records[&1].state, LifecycleState::Ready);
+        });
+    }
+
     #[test]
     fn owner_settlement_rebinds_a_recovered_validate_at_the_same_ordinal() {
         let fixture = Fixture::new();

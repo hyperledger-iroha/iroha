@@ -4797,6 +4797,121 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn shipped_taira_genesis_preserves_digital_kina_provisioning_boundary() -> Result<()> {
+        const KINA_ID: &str = "839FV3NJC8NfgWQvghXU2hEFQm9a";
+        const KINA_ALIAS: &str = "kina#bpng";
+        const KINA_DOMAIN: &str = "bpng.bpng";
+        const RETIRED_KINA_ALIASES: &[&str] = &[
+            "digital_kina#bpng",
+            "digital-kina#bpng",
+            "pgk#bpng",
+            "kina#dpn",
+        ];
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifest_path = repo_root.join("configs/soranexus/taira/genesis.json");
+        let raw = std::fs::read_to_string(&manifest_path)?;
+        let value = norito::json::parse_value(&raw)?;
+        let instructions = value
+            .get("transactions")
+            .and_then(norito::json::Value::as_array)
+            .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?
+            .iter()
+            .filter_map(|tx| tx.get("instructions"))
+            .filter_map(norito::json::Value::as_array)
+            .flatten();
+        let mut bpng_domain_registration_count = 0_usize;
+        let mut boi_domain_registration_count = 0_usize;
+        let mut ds_binding_count = 0_usize;
+        for instruction in instructions {
+            if let Some(domain) = instruction
+                .get("Register")
+                .and_then(|register| register.get("Domain"))
+                .and_then(|domain| domain.get("id"))
+                .and_then(norito::json::Value::as_str)
+            {
+                if domain == KINA_DOMAIN {
+                    bpng_domain_registration_count += 1;
+                }
+                if domain == "boi.is" {
+                    boi_domain_registration_count += 1;
+                }
+            }
+            if let Some(definition) = instruction
+                .get("Register")
+                .and_then(|register| register.get("AssetDefinition"))
+            {
+                let is_canonical_id =
+                    definition.get("id").and_then(norito::json::Value::as_str) == Some(KINA_ID);
+                let is_shadow_identity =
+                    definition.get("name").and_then(norito::json::Value::as_str) == Some("kina")
+                        && definition
+                            .get("owning_domain")
+                            .and_then(norito::json::Value::as_str)
+                            == Some(KINA_DOMAIN);
+                let has_forbidden_alias = definition
+                    .get("alias")
+                    .and_then(norito::json::Value::as_str)
+                    .is_some_and(|alias| {
+                        alias == KINA_ALIAS || RETIRED_KINA_ALIASES.contains(&alias)
+                    });
+                if is_canonical_id || is_shadow_identity || has_forbidden_alias {
+                    return Err(eyre!(
+                        "{} pre-provisions stage-owned Digital Kina in base genesis",
+                        manifest_path.display()
+                    ));
+                }
+            }
+            if let Some(binding) = instruction.get("SetAssetDefinitionAlias") {
+                let alias = binding
+                    .get("alias")
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or_default();
+                let target = binding
+                    .get("asset_definition_id")
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or_default();
+                if alias == KINA_ALIAS || RETIRED_KINA_ALIASES.contains(&alias) || target == KINA_ID
+                {
+                    return Err(eyre!(
+                        "{} binds canonical or retired Digital Kina state before the reviewed provisioning stage",
+                        manifest_path.display()
+                    ));
+                }
+                if alias == "ds#boi.is" && boi_domain_registration_count == 0 {
+                    return Err(eyre!(
+                        "{} binds preserved Digital Shekel alias before registering `boi.is`",
+                        manifest_path.display()
+                    ));
+                }
+                if alias == "ds#boi.is" {
+                    ds_binding_count += 1;
+                }
+            }
+            if let Some(destination) = instruction
+                .get("Mint")
+                .and_then(|mint| mint.get("Asset"))
+                .and_then(|asset| asset.get("destination"))
+                .and_then(norito::json::Value::as_str)
+                && destination.starts_with(&format!("{KINA_ID}#"))
+            {
+                return Err(eyre!(
+                    "{} mints stage-owned Digital Kina in base genesis",
+                    manifest_path.display()
+                ));
+            }
+        }
+        if bpng_domain_registration_count != 1
+            || boi_domain_registration_count != 1
+            || ds_binding_count != 1
+        {
+            return Err(eyre!(
+                "{} must register BPNG/BOI alias-domain prerequisites exactly once while preserving Digital Shekel",
+                manifest_path.display()
+            ));
+        }
+        Ok(())
+    }
+    #[test]
     fn soranexus_taira_genesis_binds_sorafs_appeal_xor_at_scale_nine() -> Result<()> {
         const SORA_XOR_ID: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
         const SORA_XOR_ALIAS: &str = "xor#sora.universal";

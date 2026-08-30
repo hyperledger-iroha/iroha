@@ -148,10 +148,7 @@ pub struct PrivacyReleaseIvmPrivateNoteNetworkActionV1 {
     /// Exact public statement carried by `transaction`.
     pub statement: IrohaIvmPrivateNoteStarkStatementV1,
 }
-/// Candidate governed ZK-ACE transfer shape retained for fail-closed evidence.
-///
-/// Production builders cannot currently return this type because ZK-ACE has
-/// no activatable compiled profile.
+/// Governed ZK-ACE transfer shape retained for release evidence.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseZkAceNetworkActionV1 {
     /// Ordinary signed transaction carrying exactly one ZK-ACE proof.
@@ -267,11 +264,7 @@ fn secret_scalar_v1(
     );
     SecretScalarV1::from_bytes(bytes).map_err(|_| evidence_error())
 }
-/// Reject a governed ZK-ACE candidate before constructing a proof.
-///
-/// Otherwise-valid inputs return
-/// [`PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable`] while the
-/// compiled ZK-ACE profile is fail-closed.
+/// Build one canonical governed ZK-ACE release action.
 pub fn build_privacy_release_zk_ace_network_action_v1(
     transaction_context: PrivacyReleaseTransactionContextV1,
     source: AccountId,
@@ -1280,7 +1273,7 @@ mod tests {
         assert_ne!(left_commitment, right_commitment);
     }
     #[test]
-    fn invalid_context_and_closed_builder_bounds_reject_before_proving() {
+    fn invalid_context_and_builder_bounds_reject_before_proving() {
         let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
             .expect("release builder keypair");
         let valid = context(&key_pair);
@@ -1327,24 +1320,12 @@ mod tests {
             .expect_err("zero ZK-ACE amount must reject"),
             PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed
         );
+        let zk_ace_protocol = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
         assert_eq!(
-            build_privacy_release_zk_ace_network_action_v1(
-                valid.clone(),
-                valid.authority.clone(),
-                AccountId::new(
-                    KeyPair::try_from_seed(vec![0x23; 32], Algorithm::Ed25519)
-                        .expect("fail-closed destination keypair")
-                        .public_key()
-                        .clone(),
-                ),
-                asset(),
-                1,
-                [0x53; 32],
-                [0x54; 32],
-                key_pair.private_key(),
-            )
-            .expect_err("otherwise valid ZK-ACE builder must remain unavailable"),
-            PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
+            compiled_privacy_profile_v1(zk_ace_protocol)
+                .expect("shipping ZK-ACE profile must be available")
+                .protocol_id,
+            zk_ace_protocol
         );
         let mut zero_genesis = valid.clone();
         zero_genesis.genesis_hash = [0; 32];

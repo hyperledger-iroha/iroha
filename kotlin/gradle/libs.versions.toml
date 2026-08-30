@@ -6,6 +6,7 @@ junitPlatform = "1.11.4"
 zstd = "1.5.7-7"
 bouncycastle = "1.78.1"
 serializationJson = "1.10.0"
+okhttp = "4.12.0"
 desugarJdkLibs = "2.1.5"
 playServicesNearby = "19.3.0"
 
@@ -16,6 +17,8 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd" }
 bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serializationJson" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 play-services-nearby = { module = "com.google.android.gms:play-services-nearby", version.ref = "playServicesNearby" }
 

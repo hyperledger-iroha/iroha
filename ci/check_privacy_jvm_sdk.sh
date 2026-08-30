@@ -180,16 +180,26 @@ cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test \
+  --tests org.hyperledger.iroha.sdk.client.HttpClientTransportActiveVerifyingKeyTest \
+  --tests org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutorCredentialFreeTest \
+  --tests org.hyperledger.iroha.sdk.client.transport.UrlConnectionTransportExecutorTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
   --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \
   --tests org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachmentTest
 
 cd "${ROOT_DIR}/java/iroha_android"
-./gradlew --no-daemon -q :core:test \
+ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests \
+  ./gradlew --no-daemon -q :core:test \
+  --tests org.hyperledger.iroha.android.GradleHarnessTests \
+  --tests org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutorTests \
   --tests org.hyperledger.iroha.android.privacy.PrivacyExact12FixtureCodecV1Tests \
   --tests org.hyperledger.iroha.android.model.instructions.ProofAttachmentModelTests \
   --tests org.hyperledger.iroha.android.norito.ProofAttachmentNoritoTests
+./gradlew --no-daemon -q :android:testDebugUnitTest \
+  --tests org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutorTests
+./gradlew --no-daemon -q :jvm:test \
+  --tests org.hyperledger.iroha.android.client.TransportExecutorParityTests
 
 cd "${ROOT_DIR}"
 PRIVACY_CORE_JVM_VERSION="$(

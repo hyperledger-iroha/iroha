@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -94,15 +95,15 @@ class OfflineCashV1Test {
     }
 
     @Test
-    fun `wallet session vocabulary does not claim device commit`() {
+    fun `verification session vocabulary does not claim device commit`() {
         assertEquals(
             listOf(
                 "UNAVAILABLE",
-                "RECEIVE_REQUEST_READY",
+                "REQUEST_VERIFIED",
                 "PAYMENT_VERIFIED",
                 "ACKNOWLEDGEMENT_VERIFIED",
             ),
-            OfflineCashWalletSessionStateV1.entries.map { it.name },
+            OfflineCashVerificationSessionStateV1.entries.map { it.name },
         )
         assertEquals(
             listOf(
@@ -111,13 +112,13 @@ class OfflineCashV1Test {
                 "ACKNOWLEDGEMENT_VERIFIED",
                 "ACKNOWLEDGEMENT_VERIFICATION_REPLAY",
             ),
-            OfflineCashWalletSessionEventV1.entries.map { it.name },
+            OfflineCashVerificationSessionEventV1.entries.map { it.name },
         )
     }
 
     @Test
-    fun `wallet session construction requires exact network and asset context`() {
-        val constructor = OfflineCashWalletSessionV1::class.java.declaredConstructors.single()
+    fun `verification session construction requires exact network and asset context`() {
+        val constructor = OfflineCashVerificationSessionV1::class.java.declaredConstructors.single()
 
         assertEquals(
             listOf(
@@ -129,5 +130,61 @@ class OfflineCashV1Test {
             ),
             constructor.parameterTypes.toList(),
         )
+    }
+
+    @Test
+    fun `wallet facade has exact stable states and always fails closed`() {
+        assertEquals((0..12).toList(), OfflineCashWalletSessionStateV1.entries.map { it.code })
+        assertEquals(
+            listOf(
+                "UNAVAILABLE",
+                "SETUP_REQUIRED",
+                "EMPTY",
+                "TOP_UP_PENDING",
+                "AVAILABLE",
+                "RECEIVE_REQUEST_READY",
+                "SEND_PREPARING",
+                "PAYMENT_COMMITTED",
+                "AWAITING_ACKNOWLEDGEMENT",
+                "RECEIVED",
+                "REDEEM_PENDING",
+                "RECOVERY_REQUIRED",
+                "ERROR",
+            ),
+            OfflineCashWalletSessionStateV1.entries.map { it.name },
+        )
+        assertEquals(listOf(0), OfflineCashWalletSessionStatusV1.entries.map { it.code })
+        assertEquals((0..8).toList(), OfflineCashWalletSessionActionV1.entries.map { it.code })
+        assertEquals(
+            listOf(
+                "SET_UP",
+                "TOP_UP",
+                "CREATE_RECEIVE_REQUEST",
+                "PREPARE_SEND",
+                "COMMIT_PAYMENT",
+                "RECORD_ACKNOWLEDGEMENT_EVIDENCE",
+                "RECEIVE_PAYMENT",
+                "REDEEM",
+                "RECOVER",
+            ),
+            OfflineCashWalletSessionActionV1.entries.map { it.name },
+        )
+        assertFailsWith<OfflineCashWalletSessionExceptionV1> {
+            OfflineCashWalletSessionV1.open()
+        }.also { error ->
+            assertEquals(OfflineCashWalletSessionErrorV1.UNAVAILABLE, error.reason)
+        }
+
+        val session = OfflineCashWalletSessionV1.unavailable()
+        assertEquals(OfflineCashWalletSessionStatusV1.UNAVAILABLE, session.status)
+        assertEquals(OfflineCashWalletSessionStateV1.UNAVAILABLE, session.state)
+        for (action in OfflineCashWalletSessionActionV1.entries) {
+            assertFailsWith<OfflineCashWalletSessionExceptionV1> {
+                session.attempt(action)
+            }.also { error ->
+                assertEquals(OfflineCashWalletSessionErrorV1.UNAVAILABLE, error.reason)
+            }
+            assertEquals(OfflineCashWalletSessionStateV1.UNAVAILABLE, session.state)
+        }
     }
 }

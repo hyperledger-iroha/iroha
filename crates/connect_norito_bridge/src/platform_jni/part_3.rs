@@ -1508,7 +1508,7 @@ pub(super) fn java_offline_cash_v1_canonicalize_payment(
     java_offline_cash_v1_result(env, "payment", result)
 }
 
-pub(super) fn java_offline_cash_v1_canonicalize_payment_for_session(
+pub(super) fn java_offline_cash_v1_canonicalize_payment_for_verification_session(
     env: &mut jni::JNIEnv<'_>,
     request: jni::objects::JByteArray<'_>,
     payment: jni::objects::JByteArray<'_>,
@@ -1527,7 +1527,7 @@ pub(super) fn java_offline_cash_v1_canonicalize_payment_for_session(
                 "expectedArtifactManifestSHA256 must be exactly 32 bytes".to_owned()
             })?;
             if expected == [0; 32] {
-                return Err("wallet session artifact manifest must be non-zero".to_owned());
+                return Err("verification session artifact manifest must be non-zero".to_owned());
             }
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1542,7 +1542,7 @@ pub(super) fn java_offline_cash_v1_canonicalize_payment_for_session(
                 })
         })
     });
-    java_offline_cash_v1_result(env, "session payment", result)
+    java_offline_cash_v1_result(env, "verification session payment", result)
 }
 
 pub(super) fn java_offline_cash_v1_canonicalize_acknowledgement(
@@ -1781,7 +1781,7 @@ pub(super) fn java_offline_cash_v1_artifact_write(
     chunk: jni::objects::JByteArray<'_>,
 ) {
     let result = (|| -> Result<(), String> {
-        let handle = java_offline_cash_v1_session_handle(handle)?;
+        let handle = java_offline_cash_v1_positive_handle(handle)?;
         let chunk = read_java_byte_array_bounded(env, &chunk, "artifactChunk", 1024 * 1024)
             .filter(|chunk| !chunk.is_empty())
             .ok_or_else(|| "artifactChunk is missing or oversized".to_owned())?;
@@ -1812,7 +1812,7 @@ pub(super) fn java_offline_cash_v1_artifact_finish(
     cancel: bool,
 ) {
     let result = (|| -> Result<(), String> {
-        let handle = java_offline_cash_v1_session_handle(handle)?;
+        let handle = java_offline_cash_v1_positive_handle(handle)?;
         let status = if cancel {
             offline_cash_v1_bridge::connect_norito_offline_cash_artifact_cancel_v1(handle)
         } else {
@@ -1978,14 +1978,21 @@ pub(super) fn java_offline_cash_v1_artifact_set_uninstall(
     }
 }
 
-fn java_offline_cash_v1_session_handle(handle: jni::sys::jlong) -> Result<u64, String> {
+fn java_offline_cash_v1_positive_handle(handle: jni::sys::jlong) -> Result<u64, String> {
     u64::try_from(handle)
         .ok()
         .filter(|handle| *handle != 0)
-        .ok_or_else(|| "wallet session handle must be positive".to_owned())
+        .ok_or_else(|| "native handle must be positive".to_owned())
 }
 
-pub(super) fn java_offline_cash_v1_wallet_session_open(
+fn java_offline_cash_v1_verification_session_handle(
+    handle: jni::sys::jlong,
+) -> Result<u64, String> {
+    java_offline_cash_v1_positive_handle(handle)
+        .map_err(|_| "verification session handle must be positive".to_owned())
+}
+
+pub(super) fn java_offline_cash_v1_verification_session_open(
     env: &mut jni::JNIEnv<'_>,
     _request: jni::objects::JByteArray<'_>,
     _expected_release_id: jni::objects::JByteArray<'_>,
@@ -1993,12 +2000,13 @@ pub(super) fn java_offline_cash_v1_wallet_session_open(
 ) -> jni::sys::jlong {
     throw_java_illegal_state(
         env,
-        "Offline Cash V1 session open requires exact network and asset context".to_owned(),
+        "Offline Cash V1 verification session open requires exact network and asset context"
+            .to_owned(),
     );
     0
 }
 
-pub(super) fn java_offline_cash_v1_wallet_session_open_bound(
+pub(super) fn java_offline_cash_v1_verification_session_open_bound(
     env: &mut jni::JNIEnv<'_>,
     request: jni::objects::JByteArray<'_>,
     expected_release_id: jni::objects::JByteArray<'_>,
@@ -2031,7 +2039,7 @@ pub(super) fn java_offline_cash_v1_wallet_session_open_bound(
             .try_into()
             .map_err(|_| "expectedArtifactManifestSHA256 must be exactly 32 bytes".to_owned())?;
         if release_id == [0; 32] || manifest_digest == [0; 32] {
-            return Err("wallet session release identities must be non-zero".to_owned());
+            return Err("verification session release identities must be non-zero".to_owned());
         }
         let expected_network_id =
             read_java_byte_array_bounded(env, &expected_network_id, "expectedNetworkId", 64)
@@ -2047,33 +2055,39 @@ pub(super) fn java_offline_cash_v1_wallet_session_open_bound(
         .ok_or_else(|| {
             "expectedAssetDefinitionId must be a bounded canonical literal".to_owned()
         })?;
-        let handle = offline_cash_v1_bridge::open_session_canonical_bound(
+        let handle = offline_cash_v1_bridge::open_verification_session_canonical_bound(
             &request,
             release_id,
             manifest_digest,
             &expected_network_id,
             &expected_asset_definition_id,
         )
-        .map_err(|_| "active authenticated release does not match the wallet session".to_owned())?;
-        i64::try_from(handle).map_err(|_| "wallet session handle exceeds JNI range".to_owned())
+        .map_err(|_| {
+            "active authenticated release does not match the verification session".to_owned()
+        })?;
+        i64::try_from(handle)
+            .map_err(|_| "verification session handle exceeds JNI range".to_owned())
     })();
     match result {
         Ok(handle) => handle,
         Err(message) => {
-            throw_java_illegal_state(env, format!("Offline Cash V1 session open: {message}"));
+            throw_java_illegal_state(
+                env,
+                format!("Offline Cash V1 verification session open: {message}"),
+            );
             0
         }
     }
 }
 
-pub(super) fn java_offline_cash_v1_wallet_session_accept_payment(
+pub(super) fn java_offline_cash_v1_verification_session_verify_payment(
     env: &mut jni::JNIEnv<'_>,
     handle: jni::sys::jlong,
     payment: jni::objects::JByteArray<'_>,
     observed_now_ms: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<Vec<u8>, String> {
-        let handle = java_offline_cash_v1_session_handle(handle)?;
+        let handle = java_offline_cash_v1_verification_session_handle(handle)?;
         let observed_now_ms = u64::try_from(observed_now_ms)
             .ok()
             .filter(|value| *value != 0)
@@ -2085,19 +2099,23 @@ pub(super) fn java_offline_cash_v1_wallet_session_accept_payment(
             OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
         )
         .ok_or_else(|| "paymentNorito is missing or oversized".to_owned())?;
-        offline_cash_v1_bridge::accept_session_payment_canonical(handle, &payment, observed_now_ms)
-            .map_err(|_| "paired proof or session transition was rejected".to_owned())
+        offline_cash_v1_bridge::verify_verification_session_payment_canonical(
+            handle,
+            &payment,
+            observed_now_ms,
+        )
+        .map_err(|_| "paired proof or verification transition was rejected".to_owned())
     })();
-    java_offline_cash_v1_result(env, "session payment", result)
+    java_offline_cash_v1_result(env, "verification session payment", result)
 }
 
-pub(super) fn java_offline_cash_v1_wallet_session_accept_acknowledgement(
+pub(super) fn java_offline_cash_v1_verification_session_verify_acknowledgement(
     env: &mut jni::JNIEnv<'_>,
     handle: jni::sys::jlong,
     acknowledgement: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<Vec<u8>, String> {
-        let handle = java_offline_cash_v1_session_handle(handle)?;
+        let handle = java_offline_cash_v1_verification_session_handle(handle)?;
         let acknowledgement = read_java_byte_array_bounded(
             env,
             &acknowledgement,
@@ -2105,41 +2123,126 @@ pub(super) fn java_offline_cash_v1_wallet_session_accept_acknowledgement(
             OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
         )
         .ok_or_else(|| "acknowledgementNorito is missing or oversized".to_owned())?;
-        offline_cash_v1_bridge::accept_session_acknowledgement_canonical(handle, &acknowledgement)
-            .map_err(|_| "acknowledgement or retained proof receipt was rejected".to_owned())
+        offline_cash_v1_bridge::verify_verification_session_acknowledgement_canonical(
+            handle,
+            &acknowledgement,
+        )
+        .map_err(|_| "acknowledgement or retained proof receipt was rejected".to_owned())
     })();
-    java_offline_cash_v1_result(env, "session acknowledgement", result)
+    java_offline_cash_v1_result(env, "verification session acknowledgement", result)
 }
 
-pub(super) fn java_offline_cash_v1_wallet_session_state(
+pub(super) fn java_offline_cash_v1_verification_session_state(
     env: &mut jni::JNIEnv<'_>,
     handle: jni::sys::jlong,
 ) -> jni::sys::jint {
-    let result = java_offline_cash_v1_session_handle(handle).and_then(|handle| {
-        offline_cash_v1_bridge::session_state_code(handle)
+    let result = java_offline_cash_v1_verification_session_handle(handle).and_then(|handle| {
+        offline_cash_v1_bridge::verification_session_state_code(handle)
             .map(i32::from)
-            .map_err(|_| "session is closed or its release is no longer active".to_owned())
+            .map_err(|_| {
+                "verification session is closed or its release is no longer active".to_owned()
+            })
     });
     match result {
         Ok(state) => state,
         Err(message) => {
-            throw_java_illegal_state(env, format!("Offline Cash V1 session state: {message}"));
+            throw_java_illegal_state(
+                env,
+                format!("Offline Cash V1 verification session state: {message}"),
+            );
             0
         }
     }
 }
 
-pub(super) fn java_offline_cash_v1_wallet_session_close(
+pub(super) fn java_offline_cash_v1_verification_session_close(
     env: &mut jni::JNIEnv<'_>,
     handle: jni::sys::jlong,
 ) {
-    let result = java_offline_cash_v1_session_handle(handle).and_then(|handle| {
-        offline_cash_v1_bridge::close_session(handle)
-            .map_err(|_| "session is already closed or invalid".to_owned())
+    let result = java_offline_cash_v1_verification_session_handle(handle).and_then(|handle| {
+        offline_cash_v1_bridge::close_verification_session(handle)
+            .map_err(|_| "verification session is already closed or invalid".to_owned())
     });
     if let Err(message) = result {
-        throw_java_illegal_state(env, format!("Offline Cash V1 session close: {message}"));
+        throw_java_illegal_state(
+            env,
+            format!("Offline Cash V1 verification session close: {message}"),
+        );
     }
+}
+
+pub(super) fn java_offline_cash_v1_wallet_runtime_session_open(
+    env: &mut jni::JNIEnv<'_>,
+) -> jni::sys::jlong {
+    let mut handle = u64::MAX;
+    let status = unsafe {
+        offline_cash_v1_bridge::connect_norito_offline_cash_wallet_runtime_session_open_v1(
+            &mut handle,
+        )
+    };
+    if handle != 0 {
+        throw_java_illegal_state(
+            env,
+            "Offline Cash V1 wallet runtime fabricated a handle while unavailable".to_owned(),
+        );
+        return 0;
+    }
+    throw_java_illegal_state(
+        env,
+        format!("Offline Cash V1 wallet runtime is unavailable (native status {status})"),
+    );
+    0
+}
+
+pub(super) fn java_offline_cash_v1_wallet_runtime_session_status(
+    env: &mut jni::JNIEnv<'_>,
+) -> jni::sys::jbyteArray {
+    let mut status_code = u8::MAX;
+    let mut state_code = u8::MAX;
+    let native_status = unsafe {
+        offline_cash_v1_bridge::connect_norito_offline_cash_wallet_runtime_session_status_v1(
+            &mut status_code,
+            &mut state_code,
+        )
+    };
+    let result = if native_status == 0 && status_code == 0 && state_code == 0 {
+        Ok(vec![status_code, state_code])
+    } else {
+        Err("wallet runtime status must remain unavailable".to_owned())
+    };
+    java_offline_cash_v1_result(env, "wallet runtime status", result)
+}
+
+pub(super) fn java_offline_cash_v1_wallet_runtime_session_attempt(
+    env: &mut jni::JNIEnv<'_>,
+    handle: jni::sys::jlong,
+    action: jni::sys::jint,
+) {
+    let handle = u64::try_from(handle).unwrap_or(0);
+    let action = u8::try_from(action).unwrap_or(u8::MAX);
+    let status =
+        offline_cash_v1_bridge::connect_norito_offline_cash_wallet_runtime_session_attempt_v1(
+            handle, action,
+        );
+    throw_java_illegal_state(
+        env,
+        format!("Offline Cash V1 wallet runtime action is unavailable (native status {status})"),
+    );
+}
+
+pub(super) fn java_offline_cash_v1_wallet_runtime_session_close(
+    env: &mut jni::JNIEnv<'_>,
+    handle: jni::sys::jlong,
+) {
+    let handle = u64::try_from(handle).unwrap_or(0);
+    let status =
+        offline_cash_v1_bridge::connect_norito_offline_cash_wallet_runtime_session_close_v1(
+            handle,
+        );
+    throw_java_illegal_state(
+        env,
+        format!("Offline Cash V1 wallet runtime close is unavailable (native status {status})"),
+    );
 }
 
 jni_sdk_android_pairs! {
@@ -2174,7 +2277,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCash
     payment: jni::objects::JByteArray<'_>,
     expected_artifact_manifest_sha256: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    java_offline_cash_v1_canonicalize_payment_for_session(
+    java_offline_cash_v1_canonicalize_payment_for_verification_session(
         &mut env,
         request,
         payment,
@@ -2278,6 +2381,44 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCash
 ) -> jni::sys::jobjectArray {
     java_offline_cash_v1_release_probe(&mut env)
 }
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionOpenV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionOpenV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    expected_release_id: jni::objects::JByteArray<'_>,
+    expected_artifact_manifest_sha256: jni::objects::JByteArray<'_>,
+) -> jni::sys::jlong {
+    java_offline_cash_v1_verification_session_open(
+        &mut env,
+        request,
+        expected_release_id,
+        expected_artifact_manifest_sha256,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionOpenBoundV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionOpenBoundV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    expected_release_id: jni::objects::JByteArray<'_>,
+    expected_artifact_manifest_sha256: jni::objects::JByteArray<'_>,
+    expected_network_id: jni::objects::JByteArray<'_>,
+    expected_asset_definition_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jlong {
+    java_offline_cash_v1_verification_session_open_bound(
+        &mut env,
+        request,
+        expected_release_id,
+        expected_artifact_manifest_sha256,
+        expected_network_id,
+        expected_asset_definition_id,
+    )
+}
 android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionOpenV1();
 sdk:
 #[unsafe(no_mangle)]
@@ -2288,7 +2429,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCash
     expected_release_id: jni::objects::JByteArray<'_>,
     expected_artifact_manifest_sha256: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jlong {
-    java_offline_cash_v1_wallet_session_open(
+    java_offline_cash_v1_verification_session_open(
         &mut env,
         request,
         expected_release_id,
@@ -2307,7 +2448,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCash
     expected_network_id: jni::objects::JByteArray<'_>,
     expected_asset_definition_id: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jlong {
-    java_offline_cash_v1_wallet_session_open_bound(
+    java_offline_cash_v1_verification_session_open_bound(
         &mut env,
         request,
         expected_release_id,
@@ -2397,6 +2538,97 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCash
         expected_manifest_sha256,
     )
 }
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyPaymentV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyPaymentV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+    payment: jni::objects::JByteArray<'_>,
+    observed_now_ms: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_verification_session_verify_payment(
+        &mut env,
+        handle,
+        payment,
+        observed_now_ms,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyAcknowledgementV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyAcknowledgementV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+    acknowledgement: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_verification_session_verify_acknowledgement(
+        &mut env,
+        handle,
+        acknowledgement,
+    )
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionStateV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionStateV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+) -> jni::sys::jint {
+    java_offline_cash_v1_verification_session_state(&mut env, handle)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeVerificationSessionCloseV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionCloseV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+) {
+    java_offline_cash_v1_verification_session_close(&mut env, handle)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionOpenV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionOpenV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jlong {
+    java_offline_cash_v1_wallet_runtime_session_open(&mut env)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionStatusV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionStatusV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jbyteArray {
+    java_offline_cash_v1_wallet_runtime_session_status(&mut env)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionAttemptV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionAttemptV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+    action: jni::sys::jint,
+) {
+    java_offline_cash_v1_wallet_runtime_session_attempt(&mut env, handle, action)
+}
+android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionCloseV1();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionCloseV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+) {
+    java_offline_cash_v1_wallet_runtime_session_close(&mut env, handle)
+}
 android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionAcceptPaymentV1();
 sdk:
 #[unsafe(no_mangle)]
@@ -2407,7 +2639,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCash
     payment: jni::objects::JByteArray<'_>,
     observed_now_ms: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
-    java_offline_cash_v1_wallet_session_accept_payment(
+    java_offline_cash_v1_verification_session_verify_payment(
         &mut env,
         handle,
         payment,
@@ -2423,7 +2655,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCash
     handle: jni::sys::jlong,
     acknowledgement: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    java_offline_cash_v1_wallet_session_accept_acknowledgement(
+    java_offline_cash_v1_verification_session_verify_acknowledgement(
         &mut env,
         handle,
         acknowledgement,
@@ -2437,7 +2669,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCash
     _class: jni::objects::JClass<'_>,
     handle: jni::sys::jlong,
 ) -> jni::sys::jint {
-    java_offline_cash_v1_wallet_session_state(&mut env, handle)
+    java_offline_cash_v1_verification_session_state(&mut env, handle)
 }
 android: fn Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionCloseV1();
 sdk:
@@ -2447,6 +2679,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCash
     _class: jni::objects::JClass<'_>,
     handle: jni::sys::jlong,
 ) {
-    java_offline_cash_v1_wallet_session_close(&mut env, handle)
+    java_offline_cash_v1_verification_session_close(&mut env, handle)
 }
 }

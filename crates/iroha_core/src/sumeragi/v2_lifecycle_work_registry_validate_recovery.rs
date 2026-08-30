@@ -10,7 +10,7 @@ pub(crate) struct ReadyValidatedAdapterAuthority<'a> {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     receipt: &'a ValidatedBodyReceipt,
-    local_origin_manifest: Option<wire::PayloadManifest>,
+    manifest_authority: Option<wire::PayloadManifest>,
 }
 /// Non-forgeable installed-Validate predecessor accepted only by the
 /// adapter's sealed WAL-sign binding step.
@@ -126,7 +126,7 @@ impl<'a> ReadyValidatedAdapterAuthority<'a> {
             self.round,
             self.subject,
             self.receipt,
-            self.local_origin_manifest,
+            self.manifest_authority,
         )
     }
 }
@@ -141,7 +141,7 @@ pub(crate) struct ReadyRejectedAdapterAuthority<'a> {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     receipt: &'a DurableBodyReceipt,
-    local_origin_manifest: Option<wire::PayloadManifest>,
+    manifest_authority: Option<wire::PayloadManifest>,
 }
 impl<'a> ReadyRejectedAdapterAuthority<'a> {
     /// Consume the unforgeable registry authority inside the adapter module.
@@ -159,7 +159,7 @@ impl<'a> ReadyRejectedAdapterAuthority<'a> {
             self.round,
             self.subject,
             self.receipt,
-            self.local_origin_manifest,
+            self.manifest_authority,
         )
     }
 }
@@ -549,6 +549,7 @@ impl<'registry> PreparedReadyDurableValidateAdapterPreview<'registry, '_> {
             outcome_kind: _,
             lease,
             validated_catalog_authority: _,
+            authenticated_manifest: _,
         } = prepared;
         assert_eq!(lease.ordinal(), address.ordinal);
         assert_eq!(lease.owner(), address.owner);
@@ -876,6 +877,7 @@ impl<'registry, 'adapter> PreparedInvalidBodyReportReplayPreAdmission<'registry,
             outcome_kind: _,
             lease: _,
             validated_catalog_authority: _,
+            authenticated_manifest: _,
         } = registry;
         let detached_parent = registry
             .entries
@@ -1149,6 +1151,7 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateApplyPreAdmission<'registr
             outcome_kind: _,
             lease: _,
             validated_catalog_authority: _,
+            authenticated_manifest: _,
         } = registry;
         Ok(PreparedLiveValidateApplyRegistryPublication {
             reservation: LiveValidateApplyRegistryReservation {
@@ -2548,6 +2551,58 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
         };
         completion.validates(work.digest).then_some(completion)
     }
+    /// Return the exact body key retained by this closed Ready Validate row.
+    pub(in crate::sumeragi) fn validate_retry_key(
+        &self,
+    ) -> Option<(wire::ConsensusRound, wire::BlockSubject)> {
+        let completion = self.completion()?;
+        let AdapterEffect::ValidateBody { round, subject, .. } = &completion.incumbent.effect
+        else {
+            return None;
+        };
+        (completion.incumbent.durable_receipt.round() == *round
+            && completion.incumbent.durable_receipt.subject() == *subject)
+            .then_some((*round, *subject))
+    }
+    /// Bind the exact fsynced body-store manifest to this sealed adapter join.
+    ///
+    /// Cold recovery can retain a remote durable Validate row whose proposal
+    /// manifest is absent from the replayed safety-WAL adapter. The executor
+    /// may reintroduce that manifest only after its body-store catalogs and
+    /// this registry completion agree on the complete durable receipt, body
+    /// key, and manifest hash. The bound value remains private to the adapter
+    /// preview and cannot escape as generic manifest authority.
+    pub(in crate::sumeragi) fn bind_authenticated_manifest(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> bool {
+        let matches_completion = self.completion().is_some_and(|completion| {
+            let AdapterEffect::ValidateBody { round, subject, .. } =
+                &completion.incumbent.effect
+            else {
+                return false;
+            };
+            completion.incumbent.durable_receipt == *durable_receipt
+                && completion.outcome.durable_body() == durable_receipt
+                && completion.incumbent.expected_manifest_hash == HashOf::new(manifest)
+                && durable_receipt.manifest_hash() == HashOf::new(manifest)
+                && manifest.round == *round
+                && manifest.subject == *subject
+                && Self::local_origin_manifest(completion)
+                    .is_none_or(|local| local == *manifest)
+        });
+        if !matches_completion {
+            return false;
+        }
+        match self.authenticated_manifest.as_ref() {
+            Some(existing) => existing == manifest,
+            None => {
+                self.authenticated_manifest = Some(manifest.clone());
+                true
+            }
+        }
+    }
     /// Return only the closed reducer-level outcome discriminator.
     pub(crate) const fn outcome_kind(&self) -> ReadyDurableValidateOutcomeKind {
         self.outcome_kind
@@ -2629,12 +2684,16 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             return None;
         };
         let receipt = completion.outcome.validated_receipt()?;
+        let manifest_authority = self
+            .authenticated_manifest
+            .clone()
+            .or_else(|| Self::local_origin_manifest(completion));
         Some(ReadyValidatedAdapterAuthority {
             tag: *tag,
             round: *round,
             subject: *subject,
             receipt,
-            local_origin_manifest: Self::local_origin_manifest(completion),
+            manifest_authority,
         })
     }
     fn validate_sign_predecessor_authority(
@@ -2683,12 +2742,16 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
         {
             return None;
         }
+        let manifest_authority = self
+            .authenticated_manifest
+            .clone()
+            .or_else(|| Self::local_origin_manifest(completion));
         Some(ReadyRejectedAdapterAuthority {
             tag: *tag,
             round: *round,
             subject: *subject,
             receipt: completion.outcome.durable_body(),
-            local_origin_manifest: Self::local_origin_manifest(completion),
+            manifest_authority,
         })
     }
 
@@ -2804,6 +2867,7 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             outcome_kind: _,
             lease: _,
             validated_catalog_authority: _,
+            authenticated_manifest: _,
         } = self;
         Ok(RecoveredWalValidateRegistryCut {
             registry: Some(registry),

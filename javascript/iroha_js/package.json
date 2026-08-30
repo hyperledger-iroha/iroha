@@ -24,6 +24,11 @@
       "import": "./dist/privacyCapabilities.js",
       "types": "./privacy-capabilities.d.ts"
     },
+    "./verifier-backend-registry": {
+      "browser": "./dist/verifierBackendRegistry.js",
+      "import": "./dist/verifierBackendRegistry.js",
+      "types": "./verifier-backend-registry.d.ts"
+    },
     "./bootle-lantern-issuance": {
       "browser": "./dist/bootleLanternIssuance.js",
       "import": "./dist/bootleLanternIssuance.js",
@@ -125,6 +130,9 @@
       ],
       "privacy-capabilities": [
         "./privacy-capabilities.d.ts"
+      ],
+      "verifier-backend-registry": [
+        "./verifier-backend-registry.d.ts"
       ],
       "bootle-lantern-issuance": [
         "./bootle-lantern-issuance.d.ts"
@@ -234,6 +242,7 @@
     "index.d.ts",
     "repo-agreement.d.ts",
     "privacy-capabilities.d.ts",
+    "verifier-backend-registry.d.ts",
     "bootle-lantern-issuance.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",

@@ -13,7 +13,9 @@ import java.util.concurrent.Executor
  * `HttpTransportExecutor` implementation backed by `HttpURLConnection`.
  *
  * This executor avoids `java.net.http` so it can serve JVM and Android targets with the same
- * canonical implementation.
+ * canonical implementation. It deliberately rejects credential-free requests: JVM and Android
+ * URLConnection stacks expose process-wide authentication caches that cannot be disabled or
+ * inspected portably on an individual connection.
  *
  * @param asyncExecutor optional [Executor] used to run the synchronous HTTP work for
  *   [execute] and [openStream]. When `null`, falls back to `ForkJoinPool.commonPool()`
@@ -89,6 +91,13 @@ class UrlConnectionTransportExecutor(
         }
 
     private fun executeSync(request: TransportRequest): TransportResponse {
+        if (!request.allowAmbientCredentials) {
+            throw credentialFreeUnsupported()
+        }
+        return executeSyncInternal(request)
+    }
+
+    private fun executeSyncInternal(request: TransportRequest): TransportResponse {
         var connection: HttpURLConnection? = null
         try {
             connection = openConnection(request)
@@ -110,6 +119,13 @@ class UrlConnectionTransportExecutor(
     }
 
     private fun openStreamSync(request: TransportRequest): TransportStreamResponse {
+        if (!request.allowAmbientCredentials) {
+            throw credentialFreeUnsupported()
+        }
+        return openStreamSyncInternal(request)
+    }
+
+    private fun openStreamSyncInternal(request: TransportRequest): TransportStreamResponse {
         var connection: HttpURLConnection? = null
         try {
             connection = openConnection(request)
@@ -160,6 +176,12 @@ class UrlConnectionTransportExecutor(
     companion object {
         /** Default maximum body size buffered by [execute], in bytes (64 MiB). */
         const val DEFAULT_MAXIMUM_RESPONSE_BYTES: Long = 64L * 1024L * 1024L
+
+        private fun credentialFreeUnsupported(): IllegalStateException =
+            IllegalStateException(
+                "credential-free requests are unsupported by URLConnection because process-wide " +
+                    "authentication caches cannot be isolated",
+            )
 
         private fun writeRequestBody(request: TransportRequest, connection: HttpURLConnection) {
             val body = request.body

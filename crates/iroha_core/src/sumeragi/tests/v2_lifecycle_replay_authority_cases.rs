@@ -445,6 +445,7 @@ fn refined_proposal_validate_joins_complete_qc_replay_authority() {
         .expect("seal refined Validate pending binding");
     let validate_source = exact_remote_proposal_validate_source(
         &proposal_source,
+        &validate_effect,
         &validate_pending,
         Some(certificate),
     )
@@ -471,7 +472,7 @@ fn refined_proposal_validate_joins_complete_qc_replay_authority() {
     .expect("project refined Validate coordinates");
     let stale_proposal_authority = canonical_replay_authority(
         active_context,
-        LifecycleReplaySourceV1::BodyPipeline(proposal_source),
+        LifecycleReplaySourceV1::BodyPipeline(proposal_source.clone()),
         LifecycleStageKind::ValidateBody,
         payload_binding.clone(),
     )
@@ -507,6 +508,44 @@ fn refined_proposal_validate_joins_complete_qc_replay_authority() {
     assert_eq!(
         candidate.key.execution_commitment(),
         Some(execution_commitment(certificate.execution_commitment))
+    );
+
+    let mut later_certificate = certificate.clone();
+    later_certificate.round.view += 1;
+    let stale_certified_fetch = AdapterEffect::FetchBody {
+        tag,
+        round,
+        subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect(),
+        certificate: Some(later_certificate.clone()),
+    };
+    let stale_fetch_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&stale_certified_fetch),
+        vec![RuntimeEffectOwnership::fresh_for_test(tag, 0xDB)],
+    )
+    .expect("bind later-view certified Fetch authority")
+    .pop()
+    .expect("one later-view certified Fetch owner");
+    let stale_validate_ownership = stale_fetch_ownership
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("carry later-view authority into the stale-tag Validate");
+    let stale_validate_pending = stale_validate_ownership
+        .exact_pending_adapter_effect_binding(&validate_effect)
+        .expect("seal stale-tag refined Validate pending binding");
+    assert!(
+        exact_remote_proposal_validate_source(
+            &proposal_source,
+            &validate_effect,
+            &stale_validate_pending,
+            Some(&later_certificate),
+        )
+        .is_none(),
+        "a Validate effect tag older than its QC view cannot refine Proposal authority",
     );
 }
 #[test]
@@ -1250,6 +1289,58 @@ fn certified_fetch_store_validate_evidence_retains_one_canonical_origin_and_fram
         &receipt,
         &validate_pending,
     ));
+    let later_tag = EventTag::new(
+        tag.height(),
+        tag.view().saturating_add(1),
+        Generation::new(0),
+    );
+    let later_validate_effect = AdapterEffect::ValidateBody {
+        tag: later_tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let later_family = project_certified_body_validate_family(
+        &store.family,
+        &later_validate_effect,
+        &receipt,
+        None,
+    )
+    .expect("certified Validate family advances to one later reducer tag");
+    assert_eq!(later_family.source.origin, store.family.source.origin);
+    assert_eq!(later_family.body_frame, store.family.body_frame);
+    assert_eq!(
+        later_family.source.tag,
+        ReplayEventTagV1::new(
+            later_tag.height(),
+            later_tag.view(),
+            later_tag.generation().get(),
+        )
+    );
+    assert!(certified_body_stage_matches(
+        &later_family,
+        &later_validate_effect,
+        &receipt,
+        LifecycleStageKind::ValidateBody,
+    ));
+    let stale_tag = EventTag::new(
+        tag.height(),
+        tag.view(),
+        Generation::new(tag.generation().get().saturating_sub(1)),
+    );
+    assert!(
+        project_certified_body_validate_family(
+            &store.family,
+            &AdapterEffect::ValidateBody {
+                tag: stale_tag,
+                round: manifest.round,
+                subject: manifest.subject,
+            },
+            &receipt,
+            None,
+        )
+        .is_none(),
+        "certified Validate family rejects an older reducer incarnation"
+    );
     let foreign_pending = pending_binding_with_distinct_root(
         &validate_effect,
         tag,
@@ -1271,6 +1362,206 @@ fn certified_fetch_store_validate_evidence_retains_one_canonical_origin_and_fram
     assert_eq!(fetch.family, store.family);
     assert_eq!(store.family, validate.family);
 }
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn authenticated_genesis_validate_upgrade_persists_exact_commit_restart_authority() {
+    let fixture = Fixture::new();
+    let original_tag = fixture.recovered_tag();
+    let later_tag = EventTag::new(
+        original_tag.height(),
+        original_tag.view().saturating_add(1),
+        Generation::new(0),
+    );
+    let manifest = fixture.proposal.manifest.clone();
+    let second_source_key = KeyPair::try_from_seed(vec![0xC3; 32], Algorithm::Ed25519)
+        .expect("deterministic second authenticated-genesis source");
+    let certified_sources = vec![
+        fixture.serve_request.requester.clone(),
+        PeerId::new(second_source_key.public_key().clone()),
+    ];
+    let fetch_effect = AdapterEffect::FetchBody {
+        tag: original_tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: certified_sources.clone(),
+        certificate: Some(fixture.prepare_qc.clone()),
+    };
+    let responder = KeyPair::random();
+    let mut response = wire::CertifiedBodyResponse {
+        request_hash: HashOf::new(&fixture.serve_request),
+        manifest: manifest.clone(),
+        body: vec![0xC1, 0xC2],
+        responder: 0,
+        signature: Vec::new(),
+    };
+    response.signature = Signature::new(responder.private_key(), &response.signature_preimage())
+        .payload()
+        .to_vec();
+    let receipt = DurableBodyReceipt::for_test(
+        manifest.round.context_id,
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    let fetch = CertifiedFetchReplayEvidenceV1::from_signed_response_for_test(
+        &fetch_effect,
+        &response,
+        &receipt,
+    )
+    .expect("Prepare-certified genesis fixture has one canonical Fetch family");
+    let store_effect = AdapterEffect::StoreBody {
+        tag: original_tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let store = fetch
+        .project_store_for_test(&store_effect, &receipt)
+        .expect("Prepare-certified genesis fixture has one Store family");
+    let prepare_fetch_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&fetch_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(original_tag, 8_401)],
+    )
+    .expect("bind exact Prepare Fetch owner")
+    .pop()
+    .expect("one Prepare Fetch owner");
+    let prepare_store_ownership = prepare_fetch_ownership
+        .rebind_as_inherited_adapter_effect(&store_effect)
+        .expect("carry Prepare authority into Store");
+    let store_pending = Arc::new(
+        prepare_store_ownership
+            .exact_pending_adapter_effect_binding(&store_effect)
+            .expect("retain exact Prepare Store binding"),
+    );
+    let stored = AuthenticatedGenesisStoredReplayEvidenceV1 {
+        family: store.family.clone(),
+        store_pending: Arc::clone(&store_pending),
+    };
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag: later_tag,
+        round: manifest.round,
+        subject: manifest.subject,
+    };
+    let incumbent_validate_ownership = prepare_store_ownership
+        .rebind_as_inherited_adapter_effect(&validate_effect)
+        .expect("project the Store root into later-tag Validate");
+    let commit_fetch_effect = AdapterEffect::FetchBody {
+        tag: later_tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: certified_sources.clone(),
+        certificate: Some(fixture.commit_qc.clone()),
+    };
+    let incoming_commit_validate_ownership = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&commit_fetch_effect),
+        vec![RuntimeEffectOwnership::fresh_for_test(later_tag, 8_402)],
+    )
+    .expect("bind exact Commit Fetch owner")
+    .pop()
+    .expect("one Commit Fetch owner")
+    .rebind_as_inherited_adapter_effect(&validate_effect)
+    .expect("carry Commit authority into Validate");
+    let commit_validate_ownership = incumbent_validate_ownership
+        .adopt_incumbent_body_stage_for_retry_or_authority(
+            &incoming_commit_validate_ownership,
+            &validate_effect,
+        )
+        .expect("retain the Store root while upgrading Validate to Commit");
+    let commit_validate_pending = commit_validate_ownership
+        .exact_pending_adapter_effect_binding(&validate_effect)
+        .expect("retain exact Commit Validate binding");
+    assert!(stored.exactly_projects_validate(
+        &store_effect,
+        store_pending.as_ref(),
+        &receipt,
+        &validate_effect,
+        &commit_validate_pending,
+        Some(&fixture.commit_qc),
+    ));
+    assert!(!stored.exactly_projects_validate(
+        &store_effect,
+        store_pending.as_ref(),
+        &receipt,
+        &validate_effect,
+        &commit_validate_pending,
+        None,
+    ));
+    assert!(!stored.exactly_projects_validate(
+        &store_effect,
+        store_pending.as_ref(),
+        &receipt,
+        &validate_effect,
+        &commit_validate_pending,
+        Some(&fixture.prepare_qc),
+    ));
+    let mut conflicting_commit = fixture.commit_qc.clone();
+    conflicting_commit.execution_commitment.post_state_root =
+        Hash::new(b"conflicting authenticated-genesis Commit authority");
+    assert!(!stored.exactly_projects_validate(
+        &store_effect,
+        store_pending.as_ref(),
+        &receipt,
+        &validate_effect,
+        &commit_validate_pending,
+        Some(&conflicting_commit),
+    ));
+
+    let validate = stored
+        .project_validate(
+            &store_effect,
+            store_pending.as_ref(),
+            &receipt,
+            &validate_effect,
+            &commit_validate_pending,
+            Some(&fixture.commit_qc),
+        )
+        .expect("exact CommitQC projects one restart-stable genesis Validate family");
+    let LocalValidateReplayFamilyV1::AuthenticatedGenesis(projected_family) = &validate.family
+    else {
+        panic!("authenticated genesis remains a certified local Validate family")
+    };
+    assert_eq!(projected_family.body_frame, store.family.body_frame);
+    assert_eq!(
+        projected_family.source.tag,
+        ReplayEventTagV1::new(later_tag.height(), later_tag.view(), later_tag.generation().get())
+    );
+    let BodyPipelineOriginV1::Certified {
+        certificate,
+        manifest: projected_manifest,
+        fetch_manifest_present,
+        certified_sources: projected_sources,
+    } = &projected_family.source.origin
+    else {
+        panic!("upgraded authenticated genesis retains a certified replay source")
+    };
+    assert_eq!(certificate, &fixture.commit_qc);
+    assert_eq!(projected_manifest, &manifest);
+    assert!(*fetch_manifest_present);
+    assert_eq!(projected_sources, &certified_sources);
+    assert_eq!(validate.validate_pending.as_ref(), &commit_validate_pending);
+
+    let cold_effect = standalone_validate_effect(&projected_family.source)
+        .expect("persisted certified family reconstructs one Validate effect");
+    assert_eq!(cold_effect, validate_effect);
+    let cold_pending = PendingRuntimeEffectBinding::from_durable_standalone_validate(
+        DurableStandaloneValidatePendingMintPermit::new(),
+        *validate.validate_pending.causal_lifecycle_key(),
+        &cold_effect,
+        Some(&fixture.commit_qc),
+    )
+    .expect("cold-open CommitQC reconstructs one exact pending owner");
+    assert_eq!(cold_pending, commit_validate_pending);
+    assert_eq!(
+        cold_pending
+            .candidate_statement()
+            .expect("cold certified Validate retains its statement")
+            .phase(),
+        Some(wire::GlobalPhase::Commit)
+    );
+}
+
 #[test]
 fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_identity() {
     fn projection(

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.math.BigInteger;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -32,6 +33,15 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 /** High-level client for interacting with Iroha nodes from Android applications. */
 public interface IrohaClient {
+
+  /** Lists the exact active verifying-key ids from Torii's bounded registry projection. */
+  default CompletableFuture<List<VerifyingKeyId>> listActiveVerifyingKeyIds() {
+    final CompletableFuture<List<VerifyingKeyId>> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new IllegalStateException(
+            "listActiveVerifyingKeyIds requires a concrete IrohaClient implementation"));
+    return future;
+  }
 
   /**
    * Submits a signed transaction to the node.

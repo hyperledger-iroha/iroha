@@ -96,11 +96,24 @@ public final class VerifyingKeyInstructionUtilsTests {
     assert expected.equals(VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1)
         : "Java registry must exactly mirror the native registry";
 
-    for (final String label : EXACT_REGISTRY) {
-      final VerifyingKeyBackendTag expectedTag =
-          label.startsWith("halo2/")
-              ? VerifyingKeyBackendTag.HALO2_IPA_PASTA
-              : VerifyingKeyBackendTag.STARK;
+    final VerifyingKeyBackendTag[] expectedTags = {
+      VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+      VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+      VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+      VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+      VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+      VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+      VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+      VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+      VerifyingKeyBackendTag.STARK,
+      VerifyingKeyBackendTag.STARK,
+      VerifyingKeyBackendTag.STARK,
+      VerifyingKeyBackendTag.STARK
+    };
+    assert EXACT_REGISTRY.length == expectedTags.length;
+    for (int index = 0; index < EXACT_REGISTRY.length; index++) {
+      final String label = EXACT_REGISTRY[index];
+      final VerifyingKeyBackendTag expectedTag = expectedTags[index];
       assert expectedTag == VerifyingKeyBackendTag.verifierBackendRegistryTagV1(label)
           : label + " must resolve to the expected native engine";
       assert VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(label)

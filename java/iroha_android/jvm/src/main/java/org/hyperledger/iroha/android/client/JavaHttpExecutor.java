@@ -21,7 +21,13 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
 
-/** Default executor that delegates to {@link HttpClient}. */
+/**
+ * Default executor that delegates to {@link HttpClient}.
+ *
+ * <p>A caller-supplied client is rejected for credential-free requests when it exposes cookies,
+ * origin/proxy authentication, or redirects. Its credentialless proxy routing, DNS, and TLS
+ * identity configuration remain an explicit caller trust boundary.
+ */
 final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTransportExecutor {
 
   private final HttpClient httpClient;
@@ -67,6 +73,9 @@ final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTranspor
 
   @Override
   public CompletableFuture<TransportStreamResponse> openStream(final TransportRequest request) {
+    if (!request.allowAmbientCredentials()) {
+      throw new IllegalArgumentException("credential-free streaming is unsupported");
+    }
     final HttpRequest httpRequest = buildRequestForClient(request);
     return httpClient
         .sendAsync(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
@@ -115,6 +124,23 @@ final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTranspor
   }
 
   private HttpRequest buildRequestForClient(final TransportRequest request) {
+    if (!request.allowAmbientCredentials()) {
+      if (request.uri().getRawUserInfo() != null) {
+        throw new IllegalArgumentException("credential-free requests reject URI user-info");
+      }
+      if (httpClient.cookieHandler().isPresent()) {
+        throw new IllegalArgumentException(
+            "credential-free requests require an HttpClient without a CookieHandler");
+      }
+      if (httpClient.authenticator().isPresent()) {
+        throw new IllegalArgumentException(
+            "credential-free requests require an HttpClient without an Authenticator");
+      }
+      if (httpClient.followRedirects() != HttpClient.Redirect.NEVER) {
+        throw new IllegalArgumentException(
+            "credential-free requests require an HttpClient with redirects disabled");
+      }
+    }
     if (request.replayPolicy() == RequestReplayPolicy.ONE_SHOT
         && httpClient.followRedirects() != HttpClient.Redirect.NEVER) {
       throw new IllegalArgumentException(

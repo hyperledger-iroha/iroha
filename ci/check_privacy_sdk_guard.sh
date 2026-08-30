@@ -1683,7 +1683,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
             )
 
     backend_registry_sources = (
-        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/src/verifierBackendRegistry.js",
         "python/iroha_python/src/iroha_python/_privacy_backends.py",
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
         "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt",
@@ -1714,7 +1714,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
             )
 
     backend_registry_tests = (
-        "javascript/iroha_js/test/openVerifyEnvelope.test.js",
+        "javascript/iroha_js/test/verifierBackendRegistry.test.js",
         "python/iroha_python/tests/privacy_backend_labels_test.py",
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java",
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTagTest.kt",

@@ -127,6 +127,7 @@ public final class HttpClientTransportTests {
     HttpClientTransportExactReadTests.main(args);
     ledgerExecutedBlockWireIsExactBoundedAndFailClosed();
     privacyCapabilitiesAreTypedAndExact();
+    activeVerifyingKeyIdsAreExactBoundedAndFailClosed();
     sorafsGatewayFetchUsesConfig();
     submitEmitsNetworkContextTelemetry();
     submitEmitsDeviceProfileTelemetry();
@@ -603,6 +604,214 @@ public final class HttpClientTransportTests {
             "",
             Map.of("Content-Type", List.of("application/x-norito"))),
         keyPair);
+  }
+
+  private static void activeVerifyingKeyIdsAreExactBoundedAndFailClosed() {
+    final String bodyText =
+        "[{\"backend\":\"halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3\","
+            + "\"name\":\"kagemusha_topup_v3\"},{\"backend\":\"halo2/ipa\","
+            + "\"name\":\"same_name\"},{\"backend\":\"stark/fri\","
+            + "\"name\":\"same_name\"},{\"backend\":\"stark/fri\","
+            + "\"name\":\"stark_transfer_v1\"}]";
+    final byte[] body = bodyText.getBytes(StandardCharsets.UTF_8);
+    final OneResponseExecutor executor =
+        new OneResponseExecutor(
+            new TransportResponse(
+                200,
+                body,
+                "ok",
+                Map.of(
+                    "Content-Type", List.of("application/json"),
+                    "Content-Length", List.of(Integer.toString(body.length)))));
+    final HttpClientTransport client =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .putDefaultHeader("Authorization", "Bearer must-not-leak")
+                .putDefaultHeader("Proxy-Authorization", "Bearer must-not-leak")
+                .putDefaultHeader("Cookie", "session=must-not-leak")
+                .putDefaultHeader("X-API-Token", "must-not-leak")
+                .putDefaultHeader("x-account-id", "must-not-leak")
+                .putDefaultHeader("X-Dataspace-Id", "must-not-leak")
+                .putDefaultHeader("X-Iroha-Onboarding-Token", "must-not-leak")
+                .putDefaultHeader("X-Iroha-Operator-Signature", "must-not-leak")
+                .putDefaultHeader("x-iroha-operator-future-credential", "must-not-leak")
+                .putDefaultHeader("X-Trace-Id", "active-vk-read")
+                .build());
+    final List<VerifyingKeyId> ids = client.listActiveVerifyingKeyIds().join();
+    assert ids.size() == 4 : "active VK id count mismatch";
+    assert "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
+        .equals(ids.get(0).backend());
+    assert "kagemusha_topup_v3".equals(ids.get(0).name());
+    assert "halo2-ipa-pasta".equals(ids.get(0).engine().noritoValue());
+    assert "halo2/ipa".equals(ids.get(1).backend());
+    assert "same_name".equals(ids.get(1).name());
+    assert "stark/fri".equals(ids.get(2).backend());
+    assert "same_name".equals(ids.get(2).name());
+    assert "GET".equals(executor.lastRequest.method());
+    assert "/api/v1/zk/vk".equals(executor.lastRequest.uri().getRawPath());
+    assert "status=Active&ids_only=true&limit=1000&order=asc"
+        .equals(executor.lastRequest.uri().getRawQuery());
+    assert Long.valueOf(512L * 1024L).equals(executor.lastRequest.maximumResponseBytes());
+    assert !executor.lastRequest.allowAmbientCredentials();
+    assert List.of("application/json").equals(executor.lastRequest.headers().get("Accept"));
+    assert List.of("identity").equals(executor.lastRequest.headers().get("Accept-Encoding"));
+    assert !executor.lastRequest.headers().containsKey("Authorization");
+    assert !executor.lastRequest.headers().containsKey("Proxy-Authorization");
+    assert !executor.lastRequest.headers().containsKey("Cookie");
+    assert !executor.lastRequest.headers().containsKey("X-API-Token");
+    assert !executor.lastRequest.headers().containsKey("x-account-id");
+    assert !executor.lastRequest.headers().containsKey("X-Dataspace-Id");
+    assert !executor.lastRequest.headers().containsKey("X-Iroha-Onboarding-Token");
+    assert !executor.lastRequest.headers().containsKey("X-Iroha-Operator-Signature");
+    assert !executor.lastRequest.headers().containsKey("x-iroha-operator-future-credential");
+    assert List.of("active-vk-read").equals(executor.lastRequest.headers().get("X-Trace-Id"));
+
+    for (final String hostile :
+        List.of(
+            "[{\"backend\":\"halo2/ipa\",\"name\":\"vk\",\"status\":\"Active\"}]",
+            "[{\"backend\":\"unsupported\",\"name\":\"vk\"}]",
+            "[{\"backend\":\"halo2/ipa\",\"name\":\" vk\"}]",
+            "[{\"backend\":\"halo2/ipa\",\"backend\":\"stark/fri\",\"name\":\"vk\"}]",
+            "[{\"backend\":\"halo2/ipa\",\"name\":\"vk\"},{\"backend\":\"halo2/ipa\",\"name\":\"vk\"}]",
+            "[{\"backend\":\"stark/fri\",\"name\":\"z\"},{\"backend\":\"halo2/ipa\",\"name\":\"a\"}]",
+            "[{\"backend\":\"stark/fri\",\"name\":\"same_name\"},{\"backend\":\"halo2/ipa\",\"name\":\"same_name\"}]",
+            "[{\"backend\":\"halo2/ipa\",\"name\":\"Uppercase\"}]",
+            "[{\"backend\":\"halo2/ipa\",\"name\":\"a..b\"}]",
+            "[{\"backend\":\"halo2/ipa\",\"name\":\"名前\"}]",
+            "[{\"backend\":\"halo2/ipa\",\"name\":\"" + "a".repeat(257) + "\"}]")) {
+      final byte[] hostileBody = hostile.getBytes(StandardCharsets.UTF_8);
+      boolean rejected = false;
+      try {
+        HttpClientTransport.withExecutor(
+                new OneResponseExecutor(
+                    new TransportResponse(
+                        200,
+                        hostileBody,
+                        "ok",
+                        Map.of("Content-Type", List.of("application/json")))),
+                ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build())
+            .listActiveVerifyingKeyIds()
+            .join();
+      } catch (final CompletionException expected) {
+        rejected = true;
+      }
+      assert rejected : "hostile active VK projection must fail closed: " + hostile;
+    }
+
+    boolean wrongContentTypeRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(
+                  new TransportResponse(
+                      200, body, "ok", Map.of("Content-Type", List.of("text/json")))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .listActiveVerifyingKeyIds()
+          .join();
+    } catch (final CompletionException expected) {
+      wrongContentTypeRejected = true;
+    }
+    assert wrongContentTypeRejected : "active VK projection must require exact JSON headers";
+
+    boolean nonIdentityEncodingRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(
+                  new TransportResponse(
+                      200,
+                      body,
+                      "ok",
+                      Map.of(
+                          "Content-Type", List.of("application/json"),
+                          "Content-Encoding", List.of("gzip"),
+                          "Content-Length", List.of(Integer.toString(body.length))))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .listActiveVerifyingKeyIds()
+          .join();
+    } catch (final CompletionException expected) {
+      nonIdentityEncodingRejected = true;
+    }
+    assert nonIdentityEncodingRejected
+        : "active VK projection must require the identity representation";
+
+    boolean malformedUtf8Rejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(
+                  new TransportResponse(
+                      200,
+                      new byte[] {(byte) 0xFF},
+                      "ok",
+                      Map.of("Content-Type", List.of("application/json")))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .listActiveVerifyingKeyIds()
+          .join();
+    } catch (final CompletionException expected) {
+      malformedUtf8Rejected = true;
+    }
+    assert malformedUtf8Rejected : "active VK projection must reject malformed UTF-8";
+
+    boolean oversizedRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              new OneResponseExecutor(
+                  new TransportResponse(
+                      200,
+                      new byte[512 * 1024 + 1],
+                      "ok",
+                      Map.of("Content-Type", List.of("application/json")))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .build())
+          .listActiveVerifyingKeyIds()
+          .join();
+    } catch (final CompletionException expected) {
+      oversizedRejected = true;
+    }
+    assert oversizedRejected : "active VK projection must reject an oversized response";
+
+    final CountingFailingExecutor userInfoExecutor =
+        new CountingFailingExecutor(new IllegalStateException("must not dispatch"));
+    boolean userInfoRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              userInfoExecutor,
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://ambient:must-not-leak@torii.example"))
+                  .build())
+          .listActiveVerifyingKeyIds();
+    } catch (final IllegalArgumentException expected) {
+      userInfoRejected = expected.getMessage().contains("reject URI user-info");
+    }
+    assert userInfoRejected : "active VK projection must reject URI user-info";
+    assert userInfoExecutor.callCount == 0 : "URI user-info must fail before executor dispatch";
+
+    final CountingFailingExecutor encodingOverrideExecutor =
+        new CountingFailingExecutor(new IllegalStateException("must not dispatch"));
+    boolean encodingOverrideRejected = false;
+    try {
+      HttpClientTransport.withExecutor(
+              encodingOverrideExecutor,
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("https://torii.example"))
+                  .putDefaultHeader("aCcEpT-eNcOdInG", "gzip")
+                  .build())
+          .listActiveVerifyingKeyIds();
+    } catch (final IllegalArgumentException expected) {
+      encodingOverrideRejected = expected.getMessage().contains("Accept-Encoding");
+    }
+    assert encodingOverrideRejected : "active VK projection must require identity encoding";
+    assert encodingOverrideExecutor.callCount == 0
+        : "invalid active VK encoding must fail before executor dispatch";
   }
 
   private static void assertPrivacyCapabilitiesResponseRejected(

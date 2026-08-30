@@ -198,7 +198,8 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     reopened_body_store
         .revalidate_recovered_markers(|_| Ok::<_, String>(validation_commitment))
         .expect("semantically replay the recovered validation marker");
-    let (mut executor, reopened_body_store) = V2EffectExecutor::open_with_body_store(
+    let (mut executor, reopened_body_store) =
+        V2EffectExecutor::open_with_body_store_and_validate_retry_census_for_test(
         runtime,
         reopened_body_store,
         super::super::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1::empty_for_test(),

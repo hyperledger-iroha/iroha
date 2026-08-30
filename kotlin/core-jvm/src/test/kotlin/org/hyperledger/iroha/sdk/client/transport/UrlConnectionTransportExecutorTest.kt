@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -17,6 +18,7 @@ import javax.tools.ToolProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -25,6 +27,38 @@ import org.hyperledger.iroha.sdk.client.ClientConfig
 import org.hyperledger.iroha.sdk.client.HttpClientTransport
 
 class UrlConnectionTransportExecutorTest {
+
+    @Test
+    fun credentialFreeRequestFailsClosedBeforeOpeningAConnection() {
+        ServerSocket(0).use { server ->
+            server.soTimeout = 500
+            val request = TransportRequest.builder()
+                .setMethod("GET")
+                .setUri(URI.create("http://127.0.0.1:${server.localPort}/v1/zk/vk"))
+                .setAllowAmbientCredentials(false)
+                .build()
+            val failure = assertFailsWith<ExecutionException> {
+                UrlConnectionTransportExecutor().execute(request).get()
+            }
+            assertTrue(failure.hasCauseMessage("unsupported by URLConnection"))
+            assertFailsWith<SocketTimeoutException> {
+                server.accept().close()
+            }
+        }
+    }
+
+    @Test
+    fun credentialFreeStreamingFailsClosed() {
+        val request = TransportRequest.builder()
+            .setMethod("GET")
+            .setUri(URI.create("http://127.0.0.1:1/v1/zk/vk"))
+            .setAllowAmbientCredentials(false)
+            .build()
+        val failure = assertFailsWith<ExecutionException> {
+            UrlConnectionTransportExecutor().openStream(request).get()
+        }
+        assertTrue(failure.hasCauseMessage("unsupported by URLConnection"))
+    }
 
     @Test
     fun executeRunsOnSuppliedAsyncExecutor() {

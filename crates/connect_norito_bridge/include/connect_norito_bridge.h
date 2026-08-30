@@ -246,8 +246,8 @@ int32_t connect_norito_offline_cash_payment_canonicalize_v1(
 // Compatibility one-shot verifier. It succeeds only after the governed
 // 34-role release registry resolves request.release_id, the supplied manifest
 // digest matches, and both current parity proofs terminate successfully.
-// Prefer the opaque wallet-session API below when acknowledgement verification
-// must retain the move-only proof receipt.
+// Prefer the opaque verification-session API below when acknowledgement
+// verification must retain the move-only proof receipt.
 int32_t connect_norito_offline_cash_payment_canonicalize_for_session_v1(
     const uint8_t* request_ptr, unsigned long request_len,
     const uint8_t* payment_ptr, unsigned long payment_len,
@@ -325,11 +325,99 @@ int32_t connect_norito_offline_cash_artifact_set_uninstall_v1(
     const uint8_t* expected_manifest_digest_ptr,
     unsigned long expected_manifest_digest_len);
 
-// Opaque receiver session pinned to the currently active authenticated
-// release. Payment admission retains Core's move-only paired-proof receipt;
-// acknowledgement admission must validate against that exact receipt. Host
-// `observed_now_ms` is only a proof-liveness observation: the secure-device
-// bridge must independently enforce trusted time before durable state mutation.
+// Opaque verifier-only receiver session pinned to the currently active
+// authenticated release. Payment verification retains Core's move-only
+// paired-proof receipt; acknowledgement verification must validate against
+// that exact receipt. Host `observed_now_ms` is only a proof-liveness
+// observation. These handles do not own durable wallet/device state and cannot
+// authorize a balance, counter, journal, outbox, payment, or acknowledgement.
+int32_t connect_norito_offline_cash_verification_session_open_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* expected_release_id_ptr,
+    unsigned long expected_release_id_len,
+    const uint8_t* expected_manifest_digest_ptr,
+    unsigned long expected_manifest_digest_len,
+    uint64_t* out_handle);
+int32_t connect_norito_offline_cash_verification_session_open_bound_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* expected_release_id_ptr,
+    unsigned long expected_release_id_len,
+    const uint8_t* expected_manifest_digest_ptr,
+    unsigned long expected_manifest_digest_len,
+    const uint8_t* expected_network_id_ptr,
+    unsigned long expected_network_id_len,
+    const uint8_t* expected_asset_definition_id_ptr,
+    unsigned long expected_asset_definition_id_len,
+    uint64_t* out_handle);
+int32_t connect_norito_offline_cash_verification_session_verify_payment_v1(
+    uint64_t handle,
+    const uint8_t* payment_ptr, unsigned long payment_len,
+    uint64_t observed_now_ms,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_verification_session_verify_acknowledgement_v1(
+    uint64_t handle,
+    const uint8_t* acknowledgement_ptr, unsigned long acknowledgement_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+// Verification state codes: 1=request verified, 2=payment verified,
+// 3=acknowledgement verified.
+int32_t connect_norito_offline_cash_verification_session_state_v1(
+    uint64_t handle, uint8_t* out_state);
+int32_t connect_norito_offline_cash_verification_session_close_v1(uint64_t handle);
+
+// Stable product vocabulary for the disjoint wallet-runtime facade. These
+// codes carry no device or monetary authority. ABI22 emits only the unavailable
+// status/state values and rejects every action; the remaining values reserve
+// the cross-SDK vocabulary for a separately reviewed future backend.
+typedef enum connect_norito_offline_cash_wallet_runtime_status_code_v1 {
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATUS_UNAVAILABLE_V1 = 0
+} connect_norito_offline_cash_wallet_runtime_status_code_v1;
+
+typedef enum connect_norito_offline_cash_wallet_runtime_state_code_v1 {
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_UNAVAILABLE_V1 = 0,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_SETUP_REQUIRED_V1 = 1,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_EMPTY_V1 = 2,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_TOP_UP_PENDING_V1 = 3,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_AVAILABLE_V1 = 4,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_RECEIVE_REQUEST_READY_V1 = 5,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_SEND_PREPARING_V1 = 6,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_PAYMENT_COMMITTED_V1 = 7,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_AWAITING_ACKNOWLEDGEMENT_V1 = 8,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_RECEIVED_V1 = 9,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_REDEEM_PENDING_V1 = 10,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_RECOVERY_REQUIRED_V1 = 11,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_STATE_ERROR_V1 = 12
+} connect_norito_offline_cash_wallet_runtime_state_code_v1;
+
+typedef enum connect_norito_offline_cash_wallet_runtime_action_code_v1 {
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_SET_UP_V1 = 0,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_TOP_UP_V1 = 1,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_CREATE_RECEIVE_REQUEST_V1 = 2,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_PREPARE_SEND_V1 = 3,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_COMMIT_PAYMENT_V1 = 4,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_RECORD_ACKNOWLEDGEMENT_EVIDENCE_V1 = 5,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_RECEIVE_PAYMENT_V1 = 6,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_REDEEM_V1 = 7,
+    CONNECT_NORITO_OFFLINE_CASH_WALLET_RUNTIME_ACTION_RECOVER_V1 = 8
+} connect_norito_offline_cash_wallet_runtime_action_code_v1;
+
+// ABI22 has no reviewed production secure-device backend: open always clears
+// the handle to zero and fails; status succeeds only with status=0/state=0
+// (both unavailable); every action and close fails. These functions never
+// consult or accept verifier-session handles, and symbol presence alone cannot
+// enable offline funds.
+int32_t connect_norito_offline_cash_wallet_runtime_session_open_v1(
+    uint64_t* out_handle);
+int32_t connect_norito_offline_cash_wallet_runtime_session_status_v1(
+    uint8_t* out_status, uint8_t* out_state);
+int32_t connect_norito_offline_cash_wallet_runtime_session_attempt_v1(
+    uint64_t handle, uint8_t action);
+int32_t connect_norito_offline_cash_wallet_runtime_session_close_v1(
+    uint64_t handle);
+
+// DEPRECATED ABI22 COMPATIBILITY ALIASES. Despite their historical
+// `wallet_session` spelling these symbols are verifier-only aliases for the
+// truthful `verification_session` functions declared earlier and never expose
+// a wallet-runtime capability. New callers must use that namespace.
 int32_t connect_norito_offline_cash_wallet_session_open_v1(
     const uint8_t* request_ptr, unsigned long request_len,
     const uint8_t* expected_release_id_ptr,
@@ -357,7 +445,8 @@ int32_t connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1(
     uint64_t handle,
     const uint8_t* acknowledgement_ptr, unsigned long acknowledgement_len,
     uint8_t** out_ptr, unsigned long* out_len);
-// State codes: 1=request ready, 2=payment committed, 3=acknowledged.
+// Verification state codes: 1=request verified, 2=payment verified,
+// 3=acknowledgement verified.
 int32_t connect_norito_offline_cash_wallet_session_state_v1(
     uint64_t handle, uint8_t* out_state);
 int32_t connect_norito_offline_cash_wallet_session_close_v1(uint64_t handle);

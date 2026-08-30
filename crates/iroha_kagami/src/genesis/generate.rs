@@ -2,9 +2,10 @@ use crate::{
     Outcome, RunArgs,
     genesis::profile::{
         GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
-        TAIRA_XOR_ASSET_DEFINITION_ID, TAIRA_XOR_SCALE, known_chain_discriminant_for_chain_id,
-        parse_vrf_seed_hex, profile_defaults, profile_requires_npos,
-        resolve_public_xor_asset_definition_id, resolve_vrf_seed,
+        TAIRA_DIGITAL_KINA_DOMAIN, TAIRA_XOR_ASSET_DEFINITION_ID, TAIRA_XOR_SCALE,
+        known_chain_discriminant_for_chain_id, parse_vrf_seed_hex, profile_defaults,
+        profile_requires_npos, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
+        validate_taira_digital_kina_base_prerequisite,
     },
     tui,
 };
@@ -456,6 +457,39 @@ fn ensure_public_xor_numeric_spec(
     }
     Ok(())
 }
+
+fn append_taira_digital_kina_base_prerequisite(
+    genesis: RawGenesisTransaction,
+) -> color_eyre::Result<RawGenesisTransaction> {
+    let owning_domain = DomainId::parse_fully_qualified(TAIRA_DIGITAL_KINA_DOMAIN)?;
+    let mut has_domain = false;
+    for instruction in genesis.instructions() {
+        if let Some(register) = instruction.as_any().downcast_ref::<Register<Domain>>() {
+            has_domain |= register.object.id == owning_domain;
+            continue;
+        }
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+        {
+            if let iroha_data_model::isi::register::RegisterBox::Domain(register) = register {
+                has_domain |= register.object.id == owning_domain;
+            }
+        }
+    }
+    if has_domain {
+        validate_taira_digital_kina_base_prerequisite(&genesis)?;
+        return Ok(genesis);
+    }
+    let genesis = genesis
+        .into_builder()
+        .next_transaction()
+        .append_instruction(Register::domain(Domain::new(owning_domain)))
+        .build_raw()
+        .with_consensus_meta();
+    validate_taira_digital_kina_base_prerequisite(&genesis)?;
+    Ok(genesis)
+}
 fn format_profile_summary(
     profile: GenesisProfile,
     summary_chain: &ChainId,
@@ -575,6 +609,9 @@ impl<T: Write> RunArgs<T> for Args {
         )?;
         if let Some(asset_definition_id) = public_xor_asset_definition_id.as_ref() {
             genesis = append_public_xor_binding(genesis, asset_definition_id)?;
+        }
+        if profile == Some(GenesisProfile::Iroha3Taira) {
+            genesis = append_taira_digital_kina_base_prerequisite(genesis)?;
         }
         let chain_discriminant = profile_defaults
             .as_ref()
@@ -989,6 +1026,30 @@ mod consensus_manifest_tests {
             spec,
             Some(NumericSpec::fractional(TAIRA_XOR_SCALE)),
             "shipped Taira XOR must expose the same decimal scale consumed by wallets"
+        );
+    }
+    #[test]
+    fn taira_profile_generator_preserves_the_digital_kina_provisioning_boundary() {
+        let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
+        let manifest = generate_default(
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            Some(&defaults),
+            Some([0x5a; 32]),
+        )
+        .expect("generate Taira base manifest");
+        let xor_id = AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
+            .expect("parse pinned Taira XOR id");
+        let manifest = append_public_xor_binding(manifest, &xor_id)
+            .and_then(append_taira_digital_kina_base_prerequisite)
+            .expect("append canonical Taira public prerequisites");
+        assert_eq!(
+            validate_taira_digital_kina_base_prerequisite(&manifest)
+                .expect("validate generated Digital Kina provisioning boundary")
+                .to_string(),
+            TAIRA_DIGITAL_KINA_DOMAIN
         );
     }
 }

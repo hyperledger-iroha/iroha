@@ -1382,8 +1382,6 @@ impl ProductionLifecycleOwnerV1 {
         {
             Ok(execution) => execution,
             Err(error) => {
-                #[cfg(test)]
-                eprintln!("certified Fetch registry execution projection failed: {error:?}");
                 iroha_logger::error!(
                     ?error,
                     ordinal,
@@ -1392,6 +1390,11 @@ impl ProductionLifecycleOwnerV1 {
                 self.rollback_ready_validate_publication(&lease);
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
+        };
+        let Some(validate_retry_key) = execution.validate_retry_key() else {
+            drop(execution);
+            self.rollback_ready_validate_publication(&lease);
+            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
         };
         let preview = match executor.prepare_ready_durable_validate_adapter_preview(execution) {
             Ok(preview) => preview,
@@ -1451,9 +1454,11 @@ impl ProductionLifecycleOwnerV1 {
                     );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
-                executor
-                    .release_live_lifecycle_validate_successor(ordinal)
-                    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
+                Self::release_ready_validate_retry_authority(
+                    executor,
+                    validate_retry_key,
+                    ordinal,
+                )?;
                 Ok(ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal })
             }
             Kind::ValidatedPersist => {
@@ -1490,9 +1495,11 @@ impl ProductionLifecycleOwnerV1 {
                     );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
-                executor
-                    .release_live_lifecycle_validate_successor(ordinal)
-                    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
+                Self::release_ready_validate_retry_authority(
+                    executor,
+                    validate_retry_key,
+                    ordinal,
+                )?;
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,
                     child_ordinal,
@@ -1536,9 +1543,11 @@ impl ProductionLifecycleOwnerV1 {
                     );
                     return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                 }
-                executor
-                    .release_live_lifecycle_validate_successor(ordinal)
-                    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
+                Self::release_ready_validate_retry_authority(
+                    executor,
+                    validate_retry_key,
+                    ordinal,
+                )?;
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,
                     child_ordinal,
@@ -1598,12 +1607,34 @@ impl ProductionLifecycleOwnerV1 {
                         ProductionCompletionDispatchErrorV1::LiveApplyReconciliation(error),
                     );
                 }
+                Self::release_ready_validate_retry_authority(
+                    executor,
+                    validate_retry_key,
+                    ordinal,
+                )?;
                 Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
                     parent_ordinal: ordinal,
                     child_ordinal,
                     child: LifecycleWorkClass::Apply,
                 })
             }
+        }
+    }
+    fn release_ready_validate_retry_authority(
+        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+        key: (
+            iroha_data_model::block::consensus_v2::ConsensusRound,
+            iroha_data_model::block::consensus_v2::BlockSubject,
+        ),
+        lifecycle_ordinal: u128,
+    ) -> Result<(), ProductionCompletionDispatchErrorV1> {
+        executor
+            .release_live_lifecycle_validate_successor(key, lifecycle_ordinal)
+            .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
+        match executor.release_validate_retry_lifecycle_ordinal(key, lifecycle_ordinal) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(ProductionCompletionDispatchErrorV1::InvalidCarrier),
+            Err(error) => Err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation(error)),
         }
     }
     fn rollback_ready_validate_publication(&mut self, lease: &super::TurnLease) {
@@ -1903,7 +1934,7 @@ impl ProductionLifecycleOwnerV1 {
             return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
         }
         transition.commit_after_publication();
-        executor.commit_published_lifecycle_validate_retry_marker(retry_marker);
+        executor.commit_published_lifecycle_validate_retry_marker(retry_marker, child_ordinal);
         operation.complete();
         Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
             parent_ordinal: ordinal,
@@ -5161,6 +5192,62 @@ impl ProductionLifecycleOwnerV1 {
         )
     }
 
+    /// Build one production admission owner whose exact durable Validate row
+    /// is already terminal, so executor tests can exercise the returned
+    /// terminal-admission settlement path instead of forging its outcome.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn terminal_durable_validate_admission_owner_for_test(
+        verified: crate::sumeragi::v2::VerifiedHeightContext,
+        pending: super::PendingDurableValidateAdmissionV1,
+        root: &std::path::Path,
+    ) -> Self {
+        let mut coordinator = LifecycleCoordinator::new(
+            super::projection::lifecycle_context(verified.context()),
+            0,
+            super::schema::CapacityGeometry::new([
+                (super::CapacityClass::Consensus, 8),
+                (super::CapacityClass::Effect, 8),
+                (super::CapacityClass::Serve, 8),
+                (super::CapacityClass::Producer, 8),
+            ]),
+        );
+        coordinator
+            .attach_empty_test_ledger(&root.join("ledger"))
+            .expect("attach terminal durable Validate fixture ledger");
+        let (payload_store, serve_payloads) = crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+            &root.join("serve"),
+            verified.context(),
+        )
+        .expect("open empty terminal durable Validate Serve owner");
+        let mut owner = Self {
+            verified,
+            coordinator,
+            registry: LifecycleWorkRegistryHolder::empty(),
+            recovered_lifecycle_outputs: None,
+            payload_store,
+            serve_payloads,
+            body_store: None,
+            body_store_identity: None,
+            kura_binding: None,
+            apply_service: None,
+            adapter_startup: None,
+            timeout_supersession_successor: None,
+        };
+        let ordinal = match owner.settle_durable_validate_admission(pending) {
+            super::ProductionDurableValidateAdmissionSettlementV1::Admitted(
+                super::AdmissionDecision::Admitted { ordinal, .. },
+            ) => ordinal,
+            outcome => panic!(
+                "terminal durable Validate fixture must first admit one exact row: {outcome:?}"
+            ),
+        };
+        owner
+            .coordinator
+            .finish_terminal(ordinal, super::TerminalOutcome::Cancelled)
+            .expect("terminalize the exact durable Validate fixture row");
+        owner
+    }
+
     /// Open one clean production executor before moving this owner's body
     /// store into the matching bounded service worker.
     pub(in crate::sumeragi) fn bind_body_store_to_lifecycle_completion_io_for_test(
@@ -5191,7 +5278,7 @@ impl ProductionLifecycleOwnerV1 {
             .project_recovered_durable_validate_retry_census(&self.coordinator, replayed_decision)
             .expect("project the clean recovered Validate retry census");
         let (executor, body_store) =
-            crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store(
+            crate::sumeragi::v2_effects::V2EffectExecutor::open_with_body_store_and_validate_retry_census_for_test(
                 runtime,
                 body_store,
                 recovered_validate_retry_census,

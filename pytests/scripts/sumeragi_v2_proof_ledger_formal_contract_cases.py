@@ -243,6 +243,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('state/restored_staking_owner_tests.rs'),
         Path('state/confidential_policy_transition_index_tests.rs'),
         Path('state/passive_lane_diagnostic_methods.rs'),
+        Path('state/runtime_configuration.rs'),
         Path('state/lane_lifecycle_support.rs'),
         Path('state/diagnostic_state_generation.rs'),
         Path('state/autonomous_predecessor_application.rs'),

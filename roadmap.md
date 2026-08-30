@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -45,12 +45,11 @@ Completed history lives in [`status.md`](./status.md).
   amount or give those facts an independently anchored binding with at least
   128-bit security; the current handle signature plus roughly 32-bit FASTPQ
   metadata is not a release authorization boundary.
-- Keep ZK-ACE proving, verification, and activation unavailable until its four
-  public commitment words come from independent domain-separated invocations
-  (or an equivalently strong replacement) with at least 128-bit collision
-  binding. Regenerate the wider AIR schedule, trace domain, masks, FRI profile,
-  profile digest, proof fixtures, and quantitative certificate before removing
-  the fail-closed engine flag.
+- Preserve ZK-ACE V2's four independent length-framed commitment lanes and its
+  compiled 128-bit generic collision target. Any change to that construction
+  must regenerate and requalify the AIR schedule, trace domain, masks, FRI
+  profile, profile digest, fixed proof wire, fixtures, and quantitative
+  certificate before the available engine profile can ship again.
 - Add an explicit degree bound and bounded-degree terminal polynomial check to
   private generic native-STARK AIR profiles. `blowup_log2` must affect verified
   geometry rather than only transcript metadata. Keep the exact-root public
@@ -390,7 +389,7 @@ internal blockers below cannot be closed by collecting external evidence:
   match fields. Preserve `MusubiNamespaceBindingV1` as an explicit
   namespace-to-home-dataspace binding and stop inferring either identity from a
   shared textual suffix.
-- Before a Taira release claims `dpn`, `is`, `is2`, or `cbsi` as a live physical
+- Before a Taira release claims `bpng`, `is`, `is2`, or `cbsi` as a live physical
   dataspace, archive deployment evidence for its distinct validator/server
   cohort, storage boundary, and dataspace manifest. A catalog entry or repeated
   lane-manifest roster is insufficient evidence.

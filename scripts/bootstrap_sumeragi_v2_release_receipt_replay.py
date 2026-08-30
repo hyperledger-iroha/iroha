@@ -598,6 +598,134 @@ def _framework_python_marker_record(
         "relocation": relocation,
     }
 
+def _preflight_terminal_scaling_bundle(
+    *,
+    receipt_evidence: dict[str, Any],
+    authenticated_environment: dict[str, str],
+) -> None:
+    """Reject unbound or special scaling entries before hashing evidence."""
+
+    scaling = _require_exact_json_fields(
+        receipt_evidence["multilane_scaling_bundle"],
+        {"archive_id", "file_count", "total_size_bytes", "directories", "files"},
+        "terminal scaling bundle",
+    )
+    scaling_directories = scaling["directories"]
+    scaling_files = scaling["files"]
+    if (
+        scaling["archive_id"] != "release-scaling.bundle.v1"
+        or not isinstance(scaling_directories, list)
+        or len(scaling_directories) > _MAX_SCALING_BUNDLE_DIRECTORY_COUNT
+        or not isinstance(scaling_files, list)
+        or len(scaling_files) > _MAX_SCALING_BUNDLE_FILE_COUNT
+        or type(scaling["file_count"]) is not int
+        or scaling["file_count"] != len(scaling_files)
+        or type(scaling["total_size_bytes"]) is not int
+        or not 0 <= scaling["total_size_bytes"] <= _MAX_SCALING_BUNDLE_TOTAL_BYTES
+    ):
+        raise BootstrapError("terminal scaling bundle inventory is malformed")
+
+    parsed_directories: list[tuple[str, tuple[str, ...]]] = []
+    for index, relative in enumerate(scaling_directories):
+        parsed_directories.append(
+            (
+                relative,
+                _terminal_relative_path(
+                    relative, f"terminal scaling directory {index}"
+                ),
+            )
+        )
+    if [item[0] for item in parsed_directories] != sorted(
+        {item[0] for item in parsed_directories}
+    ):
+        raise BootstrapError("terminal scaling directories are not sorted and unique")
+
+    parsed_files: list[tuple[str, tuple[str, ...], dict[str, Any]]] = []
+    total_size = 0
+    for index, raw_record in enumerate(scaling_files):
+        record = _require_exact_json_fields(
+            raw_record,
+            {"archive_id", "mode", "sha256", "size_bytes", "relative_path"},
+            f"terminal scaling file {index}",
+        )
+        relative = record["relative_path"]
+        parts = _terminal_relative_path(
+            relative, f"terminal scaling file {index}"
+        )
+        size = record["size_bytes"]
+        if (
+            record["archive_id"] != "release-scaling.file.v1:" + relative
+            or not isinstance(record["sha256"], str)
+            or type(size) is not int
+            or not 0 <= size <= _MAX_SCALING_BUNDLE_FILE_BYTES
+        ):
+            raise BootstrapError(f"terminal scaling file {index} is malformed")
+        _require_digest(record["sha256"], f"terminal scaling file {index} digest")
+        _terminal_mode(record["mode"], f"terminal scaling file {index}")
+        parsed_files.append((relative, parts, record))
+        total_size += size
+    if (
+        [item[0] for item in parsed_files]
+        != sorted({item[0] for item in parsed_files})
+        or total_size != scaling["total_size_bytes"]
+    ):
+        raise BootstrapError("terminal scaling files are not one exact sorted inventory")
+
+    manifest_environment = authenticated_environment.get(
+        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
+    )
+    if not isinstance(manifest_environment, str):
+        raise BootstrapError("authenticated runner omits scaling manifest")
+    scaling_manifest = Path(manifest_environment)
+    if (
+        not scaling_manifest.is_absolute()
+        or scaling_manifest != Path(os.path.abspath(scaling_manifest))
+    ):
+        raise BootstrapError("authenticated scaling manifest path is not normalized")
+    scaling_root = scaling_manifest.parent
+    manifest_matches = [
+        scaling_root.joinpath(*parts)
+        for relative, parts, _ in parsed_files
+        if relative == "scaling_evidence.json"
+    ]
+    if manifest_matches != [scaling_manifest]:
+        raise BootstrapError("terminal scaling manifest path is not root-bound")
+
+    def require_nonfollowing_type(
+        path: Path, label: str, *, directory: bool
+    ) -> os.stat_result:
+        try:
+            metadata = os.stat(path, follow_symlinks=False)
+        except OSError as error:
+            raise BootstrapError(f"{label} is unavailable") from error
+        expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+        if stat.S_ISLNK(metadata.st_mode) or not expected_type(metadata.st_mode):
+            kind = "directory" if directory else "regular non-symlink file"
+            raise BootstrapError(f"{label} must be a {kind}")
+        return metadata
+
+    require_nonfollowing_type(
+        scaling_root, "terminal scaling bundle root", directory=True
+    )
+    _absolute_resolved_existing(scaling_root, "terminal scaling bundle root")
+    for index, (_, parts) in enumerate(parsed_directories):
+        path = scaling_root.joinpath(*parts)
+        require_nonfollowing_type(
+            path, f"terminal scaling directory {index}", directory=True
+        )
+        _absolute_resolved_existing(path, f"terminal scaling directory {index}")
+    for index, (_, parts, record) in enumerate(parsed_files):
+        path = scaling_root.joinpath(*parts)
+        metadata = require_nonfollowing_type(
+            path, f"terminal scaling file {index}", directory=False
+        )
+        if metadata.st_size != record["size_bytes"]:
+            raise BootstrapError(
+                f"terminal scaling file {index} size does not match its record"
+            )
+        _absolute_resolved_existing(path, f"terminal scaling file {index}")
+
+
 def _validate_terminal_release_evidence(
     *,
     receipt_evidence: dict[str, Any],
@@ -3336,6 +3464,10 @@ def _validate_terminal_receipt(
         is None
     ):
         raise BootstrapError("terminal release receipt has an invalid sealed-source digest")
+    _preflight_terminal_scaling_bundle(
+        receipt_evidence=receipt_evidence,
+        authenticated_environment=authenticated_environment,
+    )
     terminal_artifacts, terminal_evidence_directories = (
         _validate_terminal_release_evidence(
             receipt_evidence=receipt_evidence,

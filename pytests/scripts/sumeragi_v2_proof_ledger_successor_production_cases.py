@@ -257,7 +257,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
 )
 assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS) == len(
     set(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS)
-) == 21
+) == 22
 
 
 @pytest.mark.parametrize(
@@ -329,28 +329,28 @@ COLD_READY_VALIDATE_RETRY_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
-        "fn project_retry(",
+        "impl RecoveredDurableValidateRetryBindingV1",
+        "incoming_tag.height() != frontier_tag.height()",
         "incoming_tag != frontier_tag",
-        "incoming_tag != recovered_tag",
         "exact cold Ready Validate retry binding",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
-        "fn project_retry(",
+        "impl RecoveredDurableValidateRetryBindingV1",
         ".zip(incoming_commitment)",
         ".zip(None)",
         "exact cold Ready Validate retry binding",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
-        "fn project_retry(",
+        "impl RecoveredDurableValidateRetryBindingV1",
         ".or(incoming_commitment)",
         ".or(None)",
         "exact cold Ready Validate retry binding",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
-        "fn project_retry(",
+        "impl RecoveredDurableValidateRetryBindingV1",
         "let recovered_statement = self.pending.candidate_statement.ok_or_else(|| {",
         "let _ = incoming.exact_pending_adapter_effect_binding(effect);\n"
         "        let recovered_statement = self.pending.candidate_statement.ok_or_else(|| {",
@@ -358,14 +358,42 @@ COLD_READY_VALIDATE_RETRY_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
-        "fn project_retry(",
-        "effect: effect.clone()",
-        "effect: recovered_effect.clone()",
+        "impl RecoveredDurableValidateRetryBindingV1",
+        "effect: if incoming_tag.strictly_advances(*frontier_tag) {",
+        "effect: if true {",
         "exact cold Ready Validate retry binding",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
-        "fn project_retry(",
+        "impl DurableValidateRetrySealV1",
+        "incoming_tag.height() != incumbent_tag.height()",
+        "incoming_tag != incumbent_tag",
+        "non-substitutable live and recovered Validate retry projection",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "impl DurableValidateRetrySealV1",
+        "if incoming_tag.strictly_advances(*incumbent_tag) {",
+        "if true {",
+        "non-substitutable live and recovered Validate retry projection",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "impl PublishedLifecycleValidateRetryMarkerV1",
+        "incoming_tag.height() != incumbent_tag.height()",
+        "incoming_tag != incumbent_tag",
+        "monotonic published lifecycle Validate retry projection",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "impl PublishedLifecycleValidateRetryMarkerV1",
+        "effect: if incoming_tag.strictly_advances(*incumbent_tag) {",
+        "effect: if true {",
+        "monotonic published lifecycle Validate retry projection",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "impl DurableValidateRetrySealV1",
         "owner: Arc::clone(owner)",
         "owner: Arc::new((**owner).clone())",
         "non-substitutable live and recovered Validate retry projection",
@@ -373,8 +401,8 @@ COLD_READY_VALIDATE_RETRY_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
         "pub(in crate::sumeragi) fn absorb(",
-        "frontier: owner.initial_retry_frontier()",
-        "frontier: None",
+        "let frontier = owner.initial_retry_frontier().ok_or_else(|| {",
+        "let frontier = None.ok_or_else(|| {",
         "atomic cold Ready Validate retry installation",
     ),
     (
@@ -393,9 +421,16 @@ COLD_READY_VALIDATE_RETRY_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(in crate::sumeragi) fn open_with_body_store(",
+        "if !ready_validate_deferred {",
+        "if true {",
+        "owner-exact cold Ready Validate marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "fn retain_effect_batch_at_frontier(",
-        "retained_validate_retry_seals.insert((*round, *subject), projected.seal)",
-        "retained_validate_retry_seals.remove(&(*round, *subject))",
+        "validate_retry_seal_updates.insert((*round, *subject), projected.seal)",
+        "validate_retry_seal_updates.remove(&(*round, *subject))",
         "exact cold Ready Validate retry stutter",
     ),
     (
@@ -436,7 +471,7 @@ COLD_READY_VALIDATE_RETRY_MUTATIONS = (
 )
 assert len(COLD_READY_VALIDATE_RETRY_MUTATIONS) == len(
     set(COLD_READY_VALIDATE_RETRY_MUTATIONS)
-) == 19
+) == 24
 
 
 @pytest.mark.parametrize(
@@ -471,7 +506,230 @@ def test_cold_ready_validate_retry_mutations_fail_closed(
         source[:mutation] + new + source[mutation + len(old) :],
         encoding="utf-8",
     )
+    frontier_seal = {
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime_durable_recovery_pending.rs",
+            "impl RecoveredDurableValidateRetryBindingV1",
+        ): (
+            "RecoveredDurableValidateRetryBindingV1",
+            "recovered_retry_projection",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "impl DurableValidateRetrySealV1",
+        ): ("DurableValidateRetrySealV1", "live_retry_projection"),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+            "impl PublishedLifecycleValidateRetryMarkerV1",
+        ): (
+            "PublishedLifecycleValidateRetryMarkerV1",
+            "published_retry_projection",
+        ),
+    }.get((relative_path, region_marker))
+    if frontier_seal is not None:
+        impl_name, seal_key = frontier_seal
+        mutated_items = [
+            item
+            for item in module.rust_items(
+                path.read_text(encoding="utf-8"), "project_retry"
+            )
+            if item.brace_context == (("impl", impl_name),)
+        ]
+        assert len(mutated_items) == 1, (relative_path, impl_name)
+        module._DURABLE_VALIDATE_RETRY_FRONTIER_RUST_ITEM_SHA256[seal_key] = (
+            module._rust_item_token_sha256(mutated_items[0])
+        )
+    if (
+        relative_path == "crates/iroha_core/src/sumeragi/v2_effects.rs"
+        and region_marker
+        == "pub(in crate::sumeragi) fn open_with_body_store("
+    ):
+        mutated_items = [
+            item
+            for item in module.rust_items(
+                path.read_text(encoding="utf-8"), "open_with_body_store"
+            )
+            if item.brace_context
+            == (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),)
+        ]
+        assert len(mutated_items) == 1, (relative_path, region_marker)
+        module._COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[
+            "open_with_body_store"
+        ] = module._rust_item_token_sha256(mutated_items[0])
     errors = module._successor_recovery_source_fidelity_errors(tmp_path)
+    assert any(error_fragment in error for error in errors), errors
+
+
+COLD_READY_VALIDATE_COMPLETION_SOURCE_FILES = (
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs",
+    "crates/iroha_core/src/sumeragi/v2_effects.rs",
+    "crates/iroha_core/src/sumeragi/v2.rs",
+)
+assert len(COLD_READY_VALIDATE_COMPLETION_SOURCE_FILES) == len(
+    set(COLD_READY_VALIDATE_COMPLETION_SOURCE_FILES)
+) == 5
+
+
+COLD_READY_VALIDATE_COMPLETION_MUTATIONS = (
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "pub(super) fn project_recovered_durable_validate_retry_census(",
+        "if !completion.validates(work.digest) {",
+        "if false && !completion.validates(work.digest) {",
+        "first census pass must authenticate a completion digest",
+        "project_recovered_durable_validate_retry_census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "pub(super) fn project_recovered_durable_validate_retry_census(",
+        "completion.matches_recovered_record(",
+        "completion.incumbent.matches_recovered_record(",
+        "owner pass must bridge the completion outcome and digest",
+        "project_recovered_durable_validate_retry_census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "pub(super) fn project_recovered_durable_validate_retry_census(",
+        "|| !carrier_matches_record",
+        "|| false",
+        "census must reject either a body or completion carrier",
+        "project_recovered_durable_validate_retry_census",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(in crate::sumeragi) fn release_live_lifecycle_validate_successor(",
+        "if !ordinal_matches && !key_matches {",
+        "if !ordinal_matches || !key_matches {",
+        "wholly unrelated terminal row must restore the selected owner and stutter",
+        "release_live_lifecycle_validate_successor",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(in crate::sumeragi) fn release_live_lifecycle_validate_successor(",
+        "if ordinal_matches != key_matches {",
+        "if false {",
+        "partial key/ordinal collision must restore the owner and fail closed",
+        "release_live_lifecycle_validate_successor",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(in crate::sumeragi) fn release_live_lifecycle_validate_successor(",
+        "        Ok(true)\n    }",
+        "        self.live_lifecycle_validate_successor = Some(owner);\n        Ok(true)\n    }",
+        "exactly the three non-consuming collision paths",
+        "release_live_lifecycle_validate_successor",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs",
+        "pub(in crate::sumeragi) fn bind_authenticated_manifest(",
+        "completion.incumbent.expected_manifest_hash == HashOf::new(manifest)",
+        "true",
+        "manifest binding must authenticate the completion, receipt, hash, body key, and optional local origin",
+        "bind_authenticated_manifest",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(in crate::sumeragi) fn prepare_ready_durable_validate_adapter_preview<'registry>(",
+        "|| !execution.bind_authenticated_manifest(&authenticated_manifest, &durable_receipt)",
+        "|| false",
+        "join both body catalogs, and bind their manifest before consuming validated authority",
+        "prepare_ready_durable_validate_adapter_preview",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "fn stage_direct_validation_registry(",
+        "|| durable_receipt.manifest_hash() != HashOf::new(manifest)",
+        "|| false",
+        "register only an exact body-key and hash authenticated manifest",
+        "stage_direct_validation_registry",
+    ),
+)
+assert len(COLD_READY_VALIDATE_COMPLETION_MUTATIONS) == len(
+    set(COLD_READY_VALIDATE_COMPLETION_MUTATIONS)
+) == 9
+
+
+@pytest.mark.parametrize(
+    (
+        "relative_path",
+        "region_marker",
+        "old",
+        "new",
+        "error_fragment",
+        "item_name",
+    ),
+    COLD_READY_VALIDATE_COMPLETION_MUTATIONS,
+)
+def test_cold_ready_validate_completion_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    region_marker: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+    item_name: str,
+) -> None:
+    module = load_checker()
+    for source_name in COLD_READY_VALIDATE_COMPLETION_SOURCE_FILES:
+        destination = tmp_path / source_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / source_name, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+
+    baseline_errors = (
+        module._cold_ready_validate_completion_source_fidelity_errors(tmp_path)
+    )
+    assert baseline_errors == [], baseline_errors
+
+    path = tmp_path / relative_path
+    source = path.read_text(encoding="utf-8")
+    region_start = source.find(region_marker)
+    assert region_start >= 0
+    mutation = source.find(old, region_start)
+    assert mutation >= 0
+    path.write_text(
+        source[:mutation] + new + source[mutation + len(old) :],
+        encoding="utf-8",
+    )
+    expected_context = {
+        "project_recovered_durable_validate_retry_census": (
+            ("impl", "ConcreteLifecycleWorkRegistry"),
+        ),
+        "release_live_lifecycle_validate_successor": (
+            ("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),
+        ),
+        "bind_authenticated_manifest": (
+            (
+                "impl",
+                "<",
+                "'",
+                "registry",
+                ">",
+                "PreparedReadyDurableValidateExecution",
+                "<",
+                "'",
+                "registry",
+                ">",
+            ),
+        ),
+        "prepare_ready_durable_validate_adapter_preview": (
+            ("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),
+        ),
+        "stage_direct_validation_registry": (("impl", "SumeragiV2Adapter"),),
+    }[item_name]
+    mutated_items = [
+        item
+        for item in module.rust_items(path.read_text(encoding="utf-8"), item_name)
+        if item.brace_context == expected_context
+    ]
+    assert len(mutated_items) == 1, (relative_path, item_name)
+    module._COLD_READY_VALIDATE_CENSUS_RUST_ITEM_SHA256[item_name] = (
+        module._rust_item_token_sha256(mutated_items[0])
+    )
+
+    errors = module._cold_ready_validate_completion_source_fidelity_errors(tmp_path)
     assert any(error_fragment in error for error in errors), errors
 
 

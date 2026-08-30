@@ -434,6 +434,9 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     fn take_scheduler_ownership(&mut self) -> Result<(), String> {
         Ok(())
     }
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        false
+    }
     fn authoritative_tag(&self) -> Option<EventTag> {
         None
     }

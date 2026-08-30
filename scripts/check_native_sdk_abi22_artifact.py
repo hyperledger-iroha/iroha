@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -31,7 +32,23 @@ from typing import NoReturn
 if __package__:
     from .compute_workspace_source_manifest import workspace_source_manifest
 else:
-    from compute_workspace_source_manifest import workspace_source_manifest
+    # CI deliberately invokes this checker with ``python -I -S``.  Isolated
+    # mode removes the script directory from ``sys.path``, so bind the one
+    # required sibling by its exact path instead of weakening isolation.
+    _manifest_helper_path = Path(__file__).resolve(strict=True).with_name(
+        "compute_workspace_source_manifest.py"
+    )
+    _manifest_helper_spec = importlib.util.spec_from_file_location(
+        "_iroha_compute_workspace_source_manifest",
+        _manifest_helper_path,
+    )
+    if _manifest_helper_spec is None or _manifest_helper_spec.loader is None:
+        raise ImportError(
+            f"unable to load workspace source manifest helper at {_manifest_helper_path}"
+        )
+    _manifest_helper = importlib.util.module_from_spec(_manifest_helper_spec)
+    _manifest_helper_spec.loader.exec_module(_manifest_helper)
+    workspace_source_manifest = _manifest_helper.workspace_source_manifest
 
 
 SCHEMA = "iroha.native-sdk-abi22-artifact.v1"
@@ -84,6 +101,17 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_offline_cash_artifact_cancel_v1",
         "connect_norito_offline_cash_artifact_set_install_v1",
         "connect_norito_offline_cash_artifact_set_uninstall_v1",
+        "connect_norito_offline_cash_verification_session_open_v1",
+        "connect_norito_offline_cash_verification_session_open_bound_v1",
+        "connect_norito_offline_cash_verification_session_verify_payment_v1",
+        "connect_norito_offline_cash_verification_session_verify_acknowledgement_v1",
+        "connect_norito_offline_cash_verification_session_state_v1",
+        "connect_norito_offline_cash_verification_session_close_v1",
+        "connect_norito_offline_cash_wallet_runtime_session_open_v1",
+        "connect_norito_offline_cash_wallet_runtime_session_status_v1",
+        "connect_norito_offline_cash_wallet_runtime_session_attempt_v1",
+        "connect_norito_offline_cash_wallet_runtime_session_close_v1",
+        # Deprecated ABI22 verifier-only aliases remain required for compatibility.
         "connect_norito_offline_cash_wallet_session_open_v1",
         "connect_norito_offline_cash_wallet_session_open_bound_v1",
         "connect_norito_offline_cash_wallet_session_accept_payment_v1",
@@ -101,7 +129,19 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativePeerEncodeAcknowledgementV1",
         "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativePeerDecodeAcknowledgementV1",
         "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeReleaseProbeV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionOpenV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionOpenBoundV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyPaymentV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionVerifyAcknowledgementV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionStateV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeVerificationSessionCloseV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionOpenV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionStatusV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionAttemptV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletRuntimeSessionCloseV1",
+        # Deprecated ABI22 verifier-only JNI aliases remain required for compatibility.
         "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionOpenV1",
+        "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionOpenBoundV1",
         "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionAcceptPaymentV1",
         "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionAcceptAcknowledgementV1",
         "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionStateV1",

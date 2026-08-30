@@ -4,6 +4,7 @@ use crate::{
     genesis::{
         GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
         profile_requires_npos, profile_uses_public_xor, resolve_vrf_seed,
+        validate_taira_digital_kina_base_prerequisite,
     },
     genesis::{PUBLIC_XOR_ALIAS, TAIRA_XOR_ASSET_DEFINITION_ID},
     tui,
@@ -98,6 +99,9 @@ fn verify_manifest(
     }
     if wants_npos && profile_uses_public_xor(profile) {
         enforce_public_xor_binding(manifest, profile)?;
+        if profile == GenesisProfile::Iroha3Taira {
+            validate_taira_digital_kina_base_prerequisite(manifest)?;
+        }
     }
     let seed_hex = if wants_npos {
         let npos_params = resolve_npos_params(&params)?;
@@ -330,7 +334,8 @@ mod tests {
         isi::asset_alias::SetAssetDefinitionAlias,
         parameter::system::SumeragiConsensusMode,
         prelude::{
-            AssetDefinition, ChainId, DomainId, Metadata, NumericSpec, PeerId, PublicKey, Register,
+            AssetDefinition, ChainId, Domain, DomainId, Metadata, NumericSpec, PeerId, PublicKey,
+            Register,
         },
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
@@ -356,9 +361,12 @@ mod tests {
         let consensus_mode = manifest.consensus_mode();
         let chain_discriminant = manifest.chain_discriminant();
         let alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse().expect("valid alias");
+        let domain = DomainId::parse_fully_qualified(crate::genesis::profile::PUBLIC_XOR_DOMAIN)
+            .expect("valid public XOR domain");
         manifest
             .into_builder()
             .next_transaction()
+            .append_instruction(Register::domain(Domain::new(domain)))
             .append_instruction(Register::asset_definition(
                 AssetDefinition::new(
                     asset_definition_id.clone(),
@@ -374,6 +382,22 @@ mod tests {
                 alias,
                 None,
             ))
+            .build_raw()
+            .with_consensus_mode(consensus_mode)
+            .with_chain_discriminant(chain_discriminant)
+    }
+    fn append_taira_digital_kina_base_prerequisite_for_test(
+        manifest: RawGenesisTransaction,
+    ) -> RawGenesisTransaction {
+        let consensus_mode = manifest.consensus_mode();
+        let chain_discriminant = manifest.chain_discriminant();
+        let domain =
+            DomainId::parse_fully_qualified(crate::genesis::profile::TAIRA_DIGITAL_KINA_DOMAIN)
+                .expect("valid Digital Kina domain");
+        manifest
+            .into_builder()
+            .next_transaction()
+            .append_instruction(Register::domain(Domain::new(domain)))
             .build_raw()
             .with_consensus_mode(consensus_mode)
             .with_chain_discriminant(chain_discriminant)
@@ -401,6 +425,11 @@ mod tests {
                 manifest,
                 test_public_xor_asset_definition_id(profile),
             )
+        } else {
+            manifest
+        };
+        let manifest = if profile == GenesisProfile::Iroha3Taira {
+            append_taira_digital_kina_base_prerequisite_for_test(manifest)
         } else {
             manifest
         };

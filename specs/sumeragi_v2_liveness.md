@@ -2232,24 +2232,54 @@ invocation passes those protected paths and digests explicitly, for example:
   --expected-runtime-helper-sha256 <sha256> \
   --runtime-helper-cli /protected/copy_sumeragi_v2_release_cargo_cache_cli.py \
   --expected-runtime-helper-cli-sha256 <sha256> \
+  --tool-probe-helper /protected/probe_sumeragi_v2_release_tool_closure.py \
+  --expected-tool-probe-helper-sha256 <sha256> \
+  --approval-contract /protected/sumeragi_v2_release_approval_contract.py \
+  --expected-approval-contract-sha256 <sha256> \
+  --offline-toolchain-sdk-approval \
+    /protected/offline-toolchain-sdk.approval.v1.json \
+  --formal-proof-tools-approval \
+    /protected/formal-proof-tools.approval.v1.json \
+  --network-scale-soak-approval \
+    /protected/network-scale-soak.approval.v1.json \
+  --final-bootstrap-publication-approval \
+    /protected/final-bootstrap-publication.approval.v1.json \
+  --approval-evidence-root-id <stable-evidence-root-id> \
+  --offline-toolchain-sdk-duration-seconds 900 \
+  --formal-proof-tools-duration-seconds 901 \
+  --network-scale-soak-duration-seconds 902 \
+  --final-bootstrap-publication-duration-seconds 903 \
+  --sdk-dependency-bundle-manifest \
+    /protected/sdk-dependency-bundle-manifest.json \
+  --expected-sdk-dependency-bundle-manifest-sha256 <sha256> \
   --runner-tool-manifest /protected/runner-tools.json \
   --expected-runner-tool-manifest-sha256 <sha256> \
   --bash-bin /protected/bash --expected-bash-sha256 <sha256> \
-  --runner-environment \
-    IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST=/authenticated/scaling/scaling_evidence.json \
-  --runner-environment IROHA_RELEASE_TLA2TOOLS_JAR=/authenticated/tla2tools.jar \
-  --runner-environment IROHA_RELEASE_APALACHE_BIN=/authenticated/apalache/bin/apalache-mc \
-  --runner-environment \
-    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256=<sha256> \
-  --runner-environment \
-    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256=<sha256> \
-  --runner-environment IROHA_RELEASE_SCALING_IROHAD_SHA256=<sha256> \
-  --runner-environment IROHA_RELEASE_SCALING_IROHA_CLI_SHA256=<sha256> \
   --expected-signer-fingerprint SHA256:<fingerprint> \
   --ssh-allowed-signers /protected/allowed_signers \
   --expected-ssh-allowed-signers-sha256 <sha256> \
   --ssh-revocation-file /protected/revocation \
-  --expected-ssh-revocation-sha256 <sha256>
+  --expected-ssh-revocation-sha256 <sha256> \
+  --runner-environment \
+    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256=<sha256> \
+  --runner-environment \
+    IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST=/authenticated/scaling/scaling_evidence.json \
+  --runner-environment IROHA_RELEASE_SCALING_IROHAD_SHA256=<sha256> \
+  --runner-environment IROHA_RELEASE_SCALING_IROHA_CLI_SHA256=<sha256> \
+  --runner-environment \
+    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256=<sha256> \
+  --runner-environment IROHA_RELEASE_TLA2TOOLS_JAR=/authenticated/tla2tools.jar \
+  --runner-environment \
+    IROHA_RELEASE_APALACHE_BIN=/authenticated/apalache/bin/apalache-mc \
+  --runner-environment \
+    IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT=/authenticated/formal-replay/source/receipt.json \
+  --runner-environment \
+    IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT=/authenticated/formal-replay/finalized/release \
+  --runner-environment \
+    IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256=<sha256> \
+  --runner-environment \
+    IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL=<principal> \
+  --command-timeout-seconds 1800
 ```
 
 The first-release policy accepts exactly one active SSH allowed-signers line

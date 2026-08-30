@@ -105,21 +105,26 @@ public sealed class VerifyingKeyBackendTagTests
     }
 
     [Theory]
-    [InlineData("halo2/ipa")]
-    [InlineData("halo2/pasta/kaigi-roster-v1")]
-    [InlineData("halo2/pasta/kaigi-usage-v1")]
-    [InlineData("halo2/pasta/ivm-execution-v1")]
-    [InlineData("halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3")]
-    [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
-    [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3")]
-    [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4")]
-    [InlineData("stark/fri")]
-    [InlineData("stark/fri/sha256-goldilocks")]
-    [InlineData("stark/fri/poseidon2-goldilocks")]
-    [InlineData("stark/fri/sha256_goldilocks.v1")]
-    public void VerifierRegistryAcceptsOnlyPinnedProfiles(string label)
+    [InlineData("halo2/ipa", VerifyingKeyBackendTag.Halo2IpaPasta)]
+    [InlineData("halo2/pasta/kaigi-roster-v1", VerifyingKeyBackendTag.Halo2IpaPasta)]
+    [InlineData("halo2/pasta/kaigi-usage-v1", VerifyingKeyBackendTag.Halo2IpaPasta)]
+    [InlineData("halo2/pasta/ivm-execution-v1", VerifyingKeyBackendTag.Halo2IpaPasta)]
+    [InlineData("halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3", VerifyingKeyBackendTag.Halo2IpaPasta)]
+    [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3", VerifyingKeyBackendTag.Halo2IpaPasta)]
+    [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3", VerifyingKeyBackendTag.Halo2IpaPasta)]
+    [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4", VerifyingKeyBackendTag.Halo2IpaPasta)]
+    [InlineData("stark/fri", VerifyingKeyBackendTag.Stark)]
+    [InlineData("stark/fri/sha256-goldilocks", VerifyingKeyBackendTag.Stark)]
+    [InlineData("stark/fri/poseidon2-goldilocks", VerifyingKeyBackendTag.Stark)]
+    [InlineData("stark/fri/sha256_goldilocks.v1", VerifyingKeyBackendTag.Stark)]
+    public void VerifierRegistryAcceptsOnlyPinnedProfiles(
+        string label,
+        VerifyingKeyBackendTag expectedTag)
     {
         Assert.True(VerifierBackendRegistryLabels.IsSupportedLabel(label));
+        Assert.True(VerifierBackendRegistryLabels.TryGetBackendTag(label, out var backendTag));
+        Assert.Equal(expectedTag, backendTag);
+        Assert.Equal(expectedTag, VerifierBackendRegistryLabels.RequireBackendTag(label));
         Assert.Equal(label, VerifierBackendRegistryLabels.RequireSupportedLabel(label));
     }
 
@@ -128,11 +133,17 @@ public sealed class VerifyingKeyBackendTagTests
     public void VerifierRegistryRejectsAliasesAndRetiredProfiles(string? label)
     {
         Assert.False(VerifierBackendRegistryLabels.IsSupportedLabel(label));
+        Assert.False(VerifierBackendRegistryLabels.TryGetBackendTag(label, out _));
         var error = Assert.Throws<ArgumentException>(
             () => VerifierBackendRegistryLabels.RequireSupportedLabel(
                 label,
                 "registryBackend"));
         Assert.Equal("registryBackend", error.ParamName);
+        var tagError = Assert.Throws<ArgumentException>(
+            () => VerifierBackendRegistryLabels.RequireBackendTag(
+                label,
+                "registryBackend"));
+        Assert.Equal("registryBackend", tagError.ParamName);
     }
 
     public static IEnumerable<object?[]> UnsupportedRegistryLabels()

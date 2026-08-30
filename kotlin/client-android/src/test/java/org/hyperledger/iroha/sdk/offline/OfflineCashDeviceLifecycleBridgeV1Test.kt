@@ -24,6 +24,25 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
     }
 
     @Test
+    fun `production cannot be enabled by optional symbols or structural capabilities`() {
+        val bridge = OfflineCashDeviceLifecycleBridgeV1.production()
+        assertEquals(OfflineCashDeviceLifecycleBridgeV1.Availability.ONLINE_ONLY, bridge.availability)
+        assertEquals(null, bridge.capabilities())
+
+        val source = sourceText()
+        val production = source.substringAfter(
+            "fun production(): OfflineCashDeviceLifecycleBridgeV1",
+        ).substringBefore("/** Explicit online-only instance")
+        assertTrue(production.contains("= onlineOnly()"))
+        assertFalse(production.contains("capabilities"))
+        assertFalse(source.contains("NativeEndpoint"))
+        assertFalse(source.contains("nativeCapabilitiesV1"))
+        assertFalse(source.contains("nativeExecuteV1"))
+        assertFalse(source.contains("System.loadLibrary"))
+        assertTrue(source.contains("internal fun withEndpointForTests("))
+    }
+
+    @Test
     fun `exact capabilities unlock all journal and outbox operations`() {
         assertEquals(14, OfflineCashDeviceLifecycleBridgeV1.OPERATION_COUNT)
         assertEquals(96, OfflineCashDeviceLifecycleBridgeV1.CAPABILITY_FRAME_BYTES)
@@ -134,23 +153,7 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
 
     @Test
     fun `response decoder transfers one owned result and retains no frame copy`() {
-        val source =
-            generateSequence(File(".").canonicalFile) { it.parentFile }
-                .flatMap { root ->
-                    sequenceOf(
-                        File(
-                            root,
-                            "src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashDeviceLifecycleBridgeV1.kt",
-                        ),
-                        File(
-                            root,
-                            "kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashDeviceLifecycleBridgeV1.kt",
-                        ),
-                    )
-                }
-                .firstOrNull(File::isFile)
-                ?.readText(Charsets.UTF_8)
-                ?: error("cannot locate OfflineCashDeviceLifecycleBridgeV1.kt")
+        val source = sourceText()
         assertTrue(source.contains("ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)"))
         assertFalse(source.contains("ByteBuffer.wrap(bytes.copyOf())"))
         assertTrue(source.contains("if (!transferred)"))
@@ -190,6 +193,24 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
     }
 
     companion object {
+        private fun sourceText(): String =
+            generateSequence(File(".").canonicalFile) { it.parentFile }
+                .flatMap { root ->
+                    sequenceOf(
+                        File(
+                            root,
+                            "src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashDeviceLifecycleBridgeV1.kt",
+                        ),
+                        File(
+                            root,
+                            "kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashDeviceLifecycleBridgeV1.kt",
+                        ),
+                    )
+                }
+                .firstOrNull(File::isFile)
+                ?.readText(Charsets.UTF_8)
+                ?: error("cannot locate OfflineCashDeviceLifecycleBridgeV1.kt")
+
         private fun fixed(value: Int, count: Int): ByteArray = ByteArray(count) { value.toByte() }
 
         private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it.toInt() and 0xff) }

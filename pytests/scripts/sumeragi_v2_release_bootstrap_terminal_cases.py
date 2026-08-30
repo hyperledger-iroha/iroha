@@ -21,15 +21,63 @@ def test_release_runner_has_no_outer_timeout_or_output_capture(
         _runner(release_fixture.launch_count, release_fixture.candidate, "slow-success"),
     )
     arguments = _replace_flag(
-        release_fixture.arguments(), "--command-timeout-seconds", "20"
+        release_fixture.arguments(),
+        "--command-timeout-seconds",
+        str(FIXTURE_COMMAND_TIMEOUT_SECONDS),
     )
     started = time.monotonic()
-    result = release_fixture.run(arguments, timeout_seconds=90)
+    result = release_fixture.run(
+        arguments,
+        timeout_seconds=FIXTURE_PROCESS_TIMEOUT_SECONDS,
+    )
 
     assert result.returncode == 0, result.stderr
     assert time.monotonic() - started >= 20.5
-    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert release_fixture.launch_count.is_file(), (
+        result,
+        sorted(path.name for path in release_fixture.root.iterdir()),
+    )
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n", result
     assert (release_fixture.evidence / "BOOTSTRAP_RELEASE_COMPLETED.json").is_file()
+
+    orphan_sentinel = release_fixture.root / "timed-out-descendant-survived"
+    descendant = (
+        "import time; from pathlib import Path; time.sleep(0.4); "
+        f"Path({str(orphan_sentinel)!r}).write_text('orphaned', encoding='utf-8')"
+    )
+    parent = (
+        "import subprocess, time; "
+        f"subprocess.Popen([{str(PYTHON)!r}, '-I', '-S', '-c', {descendant!r}]); "
+        "time.sleep(5)"
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        release_fixture.run(
+            [str(PYTHON), "-I", "-S", "-c", parent],
+            timeout_seconds=0.1,
+        )
+    time.sleep(0.6)
+    assert not orphan_sentinel.exists()
+
+    returned_orphan_sentinel = (
+        release_fixture.root / "returned-descendant-survived"
+    )
+    returned_descendant = (
+        "import time; from pathlib import Path; time.sleep(0.4); "
+        f"Path({str(returned_orphan_sentinel)!r}).write_text("
+        "'orphaned', encoding='utf-8')"
+    )
+    returned_parent = (
+        "import subprocess; "
+        f"subprocess.Popen([{str(PYTHON)!r}, '-I', '-S', '-c', "
+        f"{returned_descendant!r}], stdin=subprocess.DEVNULL, "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
+    )
+    returned = release_fixture.run(
+        [str(PYTHON), "-I", "-S", "-c", returned_parent]
+    )
+    assert returned.returncode == 0, returned
+    time.sleep(0.6)
+    assert not returned_orphan_sentinel.exists()
 
 
 def test_blocked_bootstrap_diagnostics_cannot_backpressure_runner_output(
@@ -51,14 +99,67 @@ def test_blocked_bootstrap_diagnostics_cannot_backpressure_runner_output(
         stderr=subprocess.PIPE,
         text=False,
         env={"PATH": os.environ.get("PATH", "")},
+        start_new_session=True,
     )
-    _wait_for(completed, timeout=60)
-    expected_size = int(completed.read_text(encoding="utf-8"))
-    assert (release_fixture.evidence / "runner-stdout.log").stat().st_size >= expected_size
-    assert (release_fixture.evidence / "runner-stderr.log").stat().st_size >= expected_size
-    stdout, stderr = process.communicate(timeout=30)
-    assert process.returncode == 37, stderr.decode("utf-8", "replace")
-    assert stdout == b""
+    try:
+        # Authentication and protected-runtime preparation can legitimately
+        # exceed 60 seconds on a cold or contended host.  Backpressure is only
+        # possible after the authenticated runner starts, so wait for that
+        # phase boundary using the fixture's finite process budget before
+        # applying the strict writer-completion deadline.
+        launch_deadline = time.monotonic() + FIXTURE_PROCESS_TIMEOUT_SECONDS
+        while time.monotonic() < launch_deadline:
+            if release_fixture.launch_count.exists():
+                break
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise AssertionError(
+                    "bootstrap exited before the continuous writer launched: "
+                    f"returncode={process.returncode}; "
+                    f"stdout={stdout.decode('utf-8', 'replace')!r}; "
+                    f"stderr={stderr.decode('utf-8', 'replace')!r}"
+                )
+            time.sleep(0.02)
+        else:
+            raise AssertionError(
+                f"timed out waiting for {release_fixture.launch_count}"
+            )
+
+        completion_deadline = time.monotonic() + 60
+        while time.monotonic() < completion_deadline:
+            if completed.exists():
+                break
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise AssertionError(
+                    "bootstrap exited before the continuous writer completed: "
+                    f"returncode={process.returncode}; "
+                    f"stdout={stdout.decode('utf-8', 'replace')!r}; "
+                    f"stderr={stderr.decode('utf-8', 'replace')!r}"
+                )
+            time.sleep(0.02)
+        else:
+            raise AssertionError(f"timed out waiting for {completed}")
+
+        expected_size = int(completed.read_text(encoding="utf-8"))
+        assert (
+            release_fixture.evidence / "runner-stdout.log"
+        ).stat().st_size >= expected_size
+        assert (
+            release_fixture.evidence / "runner-stderr.log"
+        ).stat().st_size >= expected_size
+        stdout, stderr = process.communicate(timeout=30)
+        assert process.returncode == 37, stderr.decode("utf-8", "replace")
+        assert stdout == b""
+    finally:
+        # The bootstrap and its authenticated runner share this test-private
+        # process group. Reap both if an assertion fires before communicate().
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if process.poll() is None:
+            process.communicate()
 
 
 @pytest.mark.parametrize(
@@ -92,11 +193,11 @@ def test_success_status_without_exact_authenticated_receipt_fails_closed(
     if action in {"receipt-hardlink", "receipt-symlink", "receipt-wrong-path"}:
         # The failure publisher refuses to traverse or delete the hostile
         # receipt, but must reclaim the exact owner-private invocation root.
-        assert result.returncode == 1, result.stderr
+        assert result.returncode == 1, result
         assert not release_fixture.retained_root.exists()
         assert not release_fixture.evidence.exists()
     elif action in {"receipt-tamper", "receipt-wrong-mode"}:
-        assert result.returncode == 2, result.stderr
+        assert result.returncode == 2, result
         assert release_fixture.evidence.is_dir()
         assert {path.name for path in release_fixture.evidence.iterdir()} == {
             "RECEIPT_VALIDATION_FAILED.json",
@@ -105,7 +206,7 @@ def test_success_status_without_exact_authenticated_receipt_fails_closed(
         }
         assert not release_fixture.retained_root.exists()
     else:
-        assert result.returncode == 2, result.stderr
+        assert result.returncode == 2, result
         assert not release_fixture.evidence.exists()
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
 
@@ -321,8 +422,12 @@ def test_terminal_receipt_extended_artifact_mutations_fail_closed(
             '["g12_cross_dataspace"]["fault_soak_completion"]["path"]',
         )
     )
-    assert result.returncode == (1 if seal_time_path_mutation else 2), result.stderr
-    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert result.returncode == (1 if seal_time_path_mutation else 2), result
+    assert release_fixture.launch_count.is_file(), (
+        result,
+        sorted(path.name for path in release_fixture.root.iterdir()),
+    )
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n", result
     assert not release_fixture.evidence.exists()
     if seal_time_path_mutation:
         assert release_fixture.retained_root.is_dir()
@@ -711,6 +816,9 @@ def test_post_launch_sdk_source_manifest_archive_drift_fails_closed(
     )
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
     assert not release_fixture.evidence.exists()
+    _assert_authenticated_sdk_source_manifest_pruning_is_exact(
+        release_fixture.root
+    )
 
 
 def test_runner_failure_status_is_preserved_exactly(release_fixture: Fixture) -> None:
@@ -814,7 +922,7 @@ def test_bootstrap_protected_validation_accepts_real_terminal_receipt(
     _rebind_bootstrap_trusted_input(
         evidence,
         label="python",
-        source=PYTHON,
+        source=release_fixture.python,
         archive_name="python3",
         archive_mode=0o500,
     )
@@ -1014,7 +1122,7 @@ def test_full_bootstrap_succeeds_with_real_terminal_receipt_validator(
     _rebind_bootstrap_trusted_input(
         evidence,
         label="python",
-        source=PYTHON,
+        source=release_fixture.python,
         archive_name="python3",
         archive_mode=0o500,
     )
@@ -1203,6 +1311,10 @@ receipt_arguments=( \
     --expected-signer-fingerprint "$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
     --corridor-completion {evidence_path("corridor_completion")} \
     --formal-completion {evidence_path("formal_completion")} \
+    --formal-replay-source-receipt "$IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT" \
+    --formal-replay-release-root "$IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT" \
+    --expected-formal-replay-signature-sha256 "$IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256" \
+    --formal-replay-principal "$IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL" \
     --seed-completion {evidence_path("seed_completion")} \
     --chaos-completion {evidence_path("chaos_completion")} \
     --g4p-completion {evidence_path("g4p_completion")} \
@@ -1247,6 +1359,26 @@ python3 -I -S "$IROHA_RELEASE_RUNTIME_HELPER" \
 '''
     release_fixture.install_planned_runner(runner)
 
+    formal_replay_source = evidence["formal_replay_source_receipt"]
+    formal_replay_root = evidence["formal_replay_release_root"]
+    formal_replay_signature_sha256 = evidence[
+        "expected_formal_replay_signature_sha256"
+    ]
+    formal_replay_principal = evidence["formal_replay_principal"]
+    signer_fingerprint = evidence["expected_signer_fingerprint"]
+    assert isinstance(formal_replay_source, Path)
+    assert isinstance(formal_replay_root, Path)
+    assert isinstance(formal_replay_signature_sha256, str)
+    assert isinstance(formal_replay_principal, str)
+    assert isinstance(signer_fingerprint, str)
+    release_fixture.formal_replay_source_receipt = formal_replay_source
+    release_fixture.formal_replay_release_root = formal_replay_root
+    release_fixture.formal_replay_signature_sha256 = (
+        formal_replay_signature_sha256
+    )
+    release_fixture.formal_replay_principal = formal_replay_principal
+    release_fixture.signer_fingerprint = signer_fingerprint
+
     scaling_environment = {
         SCALING_EVIDENCE_ENV: str(scaling_manifest),
         "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": str(
@@ -1265,7 +1397,11 @@ python3 -I -S "$IROHA_RELEASE_RUNTIME_HELPER" \
     arguments = release_fixture.arguments()
     for name, value in scaling_environment.items():
         arguments = _replace_runner_environment(arguments, name, value)
-    arguments = _replace_flag(arguments, "--command-timeout-seconds", "20")
+    arguments = _replace_flag(
+        arguments,
+        "--command-timeout-seconds",
+        str(FIXTURE_COMMAND_TIMEOUT_SECONDS),
+    )
 
     result = release_fixture.run(arguments)
 
@@ -1405,7 +1541,11 @@ def test_protected_receipt_validator_extended_value_source_mutations_fail_closed
     arguments = _replace_flag(
         arguments, "--expected-bootstrap-sha256", _sha256(mutated)
     )
-    arguments = _replace_flag(arguments, "--command-timeout-seconds", "20")
+    arguments = _replace_flag(
+        arguments,
+        "--command-timeout-seconds",
+        str(FIXTURE_COMMAND_TIMEOUT_SECONDS),
+    )
 
     result = release_fixture.run(arguments)
 
@@ -1414,6 +1554,103 @@ def test_protected_receipt_validator_extended_value_source_mutations_fail_closed
     assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
     assert "receipt validator normalized option value is not exact" in result.stderr
     assert not release_fixture.evidence.exists()
+
+
+def test_terminal_scaling_preflight_rejects_injected_path_before_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_bootstrap_module()
+    scaling_root = tmp_path / "scaling"
+    scaling_root.mkdir()
+    manifest = _write(
+        scaling_root / "scaling_evidence.json",
+        b'{"schema_version":1}\n',
+        0o400,
+    )
+    payload = tmp_path / "candidate" / "payload"
+    payload.parent.mkdir()
+    os.mkfifo(payload, 0o600)
+    metadata = manifest.stat()
+    record = {
+        "archive_id": "release-scaling.file.v1:scaling_evidence.json",
+        "relative_path": "scaling_evidence.json",
+        "sha256": _sha256(manifest),
+        "size_bytes": metadata.st_size,
+        "mode": "0400",
+        "path": str(payload),
+    }
+    receipt_evidence = {
+        "multilane_scaling_bundle": {
+            "archive_id": "release-scaling.bundle.v1",
+            "file_count": 1,
+            "total_size_bytes": metadata.st_size,
+            "directories": [],
+            "files": [record],
+        }
+    }
+    stat_calls: list[object] = []
+
+    def unexpected_stat(*args: object, **kwargs: object) -> object:
+        stat_calls.append((args, kwargs))
+        raise AssertionError("malformed scaling record reached filesystem validation")
+
+    monkeypatch.setattr(
+        module,
+        "os",
+        types.SimpleNamespace(path=os.path, stat=unexpected_stat),
+    )
+    with pytest.raises(module.BootstrapError, match="scaling file 0.*schema"):
+        module._preflight_terminal_scaling_bundle(
+            receipt_evidence=receipt_evidence,
+            authenticated_environment={
+                "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST": str(manifest)
+            },
+        )
+    assert stat_calls == []
+
+
+def test_terminal_scaling_preflight_rejects_fifo_without_opening(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_bootstrap_module()
+    scaling_root = tmp_path / "scaling"
+    scaling_root.mkdir()
+    manifest = scaling_root / "scaling_evidence.json"
+    os.mkfifo(manifest, 0o400)
+    receipt_evidence = {
+        "multilane_scaling_bundle": {
+            "archive_id": "release-scaling.bundle.v1",
+            "file_count": 1,
+            "total_size_bytes": 0,
+            "directories": [],
+            "files": [
+                {
+                    "archive_id": (
+                        "release-scaling.file.v1:scaling_evidence.json"
+                    ),
+                    "relative_path": "scaling_evidence.json",
+                    "sha256": "0" * 64,
+                    "size_bytes": 0,
+                    "mode": "0400",
+                }
+            ],
+        }
+    }
+
+    def unexpected_capture(*args: object, **kwargs: object) -> object:
+        raise AssertionError("scaling FIFO reached artifact capture")
+
+    monkeypatch.setattr(module, "_capture_large_file", unexpected_capture)
+    with pytest.raises(
+        module.BootstrapError,
+        match="terminal scaling file 0 must be a regular non-symlink file",
+    ):
+        module._preflight_terminal_scaling_bundle(
+            receipt_evidence=receipt_evidence,
+            authenticated_environment={
+                "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST": str(manifest)
+            },
+        )
 
 
 @pytest.mark.parametrize(
@@ -1525,7 +1762,8 @@ def test_legacy_runner_path_entry_never_launches(
 def test_runner_tool_manifest_digest_mismatch_never_launches(
     release_fixture: Fixture,
 ) -> None:
-    manifest = json.loads(release_fixture.tool_manifest.read_text(encoding="utf-8"))
+    protected_manifest = release_fixture.tool_manifest.read_bytes()
+    manifest = json.loads(protected_manifest)
     manifest["tools"]["chmod"]["sha256"] = "0" * 64
     _write(
         release_fixture.tool_manifest,
@@ -1537,6 +1775,21 @@ def test_runner_tool_manifest_digest_mismatch_never_launches(
 
     _assert_never_launched(release_fixture, result)
     assert "protected sha-256" in result.stderr.lower()
+
+    _write(release_fixture.tool_manifest, protected_manifest, 0o400)
+    release_fixture.install_planned_runner(
+        _runner(
+            release_fixture.launch_count,
+            release_fixture.candidate,
+            "unlisted-command",
+        ),
+    )
+
+    result = release_fixture.run()
+
+    assert result.returncode == 127
+    assert release_fixture.launch_count.read_text(encoding="utf-8") == "1\n"
+    assert not release_fixture.evidence.exists()
 
 
 def test_runner_tool_manifest_rejects_writable_source_ancestor(

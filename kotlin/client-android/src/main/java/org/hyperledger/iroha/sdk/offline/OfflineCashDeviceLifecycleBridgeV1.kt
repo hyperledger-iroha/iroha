@@ -9,9 +9,10 @@ import java.security.MessageDigest
  *
  * Android KeyMint single-use signing keys do not provide the atomic journal, trusted clock,
  * exact-next counter, or authenticated payment outbox required by Offline Cash V1. This bridge
- * therefore becomes available only when the loaded native bridge exposes the complete hardware
- * capability frame. Missing symbols, partial capabilities, malformed replies, and every native
- * failure leave the wallet online-only. There is no software backend or downgrade path.
+ * therefore remains unavailable in production until a separately reviewed compile-time backend
+ * gate joins the complete device contract. Merely exporting optional JNI symbols or a structural
+ * 96-byte capability frame can never enable funds. The endpoint constructor remains test-only;
+ * there is no AndroidKeyStore, dynamic-symbol, software-backend, or downgrade path.
  */
 class OfflineCashDeviceLifecycleBridgeV1 private constructor(
     private val endpoint: Endpoint?,
@@ -150,7 +151,6 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
         const val MAXIMUM_RESPONSE_PAYLOAD_BYTES: Int = 64 * 1024
         const val MAXIMUM_AUTHENTICATOR_BYTES: Int = 8 * 1024
 
-        private const val LIBRARY_NAME = "connect_norito_bridge"
         private const val ANDROID_PLATFORM_CODE = 1
         private const val FEATURE_ONE_INTENT_SLOT = 1 shl 0
         private const val FEATURE_EXACT_NEXT_COUNTER = 1 shl 1
@@ -174,15 +174,9 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
         private const val ONLINE_ONLY_MESSAGE =
             "Offline Cash V1 requires a rollback-resistant secure journal/outbox backend; this device remains online-only"
 
-        /** Discover the optional native secure backend without permitting a software fallback. */
+        /** Production is hard-disabled until a reviewed compile-time secure-backend gate exists. */
         @JvmStatic
-        fun production(): OfflineCashDeviceLifecycleBridgeV1 {
-            val nativeEndpoint = NativeEndpoint.create() ?: return onlineOnly()
-            val capabilities = runCatching {
-                Codec.decodeCapabilities(nativeEndpoint.capabilities(), ANDROID_PLATFORM_CODE)
-            }.getOrNull() ?: return onlineOnly()
-            return OfflineCashDeviceLifecycleBridgeV1(nativeEndpoint, capabilities)
-        }
+        fun production(): OfflineCashDeviceLifecycleBridgeV1 = onlineOnly()
 
         /** Explicit online-only instance for products that do not ship a qualifying backend. */
         @JvmStatic
@@ -193,41 +187,6 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
             val capabilities = Codec.decodeCapabilities(endpoint.capabilities(), ANDROID_PLATFORM_CODE)
             return OfflineCashDeviceLifecycleBridgeV1(endpoint, capabilities)
         }
-    }
-
-    private object NativeEndpoint : Endpoint {
-        // An audited OEM/StrongBox service may supply these optional JNI symbols only when it can
-        // attest every required capability. Their deliberate absence keeps stock AndroidKeyStore
-        // devices online-only instead of introducing a software fallback.
-        fun create(): Endpoint? = try {
-            System.loadLibrary(LIBRARY_NAME)
-            val capabilities = nativeCapabilitiesV1()
-            if (capabilities == null) null else this
-        } catch (_: RuntimeException) {
-            null
-        } catch (_: LinkageError) {
-            null
-        }
-
-        override fun capabilities(): ByteArray =
-            nativeCapabilitiesV1()
-                ?: throw IllegalStateException("native Offline Cash V1 capabilities are unavailable")
-
-        override fun execute(command: ByteArray): ByteArray {
-            val nativeCommand = command.copyOf()
-            return try {
-                nativeExecuteV1(nativeCommand)
-                    ?: throw IllegalStateException("native Offline Cash V1 execution returned no response")
-            } finally {
-                nativeCommand.fill(0)
-            }
-        }
-
-        @JvmStatic
-        private external fun nativeCapabilitiesV1(): ByteArray?
-
-        @JvmStatic
-        private external fun nativeExecuteV1(command: ByteArray): ByteArray?
     }
 
     internal object Codec {

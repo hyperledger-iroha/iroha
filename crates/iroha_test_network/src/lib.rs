@@ -1751,6 +1751,58 @@ fn first_existing_candidate<'a>(
     }
     None
 }
+const fn repo_target_fallback_allowed(
+    running_under_cargo: bool,
+    cargo_target_dir_configured: bool,
+) -> bool {
+    // A configured Cargo target identifies the active build lane. Crossing from that lane to an
+    // unrelated repo-local `target` directory can silently select a stale daemon while reentrant
+    // builds are disabled, so fail closed instead.
+    !(running_under_cargo && cargo_target_dir_configured)
+}
+fn push_unique_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if !candidates.contains(&path) {
+        candidates.push(path);
+    }
+}
+fn push_profile_candidates(
+    candidates: &mut Vec<PathBuf>,
+    target_dir: &Path,
+    profile: &str,
+    bin: &str,
+) {
+    push_unique_candidate(candidates, target_dir.join(format!("{profile}/{bin}")));
+    push_unique_candidate(candidates, target_dir.join(format!("debug/{bin}")));
+    push_unique_candidate(candidates, target_dir.join(format!("release/{bin}")));
+}
+fn program_candidate_paths(
+    repo: &Path,
+    top_level_target_dir: Option<&Path>,
+    target_dir: &Path,
+    profile: &str,
+    bin: &str,
+    cargo_bin_candidate: Option<PathBuf>,
+    colocated_candidate: Option<PathBuf>,
+    include_repo_target_fallback: bool,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = cargo_bin_candidate {
+        push_unique_candidate(&mut candidates, path);
+    }
+    if let Some(path) = colocated_candidate {
+        push_unique_candidate(&mut candidates, path);
+    }
+    // A top-level prebuild inherits `CARGO_TARGET_DIR`, whereas guarded child builds use the
+    // namespaced `target_dir`. Accept either location within the active build lane.
+    if let Some(top_level_target_dir) = top_level_target_dir {
+        push_profile_candidates(&mut candidates, top_level_target_dir, profile, bin);
+    }
+    push_profile_candidates(&mut candidates, target_dir, profile, bin);
+    if include_repo_target_fallback {
+        push_profile_candidates(&mut candidates, &repo.join("target"), profile, bin);
+    }
+    candidates
+}
 fn colocated_binary_candidate_for(current_exe: &Path, bin: &str) -> Option<PathBuf> {
     let current_dir = current_exe.parent()?;
     current_dir.join(bin).canonicalize().ok()
@@ -2485,8 +2537,9 @@ impl Program {
     /// Tries, in order:
     /// - Explicit env override (`TEST_NETWORK_BIN_*`).
     /// - `CARGO_BIN_EXE_*` if Cargo provided a direct path to the built binary
-    /// - Common target locations (debug/release) under the repo root (defaulting to
-    ///   `target/iroha-test-network`, or under `IROHA_TEST_TARGET_DIR` / `CARGO_TARGET_DIR` when set)
+    /// - Common target locations (debug/release), including top-level prebuilds in
+    ///   `CARGO_TARGET_DIR` and guarded child builds in `target/iroha-test-network` or the
+    ///   configured `IROHA_TEST_TARGET_DIR`.
     /// - Rebuilds with `cargo build --locked --offline -p <pkg>` when the cached fingerprint
     ///   disagrees with the current workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
     ///
@@ -2514,6 +2567,10 @@ impl Program {
         let repo = repo_root();
         let release_contract = release_program_contract(&repo)?;
         let release_binary = self.release_prebuilt_binary();
+        let running_under_cargo = std::env::var_os("CARGO").is_some();
+        let cargo_target_dir_configured = std::env::var_os("CARGO_TARGET_DIR").is_some();
+        let include_repo_target_fallback =
+            repo_target_fallback_allowed(running_under_cargo, cargo_target_dir_configured);
         // 1) Explicit override
         if let Ok(path) = std::env::var(env) {
             let raw = PathBuf::from(&path);
@@ -2540,12 +2597,17 @@ impl Program {
                 None => Ok(candidate),
             };
         }
-        // Fast path via cache (only when no override is present)
-        let cached = match self {
-            Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
-            Program::IrohadMessageControl => cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN),
-            Program::Iroha => cached_binary_if_present(&IROHA_BIN),
-        };
+        // Fast path via cache (only when no override is present). Do not let an ambient cached
+        // path cross into an explicitly configured Cargo target lane.
+        let cached = include_repo_target_fallback
+            .then(|| match self {
+                Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
+                Program::IrohadMessageControl => {
+                    cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN)
+                }
+                Program::Iroha => cached_binary_if_present(&IROHA_BIN),
+            })
+            .flatten();
         if let Some(path) = cached {
             return match release_contract.as_ref() {
                 Some(contract) => {
@@ -2576,27 +2638,26 @@ impl Program {
             |subdir| resolve_target_dir(&repo).join(subdir),
         );
         let primary_binary = target_dir.join(format!("{profile}/{bin}"));
-        let mut candidates: Vec<PathBuf> = Vec::new();
-        let mut push_candidate = |path: PathBuf| {
-            if !candidates.contains(&path) {
-                candidates.push(path);
-            }
-        };
-        if let Some(path) = cargo_bin_candidate {
-            push_candidate(path);
-        }
-        if let Some(path) = colocated_candidate {
-            push_candidate(path);
-        }
-        push_candidate(primary_binary.clone());
-        push_candidate(target_dir.join(format!("debug/{bin}")));
-        push_candidate(target_dir.join(format!("release/{bin}")));
-        if release_contract.is_none() && isolated_target_subdir.is_none() {
-            let default_target = repo.join("target");
-            push_candidate(default_target.join(format!("{profile}/{bin}")));
-            push_candidate(default_target.join(format!("debug/{bin}")));
-            push_candidate(default_target.join(format!("release/{bin}")));
-        }
+        let top_level_target_dir = (allow_ambient_candidates
+            && std::env::var_os(IROHA_TEST_TARGET_DIR_ENV).is_none())
+        .then(|| {
+            std::env::var("CARGO_TARGET_DIR")
+                .ok()
+                .map(|path| resolve_target_dir_path(&repo, &path))
+        })
+        .flatten();
+        let candidates = program_candidate_paths(
+            &repo,
+            top_level_target_dir.as_deref(),
+            &target_dir,
+            &profile,
+            &bin,
+            cargo_bin_candidate,
+            colocated_candidate,
+            include_repo_target_fallback
+                && release_contract.is_none()
+                && isolated_target_subdir.is_none(),
+        );
         let prebuild_candidate =
             first_existing_candidate(candidates.iter().map(|p| Cow::Borrowed(p.as_path())));
         // 4) Decide whether to (re)build.
@@ -2613,7 +2674,6 @@ impl Program {
                 "release binary resolution cannot override {IROHA_TEST_SKIP_BUILD_ENV}=1"
             ));
         }
-        let running_under_cargo = std::env::var_os("CARGO").is_some();
         let allow_reentrant =
             allow_reentrant_build(running_under_cargo, release_contract.is_some());
         let validate_freshness =
@@ -5399,6 +5459,7 @@ pub struct NetworkBuilder {
     consensus_mode: ConsensusMode,
     auto_populate_trusted_peer_pops: bool,
     npos_genesis_bootstrap_stake: Option<Quantity>,
+    permissioned_lane_authority_bootstrap: bool,
     consensus_message_control: bool,
     initial_consensus_message_control: Option<InitialConsensusMessageControl>,
 }
@@ -5730,6 +5791,9 @@ const NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION: &str =
     "0000000000000000000000000000000000000000000000000000000000000001";
 fn genesis_expected_hash_config_literal(hash_body: &str) -> String {
     norito::literal::format("hash", &hash_body.to_ascii_uppercase())
+}
+fn network_id_config_literal(network_id: NetworkId) -> String {
+    genesis_expected_hash_config_literal(&network_id.to_string())
 }
 fn ensure_non_runtime_genesis_expected_hash_for_config_projection(table: &mut Table) {
     let genesis = table
@@ -6395,6 +6459,7 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake: Some(
                 SumeragiNposParameters::default().min_self_bond().clone(),
             ),
+            permissioned_lane_authority_bootstrap: true,
             consensus_message_control: false,
             initial_consensus_message_control: None,
         };
@@ -6684,6 +6749,17 @@ impl NetworkBuilder {
         self.npos_genesis_bootstrap_stake = None;
         self
     }
+    /// Disable the default lane-0 authority bootstrap for permissioned consensus.
+    ///
+    /// Permissioned consensus still needs an authoritative routing committee. The builder
+    /// therefore registers its voting peers as stake-elected lane-0 validators by default.
+    /// Disable this only when the caller supplies equivalent post-topology instructions or an
+    /// admin-managed lane manifest. Custom genesis blocks remain entirely caller-owned and are
+    /// never augmented by this bootstrap.
+    pub fn without_permissioned_lane_authority_bootstrap(mut self) -> Self {
+        self.permissioned_lane_authority_bootstrap = false;
+        self
+    }
     /// Override the genesis signing key pair used to sign the manifest.
     pub fn with_genesis_keypair(mut self, key_pair: KeyPair) -> Self {
         self.genesis_key_pair = key_pair;
@@ -6839,6 +6915,7 @@ impl NetworkBuilder {
             consensus_mode,
             auto_populate_trusted_peer_pops,
             npos_genesis_bootstrap_stake,
+            permissioned_lane_authority_bootstrap,
             consensus_message_control,
             initial_consensus_message_control,
         } = self;
@@ -7053,14 +7130,32 @@ impl NetworkBuilder {
                 .expect("at least one genesis transaction exists");
             first_tx.splice(0..0, parameter_prefix);
         }
-        let npos_bootstrap =
-            npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
-        if let Some(stake_amount) = npos_bootstrap.clone() {
-            let stake_amount = resolve_npos_bootstrap_stake(
-                &genesis_isi,
-                &genesis_post_topology_isi,
-                stake_amount,
-            );
+        let lane_authority_bootstrap = match consensus_mode {
+            ConsensusMode::Npos => npos_genesis_bootstrap_stake.map(|stake_amount| {
+                resolve_npos_bootstrap_stake(&genesis_isi, &genesis_post_topology_isi, stake_amount)
+            }),
+            ConsensusMode::Permissioned
+                if permissioned_lane_authority_bootstrap
+                    && custom_genesis.is_none()
+                    && matches!(
+                        resolved_pre_genesis_config.nexus.staking.validator_mode(
+                            LaneId::SINGLE,
+                            &resolved_pre_genesis_config.nexus.lane_catalog,
+                        ),
+                        iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+                    ) =>
+            {
+                Some(
+                    resolved_pre_genesis_config
+                        .nexus
+                        .staking
+                        .min_validator_stake
+                        .clone(),
+                )
+            }
+            ConsensusMode::Permissioned => None,
+        };
+        if let Some(stake_amount) = lane_authority_bootstrap.clone() {
             let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
             let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
             let universal_domain =
@@ -7188,7 +7283,7 @@ impl NetworkBuilder {
                     .expect("soracloud HF shared lease asset definition id");
             let mut soracloud_validator_bootstrap = Vec::new();
             let mut seeded_accounts = BTreeSet::new();
-            let register_validator_accounts = npos_bootstrap.is_none();
+            let register_validator_accounts = lane_authority_bootstrap.is_none();
             for peer in &peers {
                 let account_id = peer.account_id();
                 if !seeded_accounts.insert(account_id.clone()) {
@@ -8861,18 +8956,17 @@ impl NetworkPeer {
             iroha_data_model::domain::DomainId::try_new("default", "universal")
                 .expect("explicit client convenience domain")
                 .to_string();
+        let network_id = network_id_config_literal(
+            self.network_id
+                .get()
+                .copied()
+                .expect("peer must be attached to a network before creating clients"),
+        );
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
-                    .write(
-                        "network_id",
-                        self.network_id
-                            .get()
-                            .copied()
-                            .expect("peer must be attached to a network before creating clients")
-                            .to_string(),
-                    )
+                    .write("network_id", network_id)
                     .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "public_key"],
@@ -11596,9 +11690,94 @@ mod tests {
             "genesis should commit to the confidential policy resolved from config layers"
         );
     }
+    fn sorafs_storage_layer_with_native_signers(context: &str) -> Table {
+        let mut table = Table::new().write(["sorafs", "storage", "enabled"], true);
+        for ((role, handle_role), seed) in [
+            ("proof_outcome", "proof-outcome"),
+            ("repair", "repair"),
+            ("reserve", "reserve"),
+            ("orderbook", "orderbook"),
+        ]
+        .into_iter()
+        .zip([0x51_u8, 0x52, 0x53, 0x54])
+        {
+            let signer = checked_key_pair_from_seed(vec![seed; 32], Algorithm::Ed25519);
+            let public_key = signer.public_key().clone();
+            let public_key_hex = hex_lower(&public_key.to_bytes().1);
+            let authority = AccountId::new(public_key)
+                .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
+                .expect("native signer authority should encode as I105");
+            let policy_digest_hex = hex_lower(&[seed; 32]);
+            let mut writer = TomlWriter::new(&mut table);
+            writer
+                .write(
+                    [
+                        "sorafs",
+                        "storage",
+                        "native_transaction_signers",
+                        role,
+                        "handle",
+                    ],
+                    format!("software://sorafs/{handle_role}/{context}"),
+                )
+                .write(
+                    [
+                        "sorafs",
+                        "storage",
+                        "native_transaction_signers",
+                        role,
+                        "authority",
+                    ],
+                    authority,
+                )
+                .write(
+                    [
+                        "sorafs",
+                        "storage",
+                        "native_transaction_signers",
+                        role,
+                        "algorithm",
+                    ],
+                    "ed25519",
+                )
+                .write(
+                    [
+                        "sorafs",
+                        "storage",
+                        "native_transaction_signers",
+                        role,
+                        "public_key_hex",
+                    ],
+                    public_key_hex,
+                )
+                .write(
+                    [
+                        "sorafs",
+                        "storage",
+                        "native_transaction_signers",
+                        role,
+                        "revision",
+                    ],
+                    1_i64,
+                )
+                .write(
+                    [
+                        "sorafs",
+                        "storage",
+                        "native_transaction_signers",
+                        role,
+                        "policy_digest_hex",
+                    ],
+                    policy_digest_hex,
+                );
+        }
+        table
+    }
     #[test]
     fn resolve_actual_config_applies_sora_profile_non_consensus_settings() {
-        let config_layers = vec![Table::new().write(["sorafs", "storage", "enabled"], true)];
+        let config_layers = vec![sorafs_storage_layer_with_native_signers(
+            "profile-detection",
+        )];
         assert!(
             config_requires_sora_profile(&config_layers),
             "SoraFS-enabled configs should trigger --sora profile detection"
@@ -11623,9 +11802,9 @@ mod tests {
             NetworkBuilder::new()
                 .with_peers(4)
                 .with_permissioned_consensus()
-                .with_config_layer(|layer| {
-                    layer.write(["sorafs", "storage", "enabled"], true);
-                }),
+                .with_config_table(sorafs_storage_layer_with_native_signers(
+                    "signed-mode-projection",
+                )),
         );
         assert_eq!(
             network.consensus_bootstrap_profile().mode_tag,
@@ -13179,6 +13358,93 @@ mod tests {
             .with_genesis_instruction(SetParameter::new(parameter))
             .build();
     }
+    fn public_lane_validator_instruction_counts(genesis: &GenesisBlock) -> (usize, usize) {
+        let mut register = 0;
+        let mut activate = 0;
+        for tx in genesis.0.external_transactions() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                        .is_some()
+                    {
+                        register += 1;
+                    }
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<ActivatePublicLaneValidator>()
+                        .is_some()
+                    {
+                        activate += 1;
+                    }
+                }
+            }
+        }
+        (register, activate)
+    }
+    #[test]
+    fn default_permissioned_builder_bootstraps_lane_authority() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_auto_populated_trusted_peers()
+                .with_permissioned_consensus(),
+        );
+        assert_eq!(
+            network.consensus_bootstrap_profile().mode_tag,
+            PERMISSIONED_TAG,
+            "lane authority bootstrap must not change signed permissioned consensus",
+        );
+        assert_eq!(
+            public_lane_validator_instruction_counts(&network.genesis()),
+            (4, 4),
+            "permissioned genesis should register and activate every voting peer for lane 0",
+        );
+    }
+    #[test]
+    fn permissioned_lane_authority_bootstrap_can_be_disabled() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_auto_populated_trusted_peers()
+                .with_permissioned_consensus()
+                .without_permissioned_lane_authority_bootstrap(),
+        );
+        assert_eq!(
+            network.consensus_bootstrap_profile().mode_tag,
+            PERMISSIONED_TAG,
+            "authority-bootstrap opt-out must preserve permissioned consensus",
+        );
+        assert_eq!(
+            public_lane_validator_instruction_counts(&network.genesis()),
+            (0, 0),
+            "explicit opt-out should leave lane authority entirely caller-owned",
+        );
+    }
+    #[test]
+    fn admin_managed_permissioned_lane_is_not_stake_bootstrapped() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_auto_populated_trusted_peers()
+                .with_permissioned_consensus()
+                .with_config_layer(|layer| {
+                    layer.write(
+                        ["nexus", "staking", "public_validator_mode"],
+                        "admin_managed",
+                    );
+                }),
+        );
+        assert_eq!(
+            public_lane_validator_instruction_counts(&network.genesis()),
+            (0, 0),
+            "admin-managed lane authority must remain manifest-owned and fail closed when absent",
+        );
+    }
     #[test]
     fn npos_bootstrap_adds_validator_instructions() {
         init_instruction_registry();
@@ -14069,6 +14335,7 @@ mod tests {
             client.torii_url.port_or_known_default(),
             Some(expected.port())
         );
+        assert_eq!(client.network_id, network.network_id());
     }
     #[test]
     fn http_start_gate_requires_http_source() {

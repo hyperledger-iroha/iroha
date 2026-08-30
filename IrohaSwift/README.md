@@ -38,10 +38,10 @@ Build the required native bridge before resolving the package:
 
 ```bash
 cd /path/to/iroha
-export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
-export NORITO_BRIDGE_OUT_DIR=/absolute/non-symlink/path/to/iroha-apple-artifacts
-export NORITO_BRIDGE_BUILD_DIR=/absolute/non-symlink/path/to/iroha-apple-build
-export NORITO_BRIDGE_ARCHIVE_OUTPUT=/absolute/non-symlink/path/to/NoritoBridge.xcframework.zip
+export CARGO_TARGET_DIR=/release/apple-a-cargo
+export NORITO_BRIDGE_OUT_DIR=/release/apple-a-artifacts
+export NORITO_BRIDGE_BUILD_DIR=/release/apple-a-build
+export NORITO_BRIDGE_ARCHIVE_OUTPUT=/release/apple-a-archive/NoritoBridge.xcframework.zip
 mkdir -p \
   "$CARGO_TARGET_DIR" \
   "$NORITO_BRIDGE_OUT_DIR" \
@@ -557,8 +557,9 @@ the manifest schema/version, ABI, proof backend, transcript, and circuit IDs
 identify the exact contract.
 
 Use `OfflineCashPaymentRequestV1`, `OfflineCashPaymentV1`,
-`OfflineCashAcknowledgementV1`, `OfflineCashWalletSessionV1`, and
-`OfflineCashPeerAdapterV1` for product flows. The retained recursive-spend
+`OfflineCashAcknowledgementV1`, `OfflineCashVerificationSessionV1`, the
+fail-closed `OfflineCashWalletSessionV1` facade, and `OfflineCashPeerAdapterV1`
+for product flows. The retained recursive-spend
 builders, prover bindings, PKK2/PKKQ1 models, and legacy top-up/redeem Torii
 helpers are package-internal implementation details.
 
@@ -572,12 +573,12 @@ the offline send or receive path.
 The clean Offline Cash V1 state machine additionally requires a platform service
 with one rollback-resistant intent slot, an exact-next monetary counter, trusted
 time, authenticated terminal recovery, and an authenticated staged-payment
-outbox. `OfflineCashDeviceLifecycleBridgeV1.production()` discovers that complete
-optional native contract. App Attest alone does not provide those primitives; if
-either native symbol or any required capability is absent, `availability` is
-`.onlineOnly` and execution fails without a Keychain or software fallback. The
-bridge accepts only bounded V1 command frames and rejects relabelled V4/V5 input.
-The exact offsets and optional symbol signatures are fixed in
+outbox. `OfflineCashDeviceLifecycleBridgeV1.production()` is therefore
+hard-disabled to `.onlineOnly` until a separately reviewed compile-time backend
+gate exists. App Attest alone does not provide those primitives, and merely
+exporting optional symbols or a structural capability frame cannot enable
+funds. The bounded V1 codec and endpoint constructor remain test-only, with no
+Keychain, dynamic-symbol, or software fallback. The future backend contract is fixed in
 [`specs/offline_cash_device_bridge_v1.md`](../specs/offline_cash_device_bridge_v1.md).
 
 Before opening a clean Offline Cash V1 receiver session, install the governed
@@ -591,14 +592,14 @@ path string crosses the native ABI. Use `uninstall` with both the exact release
 ID and manifest digest; release replacement or removal invalidates previously
 opened sessions.
 
-`OfflineCashWalletSessionV1` then opens an opaque native session pinned to that
-release and request. `acceptPayment(canonicalNorito:)` performs both Eq and Ep
+`OfflineCashVerificationSessionV1` then opens an opaque native verifier session pinned to that
+release and request. `verifyPayment(canonicalNorito:)` performs both Eq and Ep
 current-proof and carried-lineage decisions and retains the unforgeable receipt
-inside native memory. `acceptAcknowledgement(canonicalNorito:)` accepts only an
+inside native memory. `verifyAcknowledgement(canonicalNorito:)` accepts only an
 acknowledgement bound to that exact receipt. The session verifier is not a
-durability substitute: applications must still apply the result through
-`OfflineCashDeviceLifecycleBridgeV1`, and must remain online-only when the
-production device service is unavailable.
+durability substitute. `OfflineCashWalletSessionV1` is a separate opaque product
+facade with the exact 0..12 lifecycle vocabulary; `open()` and every action fail
+unavailable while the production device service remains disabled.
 
 ### Push Devices
 

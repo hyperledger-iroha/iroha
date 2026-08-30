@@ -1,10 +1,6 @@
 import CryptoKit
 import Foundation
 
-#if canImport(Darwin)
-  import Darwin
-#endif
-
 /// Failures from the exact Offline Cash V1 secure-device bridge contract.
 public enum OfflineCashDeviceLifecycleBridgeErrorV1: Error, Equatable {
   case onlineOnly
@@ -68,9 +64,10 @@ protocol OfflineCashDeviceLifecycleEndpointV1 {
 ///
 /// App Attest assertions authenticate online challenges, but do not expose a local atomic journal,
 /// trusted clock, exact-next monetary counter, or authenticated payment outbox. This bridge is
-/// therefore available only when the loaded native image provides the complete optional secure
-/// backend contract. Missing symbols, partial capability frames, malformed replies, and execution
-/// failures keep the wallet online-only; no Keychain, App Attest-only, or software fallback exists.
+/// therefore unavailable in production until a separately reviewed compile-time backend gate
+/// joins the complete device contract. Merely exporting optional symbols or a structural 96-byte
+/// capability frame can never enable funds. The endpoint constructor remains test-only; no
+/// Keychain, App Attest-only, dynamic-symbol, or software fallback exists.
 ///
 public final class OfflineCashDeviceLifecycleBridgeV1 {
   public enum Availability: Sendable {
@@ -97,21 +94,9 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
     availability = endpoint != nil && capabilities != nil ? .available : .onlineOnly
   }
 
-  /// Discover the optional native secure backend without permitting a software downgrade.
+  /// Production is hard-disabled until a reviewed compile-time secure-backend gate exists.
   public static func production() -> OfflineCashDeviceLifecycleBridgeV1 {
-    guard let endpoint = NativeEndpoint.create(),
-      let encoded = try? endpoint.capabilities(),
-      let capabilities = try? Codec.decodeCapabilities(
-        encoded,
-        expectedPlatform: Codec.iosPlatformCode
-      )
-    else {
-      return onlineOnly()
-    }
-    return OfflineCashDeviceLifecycleBridgeV1(
-      endpoint: endpoint,
-      capabilities: capabilities
-    )
+    onlineOnly()
   }
 
   /// Construct an explicit online-only bridge for a device without the complete hardware API.
@@ -164,114 +149,6 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
       endpoint: endpoint,
       capabilities: capabilities
     )
-  }
-
-  private final class NativeEndpoint: OfflineCashDeviceLifecycleEndpointV1 {
-    #if canImport(Darwin)
-      private typealias CapabilitiesFn =
-        @convention(c) (
-          UnsafeMutablePointer<UInt8>?,
-          Int
-        ) -> Int32
-      private typealias ExecuteFn =
-        @convention(c) (
-          UnsafePointer<UInt8>?,
-          Int,
-          UnsafeMutablePointer<UInt8>?,
-          Int,
-          UnsafeMutablePointer<Int>?
-        ) -> Int32
-
-      private let capabilitiesFunction: CapabilitiesFn
-      private let executeFunction: ExecuteFn
-
-      private init(
-        capabilitiesFunction: @escaping CapabilitiesFn,
-        executeFunction: @escaping ExecuteFn
-      ) {
-        self.capabilitiesFunction = capabilitiesFunction
-        self.executeFunction = executeFunction
-      }
-
-      static func create() -> NativeEndpoint? {
-        // These symbols are intentionally optional. Production packaging must omit them until
-        // an audited service provides the complete journal/counter/outbox contract; App Attest
-        // by itself is insufficient.
-        let (handle, _) = NoritoBridgeLoader.openHandle()
-        guard let handle,
-          let capabilitiesSymbol = dlsym(
-            handle,
-            "connect_norito_offline_cash_device_capabilities_v1"
-          ),
-          let executeSymbol = dlsym(
-            handle,
-            "connect_norito_offline_cash_device_execute_v1"
-          )
-        else {
-          return nil
-        }
-        return NativeEndpoint(
-          capabilitiesFunction: unsafeBitCast(
-            capabilitiesSymbol,
-            to: CapabilitiesFn.self
-          ),
-          executeFunction: unsafeBitCast(executeSymbol, to: ExecuteFn.self)
-        )
-      }
-
-      func capabilities() throws -> Data {
-        var output = Data(repeating: 0, count: Codec.capabilityBytes)
-        let outputCapacity = output.count
-        let status = output.withUnsafeMutableBytes { raw in
-          capabilitiesFunction(
-            raw.bindMemory(to: UInt8.self).baseAddress,
-            outputCapacity
-          )
-        }
-        guard status == 0 else {
-          throw OfflineCashDeviceLifecycleBridgeErrorV1.executionFailed
-        }
-        return output
-      }
-
-      func execute(_ command: Data) throws -> Data {
-        let maximum =
-          Codec.responseHeaderBytes
-          + OfflineCashDeviceLifecycleBridgeV1.maximumResponsePayloadBytes
-          + OfflineCashDeviceLifecycleBridgeV1.maximumAuthenticatorBytes
-        var output = Data(repeating: 0, count: maximum)
-        let outputRange = output.startIndex..<output.endIndex
-        defer { output.resetBytes(in: outputRange) }
-        let commandCount = command.count
-        let outputCapacity = output.count
-        var written = 0
-        let status = command.withUnsafeBytes { commandRaw in
-          output.withUnsafeMutableBytes { outputRaw in
-            executeFunction(
-              commandRaw.bindMemory(to: UInt8.self).baseAddress,
-              commandCount,
-              outputRaw.bindMemory(to: UInt8.self).baseAddress,
-              outputCapacity,
-              &written
-            )
-          }
-        }
-        guard status == 0, written >= 0, written <= output.count else {
-          throw OfflineCashDeviceLifecycleBridgeErrorV1.executionFailed
-        }
-        return Data(output.prefix(written))
-      }
-    #else
-      static func create() -> NativeEndpoint? { nil }
-
-      func capabilities() throws -> Data {
-        throw OfflineCashDeviceLifecycleBridgeErrorV1.onlineOnly
-      }
-
-      func execute(_: Data) throws -> Data {
-        throw OfflineCashDeviceLifecycleBridgeErrorV1.onlineOnly
-      }
-    #endif
   }
 
   enum Codec {

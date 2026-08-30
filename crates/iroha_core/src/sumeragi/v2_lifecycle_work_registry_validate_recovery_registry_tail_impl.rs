@@ -326,6 +326,7 @@ impl ConcreteLifecycleWorkRegistry {
             outcome_kind,
             lease: lease.clone(),
             validated_catalog_authority,
+            authenticated_manifest: None,
         })
     }
     /// Reattach one executed Validate outcome only if its original closed row

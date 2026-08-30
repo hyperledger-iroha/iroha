@@ -662,6 +662,29 @@ fn pending_validate_binding_for_test(
         .expect("Store fixture derives Validate");
     (validate, validate_binding)
 }
+fn pending_store_consumer_binding_for_test(
+    causal_lifecycle_key: Hash,
+    tag: EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    statement: RuntimeCandidateSemanticStatement,
+) -> (AdapterEffect, PendingRuntimeEffectBinding) {
+    let store = AdapterEffect::StoreBody {
+        tag,
+        round,
+        subject,
+    };
+    let candidate = production_adapter_effect_candidate_binding(&store, Some(&statement))
+        .expect("Store consumer fixture has consistent inherited coordinates")
+        .expect("Store consumer fixture derives one candidate");
+    let pending = PendingRuntimeEffectBinding::from_effect_candidate(
+        causal_lifecycle_key,
+        &store,
+        Some(&candidate),
+    );
+    assert!(pending.exactly_binds_adapter_effect(&store));
+    (store, pending)
+}
 fn signed_runtime_timeout_certificate(
     context: &wire::HeightContext,
     keys: &[KeyPair],
@@ -1009,6 +1032,161 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
             .project_store_validate_successor(&store, &validate)
             .is_none(),
         "the projected successor cannot duplicate predecessor authority"
+    );
+}
+#[test]
+fn pending_store_consumer_rebind_requires_a_strictly_later_tag() {
+    let (context, _) = authenticated_runtime_context();
+    let manifest = runtime_manifest(&context, 0x6A);
+    let previous_tag = EventTag::new(context.height, 3, Generation::new(2));
+    let later_tag = EventTag::new(context.height, 4, Generation::new(0));
+    let older_tag = EventTag::new(context.height, 2, Generation::new(99));
+    let statement = RuntimeCandidateSemanticStatement::new(
+        manifest.round,
+        manifest.round,
+        Some(manifest.subject),
+        None,
+        None,
+    );
+    let causal_lifecycle_key = Hash::new(b"pending Store consumer tag rebind");
+    let (previous, previous_pending) = pending_store_consumer_binding_for_test(
+        causal_lifecycle_key,
+        previous_tag,
+        manifest.round,
+        manifest.subject,
+        statement,
+    );
+    let (later, later_pending) = pending_store_consumer_binding_for_test(
+        causal_lifecycle_key,
+        later_tag,
+        manifest.round,
+        manifest.subject,
+        statement,
+    );
+    assert!(
+        previous_pending
+            .project_store_consumer_rebind(&previous, &later, &later_pending)
+            .is_some(),
+        "the same immutable Store accepts one strictly later consumer"
+    );
+    let (same, same_pending) = pending_store_consumer_binding_for_test(
+        causal_lifecycle_key,
+        previous_tag,
+        manifest.round,
+        manifest.subject,
+        statement,
+    );
+    assert!(
+        previous_pending
+            .project_store_consumer_rebind(&previous, &same, &same_pending)
+            .is_none(),
+        "an equal tag is an exact retry rather than a consumer rebind"
+    );
+    let (older, older_pending) = pending_store_consumer_binding_for_test(
+        causal_lifecycle_key,
+        older_tag,
+        manifest.round,
+        manifest.subject,
+        statement,
+    );
+    assert!(
+        previous_pending
+            .project_store_consumer_rebind(&previous, &older, &older_pending)
+            .is_none(),
+        "a Store consumer cannot move to an older reducer incarnation"
+    );
+}
+#[test]
+fn pending_store_consumer_rebind_rejects_stale_or_conflicting_authority() {
+    let (context, keys) = authenticated_runtime_context();
+    let prepare = signed_runtime_quorum_certificate_for_phase(
+        &context,
+        &keys,
+        0x6B,
+        wire::GlobalPhase::Prepare,
+    );
+    let foreign = signed_runtime_quorum_certificate_for_phase(
+        &context,
+        &keys,
+        0x6C,
+        wire::GlobalPhase::Prepare,
+    );
+    let previous_tag = EventTag::new(context.height, 3, Generation::new(2));
+    let later_tag = EventTag::new(context.height, 4, Generation::new(0));
+    let prepare_statement = RuntimeCandidateSemanticStatement::new(
+        prepare.round,
+        prepare.proposal_round,
+        Some(prepare.subject),
+        Some(wire::GlobalPhase::Prepare),
+        Some(prepare.execution_commitment),
+    );
+    let commit_statement = RuntimeCandidateSemanticStatement::new(
+        prepare.round,
+        prepare.proposal_round,
+        Some(prepare.subject),
+        Some(wire::GlobalPhase::Commit),
+        Some(prepare.execution_commitment),
+    );
+    let conflicting_commit_statement = RuntimeCandidateSemanticStatement::new(
+        prepare.round,
+        prepare.proposal_round,
+        Some(prepare.subject),
+        Some(wire::GlobalPhase::Commit),
+        Some(foreign.execution_commitment),
+    );
+    let causal_lifecycle_key = Hash::new(b"pending Store consumer authority rebind");
+    let (previous, prepare_pending) = pending_store_consumer_binding_for_test(
+        causal_lifecycle_key,
+        previous_tag,
+        prepare.proposal_round,
+        prepare.subject,
+        prepare_statement,
+    );
+    let (later, commit_pending) = pending_store_consumer_binding_for_test(
+        causal_lifecycle_key,
+        later_tag,
+        prepare.proposal_round,
+        prepare.subject,
+        commit_statement,
+    );
+    assert!(
+        prepare_pending
+            .project_store_consumer_rebind(&previous, &later, &commit_pending)
+            .is_some(),
+        "matching Prepare authority may advance monotonically to Commit"
+    );
+    let (_, stale_prepare_pending) = pending_store_consumer_binding_for_test(
+        causal_lifecycle_key,
+        later_tag,
+        prepare.proposal_round,
+        prepare.subject,
+        prepare_statement,
+    );
+    let (_, previous_commit_pending) = pending_store_consumer_binding_for_test(
+        causal_lifecycle_key,
+        previous_tag,
+        prepare.proposal_round,
+        prepare.subject,
+        commit_statement,
+    );
+    assert!(
+        previous_commit_pending
+            .project_store_consumer_rebind(&previous, &later, &stale_prepare_pending)
+            .is_none(),
+        "a later consumer cannot downgrade Commit authority to Prepare"
+    );
+    let (_, conflicting_pending) = pending_store_consumer_binding_for_test(
+        causal_lifecycle_key,
+        later_tag,
+        prepare.proposal_round,
+        prepare.subject,
+        conflicting_commit_statement,
+    );
+    assert!(
+        prepare_pending
+            .project_store_consumer_rebind(&previous, &later, &conflicting_pending)
+            .is_none(),
+        "an authority upgrade cannot substitute the inherited execution commitment"
     );
 }
 #[test]

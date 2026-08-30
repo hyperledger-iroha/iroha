@@ -52,6 +52,7 @@ final class OfflineCashPublicAPISurfaceV1Tests: XCTestCase {
             "public struct OfflineCashPaymentV1",
             "public struct OfflineCashAcknowledgementV1",
             "public struct OfflineCashReleaseStatusV1",
+            "public final class OfflineCashVerificationSessionV1",
             "public final class OfflineCashWalletSessionV1",
             "public struct OfflineCashPeerAdapterV1",
         ] {
@@ -60,6 +61,27 @@ final class OfflineCashPublicAPISurfaceV1Tests: XCTestCase {
         XCTAssertEqual(OfflineCashPeerAdapterV1.textPrefix, "kgm2:")
         XCTAssertFalse(source.contains("PKK2"))
         XCTAssertFalse(source.contains("PKKQ1"))
+    }
+
+    func testVerifierAndWalletFacadesAreTruthfullySeparated() throws {
+        let source = try String(
+            contentsOf: Self.packageRoot
+                .appendingPathComponent("Sources/IrohaSwift/OfflineCashV1.swift"),
+            encoding: .utf8
+        )
+        let wallet = try XCTUnwrap(
+            source.components(separatedBy: "public final class OfflineCashWalletSessionV1 {").last?
+                .components(separatedBy: "/// Strict `kgm2:` peer adapter").first
+        )
+        XCTAssertTrue(wallet.contains("private init()"))
+        XCTAssertTrue(wallet.contains("throw OfflineCashWalletSessionErrorV1.unavailable"))
+        for forbidden in ["Data", "UInt64", "Date", "nativeHandle", "canonicalNorito"] {
+            XCTAssertFalse(wallet.contains(forbidden), "wallet facade exposes \(forbidden)")
+        }
+
+        XCTAssertTrue(source.contains("OfflineCashVerificationSessionStateV1"))
+        XCTAssertTrue(source.contains("connect_norito_offline_cash_verification_session_"))
+        XCTAssertFalse(source.contains("connect_norito_offline_cash_wallet_session_"))
     }
 
     func testOfflineCashV1ExposesTheExactPublicToriiFacade() throws {

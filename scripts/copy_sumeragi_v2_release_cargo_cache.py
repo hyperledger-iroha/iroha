@@ -84,6 +84,10 @@ VALIDATOR_OPTION_ORDER = (
     "--expected-signer-fingerprint",
     "--corridor-completion",
     "--formal-completion",
+    "--formal-replay-source-receipt",
+    "--formal-replay-release-root",
+    "--expected-formal-replay-signature-sha256",
+    "--formal-replay-principal",
     "--seed-completion",
     "--chaos-completion",
     "--g4p-completion",
@@ -127,6 +131,8 @@ VALIDATOR_PATH_OPTIONS = frozenset(
         "--signature-ssh-keygen",
         "--corridor-completion",
         "--formal-completion",
+        "--formal-replay-source-receipt",
+        "--formal-replay-release-root",
         "--seed-completion",
         "--chaos-completion",
         "--g4p-completion",
@@ -158,7 +164,7 @@ VALIDATION_ACK_COMPONENT_FILES = (
     "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
 )
 VALIDATION_ACK_COMPONENT_SHA256 = (
-    "ea01518547b6a99a907cd1a6564e1219fc90918f2b7a8525b8b93bccfb9bfbd6"
+    "d535ffd5f640164622405f41630e41d70d77583480411566c67debf9d49b3d86"
 )
 VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 CLI_COMPONENT_FILES = (
@@ -2445,6 +2451,35 @@ def _probe_framework_python_runtime(
         error_type=CacheCopyError,
     )
 
+def _prepare_framework_dependency_root(dependency_root: Path) -> None:
+    """Create or safely reopen the copied private loader-dependency root."""
+
+    try:
+        dependency_root.mkdir(mode=0o700)
+        return
+    except FileExistsError:
+        pass
+    before = dependency_root.lstat()
+    if (
+        not stat.S_ISDIR(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or stat.S_IMODE(before.st_mode) & 0o022
+    ):
+        raise CacheCopyError(
+            "copied framework Python dependency root is unsafe"
+        )
+    os.chmod(dependency_root, 0o700, follow_symlinks=False)
+    after = dependency_root.lstat()
+    if (
+        (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+        or not stat.S_ISDIR(after.st_mode)
+        or after.st_uid != os.geteuid()
+        or stat.S_IMODE(after.st_mode) != 0o700
+    ):
+        raise CacheCopyError(
+            "copied framework Python dependency root changed while reopened"
+        )
+
 def _runtime_source_roots(resolved: list[Path]) -> dict[str, Path]:
     names = _runtime_names(resolved)
     cargo_index = names.index("cargo")
@@ -4263,7 +4298,7 @@ def _populate_runtime(
         dependency_root = (
             runtime_root / "lib" / stdlib_name / "iroha-loader-deps"
         )
-        os.mkdir(dependency_root, mode=0o700)
+        _prepare_framework_dependency_root(dependency_root)
         def copy_external(
             source: Path, archive_path: str, input_path: str,
         ) -> None:
@@ -4679,7 +4714,7 @@ def copy_framework_python_runtime(
         dependency_root = (
             runtime_root / "lib" / stdlib_name / "iroha-loader-deps"
         )
-        os.mkdir(dependency_root, mode=0o700)
+        _prepare_framework_dependency_root(dependency_root)
         def copy_external(
             source: Path, archive_path: str, input_path: str,
         ) -> None:

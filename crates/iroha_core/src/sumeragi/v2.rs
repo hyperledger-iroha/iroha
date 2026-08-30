@@ -12608,7 +12608,7 @@ impl SumeragiV2Adapter {
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         durable_receipt: &DurableBodyReceipt,
-        local_origin_manifest: Option<&wire::PayloadManifest>,
+        manifest_authority: Option<&wire::PayloadManifest>,
     ) -> Result<(WireRegistry, reducer::Round, reducer::Subject), AdapterError> {
         if durable_receipt.context_id() != self.wire_context.id()
             || durable_receipt.round() != round
@@ -12619,7 +12619,7 @@ impl SumeragiV2Adapter {
         let mut next_registry = self.registry.clone();
         let core_round = next_registry.round_to_core(round, &self.wire_context)?;
         let core_subject = next_registry.register_subject(subject)?;
-        if let Some(manifest) = local_origin_manifest {
+        if let Some(manifest) = manifest_authority {
             if manifest.round != round
                 || manifest.subject != subject
                 || durable_receipt.manifest_hash() != HashOf::new(manifest)
@@ -13041,13 +13041,13 @@ impl SumeragiV2Adapter {
         &'adapter mut self,
         authority: ReadyValidatedAdapterAuthority<'_>,
     ) -> Result<SealedReadyDurableValidateAdapterPreview<'adapter>, AdapterError> {
-        let (tag, round, subject, receipt, local_origin_manifest) = authority.into_parts();
+        let (tag, round, subject, receipt, manifest_authority) = authority.into_parts();
         self.prepare_direct_validation_succeeded_with_local_origin_manifest(
             tag,
             round,
             subject,
             receipt,
-            local_origin_manifest.as_ref(),
+            manifest_authority.as_ref(),
         )
         .map(|preview| {
             SealedReadyDurableValidateAdapterPreview(match preview {
@@ -13078,13 +13078,13 @@ impl SumeragiV2Adapter {
         &'adapter mut self,
         authority: ReadyRejectedAdapterAuthority<'_>,
     ) -> Result<SealedReadyDurableValidateAdapterPreview<'adapter>, AdapterError> {
-        let (tag, round, subject, receipt, local_origin_manifest) = authority.into_parts();
+        let (tag, round, subject, receipt, manifest_authority) = authority.into_parts();
         self.prepare_direct_validation_failed_with_local_origin_manifest(
             tag,
             round,
             subject,
             receipt,
-            local_origin_manifest.as_ref(),
+            manifest_authority.as_ref(),
         )
         .map(|preview| {
             SealedReadyDurableValidateAdapterPreview(match preview {

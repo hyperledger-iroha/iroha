@@ -267,14 +267,25 @@ pub(in crate::sumeragi) enum ProductionLifecycleIngressSelectionV1 {
 /// The exact inbound carrier, ordinary dequeue disposition, and any stateful
 /// Certified-Serve result cannot be separated at the runner-facing boundary.
 /// The lifecycle height driver routes this token through the activated shared
-/// runner consumer. Drop closes consensus admission so a prepared Serve
-/// placeholder or staged negative can never be silently abandoned.
+/// runner consumer. It retains the genuine current Ingress-turn borrow until
+/// that consumer finishes the owner-to-worker launch. Drop closes consensus
+/// admission so a prepared Serve placeholder or staged negative can never be
+/// silently abandoned.
 #[must_use = "the exact ordinary ingress handoff must be consumed by the runner"]
 #[cfg_attr(not(test), allow(dead_code))]
-pub(in crate::sumeragi) struct ProductionPreparedOrdinaryIngressTurnV1 {
+pub(in crate::sumeragi) struct ProductionPreparedOrdinaryIngressTurnV1<'cursor> {
+    handoff: Option<PreparedDequeuedV2IngressV1>,
     #[cfg(test)]
     drop_order_probe: Option<PreparedOrdinaryIngressDropOrderProbe>,
-    handoff: Option<PreparedDequeuedV2IngressV1>,
+    _runner_turn: PreparedOrdinaryIngressRunnerTurnV1<'cursor>,
+}
+
+enum PreparedOrdinaryIngressRunnerTurnV1<'cursor> {
+    Live {
+        _turn: LifecycleCurrentRunnerTurn<'cursor>,
+    },
+    #[cfg(test)]
+    Detached,
 }
 
 #[cfg(test)]
@@ -295,7 +306,7 @@ impl Drop for PreparedOrdinaryIngressDropOrderProbe {
     }
 }
 
-impl Drop for ProductionPreparedOrdinaryIngressTurnV1 {
+impl Drop for ProductionPreparedOrdinaryIngressTurnV1<'_> {
     fn drop(&mut self) {
         if let Some(handoff) = self.handoff.as_ref() {
             handoff.close_output_for_restart();
@@ -303,7 +314,7 @@ impl Drop for ProductionPreparedOrdinaryIngressTurnV1 {
     }
 }
 
-impl ProductionPreparedOrdinaryIngressTurnV1 {
+impl ProductionPreparedOrdinaryIngressTurnV1<'_> {
     /// Return the retained queue-minted physical ordinal for ownership tests.
     #[cfg(test)]
     pub(in crate::sumeragi) fn physical_ordinal_for_test(&self) -> u64 {
@@ -322,17 +333,16 @@ impl ProductionPreparedOrdinaryIngressTurnV1 {
     }
 }
 
-fn prepared_ordinary_ingress_turn(
+fn prepared_ordinary_ingress_turn<'cursor>(
     receiver: std::sync::Arc<FairV2Ingress>,
     inbound: InboundBlockMessage,
     disposition: FairV2IngressDequeueDisposition,
     prepared_serve: Option<ProductionPreparedCertifiedServeV1>,
     terminal_subject: Option<iroha_data_model::block::consensus_v2::BlockSubject>,
     output_guard: std::sync::Arc<ConsensusOutputGuard>,
-) -> ProductionPreparedOrdinaryIngressTurnV1 {
+    runner: LifecycleCurrentRunnerTurn<'cursor>,
+) -> ProductionPreparedOrdinaryIngressTurnV1<'cursor> {
     ProductionPreparedOrdinaryIngressTurnV1 {
-        #[cfg(test)]
-        drop_order_probe: None,
         handoff: Some(PreparedDequeuedV2IngressV1::new(
             receiver,
             inbound,
@@ -341,6 +351,32 @@ fn prepared_ordinary_ingress_turn(
             terminal_subject,
             output_guard,
         )),
+        #[cfg(test)]
+        drop_order_probe: None,
+        _runner_turn: PreparedOrdinaryIngressRunnerTurnV1::Live { _turn: runner },
+    }
+}
+
+#[cfg(test)]
+fn detached_prepared_ordinary_ingress_turn_for_test(
+    receiver: std::sync::Arc<FairV2Ingress>,
+    inbound: InboundBlockMessage,
+    disposition: FairV2IngressDequeueDisposition,
+    prepared_serve: Option<ProductionPreparedCertifiedServeV1>,
+    terminal_subject: Option<iroha_data_model::block::consensus_v2::BlockSubject>,
+    output_guard: std::sync::Arc<ConsensusOutputGuard>,
+) -> ProductionPreparedOrdinaryIngressTurnV1<'static> {
+    ProductionPreparedOrdinaryIngressTurnV1 {
+        handoff: Some(PreparedDequeuedV2IngressV1::new(
+            receiver,
+            inbound,
+            disposition,
+            prepared_serve,
+            terminal_subject,
+            output_guard,
+        )),
+        drop_order_probe: None,
+        _runner_turn: PreparedOrdinaryIngressRunnerTurnV1::Detached,
     }
 }
 
@@ -355,7 +391,7 @@ pub(in crate::sumeragi) enum ProductionLifecycleIngressTurnV1<'cursor> {
     /// No fair ingress winner exists, so the real runner cursor is unchanged.
     PassThrough(LifecycleCurrentRunnerTurn<'cursor>),
     /// The queue physically removed the exact ordinary fair winner once.
-    Ordinary(ProductionPreparedOrdinaryIngressTurnV1),
+    Ordinary(ProductionPreparedOrdinaryIngressTurnV1<'cursor>),
     /// Recovered Decision Fetch work consumed this Ingress turn.
     Selected(ProductionLifecycleIngressSelectionV1),
 }
@@ -884,9 +920,9 @@ fn dequeue_prepared_ordinary_ingress<'cursor>(
                 prepared_serve,
                 terminal_subject,
                 std::sync::Arc::clone(&output_guard),
+                runner,
             );
             operation.complete();
-            drop(runner);
             ProductionLifecycleIngressTurnV1::Ordinary(turn)
         }
         Err((error, retained)) => {
@@ -2147,7 +2183,7 @@ impl ActivatedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn consume_prepared_ordinary_ingress_turn(
         &mut self,
         _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
-        mut turn: ProductionPreparedOrdinaryIngressTurnV1,
+        mut turn: ProductionPreparedOrdinaryIngressTurnV1<'_>,
         lane_work: &mut V2LaneWorkAdapter,
         kura: &Kura,
         local_key: &KeyPair,
@@ -2173,7 +2209,7 @@ impl ActivatedProductionLifecycleV1 {
             leader_wire_ingress_binding,
             ..
         } = &mut self.launched;
-        consume_prepared_dequeued_v2_ingress(
+        let outcome = consume_prepared_dequeued_v2_ingress(
             handoff,
             &leader_wire_ingress_binding.ingress,
             executor,
@@ -2185,7 +2221,9 @@ impl ActivatedProductionLifecycleV1 {
             block_sync,
             block_sync_request,
             npos_vrf,
-        )
+        );
+        drop(turn);
+        outcome
     }
 
     /// Hold the sole test auxiliary admission unit through one ingress drive.
@@ -2203,13 +2241,16 @@ impl ActivatedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn settle_prepared_certified_serve_for_test(
         &mut self,
         _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
-        mut turn: ProductionPreparedOrdinaryIngressTurnV1,
+        mut turn: ProductionPreparedOrdinaryIngressTurnV1<'_>,
     ) -> Result<ProductionPreparedCertifiedServeTestSettlementV1, String> {
         let Some(handoff) = turn.handoff.take() else {
             self.launched.close_output_for_restart();
             return Err("prepared Serve token lost its exact runner handoff".to_owned());
         };
-        settle_prepared_certified_serve_for_test(handoff, &mut self.launched.services)
+        let settlement =
+            settle_prepared_certified_serve_for_test(handoff, &mut self.launched.services);
+        drop(turn);
+        settlement
     }
 }
 
@@ -2247,7 +2288,7 @@ mod ordinary_ingress_token_tests {
             .unwrap_or_else(|_| panic!("dequeue the exact selected ordinary winner"));
         let output_guard = ConsensusOutputGuard::isolated();
         let observed = Arc::new(AtomicBool::new(false));
-        let mut turn = prepared_ordinary_ingress_turn(
+        let mut turn = detached_prepared_ordinary_ingress_turn_for_test(
             Arc::clone(&ingress),
             inbound,
             disposition,

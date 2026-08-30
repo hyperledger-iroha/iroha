@@ -1929,32 +1929,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             ));
             let invalid_response_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
             assert!(ordinary_ordinal < invalid_response_ordinal);
-            let (ordinary_turn, after_ordinary_ingress) =
-                with_lifecycle_current_runner_turn_for_test(
-                    &recovered_context,
-                    LifecycleRunnerRankTarget::Ingress,
-                    |runner| match activated.drive_ingress_turn(runner) {
-                        ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
-                        ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
-                            drop(runner);
-                            panic!("an exact ordinary winner cannot return the unchanged cursor")
-                        }
-                        ProductionLifecycleIngressTurnV1::Selected(_) => {
-                            panic!("an ordinary head cannot be poisoned by a later response family")
-                        }
-                    },
-                );
-            assert_eq!(
-                after_ordinary_ingress,
-                LifecycleRunnerRankTarget::Completion
-            );
-            assert_eq!(ordinary_turn.physical_ordinal_for_test(), ordinary_ordinal);
-            assert!(!ordinary_turn.has_prepared_serve_for_test());
-            assert_eq!(
-                leader_wire_ingress.len(),
-                1,
-                "the unrelated malformed response remains behind the exact drained head"
-            );
             let mut ordinary_runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
             let mut block_sync_server = super::super::v2_block_sync::V2BlockSyncServer::new(
@@ -1976,28 +1950,77 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &local_signer,
             )
             .expect("open ordinary-tail NPoS lifecycle");
+            let ((ordinary_physical_ordinal, ordinary_has_serve, ordinary_consumption), after_ordinary_ingress) =
+                with_lifecycle_current_runner_turn_for_test(
+                    &recovered_context,
+                    LifecycleRunnerRankTarget::Ingress,
+                    |runner| match activated.drive_ingress_turn(runner) {
+                        ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                            let physical_ordinal = turn.physical_ordinal_for_test();
+                            let has_prepared_serve = turn.has_prepared_serve_for_test();
+                            let consumption = activated
+                                .consume_prepared_ordinary_ingress_turn(
+                                    &mut ordinary_runner,
+                                    turn,
+                                    &mut lane_work,
+                                    kura.as_ref(),
+                                    &local_signer,
+                                    &mut block_sync_server,
+                                    &mut block_sync,
+                                    &mut block_sync_request,
+                                    &mut npos_vrf,
+                                )
+                                .expect("consume the exact ordinary runner handoff");
+                            (physical_ordinal, has_prepared_serve, consumption)
+                        }
+                        ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                            drop(runner);
+                            panic!("an exact ordinary winner cannot return the unchanged cursor")
+                        }
+                        ProductionLifecycleIngressTurnV1::Selected(_) => {
+                            panic!("an ordinary head cannot be poisoned by a later response family")
+                        }
+                    },
+                );
             assert_eq!(
-                activated
-                    .consume_prepared_ordinary_ingress_turn(
-                        &mut ordinary_runner,
-                        ordinary_turn,
-                        &mut lane_work,
-                        kura.as_ref(),
-                        &local_signer,
-                        &mut block_sync_server,
-                        &mut block_sync,
-                        &mut block_sync_request,
-                        &mut npos_vrf,
-                    )
-                    .expect("consume the exact ordinary runner handoff"),
+                after_ordinary_ingress,
+                LifecycleRunnerRankTarget::Completion
+            );
+            assert_eq!(ordinary_physical_ordinal, ordinary_ordinal);
+            assert!(!ordinary_has_serve);
+            assert_eq!(
+                ordinary_consumption,
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
             );
+            assert_eq!(
+                leader_wire_ingress.len(),
+                1,
+                "the unrelated malformed response remains behind the exact drained head"
+            );
             assert!(!output_guard.restart_required());
-            let (invalid_turn, after_invalid_ingress) = with_lifecycle_current_runner_turn_for_test(
+            let mut invalid_runner =
+                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+            let ((invalid_physical_ordinal, invalid_consumption), after_invalid_ingress) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
                 |runner| match activated.drive_ingress_turn(runner) {
-                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                        let physical_ordinal = turn.physical_ordinal_for_test();
+                        let consumption = activated
+                            .consume_prepared_ordinary_ingress_turn(
+                                &mut invalid_runner,
+                                turn,
+                                &mut lane_work,
+                                kura.as_ref(),
+                                &local_signer,
+                                &mut block_sync_server,
+                                &mut block_sync,
+                                &mut block_sync_request,
+                                &mut npos_vrf,
+                            )
+                            .expect("consume the exact malformed-response ordinary handoff");
+                        (physical_ordinal, consumption)
+                    }
                     ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                         drop(runner);
                         panic!("invalid-signature response is a drainable ordinary winner")
@@ -2008,26 +2031,9 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 },
             );
             assert_eq!(after_invalid_ingress, LifecycleRunnerRankTarget::Completion);
+            assert_eq!(invalid_physical_ordinal, invalid_response_ordinal);
             assert_eq!(
-                invalid_turn.physical_ordinal_for_test(),
-                invalid_response_ordinal
-            );
-            let mut invalid_runner =
-                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-            assert_eq!(
-                activated
-                    .consume_prepared_ordinary_ingress_turn(
-                        &mut invalid_runner,
-                        invalid_turn,
-                        &mut lane_work,
-                        kura.as_ref(),
-                        &local_signer,
-                        &mut block_sync_server,
-                        &mut block_sync,
-                        &mut block_sync_request,
-                        &mut npos_vrf,
-                    )
-                    .expect("consume the exact malformed-response ordinary handoff"),
+                invalid_consumption,
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
             );
             assert_eq!(leader_wire_ingress.len(), 0);
@@ -2097,11 +2103,19 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let auxiliary_hold = activated
                 .hold_auxiliary_io_admission_for_test()
                 .expect("hold the sole auxiliary I/O admission unit");
-            let (rejected_turn, after_rejected_serve) = with_lifecycle_current_runner_turn_for_test(
+            let mut serve_runner =
+                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+            let ((rejected_physical_ordinal, rejected_settlement), after_rejected_serve) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
                 |runner| match activated.drive_ingress_turn(runner) {
-                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                        let physical_ordinal = turn.physical_ordinal_for_test();
+                        let settlement = activated
+                            .settle_prepared_certified_serve_for_test(&mut serve_runner, turn)
+                            .expect("retire exact deterministic Serve negative");
+                        (physical_ordinal, settlement)
+                    }
                     ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                         drop(runner);
                         panic!("current certified Serve rejection must own ingress")
@@ -2112,15 +2126,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 },
             );
             assert_eq!(after_rejected_serve, LifecycleRunnerRankTarget::Completion);
-            assert_eq!(
-                rejected_turn.physical_ordinal_for_test(),
-                rejected_serve_ordinal
-            );
-            let mut serve_runner =
-                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-            let rejected_settlement = activated
-                .settle_prepared_certified_serve_for_test(&mut serve_runner, rejected_turn)
-                .expect("retire exact deterministic Serve negative");
+            assert_eq!(rejected_physical_ordinal, rejected_serve_ordinal);
             assert!(
                 matches!(
                     &rejected_settlement,

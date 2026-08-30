@@ -444,18 +444,19 @@ The exact ABI22 Kagemusha V4 builders, scaled amounts, artifact streaming,
 attestation registration, and PKK2/PKKQ1 transport models remain internal
 implementation substrate. Kotlin applications use the public Offline Cash V1
 types, `OfflineCashPeerAdapterV1`, `OfflineCashQrStream*V1`, wallet session,
-artifact installer, and device lifecycle bridge.
+verification session, artifact installer, and device lifecycle bridge.
 
 The clean Offline Cash V1 lifecycle additionally requires one rollback-resistant
 intent slot, an exact-next monetary counter, trusted time, authenticated terminal
 recovery, and an authenticated staged-payment outbox. Android KeyMint's one-use
-key API does not provide that atomic state machine. Call
-`OfflineCashDeviceLifecycleBridgeV1.production()` to discover the complete
-optional native contract; missing symbols or any partial capability produce
-`ONLINE_ONLY`, with no KeyMint-only, TEE, or software fallback. The bridge accepts
-only the bounded V1 command frame and does not expose an old V4/V5 selector.
-See [`specs/offline_cash_device_bridge_v1.md`](../specs/offline_cash_device_bridge_v1.md)
-for exact frame offsets, feature bits, and optional native entry points.
+key API does not provide that atomic state machine.
+`OfflineCashDeviceLifecycleBridgeV1.production()` is therefore hard-disabled to
+`ONLINE_ONLY` until a separately reviewed compile-time backend gate exists;
+optional JNI symbols or a structural capability frame cannot enable it. The
+bounded V1 command codec and `withEndpointForTests` remain test-only, with no
+KeyMint-only, TEE, dynamic-symbol, or software fallback. See
+[`specs/offline_cash_device_bridge_v1.md`](../specs/offline_cash_device_bridge_v1.md)
+for the contract that a future reviewed backend must satisfy.
 
 Install the clean Offline Cash V1 proof release with
 `OfflineCashArtifactSetInstallerV1.install` before opening a receiver session.
@@ -463,12 +464,13 @@ The call streams exactly one regular file for every case of the canonical
 34-role `OfflineCashArtifactRoleV1` inventory and supplies the independently
 trusted manifest SHA-256, internal validation receipt, authority policy, and
 threshold release attestation. Native code pins and reauthenticates every file;
-no path string crosses JNI. `OfflineCashWalletSessionV1` then retains the
+no path string crosses JNI. `OfflineCashVerificationSessionV1` then retains the
 move-only paired-proof receipt inside an opaque native handle so only the exact
-bound acknowledgement can advance the session. Release replacement or removal
-invalidates old sessions. This verification does not replace the secure-device
-journal/outbox bridge, so Android remains online-only when that production
-service is unavailable.
+bound acknowledgement can advance verification. Release replacement or removal
+invalidates old verification sessions. This does not replace the secure-device
+journal/outbox bridge. `OfflineCashWalletSessionV1` is a separate opaque product
+facade with the exact 0..12 lifecycle vocabulary; `open` and every action fail
+unavailable while the production service remains disabled.
 
 Artifact streaming installs
 exactly eight Pasta artifacts atomically: `ParamsIPA`, processed proving key, processed verifying
@@ -785,7 +787,20 @@ transport.unregisterPushDevice(request, canonicalAuth).join()
 
 ## Verifying Key Registry
 
-`core-jvm` exposes Torii helpers for `/v1/zk/vk/register` and
+`core-jvm` exposes a strict `listActiveVerifyingKeyIds()` discovery helper. It
+always requests `GET /v1/zk/vk?status=Active&ids_only=true&limit=1000&order=asc`,
+requires an exact 512 KiB-bounded `application/json` array of canonical
+`{backend,name}` identifiers. Response bytes must be strict UTF-8; both fields
+must use Rust's lowercase ASCII portable registry grammar and fit within 256
+UTF-8 bytes, while backends additionally belong to the closed verifier
+registry. The public read strips configured cookies, proxy/API credentials,
+canonical-request credentials, and operator credentials while retaining
+harmless headers such as tracing metadata. The default client routes this
+buffered read through a fresh SDK-owned OkHttp corridor and never falls back to
+URLConnection, whose process-wide authentication caches cannot be isolated.
+Caller-supplied executors remain an explicit transport and TLS trust boundary.
+
+`core-jvm` also exposes Torii helpers for `/v1/zk/vk/register` and
 `/v1/zk/vk/update`. They validate production verifier backends, required
 registry fields, height ranges, and inline verifier-key commitments before
 sending the request. Neither request accepts or transmits a private key. Torii

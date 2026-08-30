@@ -93,6 +93,64 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
         }
     }
 
+    func testVerifierRegistryV1InventoryAndEngineBindingsAreExact() {
+        let expected: [(String, VerifyingKeyBackendTag)] = [
+            ("halo2/ipa", .halo2IpaPasta),
+            ("halo2/pasta/kaigi-roster-v1", .halo2IpaPasta),
+            ("halo2/pasta/kaigi-usage-v1", .halo2IpaPasta),
+            ("halo2/pasta/ivm-execution-v1", .halo2IpaPasta),
+            (
+                "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+                .halo2IpaPasta
+            ),
+            (
+                "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+                .halo2IpaPasta
+            ),
+            (
+                "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+                .halo2IpaPasta
+            ),
+            (
+                "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+                .halo2IpaPasta
+            ),
+            ("stark/fri", .stark),
+            ("stark/fri/sha256-goldilocks", .stark),
+            ("stark/fri/poseidon2-goldilocks", .stark),
+            ("stark/fri/sha256_goldilocks.v1", .stark),
+        ]
+
+        XCTAssertEqual(
+            VerifyingKeyBackendTag.verifierBackendRegistryLabelsV1,
+            expected.map(\.0)
+        )
+        XCTAssertEqual(VerifierBackendRegistryLabels.orderedV1, expected.map(\.0))
+        for (label, engine) in expected {
+            XCTAssertEqual(
+                VerifyingKeyBackendTag.verifierBackendRegistryTagV1(label),
+                engine,
+                label
+            )
+        }
+
+        for rejected in [
+            nil,
+            "",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "halo2-ipa-pasta",
+            "stark",
+            "STARK/FRI",
+            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3/latest",
+        ] as [String?] {
+            XCTAssertNil(
+                VerifyingKeyBackendTag.verifierBackendRegistryTagV1(rejected),
+                rejected ?? "nil"
+            )
+        }
+    }
+
     func testVerifierRegistryRejectsAliasesRetiredProfilesAndConfusables() {
         let rejected: [String?] = [
             nil,

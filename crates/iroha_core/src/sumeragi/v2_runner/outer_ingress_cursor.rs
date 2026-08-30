@@ -138,9 +138,9 @@ impl LifecycleRunnerRankSnapshot {
 /// Reifying the cursor preserves the existing iterator order while giving the
 /// guarded lifecycle planner a real runner-reach debt instead of a
 /// caller-supplied zero. It remains private and never mints SchedulerInputs by
-/// itself.
-// TODO: Call the owner transaction while this cursor is borrowed at the live
-// Ingress turn, together with the consuming owner-to-worker body-store launch.
+/// itself. Ordinary Ingress selection transfers the live borrow into its
+/// opaque owner transaction, which releases the cursor only after the
+/// owner-to-worker handoff has been consumed.
 #[derive(Debug)]
 struct OuterIngressTurns {
     context_id: wire::HeightContextId,

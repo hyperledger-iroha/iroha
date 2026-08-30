@@ -1171,6 +1171,60 @@ fn durable_validate_origin_exactly_authorizes_candidate(
                     && consumed == universe
             })
 }
+
+/// Recheck the live retry frontier of one still-pending durable Validate.
+///
+/// The move-only admission retains the original effect binding while its
+/// paired executor retry seal may advance to a later consumer tag or stronger
+/// quorum authority.  Joining by causal key and the closed body-stage
+/// authority lattice proves that the frontier still belongs to this exact
+/// origin without exposing either origin-specific replay carrier.
+fn durable_validate_origin_exactly_authenticates_frontier(
+    valid: bool,
+    origin_effect: &AdapterEffect,
+    origin_pending: &PendingRuntimeEffectBinding,
+    frontier_effect: &AdapterEffect,
+    frontier_ownership: &RuntimeEffectOwnership,
+) -> bool {
+    let (
+        AdapterEffect::ValidateBody {
+            tag: origin_tag,
+            round: origin_round,
+            subject: origin_subject,
+        },
+        AdapterEffect::ValidateBody {
+            tag: frontier_tag,
+            round: frontier_round,
+            subject: frontier_subject,
+        },
+    ) = (origin_effect, frontier_effect)
+    else {
+        return false;
+    };
+    let Ok(frontier_pending) =
+        frontier_ownership.exact_pending_adapter_effect_binding(frontier_effect)
+    else {
+        return false;
+    };
+    let (Some(origin_statement), Some(frontier_statement)) = (
+        origin_pending.candidate_statement(),
+        frontier_pending.candidate_statement(),
+    ) else {
+        return false;
+    };
+    valid
+        && (frontier_tag == origin_tag || frontier_tag.strictly_advances(*origin_tag))
+        && frontier_round == origin_round
+        && frontier_subject == origin_subject
+        && frontier_pending.causal_lifecycle_key() == origin_pending.causal_lifecycle_key()
+        && matches!(
+            origin_statement.body_stage_authority_relation_to(frontier_statement),
+            Some(
+                crate::sumeragi::v2_runtime::RuntimeFetchAuthorityRelation::Same
+                    | crate::sumeragi::v2_runtime::RuntimeFetchAuthorityRelation::Upgrade
+            )
+        )
+}
 /// Origin-specific durable Validate owner accepted by the single admission cut.
 #[must_use = "durable Validate admission must be installed or returned intact"]
 pub(super) enum PreparedDurableValidateAdmissionV1 {
@@ -1482,6 +1536,43 @@ impl PreparedAuthenticatedGenesisStoreReplayPreAdmission {
     ) -> bool {
         self.validates() && self.replay_evidence.exactly_matches_origin_fetch(effect)
     }
+    /// Authenticate the certified Fetch which reopens this immutable Store
+    /// under a strictly later reducer incarnation.
+    pub(in crate::sumeragi) fn exactly_authenticates_fetch_consumer_rebind(
+        &self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        let AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            ..
+        } = effect
+        else {
+            return false;
+        };
+        let successor_store = AdapterEffect::StoreBody {
+            tag: *tag,
+            round: *round,
+            subject: *subject,
+        };
+        let Ok(successor_ownership) =
+            ownership.rebind_as_inherited_adapter_effect(&successor_store)
+        else {
+            return false;
+        };
+        let Ok(successor_pending) =
+            successor_ownership.exact_pending_adapter_effect_binding(&successor_store)
+        else {
+            return false;
+        };
+        self.validates()
+            && self
+                .replay_evidence
+                .exactly_matches_rebound_origin_fetch(effect)
+            && successor_pending.exactly_binds_adapter_effect(&successor_store)
+    }
     /// Recheck an exact Store retry without replacing its local genesis origin.
     pub(in crate::sumeragi) fn exactly_matches_retry(
         &self,
@@ -1493,6 +1584,23 @@ impl PreparedAuthenticatedGenesisStoreReplayPreAdmission {
             .is_ok_and(|pending| {
                 self.validates() && self.effect == *effect && self.pending == pending
             })
+    }
+    /// Authenticate a strictly later reducer consumer without replacing the
+    /// immutable genesis Store task or its locally authenticated replay root.
+    pub(in crate::sumeragi) fn exactly_authenticates_consumer_rebind(
+        &self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        let Ok(pending) = ownership.exact_pending_adapter_effect_binding(effect) else {
+            return false;
+        };
+        self.validates()
+            && self
+                .pending
+                .project_store_consumer_rebind(&self.effect, effect, &pending)
+                .as_ref()
+                == Some(&pending)
     }
     /// Join the exact store-minted BodyFrame without exposing either input.
     #[allow(clippy::result_large_err)]
@@ -1564,6 +1672,43 @@ impl PreparedAuthenticatedGenesisStoredReplayPreAdmission {
                     && pending == self.store_pending
             })
     }
+    /// Rebind a strictly later same-body Store consumer under the immutable
+    /// runtime owner retained by this durable authenticated-genesis replay.
+    pub(in crate::sumeragi) fn project_incumbent_store_ownership(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        store_ownership: &RuntimeEffectOwnership,
+        store_effect: &AdapterEffect,
+        incoming_ownership: &RuntimeEffectOwnership,
+    ) -> Option<RuntimeEffectOwnership> {
+        let (
+            AdapterEffect::StoreBody {
+                tag: retained_tag,
+                round: retained_round,
+                subject: retained_subject,
+            },
+            AdapterEffect::StoreBody {
+                tag: incoming_tag,
+                round: incoming_round,
+                subject: incoming_subject,
+            },
+        ) = (&self.store_effect, store_effect)
+        else {
+            return None;
+        };
+        if !self.exactly_retains_owned_store(durable_receipt, store_ownership)
+            || !incoming_ownership.exactly_binds_adapter_effect(store_effect)
+            || retained_tag.height() != incoming_tag.height()
+            || !incoming_tag.strictly_advances(*retained_tag)
+            || retained_round != incoming_round
+            || retained_subject != incoming_subject
+        {
+            return None;
+        }
+        store_ownership
+            .adopt_incumbent_body_stage_for_retry_or_authority(incoming_ownership, store_effect)
+            .ok()
+    }
     /// Derive the same-body Validate runtime owner from this exact Store owner.
     pub(in crate::sumeragi) fn project_incumbent_validate_ownership(
         &self,
@@ -1603,6 +1748,7 @@ impl PreparedAuthenticatedGenesisStoredReplayPreAdmission {
         self,
         effect: AdapterEffect,
         ownership: RuntimeEffectOwnership,
+        authority_certificate: Option<&wire::QuorumCertificate>,
     ) -> Result<
         PreparedLocalBodyValidateReplayPreAdmission,
         AuthenticatedGenesisValidateReplayPreAdmissionError,
@@ -1620,6 +1766,7 @@ impl PreparedAuthenticatedGenesisStoredReplayPreAdmission {
             &self.durable_receipt,
             &effect,
             &pending,
+            authority_certificate,
         ) {
             return Err(AuthenticatedGenesisValidateReplayPreAdmissionError {
                 stored: self,
@@ -1640,6 +1787,7 @@ impl PreparedAuthenticatedGenesisStoredReplayPreAdmission {
                 &durable_receipt,
                 &effect,
                 &pending,
+                authority_certificate,
             )
             .expect("preflighted authenticated-genesis Validate projection is exact");
         let validate = PreparedLocalBodyValidateReplayPreAdmission {
@@ -1657,11 +1805,12 @@ impl PreparedAuthenticatedGenesisStoredReplayPreAdmission {
         self,
         effect: AdapterEffect,
         ownership: RuntimeEffectOwnership,
+        authority_certificate: Option<&wire::QuorumCertificate>,
     ) -> Result<
         PreparedLocalBodyValidateReplayPreAdmission,
         AuthenticatedGenesisValidateReplayPreAdmissionError,
     > {
-        self.project_validate_inner(effect, ownership)
+        self.project_validate_inner(effect, ownership, authority_certificate)
     }
     /// Consume the durable Store family through its exact Commit-authorized Validate.
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -1673,6 +1822,7 @@ impl PreparedAuthenticatedGenesisStoredReplayPreAdmission {
         proposal_round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         execution_commitment: wire::ExecutionCommitment,
+        authority_certificate: Option<&wire::QuorumCertificate>,
     ) -> Result<
         PreparedLocalBodyValidateReplayPreAdmission,
         AuthenticatedGenesisValidateReplayPreAdmissionError,
@@ -1689,7 +1839,7 @@ impl PreparedAuthenticatedGenesisStoredReplayPreAdmission {
                 _ownership: ownership,
             });
         }
-        self.project_validate_inner(effect, ownership)
+        self.project_validate_inner(effect, ownership, authority_certificate)
     }
 }
 impl PreparedRemoteProposalFetchReplayPreAdmission {
@@ -1832,6 +1982,23 @@ impl PreparedRemoteProposalStoreReplayPreAdmission {
                         .exactly_matches_store_pending(effect, &pending)
             })
     }
+    /// Authenticate a strictly later reducer consumer without replacing the
+    /// immutable Store task or its signed-Proposal replay origin.
+    pub(in crate::sumeragi) fn exactly_authenticates_consumer_rebind(
+        &self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        let Ok(pending) = ownership.exact_pending_adapter_effect_binding(effect) else {
+            return false;
+        };
+        self.validates()
+            && self
+                .pending
+                .project_store_consumer_rebind(&self.effect, effect, &pending)
+                .as_ref()
+                == Some(&pending)
+    }
     /// Join the exact store-minted BodyFrame without exposing either input.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn bind_durable_body(
@@ -1913,6 +2080,43 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
                 self.exactly_matches_retry(&self.store_effect, durable_receipt)
                     && pending == self.store_pending
             })
+    }
+    /// Rebind a strictly later same-body Store consumer under the immutable
+    /// runtime owner retained by this durable signed-Proposal replay.
+    pub(in crate::sumeragi) fn project_incumbent_store_ownership(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        store_ownership: &RuntimeEffectOwnership,
+        store_effect: &AdapterEffect,
+        incoming_ownership: &RuntimeEffectOwnership,
+    ) -> Option<RuntimeEffectOwnership> {
+        let (
+            AdapterEffect::StoreBody {
+                tag: retained_tag,
+                round: retained_round,
+                subject: retained_subject,
+            },
+            AdapterEffect::StoreBody {
+                tag: incoming_tag,
+                round: incoming_round,
+                subject: incoming_subject,
+            },
+        ) = (&self.store_effect, store_effect)
+        else {
+            return None;
+        };
+        if !self.exactly_retains_owned_store(durable_receipt, store_ownership)
+            || !incoming_ownership.exactly_binds_adapter_effect(store_effect)
+            || retained_tag.height() != incoming_tag.height()
+            || !incoming_tag.strictly_advances(*retained_tag)
+            || retained_round != incoming_round
+            || retained_subject != incoming_subject
+        {
+            return None;
+        }
+        store_ownership
+            .adopt_incumbent_body_stage_for_retry_or_authority(incoming_ownership, store_effect)
+            .ok()
     }
     /// Derive the only same-body Validate incumbent from the retained Store
     /// owner without releasing the replay token or minting a new causal root.
@@ -2090,6 +2294,7 @@ impl PreparedRemoteProposalValidateReplayPreAdmission {
             &self.durable_receipt,
             self.replay_evidence.exactly_authorizes_admission_authority(
                 active_context,
+                &self.effect,
                 &candidate.replay_authority,
             ),
             active_context,
@@ -2514,6 +2719,35 @@ impl PreparedDurableValidateAdmissionV1 {
     }
 }
 impl PendingDurableValidateAdmissionV1 {
+    /// Authenticate the monotone live retry frontier paired with this exact
+    /// move-only admission owner.
+    pub(in crate::sumeragi) fn exactly_authenticates_live_frontier(
+        &self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        match &self.validate {
+            PreparedDurableValidateAdmissionV1::RemoteProposal(validate) => {
+                durable_validate_origin_exactly_authenticates_frontier(
+                    validate.validates(),
+                    &validate.effect,
+                    &validate.pending,
+                    effect,
+                    ownership,
+                )
+            }
+            PreparedDurableValidateAdmissionV1::LocalBody(validate) => {
+                durable_validate_origin_exactly_authenticates_frontier(
+                    validate.validates(),
+                    &validate.effect,
+                    &validate.pending,
+                    effect,
+                    ownership,
+                )
+            }
+        }
+    }
+
     /// Recheck an idempotent local-proposal retry without accepting a remote origin.
     pub(in crate::sumeragi) fn exactly_matches_local_body_retry(
         &self,

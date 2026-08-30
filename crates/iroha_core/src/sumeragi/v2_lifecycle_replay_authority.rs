@@ -60,8 +60,8 @@ use crate::sumeragi::{
         LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity, PendingRuntimeEffectBinding,
         RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
         RecoveredWalCandidateProjectionPermit, RecoveredWalDecisionFetchPendingMintPermit,
-        RemoteProposalReplayMintPermit, RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
-        SerializedV2Runtime,
+        RemoteProposalReplayMintPermit, RuntimeCandidateSemanticStatement, RuntimeEffectOwnership,
+        RuntimeFetchAuthorityRelation, RuntimeIngressOwnershipEvidence, SerializedV2Runtime,
     },
     v2_transport::AuthenticatedCertifiedBodyRequest,
 };
@@ -3162,6 +3162,7 @@ impl RemoteProposalStoredReplayEvidenceV1 {
     ) -> Result<RemoteProposalValidateReplayEvidenceV1, Self> {
         let Some(validate_source) = exact_remote_proposal_validate_source(
             &self.family.source,
+            validate_effect,
             validate_pending,
             authority_certificate,
         ) else {
@@ -3214,6 +3215,7 @@ impl RemoteProposalStoredReplayEvidenceV1 {
     ) -> Result<RemoteProposalValidateReplayEvidenceV1, Self> {
         let Some(validate_source) = exact_remote_proposal_validate_source(
             &self.family.source,
+            validate_effect,
             validate_pending,
             Some(decision_certificate),
         ) else {
@@ -3268,6 +3270,7 @@ impl RemoteProposalValidateReplayEvidenceV1 {
             && exact_remote_proposal_validate_source_from_retained(
                 &self.family.source,
                 &self.validate_source,
+                effect,
                 &self.validate_pending,
             )
             && remote_proposal_body_stage_matches(
@@ -3296,11 +3299,13 @@ impl RemoteProposalValidateReplayEvidenceV1 {
     pub(super) fn exactly_authorizes_admission_authority(
         &self,
         active_context: LifecycleContext,
+        effect: &AdapterEffect,
         authority: &LifecycleReplayAuthorityV1,
     ) -> bool {
         exact_remote_proposal_validate_source_from_retained(
             &self.family.source,
             &self.validate_source,
+            effect,
             &self.validate_pending,
         ) && canonical_replay_authority(
             active_context,
@@ -3321,6 +3326,7 @@ impl RemoteProposalValidateReplayEvidenceV1 {
 /// unchanged ordinary statement.
 fn exact_remote_proposal_validate_source(
     source: &BodyPipelineReplaySourceV1,
+    effect: &AdapterEffect,
     pending: &PendingRuntimeEffectBinding,
     authority_certificate: Option<&wire::QuorumCertificate>,
 ) -> Option<BodyPipelineReplaySourceV1> {
@@ -3351,8 +3357,32 @@ fn exact_remote_proposal_validate_source(
                 && statement.phase() == Some(certificate.phase)
                 && statement.execution_commitment() == Some(certificate.execution_commitment) =>
         {
+            let AdapterEffect::ValidateBody {
+                tag,
+                round,
+                subject,
+            } = effect
+            else {
+                return None;
+            };
+            let rebound_tag =
+                ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get());
+            if !pending.exactly_binds_adapter_effect(effect)
+                || *round != proposal.round
+                || *subject != proposal.subject
+                || (rebound_tag != source.tag
+                    && !tag.strictly_advances(EventTag::new(
+                        source.tag.height,
+                        source.tag.view,
+                        crate::sumeragi::v2_core::Generation::new(source.tag.generation),
+                    )))
+                || tag.height() != certificate.round.height
+                || tag.view() < certificate.round.view
+            {
+                return None;
+            }
             Some(BodyPipelineReplaySourceV1 {
-                tag: source.tag,
+                tag: rebound_tag,
                 origin: BodyPipelineOriginV1::Certified {
                     certificate: certificate.clone(),
                     manifest: proposal.manifest.clone(),
@@ -3368,6 +3398,7 @@ fn exact_remote_proposal_validate_source(
 fn exact_remote_proposal_validate_source_from_retained(
     proposal_source: &BodyPipelineReplaySourceV1,
     validate_source: &BodyPipelineReplaySourceV1,
+    effect: &AdapterEffect,
     pending: &PendingRuntimeEffectBinding,
 ) -> bool {
     let certificate = match &validate_source.origin {
@@ -3377,7 +3408,7 @@ fn exact_remote_proposal_validate_source_from_retained(
             return false;
         }
     };
-    exact_remote_proposal_validate_source(proposal_source, pending, certificate).as_ref()
+    exact_remote_proposal_validate_source(proposal_source, effect, pending, certificate).as_ref()
         == Some(validate_source)
 }
 fn exact_remote_proposal_fetch<'a>(

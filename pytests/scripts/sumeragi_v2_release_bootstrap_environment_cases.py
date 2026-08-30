@@ -19,10 +19,23 @@ def test_nonrelocatable_protected_bash_never_launches(
 
 
 def test_unapproved_runner_environment_is_rejected(release_fixture: Fixture) -> None:
+    fixture_arguments = release_fixture.arguments()
+    assert [
+        fixture_arguments[index + 1].partition("=")[0]
+        for index, argument in enumerate(fixture_arguments[:-1])
+        if argument == "--runner-environment"
+    ] == [*SCALING_TRUST_ENV, *FORMAL_TOOL_ENV, *FORMAL_REPLAY_ENV]
+    assert fixture_arguments[-2:] == [
+        "--command-timeout-seconds",
+        str(FIXTURE_COMMAND_TIMEOUT_SECONDS),
+    ]
     result = release_fixture.run(
-        [*release_fixture.arguments(), "--runner-environment", "BASH_ENV=/tmp/attack"]
+        [*fixture_arguments, "--runner-environment", "BASH_ENV=/tmp/attack"]
     )
     _assert_never_launched(release_fixture, result)
+    _assert_release_trust_inputs_and_documented_invocation_are_exact(
+        release_fixture.root
+    )
 
 
 def test_scaling_evidence_runner_environment_is_authenticated_and_forwarded(
@@ -56,7 +69,11 @@ def test_scaling_evidence_runner_environment_is_authenticated_and_forwarded(
         arguments = _replace_runner_environment(
             arguments, name, scaling_environment[name]
         )
-    arguments = _replace_flag(arguments, "--command-timeout-seconds", "20")
+    arguments = _replace_flag(
+        arguments,
+        "--command-timeout-seconds",
+        str(FIXTURE_COMMAND_TIMEOUT_SECONDS),
+    )
     result = release_fixture.run(arguments)
 
     assert result.returncode == 0, result.stderr

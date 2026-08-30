@@ -177,7 +177,7 @@ _BOOTSTRAP_COMPONENT_FILES = (
 )
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "ebc24402ef78e332d3c1d268e1d5fb3927318335e64aee4d2061f4bd3e1cf61c"
+        "d88562890cc954904ee591da5f5a6a4e7859241f770bc3b9e997cf9f8753482f"
     ),
 }
 _APPROVAL_CLASS_IDS = (
