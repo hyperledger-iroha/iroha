@@ -57808,7 +57808,7 @@ impl StateTransaction<'_, '_> {
     /// Consume the exact signed private-settlement carrier once.
     pub(crate) fn consume_private_settlement_carrier_binding_v1(
         &mut self,
-        commit_bundle_digest: Hash,
+        payload_digest: Hash,
         instruction_digest: Hash,
     ) -> core::result::Result<(), PrivateSettlementCarrierBindingErrorV1> {
         let max_signed_transaction_bytes =
@@ -57817,7 +57817,7 @@ impl StateTransaction<'_, '_> {
             .as_mut()
             .ok_or(PrivateSettlementCarrierBindingErrorV1::MissingBinding)?
             .consume(
-                commit_bundle_digest,
+                payload_digest,
                 instruction_digest,
                 max_signed_transaction_bytes,
             )

@@ -1248,10 +1248,9 @@ fn settle_terminal_fixture_runner_handoff(
     lane_work: &mut super::super::v2_lane_work::V2LaneWorkAdapter,
     output_guard: &crate::sumeragi::output_guard::ConsensusOutputGuard,
 ) {
-    let permit =
-        super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
-            .decided_lane_recovery_permit()
-            .expect("settled Apply authorizes its exact runner handoff");
+    let permit = super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+        .decided_lane_recovery_permit()
+        .expect("settled Apply authorizes its exact runner handoff");
     activated
         .with_runner_runtime(
             runner,
@@ -2061,7 +2060,13 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             assert!(!output_guard.restart_required());
 
             let ordinary_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
+                wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                    manifest_hash: HashOf::new(&manifest),
+                    index: 0,
+                    bytes: chunks[0].clone(),
+                    sender: local_validator,
+                    signature: vec![1],
+                }),
             ));
             assert!(matches!(
                 leader_wire_ingress.try_push(
@@ -2212,7 +2217,13 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 output_guard.as_ref(),
             );
             let batch_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
+                wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                    manifest_hash: HashOf::new(&manifest),
+                    index: 0,
+                    bytes: chunks[0].clone(),
+                    sender: local_validator,
+                    signature: vec![1],
+                }),
             ));
             assert!(matches!(
                 leader_wire_ingress.try_push(

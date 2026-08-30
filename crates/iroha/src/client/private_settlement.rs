@@ -7,7 +7,7 @@
 
 use super::*;
 use iroha_data_model::{
-    isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
+    isi::private_settlement::{AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1},
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
         PRIVATE_SETTLEMENT_BLS_BYTES_V1, PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1,
@@ -60,7 +60,7 @@ fn private_settlement_leg_ordinal_for_payload_v1(
 
 fn exact_private_settlement_carrier_v1(
     transaction: &SignedTransaction,
-) -> Result<&FinalizeAtomicPrivateSettlementV1> {
+) -> Result<&AtomicPrivateSettlementV1> {
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(eyre!(
             "private-settlement bundle submission requires one direct carrier"
@@ -71,10 +71,16 @@ fn exact_private_settlement_carrier_v1(
             "private-settlement bundle submission requires one direct carrier"
         ));
     }
-    instructions[0]
-        .as_any()
-        .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
-        .ok_or_else(|| eyre!("private-settlement bundle submission requires one direct carrier"))
+    let instruction = instructions[0].as_any();
+    if let Some(carrier) = instruction.downcast_ref::<FinalizeAtomicPrivateSettlementV1>() {
+        return Ok(&carrier.commit_bundle.manifest);
+    }
+    if let Some(carrier) = instruction.downcast_ref::<AbortAtomicPrivateSettlementV1>() {
+        return Ok(&carrier.manifest);
+    }
+    Err(eyre!(
+        "private-settlement bundle submission requires one direct carrier"
+    ))
 }
 
 fn validate_availability_certificate_v1(
@@ -2115,7 +2121,7 @@ impl Client {
         Ok(decoded)
     }
 
-    /// Submit one exact sponsor-signed global finalization carrier.
+    /// Submit one exact sponsor-signed global finalization or abort carrier.
     ///
     /// # Errors
     ///
@@ -2126,17 +2132,16 @@ impl Client {
         &self,
         request: &PrivateSettlementBundleSubmitRequestV1,
     ) -> Result<PrivateSettlementBundleSubmitResponseV1> {
-        let carrier = exact_private_settlement_carrier_v1(&request.transaction)?;
-        if carrier.commit_bundle.manifest.sponsor != self.account
+        let manifest = exact_private_settlement_carrier_v1(&request.transaction)?;
+        if manifest.sponsor != self.account
             || request.transaction.authority() != &self.account
-            || request.transaction.fee_payment_intent()
-                != &carrier.commit_bundle.manifest.public_fee_intent
+            || request.transaction.fee_payment_intent() != &manifest.public_fee_intent
         {
             return Err(eyre!(
                 "private-settlement bundle carrier sponsor binding is invalid"
             ));
         }
-        let expected_bundle = carrier.commit_bundle.manifest.bundle_id;
+        let expected_bundle = manifest.bundle_id;
         let expected_carrier = Hash::from(request.transaction.hash());
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode private-settlement bundle carrier")?;

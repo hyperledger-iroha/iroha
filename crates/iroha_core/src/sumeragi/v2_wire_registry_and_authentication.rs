@@ -725,10 +725,6 @@ impl WireRegistry {
                     self.tc_to_wire(&certificate, aggregator)?,
                 )
             }
-            reducer::ConsensusMessageV2::BodyRequest(_)
-            | reducer::ConsensusMessageV2::BodyChunk(_) => {
-                return Err(AdapterError::TransportPayload);
-            }
         };
         Ok(wire::ConsensusMessageV2::new(payload))
     }
@@ -1112,8 +1108,7 @@ fn verify_authenticated_message(
         wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
             verify_timeout_certificate(context, certificate, proofs_of_possession)
         }
-        wire::ConsensusMessageV2Payload::PayloadManifest(_)
-        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)

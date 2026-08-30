@@ -233,10 +233,6 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         ConsensusMessageV2Payload::TimeoutCertificate(timeout.clone()),
     );
     insert_message(
-        "payload_manifest",
-        ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
-    );
-    insert_message(
         "payload_chunk",
         ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
             manifest_hash: HashOf::new(&manifest),

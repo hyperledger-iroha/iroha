@@ -752,7 +752,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
             ]
         }
         if route.hasSuffix("/bundles") {
-            return ["bundle_id", "accepted_at_height", "carrier_id", "lifecycle"]
+            return ["bundle_id", "accepted_at_height", "carrier_id"]
         }
         if route.hasSuffix("/status") {
             return [

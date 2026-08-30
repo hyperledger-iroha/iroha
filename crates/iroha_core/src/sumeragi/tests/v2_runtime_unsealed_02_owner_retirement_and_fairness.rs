@@ -1750,7 +1750,8 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
     let original = signed_runtime_proposal(&context, &keys, 1);
     let second = signed_runtime_proposal(&context, &keys, 2);
     let third = signed_runtime_proposal(&context, &keys, 3);
-    let authenticated_peer = super::super::authenticated_peer_for_test();
+    let transport_key = KeyPair::random();
+    let authenticated_peer = PeerId::new(transport_key.public_key().clone());
     let enqueue_network = |runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
                            message: wire::ConsensusMessageV2| {
         let ownership = fair_runtime_ownership(
@@ -1769,12 +1770,23 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
         );
         runtime.can_admit_network_message_with_ingress_ownership(message, &ownership)
     };
-    let transport = match &original.payload {
-        wire::ConsensusMessageV2Payload::Proposal(proposal) => wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadManifest(proposal.manifest.clone()),
-        ),
-        _ => unreachable!("fixture is a proposal"),
+    let mut transport_request = wire::CommitCertificateRequest {
+        protocol_version: wire::PROTOCOL_VERSION,
+        network_id: context.network_id,
+        context_id: context.id(),
+        height: context.height,
+        requester: authenticated_peer.clone(),
+        signature: Vec::new(),
     };
+    transport_request.signature = Signature::new(
+        transport_key.private_key(),
+        &transport_request.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let transport = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::CommitCertificateRequest(transport_request),
+    );
     let owner_tag = enqueue_network(&mut runtime, original.clone())
         .expect("first authenticated proposal owns one normal slot");
     assert_eq!(runtime.queued_commands(), 1);

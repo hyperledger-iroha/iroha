@@ -179,7 +179,7 @@ pub const AUDITOR_APPROVAL: RouteDescriptor = auditor_post(
     "private_settlement.auditor.approval",
     "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
 );
-/// Submit the complete certified bundle carrier as its public sponsor.
+/// Submit a complete finalization or abort carrier as its public sponsor.
 pub const BUNDLE_SUBMIT: RouteDescriptor = account_post(
     "private_settlement.bundle.submit",
     "/v1/nexus/private-settlements/bundles",

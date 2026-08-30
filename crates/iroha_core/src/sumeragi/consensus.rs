@@ -104,10 +104,9 @@ pub fn consensus_domain(
 }
 /// Compute the genesis-embedded v2 consensus-parameters fingerprint.
 ///
-/// The projection deliberately omits v1 collectors, phase-specific and
-/// adaptive timeouts, the global-RBC switch, and any local fallback. Mode,
-/// cadence, block bound, signed DA/Nexus context,
-/// and the genesis-selected NPoS election inputs are canonical Norito fields.
+/// Mode, cadence, block bound, signed DA/Nexus context, and the
+/// genesis-selected NPoS election inputs are the complete canonical Norito
+/// projection for the first release.
 /// Mutable shared adapter settings are committed separately by
 /// [`SumeragiConfig::v2_config`].
 pub fn compute_consensus_parameters_fingerprint(

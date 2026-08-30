@@ -1530,7 +1530,6 @@ impl Reducer {
             ConsensusMessageV2::TimeoutCertificate(certificate) => {
                 durable.last_timeout() == Some(certificate)
             }
-            ConsensusMessageV2::BodyRequest(_) | ConsensusMessageV2::BodyChunk(_) => false,
         }
     }
     fn prune_inactive_outbound_control(&mut self) {
@@ -2886,8 +2885,6 @@ impl Reducer {
             ConsensusMessageV2::TimeoutCertificate(certificate) => {
                 Self::apply_timeout_certificate(key, certificate);
             }
-            ConsensusMessageV2::BodyRequest(subject) => key.subject = *subject,
-            ConsensusMessageV2::BodyChunk(chunk) => key.subject = chunk.subject(),
         }
     }
     fn effect_capability(effect: &Effect) -> EffectCapabilityKey {
@@ -3211,7 +3208,6 @@ impl Reducer {
                         Self::apply_timeout_certificate(&mut key, certificate);
                         key
                     }),
-                ConsensusMessageV2::BodyRequest(_) | ConsensusMessageV2::BodyChunk(_) => None,
             },
             Effect::Apply {
                 subject,
@@ -4106,7 +4102,6 @@ impl Reducer {
                 OutboundControlClass::TimeoutCertificate,
                 certificate.round(),
             ),
-            ConsensusMessageV2::BodyRequest(_) | ConsensusMessageV2::BodyChunk(_) => return,
         };
         let replace = self.outbound_control.get(&class).is_none_or(|existing| {
             let existing_round = match existing {
@@ -4115,9 +4110,6 @@ impl Reducer {
                 ConsensusMessageV2::QuorumCertificate(certificate) => certificate.round(),
                 ConsensusMessageV2::TimeoutVote(vote) => vote.vote().round(),
                 ConsensusMessageV2::TimeoutCertificate(certificate) => certificate.round(),
-                ConsensusMessageV2::BodyRequest(_) | ConsensusMessageV2::BodyChunk(_) => {
-                    unreachable!("transport messages are never retained as control traffic")
-                }
             };
             round.view() > existing_round.view()
                 || &message == existing

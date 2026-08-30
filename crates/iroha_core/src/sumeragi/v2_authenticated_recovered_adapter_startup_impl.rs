@@ -164,7 +164,6 @@ impl AuthenticatedRecoveredAdapterStartup {
         let RecoveredLifecycleStorageAuthorityV1 {
             kura_identity,
             wal_path,
-            chunk_root,
             lifecycle_root,
             successor_floor,
             ..
@@ -190,7 +189,6 @@ impl AuthenticatedRecoveredAdapterStartup {
         let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 {
             kura_identity,
             wal_path,
-            chunk_root,
             local_signer: Some(local_signer.public_key().clone()),
         };
         Ok(owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service))
@@ -534,12 +532,11 @@ impl AuthenticatedRecoveredAdapterStartup {
                 verified.context(),
             )
         };
-        let (payload_store, recovered_payloads) = payload_store_open
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
-                )
-            })?;
+        let (payload_store, recovered_payloads) = payload_store_open.map_err(|error| {
+            ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
+            )
+        })?;
         let serve_payloads = recovered_payloads
             .authenticate(&verified, local_signer, &body_store)
             .map_err(|error| {
@@ -624,12 +621,11 @@ impl AuthenticatedRecoveredAdapterStartup {
                 verified.context(),
             )
         };
-        let (payload_store, recovered_payloads) = payload_store_open
-            .map_err(|error| {
-                ProductionLifecycleOwnerStartupErrorV1::new(
-                    ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
-                )
-            })?;
+        let (payload_store, recovered_payloads) = payload_store_open.map_err(|error| {
+            ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
+            )
+        })?;
         let serve_payloads = recovered_payloads
             .authenticate(verified, local_signer, &body_store)
             .map_err(|error| {

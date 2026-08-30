@@ -141,6 +141,10 @@ class PrivateSettlementFaultReportTests(unittest.TestCase):
         unacknowledged["loss_trials"][0]["control_acknowledged"] = False  # type: ignore[index]
         with self.assertRaises(MODULE.FaultEvidenceError):
             MODULE.parse_run(unacknowledged, "fixture")
+        undelayed = run_record(3, 0, 0)
+        undelayed["phase_cut_partitions"][0]["delayed_delivery"] = False  # type: ignore[index]
+        with self.assertRaises(MODULE.FaultEvidenceError):
+            MODULE.parse_run(undelayed, "fixture")
         missing_crash = run_record(3, 0, 0)
         missing_crash["crash_recoveries"] = missing_crash["crash_recoveries"][:-1]  # type: ignore[index]
         with self.assertRaises(MODULE.FaultEvidenceError):

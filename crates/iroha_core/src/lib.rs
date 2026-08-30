@@ -579,8 +579,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                     } else {
                         match &message.payload {
                             ConsensusMessageV2Payload::PayloadChunk(_) => T::ConsensusChunk,
-                            ConsensusMessageV2Payload::PayloadManifest(_)
-                            | ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
+                            ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
                                 T::ConsensusPayload
                             }
                             ConsensusMessageV2Payload::Proposal(_)

@@ -304,15 +304,6 @@ blocksync_range_pull_escalation_total	blocksync_range_pull_escalation_total	Bloc
 blocksync_range_pull_success_total	blocksync_range_pull_success_total	Block-sync range-pull recoveries that succeeded (cumulative)	registered
 blocksync_range_pull_failure_total	blocksync_range_pull_failure_total	Block-sync range-pull recoveries that expired without progress (cumulative)	registered
 consensus_recovery_stuck_round_seconds	consensus_recovery_stuck_round_seconds	Observed seconds spent in empty-topology/missing-dependency recovery rounds	registered
-sumeragi_da_gate_block_total	sumeragi_da_gate_block_total	Sumeragi commits gated by missing data-availability artifacts (missing_local_data|manifest_*)	registered
-sumeragi_da_gate_last_reason	sumeragi_da_gate_last_reason	Sumeragi DA availability last reason code (0=none,1=missing_local_data,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)	registered
-sumeragi_da_gate_last_satisfied	sumeragi_da_gate_last_satisfied	Sumeragi DA availability last satisfaction code (0=none,1=missing_data_recovered)	registered
-sumeragi_da_gate_satisfied_total	sumeragi_da_gate_satisfied_total	Sumeragi DA availability satisfactions (missing_data_recovered)	registered
-sumeragi_da_manifest_guard_total	sumeragi_da_manifest_guard_total	Sumeragi DA manifest guard outcomes (allowed|rejected by reason)	registered
-sumeragi_da_manifest_cache_total	sumeragi_da_manifest_cache_total	Sumeragi DA manifest cache outcomes (hit|miss)	registered
-sumeragi_da_spool_cache_total	sumeragi_da_spool_cache_total	Sumeragi DA spool cache outcomes (hit|miss by kind)	registered
-sumeragi_da_pin_intent_spool_total	sumeragi_da_pin_intent_spool_total	Sumeragi DA pin intent spool handling outcomes (kept|dropped by reason)	registered
-sumeragi_da_votes_ingested_total	sumeragi_da_votes_ingested_total	Availability votes ingested by this validator (cumulative)	registered
 sumeragi_qc_assembly_latency_ms	sumeragi_qc_assembly_latency_ms	Latency from first vote to QC assembly (ms) labeled by kind	registered
 sumeragi_qc_last_latency_ms	sumeragi_qc_last_latency_ms	Last observed QC assembly latency (ms) labeled by kind	registered
 sumeragi_kura_store_failures_total	sumeragi_kura_store_failures_total	Sumeragi kura persistence failures (outcome=retry|abort)	registered

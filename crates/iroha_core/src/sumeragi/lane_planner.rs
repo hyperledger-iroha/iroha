@@ -1760,10 +1760,9 @@ pub(super) fn plan_lane_block_subjects_for_slots(
 /// Derive deterministic DA/RBC ownership identities from lane block subjects.
 ///
 /// The planner validates each subject against its canonical subject digest
-/// before deriving payload ownership and RBC instance digests. The current
-/// proposal path uses this as preflight metadata while it still broadcasts a
-/// global block payload; future lane-local DA/RBC sessions can use these
-/// digests as stable, hardware-independent instance names.
+/// before deriving payload ownership and the lane's domain-separated
+/// availability identity. These values are replay/ownership metadata; signed
+/// RS16 manifests and chunks remain the sole payload-availability transport.
 pub(super) fn plan_lane_payload_ownership(
     subjects: &[LaneBlockSubject],
 ) -> Result<Vec<LanePayloadOwnership>, LanePayloadOwnershipError> {

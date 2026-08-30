@@ -34,12 +34,12 @@ struct NposGenesisFingerprintInput {
 }
 /// Compute the deterministic v2 consensus-parameters fingerprint.
 ///
-/// Only frozen v2 inputs are representable in the encoded projection. Legacy collectors,
-/// per-phase/adaptive timers, the global-RBC enable flag, the BLS domain string, and node-local
-/// fallbacks are deliberately discarded. Live startup therefore cannot fingerprint input that omits
-/// its v2 context. Exact network identity is deliberately not part of this genesis-embedded value:
-/// runtime handshakes authenticate a separate required `NetworkId`, avoiding a self-reference
-/// through the genesis block hash.
+/// Only first-release frozen inputs are representable in the encoded
+/// projection: mode, cadence, block bound, signed DA/Nexus context, and NPoS
+/// election parameters. Exact network identity is deliberately not part of
+/// this genesis-embedded value: runtime handshakes authenticate a separate
+/// required `NetworkId`, avoiding a self-reference through the genesis block
+/// hash.
 ///
 /// # Errors
 ///

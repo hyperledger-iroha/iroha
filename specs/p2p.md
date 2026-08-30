@@ -794,8 +794,8 @@ acquire this reply deadline.
     `ConsensusSafety` messages such as `Proposal`, `Vote`,
     `QuorumCertificate`, `TimeoutVote`, and `TimeoutCertificate`)
   - `[network].max_frame_bytes_block_sync` (default = 17 MiB plaintext ceiling;
-    caps revision-4 `PayloadManifest`, `PayloadChunk`, and
-    `CertifiedBodyResponse` frames plus BlockSync responses)
+    caps revision-4 `PayloadChunk` and `CertifiedBodyResponse` frames plus
+    BlockSync responses; the manifest travels only inside `Proposal`)
   - `[network].max_frame_bytes_tx_gossip` (default 256 KiB)
   - `[network].max_frame_bytes_peer_gossip` (default 64 KiB)
   - `[network].max_frame_bytes_health` (default 32 KiB)

@@ -5,6 +5,21 @@ Last updated: 2026-08-30
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Revision-4 DA/RBC release qualification
+
+- After the independent Kotodama syscall-symbol regression and lifecycle-runner
+  formal source-contract drift are resolved, run the focused Core chunk,
+  transport, worker, lifecycle, and proof-harness suites from one settled
+  candidate, followed by strict all-target Clippy and the workspace test gate.
+- Rebuild the Swift native bridge and rerun Swift wire fixtures. Then exercise
+  authenticated chunk loss, parity-first reordering, restart recovery, and
+  certified-body fallback with exact 4- and 7-validator committees, preserving
+  mandatory signed RS16 availability throughout.
+- Profile complete inbound chunk sessions. If repeated manifest validation is
+  material, add a lifecycle-owned authentication seal keyed by the exact height
+  context and manifest, with fail-closed invalidation tests across view and
+  height retirement.
+
 ## Default-on capability follow-up
 
 - Upgrade the locked QUIC stack to a qualified `quinn-proto` release, rerun the
@@ -54,17 +69,21 @@ Completed history lives in [`status.md`](./status.md).
   N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
   DA/RBC throughout. Exercise one validator unavailable per committee,
   coordinator/global restarts, acknowledged authenticated 5/10/20-percent
-  message loss, phase-cut partitions, delay/healing, and crashes after every
+  message loss, phase-cut partitions, delayed delivery/healing, and crashes after every
   sidecar, staged-delta, QC, Kura, WSV, and receipt-publication boundary.
   The strict campaign planner/validator, acknowledged feature-isolated
   process-cut hooks, and private-profile plus transparent Native-AMX
   N=2,3,4,8,16 real-process benchmark entrypoints exist. Because transparent
   DvP V1 is bilateral, its N-participant control is one atomic carrier with
   N-1 consented star-topology DvPs whose Native-AMX receipt covers exactly N
-  participant routes. Finish the fault and leakage paths; compile and execute
-  the complete matrix; execute every hook; and archive the
-  controller acknowledgements instead of promoting the fixed N=3 smoke test,
-  an unexecuted harness, or synthetic responses.
+  participant routes. The real-process fault path now creates fresh bundles for
+  the required route-loss/hold, validator/coordinator restart, persistence-cut,
+  invalid-leg, replay, and continuous atomicity trials, and the leakage path
+  retains raw packet/source/peer-state inputs for independent replay. Compile
+  these paths from one settled candidate, execute the complete matrix and every
+  hook, and archive the genuine controller acknowledgements instead of
+  promoting the fixed N=3 smoke test, an unexecuted harness, or synthetic
+  responses.
   Continuously assert that no strict subset of legs becomes visible or
   spendable. Bind each raw run to the settled commit, the archived structured
   hardware description, and the exact N-specific configuration through the
@@ -77,12 +96,15 @@ Completed history lives in [`status.md`](./status.md).
   formal-model evidence.
 - Execute the structured-canary and differential leakage matrix over Torii,
   restricted/public P2P, block wire, Kura/merge artifacts, snapshots, queries,
-  events, logs, and telemetry. Bind every exact left/right input in the
-  canonical differential-pair manifest, with no unpaired files in either
-  declared root, so the final verifier can recompute byte-size and JSON-shape
-  equivalence independently. Publish the intentional residual linkability:
-  routes/count, timing, sponsor/fee, stable pools/roots, and possible asset
-  inference in single-CBDC dataspaces.
+  events, logs, and telemetry. Retain each unfiltered pcap, tcpdump statistics,
+  canonical port manifest, restricted raw-source archive, and all 16 peer
+  atomicity traces. Bind every exact left/right input in the canonical
+  differential-pair manifest, with no unpaired files in either declared root,
+  so the final verifier can reconstruct the published packet surfaces, replay
+  source projections and atomicity, compare traffic counts, packet shapes,
+  restricted row shapes, and public JSON/byte shapes independently. Publish the
+  intentional residual linkability: routes/count, timing, sponsor/fee, stable
+  pools/roots, and possible asset inference in single-CBDC dataspaces.
 - On pinned hardware, collect at least five warmups and thirty measured bundles
   per real N and multiple seeds. Publish p50/p95/p99 plus confidence intervals
   for proof, availability, audit, committee verification, Prepare, Commit,

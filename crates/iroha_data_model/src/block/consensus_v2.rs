@@ -1806,6 +1806,118 @@ impl PayloadManifest {
         }
         Ok(())
     }
+
+    /// Validate this manifest once for repeated payload-chunk operations.
+    ///
+    /// The returned borrowed seal caches the manifest hash and fixed context
+    /// fields used by every chunk signature. Batch producers and verifiers
+    /// should retain it while processing the manifest's chunk sequence instead
+    /// of revalidating and rehashing the complete manifest for every chunk.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when this manifest is not valid
+    /// for `context` or its chunk count is not representable on the wire.
+    pub fn validated_for_chunks<'manifest>(
+        &'manifest self,
+        context: &HeightContext,
+    ) -> Result<ValidatedPayloadManifest<'manifest>, ValidationError> {
+        self.validate(context)?;
+        let total_chunks = u32::try_from(self.chunk_hashes.len())
+            .map_err(|_| ValidationError::ChunkCountTooLarge)?;
+        Ok(ValidatedPayloadManifest {
+            manifest: self,
+            manifest_hash: HashOf::new(self),
+            total_chunks,
+            epoch: context.epoch,
+            roster_len: context.roster.len(),
+        })
+    }
+}
+
+/// Borrowed proof that one payload manifest passed its complete height-context
+/// validation.
+///
+/// This type is intentionally not a wire value. It exists so repeated chunk
+/// signing and verification can reuse immutable manifest work without weakening
+/// any per-chunk hash, length, sender, or signature check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ValidatedPayloadManifest<'manifest> {
+    manifest: &'manifest PayloadManifest,
+    manifest_hash: HashOf<PayloadManifest>,
+    total_chunks: u32,
+    epoch: u64,
+    roster_len: usize,
+}
+impl ValidatedPayloadManifest<'_> {
+    /// Hash of the exact validated manifest.
+    #[must_use]
+    pub const fn manifest_hash(&self) -> HashOf<PayloadManifest> {
+        self.manifest_hash
+    }
+
+    /// Build the canonical signature payload for one chunk without repeating
+    /// complete manifest validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when the chunk does not match the
+    /// validated manifest or its frozen roster.
+    pub fn signature_payload(
+        &self,
+        chunk: &PayloadChunk,
+    ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
+        if chunk.manifest_hash != self.manifest_hash {
+            return Err(ValidationError::ManifestHashMismatch);
+        }
+        let index =
+            usize::try_from(chunk.index).map_err(|_| ValidationError::ChunkIndexOutOfRange)?;
+        let expected_hash = self
+            .manifest
+            .chunk_hashes
+            .get(index)
+            .ok_or(ValidationError::ChunkIndexOutOfRange)?;
+        validate_encoded_chunk_len(self.manifest, chunk.bytes.len())?;
+        let chunk_hash = Hash::new(&chunk.bytes);
+        if &chunk_hash != expected_hash {
+            return Err(ValidationError::ChunkHashMismatch);
+        }
+        if usize::try_from(chunk.sender)
+            .ok()
+            .is_none_or(|sender| sender >= self.roster_len)
+        {
+            return Err(ValidationError::SignerOutOfRange);
+        }
+        Ok(PayloadChunkSignaturePayload {
+            protocol_version: PROTOCOL_VERSION,
+            context_id: self.manifest.round.context_id,
+            epoch: self.epoch,
+            height: self.manifest.round.height,
+            view: self.manifest.round.view,
+            subject: self.manifest.subject,
+            manifest_hash: self.manifest_hash,
+            encoding: self.manifest.layout.encoding,
+            index: chunk.index,
+            total_chunks: self.total_chunks,
+            chunk_hash,
+            sender: chunk.sender,
+        })
+    }
+
+    /// Build the canonical signature payload after also validating signature
+    /// presence and size.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when the signature bounds or any
+    /// chunk commitment is invalid.
+    pub fn validated_signature_payload(
+        &self,
+        chunk: &PayloadChunk,
+    ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
+        chunk.validate_signature_bounds()?;
+        self.signature_payload(chunk)
+    }
 }
 /// One encoded payload chunk.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -1838,13 +1950,26 @@ impl PayloadChunk {
         context: &HeightContext,
         manifest: &PayloadManifest,
     ) -> Result<(), ValidationError> {
-        if self.signature.is_empty() {
-            return Err(ValidationError::MissingChunkSignature);
-        }
-        if self.signature.len() > MAX_CONSENSUS_SIGNATURE_BYTES {
-            return Err(ValidationError::SignatureTooLarge);
-        }
+        self.validate_signature_bounds()?;
         self.signature_payload(context, manifest).map(|_| ())
+    }
+    /// Build the canonical signature payload after also validating signature
+    /// presence and size.
+    ///
+    /// This is the single-pass verification entry point for transports that
+    /// need both structural validation and the signature preimage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when the signature bounds or any
+    /// chunk commitment does not match `context` and `manifest`.
+    pub fn validated_signature_payload(
+        &self,
+        context: &HeightContext,
+        manifest: &PayloadManifest,
+    ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
+        self.validate_signature_bounds()?;
+        self.signature_payload(context, manifest)
     }
     /// Build the canonical signature payload for this chunk.
     ///
@@ -1863,43 +1988,9 @@ impl PayloadChunk {
         context: &HeightContext,
         manifest: &PayloadManifest,
     ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
-        manifest.validate(context)?;
-        if self.manifest_hash != HashOf::new(manifest) {
-            return Err(ValidationError::ManifestHashMismatch);
-        }
-        let total_chunks = u32::try_from(manifest.chunk_hashes.len())
-            .map_err(|_| ValidationError::ChunkCountTooLarge)?;
-        let index =
-            usize::try_from(self.index).map_err(|_| ValidationError::ChunkIndexOutOfRange)?;
-        let expected_hash = manifest
-            .chunk_hashes
-            .get(index)
-            .ok_or(ValidationError::ChunkIndexOutOfRange)?;
-        validate_encoded_chunk_len(manifest, self.bytes.len())?;
-        let chunk_hash = Hash::new(&self.bytes);
-        if &chunk_hash != expected_hash {
-            return Err(ValidationError::ChunkHashMismatch);
-        }
-        if usize::try_from(self.sender)
-            .ok()
-            .is_none_or(|sender| sender >= context.roster.len())
-        {
-            return Err(ValidationError::SignerOutOfRange);
-        }
-        Ok(PayloadChunkSignaturePayload {
-            protocol_version: PROTOCOL_VERSION,
-            context_id: manifest.round.context_id,
-            epoch: context.epoch,
-            height: manifest.round.height,
-            view: manifest.round.view,
-            subject: manifest.subject,
-            manifest_hash: self.manifest_hash,
-            encoding: manifest.layout.encoding,
-            index: self.index,
-            total_chunks,
-            chunk_hash,
-            sender: self.sender,
-        })
+        manifest
+            .validated_for_chunks(context)?
+            .signature_payload(self)
     }
     /// Return the domain-separated bytes that the sender must sign.
     ///
@@ -1912,13 +2003,17 @@ impl PayloadChunk {
         context: &HeightContext,
         manifest: &PayloadManifest,
     ) -> Result<Vec<u8>, ValidationError> {
-        const DOMAIN: &[u8] = b"iroha:sumeragi:v2:payload-chunk";
-        let payload = self.signature_payload(context, manifest)?;
-        let encoded = payload.encode();
-        let mut preimage = Vec::with_capacity(DOMAIN.len() + encoded.len());
-        preimage.extend_from_slice(DOMAIN);
-        preimage.extend_from_slice(&encoded);
-        Ok(preimage)
+        self.signature_payload(context, manifest)
+            .map(|payload| payload.signature_preimage())
+    }
+    fn validate_signature_bounds(&self) -> Result<(), ValidationError> {
+        if self.signature.is_empty() {
+            return Err(ValidationError::MissingChunkSignature);
+        }
+        if self.signature.len() > MAX_CONSENSUS_SIGNATURE_BYTES {
+            return Err(ValidationError::SignatureTooLarge);
+        }
+        Ok(())
     }
 }
 /// Canonical fields authenticated by a v2 payload-chunk signature.
@@ -1950,6 +2045,18 @@ pub struct PayloadChunkSignaturePayload {
     pub chunk_hash: Hash,
     /// Sender index in the height context roster.
     pub sender: ValidatorIndex,
+}
+impl PayloadChunkSignaturePayload {
+    /// Return the domain-separated bytes authenticated by a chunk signature.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        const DOMAIN: &[u8] = b"iroha:sumeragi:v2:payload-chunk";
+        let encoded = self.encode();
+        let mut preimage = Vec::with_capacity(DOMAIN.len() + encoded.len());
+        preimage.extend_from_slice(DOMAIN);
+        preimage.extend_from_slice(&encoded);
+        preimage
+    }
 }
 /// Signed proposal for one round.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -2531,8 +2638,6 @@ pub enum ConsensusMessageV2Payload {
     TimeoutVote(TimeoutVote),
     /// Aggregate timeout certificate.
     TimeoutCertificate(TimeoutCertificate),
-    /// Payload manifest announcement or retransmission.
-    PayloadManifest(PayloadManifest),
     /// Encoded payload chunk.
     PayloadChunk(PayloadChunk),
     /// Request for a certified body.

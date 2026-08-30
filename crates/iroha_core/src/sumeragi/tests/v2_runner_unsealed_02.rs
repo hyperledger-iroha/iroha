@@ -387,10 +387,8 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
     );
     assert_eq!(encoded.manifest().subject, locked_subject);
     let (manifest, chunks) = encoded.into_parts();
-    let acquisition_root = tempfile::tempdir().expect("chunk reconstruction directory");
-    let mut session =
-        super::super::v2_chunks::V2ChunkSession::open(acquisition_root.path(), &context, manifest)
-            .expect("open exact reproposal chunk session");
+    let mut session = super::super::v2_chunks::V2ChunkSession::open(&context, manifest)
+        .expect("open exact reproposal chunk session");
     for (index, chunk) in chunks.iter().enumerate() {
         session
             .admit_bytes(
@@ -554,12 +552,17 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
         },
     );
     assert!(v2_payload_is_terminal_reducer_control(&response));
-    let manifest = encode_payload(&context, round, subject, &body)
-        .expect("encode terminal body fixture payload")
-        .manifest()
-        .clone();
+    let encoded = encode_payload(&context, round, subject, &body)
+        .expect("encode terminal body fixture payload");
+    let (manifest, chunks) = encoded.into_parts();
     assert!(!v2_payload_is_terminal_reducer_control(
-        &wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
+        &wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+            manifest_hash: HashOf::new(&manifest),
+            index: 0,
+            bytes: chunks[0].clone(),
+            sender: 0,
+            signature: vec![1],
+        })
     ));
     let exact_request = wire::CertifiedBodyRequest {
         round,

@@ -2385,52 +2385,6 @@ pub struct SumeragiLaneGovernance {
     #[norito(default)]
     pub runtime_upgrade: Option<SumeragiRuntimeUpgradeHook>,
 }
-/// DA availability reason reported by `/v1/sumeragi/status`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
-pub enum SumeragiDaGateReason {
-    /// No gate currently blocking commit/finalize.
-    #[default]
-    None,
-    /// Missing local data required to validate the pending block.
-    MissingLocalData,
-    /// Manifest is missing for the pending commitment.
-    ManifestMissing,
-    /// Manifest hash mismatched the commitment.
-    ManifestHashMismatch,
-    /// Manifest could not be read from disk.
-    ManifestReadFailed,
-    /// Manifest spool could not be scanned.
-    ManifestSpoolScan,
-}
-/// Which DA availability condition was satisfied most recently.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
-pub enum SumeragiDaGateSatisfaction {
-    /// No condition has been satisfied yet.
-    #[default]
-    None,
-    /// Missing local data was recovered.
-    MissingDataRecovered,
-    /// Manifest guard was satisfied after previously reporting missing or invalid manifests.
-    ManifestGuardRecovered,
-}
-/// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct SumeragiDaGateStatus {
-    /// Most recent reason that reported missing availability evidence.
-    pub reason: SumeragiDaGateReason,
-    /// Most recent condition that satisfied availability tracking.
-    pub last_satisfied: SumeragiDaGateSatisfaction,
-    /// Count of times local data was missing.
-    pub missing_local_data_total: u64,
-    /// Count of times the manifest guard reported missing/invalid manifests.
-    #[norito(default)]
-    pub manifest_guard_total: u64,
-}
 /// Snapshot of missing-block fetch attempts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2522,9 +2476,6 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after roster-unavailability recovery.
     #[norito(default)]
     pub roster_unavailable_total: u64,
-    /// Total view changes triggered after the DA availability gate remains unresolved.
-    #[norito(default)]
-    pub da_gate_total: u64,
     /// Total view changes triggered after censorship evidence reaches quorum.
     #[norito(default)]
     pub censorship_evidence_total: u64,
@@ -2556,9 +2507,6 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Milliseconds since UNIX epoch when a roster-unavailable cause was last recorded.
     #[norito(default)]
     pub last_roster_unavailable_timestamp_ms: u64,
-    /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
-    #[norito(default)]
-    pub last_da_gate_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a censorship-evidence cause was last recorded.
     #[norito(default)]
     pub last_censorship_evidence_timestamp_ms: u64,

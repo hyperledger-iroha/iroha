@@ -1928,7 +1928,6 @@ impl ConsensusIngressLimiter {
                         | ConsensusMessageV2Payload::QuorumCertificate(_)
                         | ConsensusMessageV2Payload::TimeoutVote(_)
                         | ConsensusMessageV2Payload::TimeoutCertificate(_)
-                        | ConsensusMessageV2Payload::PayloadManifest(_)
                         | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
                         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
                         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
@@ -4540,11 +4539,6 @@ impl NetworkRelayShared {
             ),
             ConsensusMessageV2Payload::TimeoutCertificate(value) => (
                 "SumeragiV2TimeoutCertificate",
-                Some(value.round.height),
-                Some(value.round.view),
-            ),
-            ConsensusMessageV2Payload::PayloadManifest(value) => (
-                "SumeragiV2PayloadManifest",
                 Some(value.round.height),
                 Some(value.round.view),
             ),

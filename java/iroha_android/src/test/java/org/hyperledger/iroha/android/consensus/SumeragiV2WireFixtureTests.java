@@ -35,7 +35,6 @@ public final class SumeragiV2WireFixtureTests {
               "commit_quorum_certificate_reproposal",
               "timeout_vote",
               "timeout_certificate",
-              "payload_manifest",
               "payload_chunk",
               "certified_body_request",
               "certified_body_response",

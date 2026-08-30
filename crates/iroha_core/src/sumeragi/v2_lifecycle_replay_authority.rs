@@ -2467,7 +2467,6 @@ pub(super) fn exact_signed_broadcast_successor_candidate(
         wire::ConsensusMessageV2Payload::TimeoutVote(vote) => vote.round,
         wire::ConsensusMessageV2Payload::QuorumCertificate(_)
         | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -2831,8 +2830,7 @@ fn exact_signed_broadcast_authority(effect: &AdapterEffect) -> Option<LifecycleR
         wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
             (certificate.round, LifecycleStageKind::BroadcastTc)
         }
-        wire::ConsensusMessageV2Payload::PayloadManifest(_)
-        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)

@@ -70,10 +70,11 @@ REQUIRED_ARTIFACT_KINDS = (
     "formal_model_report",
     "hardware_description",
     "kura_artifact",
+    "leakage_capture_provenance",
     "leakage_report",
     "limitations",
     "merge_artifact",
-    "message_count_manifest",
+    "traffic_count_manifest",
     "operator_log",
     "plot",
     "privacy_release_report",
@@ -86,6 +87,8 @@ REQUIRED_ARTIFACT_KINDS = (
     "release_binary",
     "release_inventory_report",
     "reproducible_build_report",
+    "restricted_audit_source",
+    "restricted_packet_source",
     "restricted_p2p_capture",
     "sanitized_capture",
     "sbom",
@@ -93,6 +96,7 @@ REQUIRED_ARTIFACT_KINDS = (
     "snapshot_artifact",
     "soak_report",
     "source_archive",
+    "source_commit",
     "source_lockfile",
     "source_manifest",
     "telemetry_capture",
@@ -109,11 +113,11 @@ REQUIRED_LEAKAGE_CANARY_NAMES = (
     "capsule",
     "memo",
 )
-REQUIRED_MESSAGE_COUNT_CHANNELS = (
-    "torii_requests",
-    "torii_responses",
-    "public_p2p_messages",
-    "restricted_p2p_messages",
+REQUIRED_TRAFFIC_COUNT_CHANNELS = (
+    "torii_request_packets",
+    "torii_response_packets",
+    "public_p2p_packets",
+    "restricted_p2p_packets",
     "block_messages",
     "query_responses",
     "event_records",
@@ -124,12 +128,15 @@ REQUIRED_LEAKAGE_ARTIFACT_KINDS = (
     "block_wire_capture",
     "event_capture",
     "kura_artifact",
+    "leakage_capture_provenance",
     "merge_artifact",
-    "message_count_manifest",
+    "traffic_count_manifest",
     "operator_log",
     "public_p2p_capture",
     "query_capture",
+    "restricted_audit_source",
     "restricted_p2p_capture",
+    "restricted_packet_source",
     "sanitized_capture",
     "snapshot_artifact",
     "telemetry_capture",
@@ -143,16 +150,42 @@ REQUIRED_DIFFERENTIAL_ARTIFACT_KINDS = (
     "operator_log",
     "public_p2p_capture",
     "query_capture",
+    "restricted_audit_source",
     "restricted_p2p_capture",
+    "restricted_packet_source",
     "sanitized_capture",
     "snapshot_artifact",
     "telemetry_capture",
     "torii_capture",
 )
+DIFFERENTIAL_SURFACE_FILES = {
+    "block_wire_capture": "block-wire.bin",
+    "event_capture": "events.json",
+    "kura_artifact": "kura.bin",
+    "merge_artifact": "merge.bin",
+    "operator_log": "operator.json",
+    "public_p2p_capture": "public-p2p.pcapng",
+    "query_capture": "queries.json",
+    "restricted_audit_source": "restricted-audit-sources.bin",
+    "restricted_p2p_capture": "restricted-p2p.pcapng",
+    "restricted_packet_source": "raw-loopback.pcap",
+    "sanitized_capture": "sanitized-capture.pcapng",
+    "snapshot_artifact": "snapshot.bin",
+    "telemetry_capture": "telemetry.json",
+    "torii_capture": "torii.pcapng",
+}
+REQUIRED_DIFFERENTIAL_STATE_CHANGES = frozenset(
+    {"block_wire_capture", "kura_artifact", "snapshot_artifact"}
+)
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
 _GIT_COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DOI = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
 _UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+_GIT_INVENTORY_MODES = frozenset({"100644", "100755", "120000", "160000"})
+_MAX_SOURCE_INVENTORY_ENTRIES = 1_000_000
+_MAX_SOURCE_INVENTORY_PATH_BYTES = 4096
+_SOURCE_SEAL_DOMAIN = b"iroha-workspace-source-seal-v1\0"
+_MAX_SOURCE_SEAL_MEMBER_BYTES = 8 * 1024 * 1024 * 1024
 PASS_REPORT_GATES = {
     "clippy_report": "strict_clippy",
     "format_report": "format_verification",
@@ -227,6 +260,290 @@ def _nonempty_string(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise EvidenceError(f"{label} must be a non-empty string")
     return value
+
+
+def _git_object_digest(payload: bytes, kind: bytes, oid_hex_chars: int) -> str:
+    framed = kind + b" " + str(len(payload)).encode("ascii") + b"\0" + payload
+    if oid_hex_chars == 40:
+        return hashlib.sha1(framed).hexdigest()
+    if oid_hex_chars == 64:
+        return hashlib.sha256(framed).hexdigest()
+    raise EvidenceError("source inventory uses an unsupported Git object format")
+
+
+def _validated_git_inventory(
+    entries: Any,
+    *,
+    label: str,
+    oid_hex_chars: int,
+) -> dict[str, tuple[str, str]]:
+    if (
+        not isinstance(entries, list)
+        or not entries
+        or len(entries) > _MAX_SOURCE_INVENTORY_ENTRIES
+    ):
+        raise EvidenceError(f"{label} must be a non-empty bounded list")
+    inventory: dict[str, tuple[str, str]] = {}
+    canonical_paths: list[bytes] = []
+    for index, candidate in enumerate(entries):
+        entry = _exact_fields(
+            candidate,
+            {"path", "mode", "object"},
+            f"{label}[{index}]",
+        )
+        path = entry["path"]
+        mode = entry["mode"]
+        object_id = entry["object"]
+        if not isinstance(path, str):
+            raise EvidenceError(f"{label}[{index}].path must be a string")
+        try:
+            encoded_path = path.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise EvidenceError(
+                f"{label}[{index}].path must be canonical UTF-8"
+            ) from error
+        components = path.split("/")
+        if (
+            not encoded_path
+            or len(encoded_path) > _MAX_SOURCE_INVENTORY_PATH_BYTES
+            or path.startswith("/")
+            or "\0" in path
+            or any(component in ("", ".", "..") for component in components)
+            or components[0] == ".git"
+        ):
+            raise EvidenceError(f"{label}[{index}].path is unsafe")
+        if mode not in _GIT_INVENTORY_MODES:
+            raise EvidenceError(f"{label}[{index}].mode is not a tracked Git mode")
+        if (
+            not isinstance(object_id, str)
+            or len(object_id) != oid_hex_chars
+            or re.fullmatch(r"[0-9a-f]+", object_id) is None
+        ):
+            raise EvidenceError(f"{label}[{index}].object is not a Git object ID")
+        if path in inventory:
+            raise EvidenceError(f"{label} contains duplicate path {path!r}")
+        inventory[path] = (mode, object_id)
+        canonical_paths.append(encoded_path)
+    if canonical_paths != sorted(canonical_paths):
+        raise EvidenceError(f"{label} paths must be raw-byte sorted")
+    return inventory
+
+
+def _git_inventory_tree_oid_v1(
+    inventory: Mapping[str, tuple[str, str]], oid_hex_chars: int
+) -> str:
+    root: dict[bytes, Any] = {}
+    for path, leaf in inventory.items():
+        components = [component.encode("utf-8") for component in path.split("/")]
+        node = root
+        for component in components[:-1]:
+            existing = node.get(component)
+            if existing is None:
+                child: dict[bytes, Any] = {}
+                node[component] = child
+                node = child
+            elif isinstance(existing, dict):
+                node = existing
+            else:
+                raise EvidenceError(
+                    f"source inventory path conflicts with file {path!r}"
+                )
+        basename = components[-1]
+        if basename in node:
+            raise EvidenceError(f"source inventory path conflicts at {path!r}")
+        node[basename] = leaf
+
+    def tree_digest(node: dict[bytes, Any]) -> str:
+        body = bytearray()
+        ordered = sorted(
+            node.items(),
+            key=lambda item: item[0] + (b"/" if isinstance(item[1], dict) else b""),
+        )
+        for name, value in ordered:
+            if isinstance(value, dict):
+                mode = "40000"
+                object_id = tree_digest(value)
+            else:
+                mode, object_id = value
+            body.extend(mode.encode("ascii"))
+            body.extend(b" ")
+            body.extend(name)
+            body.extend(b"\0")
+            body.extend(bytes.fromhex(object_id))
+        return _git_object_digest(bytes(body), b"tree", oid_hex_chars)
+
+    return tree_digest(root)
+
+
+def _validate_source_commit(path: Path, commit: str) -> str:
+    try:
+        payload = path.read_bytes()
+    except OSError as error:
+        raise EvidenceError(f"cannot read source_commit: {error}") from error
+    if not payload or len(payload) > 16 * 1024 * 1024:
+        raise EvidenceError("source_commit must be one bounded raw Git commit object")
+    if _git_object_digest(payload, b"commit", len(commit)) != commit:
+        raise EvidenceError("source_commit does not hash to the release commit")
+    header, separator, _ = payload.partition(b"\n\n")
+    if not separator:
+        raise EvidenceError("source_commit is missing its Git header boundary")
+    first_line = header.splitlines()[0] if header else b""
+    prefix = b"tree "
+    if not first_line.startswith(prefix):
+        raise EvidenceError("source_commit is missing its leading tree header")
+    try:
+        tree = first_line[len(prefix) :].decode("ascii")
+    except UnicodeDecodeError as error:
+        raise EvidenceError("source_commit tree is not ASCII") from error
+    if len(tree) != len(commit) or re.fullmatch(r"[0-9a-f]+", tree) is None:
+        raise EvidenceError("source_commit tree is not a Git object ID")
+    return tree
+
+
+def _source_seal_take(stream: Any, size: int, label: str) -> bytes:
+    payload = stream.read(size)
+    if len(payload) != size:
+        raise EvidenceError(f"source archive is truncated while reading {label}")
+    return payload
+
+
+def _source_seal_u64(stream: Any, label: str) -> int:
+    return int.from_bytes(_source_seal_take(stream, 8, label), "big")
+
+
+def _validate_source_seal_inventory(
+    path: Path,
+    inventory: Mapping[str, tuple[str, str]],
+    oid_hex_chars: int,
+) -> None:
+    actual: dict[str, tuple[str, str]] = {}
+    prior_path: bytes | None = None
+    try:
+        stream = path.open("rb")
+    except OSError as error:
+        raise EvidenceError(f"cannot read source_archive: {error}") from error
+    with stream:
+        if _source_seal_take(
+            stream, len(_SOURCE_SEAL_DOMAIN), "domain"
+        ) != _SOURCE_SEAL_DOMAIN:
+            raise EvidenceError("source_archive is not a workspace source seal")
+        count = _source_seal_u64(stream, "member count")
+        if count == 0 or count > _MAX_SOURCE_INVENTORY_ENTRIES:
+            raise EvidenceError("source archive member count exceeds its bound")
+        for index in range(count):
+            path_size = _source_seal_u64(stream, f"member {index} path size")
+            if path_size == 0 or path_size > _MAX_SOURCE_INVENTORY_PATH_BYTES:
+                raise EvidenceError("source archive member path exceeds its bound")
+            encoded_path = _source_seal_take(
+                stream, path_size, f"member {index} path"
+            )
+            try:
+                actual_path = encoded_path.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise EvidenceError("source archive path is not canonical UTF-8") from error
+            if prior_path is not None and encoded_path <= prior_path:
+                raise EvidenceError("source archive paths are duplicated or out of order")
+            prior_path = encoded_path
+            components = actual_path.split("/")
+            if (
+                actual_path.startswith("/")
+                or "\0" in actual_path
+                or any(component in ("", ".", "..") for component in components)
+                or components[0] == ".git"
+            ):
+                raise EvidenceError("source archive contains an unsafe path")
+            kind = _source_seal_take(stream, 1, f"member {index} kind")
+            mode = int.from_bytes(
+                _source_seal_take(stream, 4, f"member {index} mode"), "big"
+            )
+            payload_size = _source_seal_u64(stream, f"member {index} payload size")
+            if mode & ~0o7777 or payload_size > _MAX_SOURCE_SEAL_MEMBER_BYTES:
+                raise EvidenceError("source archive member metadata exceeds its bound")
+            if kind == b"F":
+                git_mode = "100755" if mode & 0o111 else "100644"
+                algorithm = hashlib.sha1 if oid_hex_chars == 40 else hashlib.sha256
+                digest = algorithm()
+                digest.update(b"blob " + str(payload_size).encode("ascii") + b"\0")
+                remaining = payload_size
+                while remaining:
+                    chunk = _source_seal_take(
+                        stream,
+                        min(1024 * 1024, remaining),
+                        f"member {index} contents",
+                    )
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                actual_object = digest.hexdigest()
+                actual[actual_path] = (git_mode, actual_object)
+            elif kind == b"L":
+                if payload_size == 0:
+                    raise EvidenceError("source archive contains an empty symlink target")
+                target = _source_seal_take(
+                    stream, payload_size, f"member {index} symlink target"
+                )
+                actual[actual_path] = (
+                    "120000",
+                    _git_object_digest(target, b"blob", oid_hex_chars),
+                )
+            elif kind == b"G":
+                if payload_size != 0:
+                    raise EvidenceError("source archive gitlink has a payload")
+                expected_gitlink = inventory.get(actual_path)
+                actual[actual_path] = (
+                    "160000",
+                    expected_gitlink[1]
+                    if expected_gitlink is not None and expected_gitlink[0] == "160000"
+                    else "0" * oid_hex_chars,
+                )
+            else:
+                raise EvidenceError(f"source archive contains unsupported member {actual_path!r}")
+        if stream.read(1) != b"":
+            raise EvidenceError("source archive has trailing bytes")
+    missing = sorted(set(inventory) - set(actual))
+    unexpected = sorted(set(actual) - set(inventory))
+    incorrect = sorted(
+        source_path
+        for source_path in set(inventory) & set(actual)
+        if inventory[source_path] != actual[source_path]
+    )
+    if missing or unexpected or incorrect:
+        raise EvidenceError(
+            "release inventory differs from the source archive; "
+            f"missing={missing!r} unexpected={unexpected!r} incorrect={incorrect!r}"
+        )
+
+
+def _validate_release_inventory_details(
+    details: Any,
+    *,
+    source_tree: str,
+    source_tracked_file_count: int,
+    source_archive_path: Path,
+) -> None:
+    inventory = _exact_fields(
+        details,
+        {"tree", "entries"},
+        "release_inventory_report.details",
+    )
+    tree = inventory["tree"]
+    if tree != source_tree:
+        raise EvidenceError("release inventory tree differs from source manifest")
+    oid_hex_chars = len(source_tree)
+    expected = _validated_git_inventory(
+        inventory["entries"],
+        label="release_inventory_report.details.entries",
+        oid_hex_chars=oid_hex_chars,
+    )
+    if len(expected) != source_tracked_file_count:
+        raise EvidenceError(
+            "release inventory count differs from the clean source manifest"
+        )
+    reconstructed_tree = _git_inventory_tree_oid_v1(expected, oid_hex_chars)
+    if reconstructed_tree != source_tree:
+        raise EvidenceError(
+            "release inventory entries do not reconstruct the clean source tree"
+        )
+    _validate_source_seal_inventory(source_archive_path, expected, oid_hex_chars)
 
 
 def _exact_integer(value: Any, expected: int, label: str) -> None:
@@ -473,6 +790,9 @@ def _validate_pass_report(
     artifact_kind: str,
     commit: str,
     artifacts_by_path: dict[PurePosixPath, Artifact],
+    source_tree: str | None = None,
+    source_tracked_file_count: int | None = None,
+    source_archive_path: Path | None = None,
 ) -> PurePosixPath:
     """Validate one successful command gate and its separately bound transcript."""
 
@@ -520,33 +840,20 @@ def _validate_pass_report(
         raise EvidenceError(f"{artifact_kind}.duration_seconds must be positive")
     details = report["details"]
     if artifact_kind == "release_inventory_report":
-        inventory = _exact_fields(
-            details,
-            {
-                "expected_count",
-                "actual_count",
-                "missing",
-                "unexpected",
-                "untracked",
-                "incorrect_entries",
-            },
-            f"{artifact_kind}.details",
-        )
-        expected_count = inventory["expected_count"]
-        actual_count = inventory["actual_count"]
         if (
-            isinstance(expected_count, bool)
-            or not isinstance(expected_count, int)
-            or expected_count <= 0
-            or actual_count != expected_count
-            or any(
-                inventory[field] != []
-                for field in ("missing", "unexpected", "untracked", "incorrect_entries")
-            )
+            source_tree is None
+            or source_tracked_file_count is None
+            or source_archive_path is None
         ):
             raise EvidenceError(
-                "release_inventory_report must prove one exact tracked inventory"
+                "release_inventory_report requires the validated source manifest"
             )
+        _validate_release_inventory_details(
+            details,
+            source_tree=source_tree,
+            source_tracked_file_count=source_tracked_file_count,
+            source_archive_path=source_archive_path,
+        )
     elif artifact_kind == "sdk_test_report":
         sdk_details = _exact_fields(details, {"sdks"}, f"{artifact_kind}.details")
         sdks = sdk_details["sdks"]
@@ -1104,7 +1411,7 @@ def _validate_source_manifest(
     *,
     commit: str,
     artifacts_by_path: dict[PurePosixPath, Artifact],
-) -> PurePosixPath:
+) -> tuple[PurePosixPath, str, int, PurePosixPath, PurePosixPath]:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
@@ -1121,6 +1428,7 @@ def _validate_source_manifest(
             "modified",
             "untracked",
             "source_archive",
+            "source_commit",
             "source_lockfile",
             "passed",
             "transcript",
@@ -1144,10 +1452,16 @@ def _validate_source_manifest(
         or report["passed"] is not True
     ):
         raise EvidenceError("source manifest does not prove one clean exact Git tree")
-    _validate_artifact_reference(
+    source_archive = _validate_artifact_reference(
         report["source_archive"],
         label="source_manifest.source_archive",
         expected_kind="source_archive",
+        artifacts_by_path=artifacts_by_path,
+    )
+    source_commit = _validate_artifact_reference(
+        report["source_commit"],
+        label="source_manifest.source_commit",
+        expected_kind="source_commit",
         artifacts_by_path=artifacts_by_path,
     )
     _validate_artifact_reference(
@@ -1156,11 +1470,12 @@ def _validate_source_manifest(
         expected_kind="source_lockfile",
         artifacts_by_path=artifacts_by_path,
     )
-    return _validate_transcript_binding(
+    transcript = _validate_transcript_binding(
         report["transcript"],
         label="source_manifest.transcript",
         artifacts_by_path=artifacts_by_path,
     )
+    return transcript, tree, tracked, source_archive, source_commit
 
 
 def _validate_audit_attestation(
@@ -1881,27 +2196,27 @@ def _load_canary_names(path: Path) -> list[str]:
     return names
 
 
-def _load_message_count_manifest(path: Path) -> dict[str, int]:
+def _load_traffic_count_manifest(path: Path) -> dict[str, int]:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise EvidenceError(f"cannot read message-count manifest: {error}") from error
+        raise EvidenceError(f"cannot read traffic-count manifest: {error}") from error
     manifest = _exact_fields(
-        document, {"version", "channels"}, "message_count_manifest"
+        document, {"version", "channels"}, "traffic_count_manifest"
     )
     if manifest["version"] != MANIFEST_VERSION:
-        raise EvidenceError("message-count manifest version must be 1")
+        raise EvidenceError("traffic-count manifest version must be 1")
     channels = manifest["channels"]
     if not isinstance(channels, dict) or set(channels) != set(
-        REQUIRED_MESSAGE_COUNT_CHANNELS
+        REQUIRED_TRAFFIC_COUNT_CHANNELS
     ):
-        raise EvidenceError("message-count manifest channels are incomplete")
+        raise EvidenceError("traffic-count manifest channels are incomplete")
     for channel, count in channels.items():
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
             raise EvidenceError(
-                f"message-count manifest channel {channel!r} is invalid"
+                f"traffic-count manifest channel {channel!r} is invalid"
             )
-    return {channel: channels[channel] for channel in REQUIRED_MESSAGE_COUNT_CHANNELS}
+    return {channel: channels[channel] for channel in REQUIRED_TRAFFIC_COUNT_CHANNELS}
 
 
 def _verify_archived_canary_scan(
@@ -1936,6 +2251,142 @@ def _verify_archived_canary_scan(
             del sys.modules[module_name]
         else:
             sys.modules[module_name] = previous
+
+
+def _recompute_archived_differential(left: Path, right: Path) -> dict[str, Any]:
+    """Run the strict differential comparator over the archived pair roots."""
+
+    scanner_path = Path(__file__).with_name("private_settlement_leakage_audit.py")
+    module_name = "_private_settlement_leakage_differential_for_release"
+    spec = importlib.util.spec_from_file_location(module_name, scanner_path)
+    if spec is None or spec.loader is None:
+        raise EvidenceError("cannot load the strict differential scanner")
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+        return module.compare_capture_roots(
+            left, right, module.DEFAULT_MAX_FILE_BYTES
+        )
+    except EvidenceError:
+        raise
+    except Exception as error:
+        raise EvidenceError(f"archived differential replay is invalid: {error}") from error
+    finally:
+        if previous is None:
+            del sys.modules[module_name]
+        else:
+            sys.modules[module_name] = previous
+
+
+def _load_release_runner_for_evidence_replay() -> Any:
+    """Load the release runner so archived harness responses use one validator."""
+
+    module_name = "_private_settlement_release_runner_for_evidence"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    runner_path = Path(__file__).with_name("private_settlement_release_runner.py")
+    spec = importlib.util.spec_from_file_location(module_name, runner_path)
+    if spec is None or spec.loader is None:
+        raise EvidenceError("cannot load the private-settlement release runner")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        del sys.modules[module_name]
+        raise
+    return module
+
+
+def _validate_archived_leakage_provenance(
+    *,
+    provenance_artifacts: Sequence[Artifact],
+    artifacts_by_path: Mapping[PurePosixPath, Artifact],
+    root: Path,
+    commit: str,
+    variant_roots: Mapping[str, PurePosixPath],
+    archived_counts: Mapping[str, Mapping[str, int]],
+) -> None:
+    """Replay raw capture, source, and atomicity evidence from archived runs."""
+
+    if len(provenance_artifacts) != 2:
+        raise EvidenceError(
+            "evidence bundle must contain exactly two leakage capture provenance records"
+        )
+    try:
+        runner = _load_release_runner_for_evidence_replay()
+    except Exception as error:
+        raise EvidenceError(f"cannot load leakage provenance validator: {error}") from error
+    seen: set[str] = set()
+    for artifact in provenance_artifacts:
+        try:
+            raw = root.joinpath(*artifact.path.parts).read_text(encoding="utf-8")
+            response = runner.strict_json_loads(raw, "archived leakage provenance")
+            payload = runner.exact_fields(
+                response["payload"],
+                runner.LEAKAGE_PAYLOAD_FIELDS,
+                "archived leakage provenance payload",
+            )
+            variant = payload["variant"]
+            if variant not in {"left", "right"} or variant in seen:
+                raise EvidenceError("leakage provenance variants are incomplete or duplicated")
+            if artifact.path.name != f"capture-provenance-{variant}.json":
+                raise EvidenceError("leakage provenance used a non-canonical filename")
+            seen.add(variant)
+            if response["commit"] != commit or response["kind"] != "leakage":
+                raise EvidenceError("leakage provenance does not bind the release candidate")
+            plan = {
+                "commit": commit,
+                "hardware": {
+                    "sha256": response["hardware_sha256"],
+                    "profile_sha256": response["hardware_profile_sha256"],
+                },
+            }
+            job = {
+                "request_id": response["request_id"],
+                "invocation_nonce": response["invocation_nonce"],
+                "kind": "leakage",
+                "configuration_sha256": response["configuration_sha256"],
+                "participants": response["participants"],
+                "variant": variant,
+                "canary_names": payload["canaries_injected"],
+                "canary_commitments": payload["canary_commitments"],
+            }
+            evidence_dir = root.joinpath(*variant_roots[variant].parts)
+            counts, surfaces = runner.validate_leakage_response(
+                response,
+                plan=plan,
+                job=job,
+                evidence_dir=evidence_dir,
+            )
+            if counts != dict(archived_counts[variant]):
+                raise EvidenceError(
+                    f"archived {variant} traffic counts differ from provenance replay"
+                )
+            for surface, path, binding in surfaces:
+                relative = variant_roots[variant] / runner.SURFACE_FILES[surface]
+                declared = artifacts_by_path.get(relative)
+                if (
+                    declared is None
+                    or declared.kind != surface
+                    or declared.sha256 != binding["sha256"]
+                    or declared.bytes != binding["bytes"]
+                    or path != root.joinpath(*relative.parts).resolve(strict=True)
+                ):
+                    raise EvidenceError(
+                        f"archived {variant} surface {surface} differs from provenance replay"
+                    )
+        except EvidenceError:
+            raise
+        except Exception as error:
+            raise EvidenceError(
+                f"archived leakage provenance replay failed: {error}"
+            ) from error
+    if seen != {"left", "right"}:
+        raise EvidenceError("leakage provenance omitted a secret-only variant")
 
 
 def _public_json_shape(value: Any) -> Any:
@@ -2029,6 +2480,8 @@ def _validate_differential_pair_manifest(
         if surface not in REQUIRED_DIFFERENTIAL_ARTIFACT_KINDS:
             raise EvidenceError(f"{label}.surface is not a privacy surface")
         relative_name = _relative_path(pair["relative_name"], f"{label}.relative_name")
+        if relative_name.as_posix() != DIFFERENTIAL_SURFACE_FILES[surface]:
+            raise EvidenceError(f"{label}.relative_name is not canonical for its surface")
         order_key = (surface, relative_name.as_posix())
         ordering.append(order_key)
         surfaces.add(surface)
@@ -2062,8 +2515,15 @@ def _validate_differential_pair_manifest(
         referenced_paths.update((left_path, right_path))
         left = artifacts_by_path[left_path]
         right = artifacts_by_path[right_path]
-        if left.bytes != right.bytes:
+        if left.bytes != right.bytes and surface not in {
+            "restricted_audit_source",
+            "restricted_packet_source",
+        }:
             raise EvidenceError("differential pair byte sizes differ")
+        if surface in REQUIRED_DIFFERENTIAL_STATE_CHANGES and left.sha256 == right.sha256:
+            raise EvidenceError(
+                f"differential state surface {surface} did not change with the secret variant"
+            )
         bindings.extend(((left.sha256, left.bytes), (right.sha256, right.bytes)))
         if relative_name.suffix.lower() == ".json":
             try:
@@ -2119,8 +2579,8 @@ def _validate_leakage_report(
             "canary_names",
             "findings",
             "differential",
-            "message_count_manifests",
-            "message_count_mismatches",
+            "traffic_count_manifests",
+            "traffic_count_mismatches",
         },
         "leakage_report",
     )
@@ -2147,8 +2607,8 @@ def _validate_leakage_report(
         raise EvidenceError(
             "leakage report lacks account, asset, alias, amount, memo, or capsule canaries"
         )
-    if record["findings"] != [] or record["message_count_mismatches"] != []:
-        raise EvidenceError("leakage report contains a canary or message-count finding")
+    if record["findings"] != [] or record["traffic_count_mismatches"] != []:
+        raise EvidenceError("leakage report contains a canary or traffic-count finding")
 
     declared_bindings = Counter(
         (artifact.sha256, artifact.bytes)
@@ -2202,6 +2662,21 @@ def _validate_leakage_report(
         raise EvidenceError(
             "differential pair manifest references an unscanned artifact"
         )
+    try:
+        pair_document = json.loads(
+            root.joinpath(*pair_manifests[0].path.parts).read_text(encoding="utf-8")
+        )
+        pair_left = _relative_path(
+            pair_document["left_root"], "differential_pair_manifest.left_root"
+        )
+        pair_right = _relative_path(
+            pair_document["right_root"], "differential_pair_manifest.right_root"
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError) as error:
+        raise EvidenceError(f"cannot replay differential roots: {error}") from error
+    recomputed_differential = _recompute_archived_differential(
+        root.joinpath(*pair_left.parts), root.joinpath(*pair_right.parts)
+    )
 
     canary_artifacts = [
         artifact for artifact in artifacts if artifact.kind == "canary_manifest"
@@ -2224,37 +2699,72 @@ def _validate_leakage_report(
     )
 
     count_artifacts = [
-        artifact for artifact in artifacts if artifact.kind == "message_count_manifest"
+        artifact for artifact in artifacts if artifact.kind == "traffic_count_manifest"
     ]
     if len(count_artifacts) != 2:
         raise EvidenceError(
-            "evidence bundle must contain exactly two message-count manifests"
+            "evidence bundle must contain exactly two traffic-count manifests"
         )
-    raw_count_bindings = record["message_count_manifests"]
+    raw_count_bindings = record["traffic_count_manifests"]
     if not isinstance(raw_count_bindings, list) or len(raw_count_bindings) != 2:
-        raise EvidenceError("leakage report must bind two message-count manifests")
+        raise EvidenceError("leakage report must bind two traffic-count manifests")
     count_bindings = [
-        _parse_file_binding(value, f"leakage_report.message_count_manifests[{index}]")
+        _parse_file_binding(value, f"leakage_report.traffic_count_manifests[{index}]")
         for index, value in enumerate(raw_count_bindings)
     ]
     if count_bindings != sorted(count_bindings) or Counter(count_bindings) != Counter(
         (artifact.sha256, artifact.bytes) for artifact in count_artifacts
     ):
         raise EvidenceError(
-            "leakage report message-count bindings do not match archive"
+            "leakage report traffic-count bindings do not match archive"
         )
-    archived_counts = [
-        _load_message_count_manifest(root.joinpath(*artifact.path.parts))
-        for artifact in count_artifacts
+    archived_counts: dict[str, dict[str, int]] = {}
+    for artifact in count_artifacts:
+        variant = next(
+            (
+                candidate
+                for candidate in ("left", "right")
+                if artifact.path.name == f"traffic-counts-{candidate}.json"
+            ),
+            None,
+        )
+        if variant is None or variant in archived_counts:
+            raise EvidenceError("traffic-count manifest filenames are non-canonical")
+        archived_counts[variant] = _load_traffic_count_manifest(
+            root.joinpath(*artifact.path.parts)
+        )
+    if set(archived_counts) != {"left", "right"}:
+        raise EvidenceError("traffic-count manifests omit a secret-only variant")
+    if archived_counts["left"] != archived_counts["right"]:
+        raise EvidenceError("archived differential traffic counts do not match")
+
+    provenance_artifacts = [
+        artifact
+        for artifact in artifacts
+        if artifact.kind == "leakage_capture_provenance"
     ]
-    if archived_counts[0] != archived_counts[1]:
-        raise EvidenceError("archived differential message counts do not match")
+    _validate_archived_leakage_provenance(
+        provenance_artifacts=provenance_artifacts,
+        artifacts_by_path={artifact.path: artifact for artifact in artifacts},
+        root=root,
+        commit=commit,
+        variant_roots={"left": pair_left, "right": pair_right},
+        archived_counts=archived_counts,
+    )
 
     differential = _exact_fields(
         record["differential"],
-        {"left_only", "right_only", "size_mismatches", "json_shape_mismatches"},
+        {
+            "left_only",
+            "right_only",
+            "size_mismatches",
+            "json_shape_mismatches",
+            "packet_length_mismatches",
+        },
         "leakage_report.differential",
     )
+    if differential != recomputed_differential:
+        raise EvidenceError("leakage differential report differs from archived replay")
     if any(differential.values()):
         raise EvidenceError("leakage report contains a public shape or size finding")
 
@@ -2683,7 +3193,30 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
         leakage_report_paths[0], artifacts, root, manifest["commit"]
     )
 
-    gate_transcripts: list[PurePosixPath] = []
+    source_manifests = [
+        artifact for artifact in artifacts if artifact.kind == "source_manifest"
+    ]
+    if len(source_manifests) != 1:
+        raise EvidenceError("evidence bundle must contain exactly one source manifest")
+    (
+        source_transcript,
+        source_tree,
+        source_tracked_file_count,
+        source_archive_reference,
+        source_commit_reference,
+    ) = _validate_source_manifest(
+        root.joinpath(*source_manifests[0].path.parts),
+        commit=manifest["commit"],
+        artifacts_by_path=artifacts_by_path,
+    )
+    committed_tree = _validate_source_commit(
+        root.joinpath(*source_commit_reference.parts), manifest["commit"]
+    )
+    if committed_tree != source_tree:
+        raise EvidenceError("source manifest tree differs from the release commit")
+    source_archive_path = root.joinpath(*source_archive_reference.parts)
+
+    gate_transcripts: list[PurePosixPath] = [source_transcript]
     for artifact_kind in PASS_REPORT_GATES:
         gate_artifacts = [
             artifact for artifact in artifacts if artifact.kind == artifact_kind
@@ -2699,6 +3232,9 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
                 artifact_kind=artifact_kind,
                 commit=manifest["commit"],
                 artifacts_by_path=artifacts_by_path,
+                source_tree=source_tree,
+                source_tracked_file_count=source_tracked_file_count,
+                source_archive_path=source_archive_path,
             )
         )
     randomized_artifacts = [
@@ -2785,18 +3321,6 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
         root.joinpath(*sbom_artifacts[0].path.parts),
         commit=manifest["commit"],
         release_binaries=release_binaries,
-    )
-    source_manifests = [
-        artifact for artifact in artifacts if artifact.kind == "source_manifest"
-    ]
-    if len(source_manifests) != 1:
-        raise EvidenceError("evidence bundle must contain exactly one source manifest")
-    gate_transcripts.append(
-        _validate_source_manifest(
-            root.joinpath(*source_manifests[0].path.parts),
-            commit=manifest["commit"],
-            artifacts_by_path=artifacts_by_path,
-        )
     )
     audit_attestations = [
         artifact for artifact in artifacts if artifact.kind == "audit_attestation"

@@ -43,27 +43,20 @@ fn zero_cleanup_deadline_polls_an_already_buffered_completion() {
     ));
 }
 #[test]
-fn finalized_cleanup_without_context_worker_retains_all_local_files() {
+fn finalized_cleanup_without_context_worker_reports_unavailability() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    let chunk_root = directory.path().join("chunk-root-is-a-file");
-    std::fs::write(&chunk_root, b"not a directory").expect("create adversarial chunk root");
-    service.chunk_root = chunk_root.clone();
     let mut supervisor = V2CleanupSupervisor::default();
     let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
     assert_eq!(outcome.warnings().len(), 1);
     assert!(outcome.warnings()[0].reason().contains("unavailable"));
-    assert!(chunk_root.is_file());
 }
 #[test]
 fn finalized_cleanup_reports_disconnected_worker_without_failing_rollover() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    service.chunk_root = directory.path().join("already-absent-chunks");
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
     drop(command_rx);
     let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
@@ -84,15 +77,10 @@ fn finalized_cleanup_reports_disconnected_worker_without_failing_rollover() {
     assert!(outcome.warnings()[0].reason().contains("disconnected"));
 }
 #[test]
-fn prelatched_finalized_cleanup_mutates_neither_queue_nor_chunks() {
+fn prelatched_finalized_cleanup_does_not_mutate_the_io_queue() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    let chunk_root = directory.path().join("retained-chunks");
-    std::fs::create_dir_all(&chunk_root).expect("seed retained chunk root");
-    std::fs::write(chunk_root.join("chunk"), b"retained").expect("seed retained chunk");
-    service.chunk_root = chunk_root.clone();
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
     let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
     service.io = Some(V2IoHandle {
@@ -106,7 +94,6 @@ fn prelatched_finalized_cleanup_mutates_neither_queue_nor_chunks() {
     let mut supervisor = V2CleanupSupervisor::default();
     let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
     assert!(command_rx.try_recv().is_err());
-    assert!(chunk_root.join("chunk").is_file());
     assert_eq!(outcome.warnings().len(), 1);
     assert!(outcome.warnings()[0].reason().contains("restart"));
 }
@@ -115,8 +102,6 @@ fn finalized_cleanup_does_not_wait_for_post_retire_completion() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    service.chunk_root = directory.path().join("already-absent-chunks");
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
     let (_completion_tx, completion_rx) = mpsc::sync_channel(2);
     let join = thread::spawn(move || {
@@ -138,8 +123,6 @@ fn finalized_cleanup_releases_rollover_after_retire_enqueue() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    service.chunk_root = directory.path().join("already-absent-chunks");
     let (command_tx, command_rx, admission) = test_io_command_channel(1);
     let (completion_tx, completion_rx) = mpsc::sync_channel(1);
     let (accepted_tx, accepted_rx) = mpsc::sync_channel(1);
@@ -177,8 +160,6 @@ fn finalized_cleanup_full_queue_timeout_allows_normal_worker_disconnect() {
     let (mut service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     seal_empty_exact_output_for_cleanup_test(&service);
-    let directory = TempDir::new().expect("cleanup test directory");
-    service.chunk_root = directory.path().join("already-absent-chunks");
     let output_guard = Arc::clone(&service.output_guard);
     let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
     let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
@@ -246,7 +227,6 @@ fn cleanup_job_fixture(
     service: &ProductionV2Services,
     receipt: &KuraV2CommitReceipt,
     body_root: &Path,
-    chunk_root: PathBuf,
 ) -> PostFinalityCleanupJob {
     let bodies = V2BodyStore::open(body_root, service.context.clone())
         .expect("open cleanup body fixture")
@@ -255,7 +235,6 @@ fn cleanup_job_fixture(
     PostFinalityCleanupJob {
         identity: CleanupWorkerIdentity::from_receipt(receipt),
         bodies,
-        chunk_root,
     }
 }
 #[test]
@@ -267,41 +246,27 @@ fn cleanup_submission_is_bounded_and_never_waits_for_capacity() {
     let (sender, _receiver) = mpsc::sync_channel(1);
     let submission = V2CleanupSubmission { sender };
     submission
-        .try_submit(cleanup_job_fixture(
-            &service,
-            &receipt,
-            first_root.path(),
-            first_root.path().join("chunks"),
-        ))
+        .try_submit(cleanup_job_fixture(&service, &receipt, first_root.path()))
         .expect("first cleanup fills the bounded queue");
     let started = Instant::now();
     let error = submission
-        .try_submit(cleanup_job_fixture(
-            &service,
-            &receipt,
-            second_root.path(),
-            second_root.path().join("chunks"),
-        ))
+        .try_submit(cleanup_job_fixture(&service, &receipt, second_root.path()))
         .expect_err("second cleanup cannot exceed queue capacity");
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(error.contains("queue is full"));
 }
 #[test]
-fn cleanup_worker_job_removes_bodies_and_chunks_off_the_consensus_path() {
+fn cleanup_worker_job_removes_bodies_off_the_consensus_path() {
     let (service, keys) = fixture();
     let receipt = durable_receipt(&service, &keys);
     let root = TempDir::new().expect("cleanup execution root");
-    let chunk_root = root.path().join("chunks");
-    std::fs::create_dir_all(&chunk_root).expect("create cleanup chunks");
-    std::fs::write(chunk_root.join("chunk"), b"chunk").expect("seed cleanup chunk");
-    let job = cleanup_job_fixture(&service, &receipt, root.path(), chunk_root.clone());
+    let job = cleanup_job_fixture(&service, &receipt, root.path());
     let context_directory = root
         .path()
         .join(hex::encode(service.context.id().0.as_ref()));
     assert!(context_directory.is_dir());
     execute_post_finality_cleanup(job);
     assert!(!context_directory.exists());
-    assert!(!chunk_root.exists());
 }
 fn merge_sidecar_reference(label: &[u8]) -> CertifiedMergeLedgerReference {
     CertifiedMergeLedgerReference {
@@ -1145,7 +1110,6 @@ fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
     let (mut service, keys) = fixture_with_block_payload();
     service.max_orphan_chunks = 1;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     let gate_directory = TempDir::new().expect("temporary productive-chunk ingress gate");
     let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
     let (_, manifest, proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
@@ -1535,7 +1499,6 @@ fn productive_retry_after_proofless_reconstruction_does_not_become_orphan() {
     let (mut service, keys) = fixture_with_block_payload();
     service.max_orphan_chunks = 16;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     let gate_directory = TempDir::new().expect("temporary reconstructed-chunk gate");
     let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
     let (_, manifest, proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
@@ -1601,7 +1564,6 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     allow_fixture_block_payload(&mut service.context);
     service.max_orphan_chunks = 4;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     let gate_directory = TempDir::new().expect("temporary productive-orphan gate");
     let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
@@ -1757,7 +1719,6 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     allow_fixture_block_payload(&mut service.context);
     service.max_orphan_chunks = 4;
     service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let (manifest, chunks) = payload.into_parts();
     assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");

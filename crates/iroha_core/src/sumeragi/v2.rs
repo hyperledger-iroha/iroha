@@ -670,7 +670,6 @@ pub(crate) struct RecoveredLifecycleStorageAuthorityV1 {
     context_id: wire::HeightContextId,
     height: wire::Height,
     wal_path: PathBuf,
-    chunk_root: PathBuf,
     lifecycle_root: PathBuf,
     body_store_root: PathBuf,
     signature_policy: super::v2_body_store::BlockSignaturePolicy,
@@ -727,28 +726,17 @@ pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryInputsV1 {
 pub(crate) struct RecoveredLifecycleOwnerKuraBindingV1 {
     kura_identity: KuraInstanceIdentity,
     wal_path: PathBuf,
-    chunk_root: PathBuf,
     local_signer: Option<PublicKey>,
 }
 /// Canonical launch paths projected only after the live Kura rejoins recovery.
 #[must_use = "recovered launch storage paths must enter the sealed launch"]
 pub(in crate::sumeragi) struct RecoveredLifecycleLaunchStoragePathsV1 {
     wal_path: PathBuf,
-    chunk_root: PathBuf,
 }
 impl RecoveredLifecycleLaunchStoragePathsV1 {
     /// Borrow the exact recovery-derived safety-WAL path for adapter binding.
     pub(in crate::sumeragi) fn wal_path(&self) -> &std::path::Path {
         &self.wal_path
-    }
-    /// Borrow the exact recovery-derived chunk root for durable Serve restore.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn chunk_root(&self) -> &std::path::Path {
-        &self.chunk_root
-    }
-    /// Consume the path seal into the exact worker-owned chunk root.
-    pub(in crate::sumeragi) fn into_chunk_root(self) -> PathBuf {
-        self.chunk_root
     }
 }
 impl RecoveredLifecycleOwnerKuraBindingV1 {
@@ -780,7 +768,6 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
         self.matches_kura(kura)
             .then(|| RecoveredLifecycleLaunchStoragePathsV1 {
                 wal_path: self.wal_path.clone(),
-                chunk_root: self.chunk_root.clone(),
             })
     }
     /// Join the just-retired LedgerV1 floor to this exact live Kura instance.
@@ -802,7 +789,6 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
                 .sumeragi_v2_storage_root()
                 .join("wal")
                 .join(format!("{:020}.wal", 1_u64)),
-            chunk_root: kura.sumeragi_v2_storage_root().join("chunks"),
             local_signer: local_signer.map(|key_pair| key_pair.public_key().clone()),
         }
     }
@@ -866,7 +852,6 @@ impl RecoveredLifecycleStorageAuthorityV1 {
             wal_path: storage_root
                 .join("wal")
                 .join(format!("{:020}.wal", context.height)),
-            chunk_root: storage_root.join("chunks"),
             lifecycle_root: storage_root
                 .join("lifecycle-v1")
                 .join(hex::encode(context.id().0.as_ref())),
@@ -926,7 +911,6 @@ impl RecoveredLifecycleStorageAuthorityV1 {
             wal_path: storage_root
                 .join("wal")
                 .join(format!("{:020}.wal", context.height)),
-            chunk_root: storage_root.join("chunks"),
             lifecycle_root: storage_root
                 .join("lifecycle-v1")
                 .join(hex::encode(context.id().0.as_ref())),
@@ -4450,7 +4434,6 @@ impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
             wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -8958,7 +8941,6 @@ fn ingress_equivocation_identity(
         )),
         wire::ConsensusMessageV2Payload::QuorumCertificate(_)
         | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -8985,7 +8967,6 @@ impl IngressEquivocationArtifact {
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -11356,8 +11337,7 @@ impl SumeragiV2Adapter {
                     &mut observed,
                 )?;
             }
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {}
@@ -11851,7 +11831,6 @@ impl SumeragiV2Adapter {
                 return Ok((None, None));
             }
             wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -12173,8 +12152,7 @@ impl SumeragiV2Adapter {
                     authenticated_wire_identity,
                 );
             }
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -15195,8 +15173,6 @@ impl SumeragiV2Adapter {
             reducer::ConsensusMessageV2::TimeoutCertificate(certificate) => {
                 self.intent_for_timeout_certificate(certificate, stage)
             }
-            reducer::ConsensusMessageV2::BodyRequest(_)
-            | reducer::ConsensusMessageV2::BodyChunk(_) => return Ok(None),
         };
         Ok(Some(intent))
     }
@@ -17494,8 +17470,7 @@ impl SumeragiV2Adapter {
             }
             wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => None,
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -17551,8 +17526,7 @@ impl SumeragiV2Adapter {
                         },
                     )
                 }),
-            wire::ConsensusMessageV2Payload::PayloadManifest(_)
-            | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+            wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)

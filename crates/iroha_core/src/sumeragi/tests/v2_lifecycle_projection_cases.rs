@@ -2617,7 +2617,6 @@ fn all_auxiliary_broadcast_payloads_are_explicitly_rejected() {
         signature: vec![0x62],
     };
     let payloads = vec![
-        wire::ConsensusMessageV2Payload::PayloadManifest(fixture.manifest.clone()),
         wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
             manifest_hash: HashOf::new(&fixture.manifest),
             index: 0,

@@ -382,7 +382,7 @@ Run exact four-validator processes for every dataspace at N=2,3,4,8,16, using
 N=3 as the paper's primary configuration. Stop/restart one validator in every
 committee plus coordinator/global nodes. Use only the authenticated consensus
 message controller, acknowledge each hold/drop, and exercise 5%, 10%, and 20%
-loss, phase-cut partitions, delay, reordering, healing, and crashes after
+loss, phase-cut partitions, delayed delivery, healing, and crashes after
 sidecar, staged delta, Prepare QC, Commit QC, Kura append, WSV apply, and receipt
 publication. Continuously assert that no strict subset becomes visible or
 spendable and that every node converges after healing. Keep signed RS16 DA/RBC
@@ -432,32 +432,57 @@ tests. They must not be labeled real-network latency measurements.
 Capture Torii, restricted/public P2P, block wire, Kura/merge artifacts,
 snapshots, queries, events, logs, and telemetry. Plant account, asset, amount,
 memo, and capsule canaries in multiple encodings. Differential runs in which
-only secrets change must preserve public shapes and message counts; only
+only secrets change must preserve public shapes and traffic counts; only
 cryptographic values may differ. Publish the residual metadata listed above.
 `scripts/private_settlement_leakage_audit.py` enforces this with byte-level
 canary scans, exact public file/size/JSON-shape comparison, and mandatory paired
-V1 message-count manifests covering Torii, public/restricted P2P, block, query,
-event, log, and telemetry records. Its report binds the canary manifest, every
-scanned artifact, and both message-count manifests by byte length and SHA-256.
+V1 traffic-count manifests covering Torii requests/responses,
+public/restricted P2P packets, blocks, queries, events, logs, and telemetry.
+Its report binds the canary manifest, every scanned artifact, and both
+traffic-count manifests by byte length and SHA-256.
 Canonical account and asset canaries are expanded into their protocol-native
 I105-controller and asset-UUID byte encodings as well as ordinary text, integer,
 hex, Base64, URL, and JSON representations. The real loopback capture is split
 by the exact per-run Torii, public-lane P2P, and restricted-lane P2P port
 manifest with `scripts/private_settlement_capture_split.py`; packet payloads and
 timestamps are copied unchanged into canonical pcapng surfaces, and an empty
-declared channel fails closed.
+declared channel fails closed. The unfiltered classic pcap is retained as an
+owner-only `restricted_packet_source`; final capture provenance binds its exact
+bytes, the canonical port manifest, and the raw `tcpdump` stderr. Validation
+reparses the capture statistics, requires a nonzero capture with no kernel
+drops, rejects truncated/fragmented packets, scans the complete raw capture for
+canaries before filtering, and reconstructs all four published pcapng surfaces
+byte-for-byte from that retained source.
+
+Non-packet evidence is retained once more in an owner-only
+`restricted_audit_source` archive. Its canonical rows preserve the exact source
+bytes for block wire, queries, events, operator/coordinator logs, telemetry,
+Kura/merge/snapshot inputs, confidential DA, and all 16 peer atomicity
+observations. Replay verifies each public digest projection against those raw
+bytes. Atomicity replay additionally requires a common byte-identical baseline
+and terminal state across every peer, bounded nondecreasing heights, no baseline
+or terminal staged locks, and exactly the expected N=3 pool/root/nullifier/
+output/receipt transition with no partial visible or spendable state.
 The DOI-bundle verifier independently requires those bindings to cover every
 archived public and restricted capture, Kura/merge and snapshot artifact,
-query/event/log/telemetry record, and both count manifests; a clean report from
-another capture set cannot satisfy the gate. It also reloads the canary manifest
-and independently rescans every archived privacy surface, so a digest-rebound
-report with suppressed findings still fails. A separate canonical
-differential-pair manifest binds the left and right artifact paths, kinds,
-lengths, and SHA-256 digests for every required privacy surface. The verifier
-requires the declared left/right roots to contain exactly that paired archive
-inventory, loads every pair itself, requires equal byte lengths, and recomputes
-JSON public shapes. Changing a same-size public field name or omitting an
-unpaired differential file cannot be hidden by rewriting the leakage report.
+query/event/log/telemetry record, both retained raw-source archives, and both
+traffic-count manifests; a clean report from another capture set cannot satisfy
+the gate. It reloads each archived capture-provenance response and reruns the
+release runner's complete raw-pcap, restricted-source, and atomicity validator
+against the archived left/right directories. It also reloads the canary
+manifest and independently rescans every archived privacy surface, so a
+digest-rebound report with suppressed findings still fails. A separate
+canonical differential-pair manifest binds the left and right artifact paths,
+kinds, lengths, and SHA-256 digests for every required privacy surface. The
+verifier requires the declared left/right roots to contain exactly that paired
+archive inventory and loads every pair itself. Public/fixed-shape surfaces must
+have equal byte lengths and JSON shapes. The entropy-bearing raw pcap and
+restricted-source archive are explicit whole-file size exceptions; instead the
+verifier requires equal packet link types and per-packet length sequences, equal
+restricted row identities, and equal lengths for the restricted fixed-shape
+groups. Changing a same-size public field name, a packet boundary, a
+capture-provenance claim, or an unpaired differential file cannot be hidden by
+rewriting summary reports and their digests.
 
 For each real N, run at least five warmups and thirty measured bundles across
 multiple seeds on pinned hardware. Report p50/p95/p99 with confidence intervals

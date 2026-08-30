@@ -864,7 +864,6 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         network: crate::IrohaNetwork::closed_for_tests(),
         archive_peer_cursor: AtomicUsize::new(0),
         kura,
-        chunk_root: PathBuf::new(),
         io: None,
         lifecycle_body_store_identity: None,
         lifecycle_payload_store_identity: None,

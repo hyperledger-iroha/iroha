@@ -2067,9 +2067,6 @@ fn target_lifecycle_context(
             wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
                 Some((certificate.round.context_id, certificate.round.height))
             }
-            wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
-                Some((manifest.round.context_id, manifest.round.height))
-            }
             wire::ConsensusMessageV2Payload::PayloadChunk(_) => {
                 let token = entry.leader_wire_token.as_ref()?;
                 return (token.identity.phase == FairV2IngressLeaderWirePhase::Chunk)

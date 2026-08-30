@@ -610,7 +610,7 @@ public final class AtomicPrivateSettlementToriiClientV1 {
           "lifecycle");
     }
     if (route.endsWith("/bundles")) {
-      return Set.of("bundle_id", "accepted_at_height", "carrier_id", "lifecycle");
+      return Set.of("bundle_id", "accepted_at_height", "carrier_id");
     }
     if (route.endsWith("/status")) {
       return Set.of(

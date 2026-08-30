@@ -8,7 +8,7 @@
 use iroha_crypto::Hash;
 use iroha_data_model::{
     ValidationFail,
-    isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
+    isi::private_settlement::{AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1},
     nexus::PrivateSettlementCommitBundleV1,
     transaction::{Executable, SignedTransaction},
 };
@@ -18,6 +18,8 @@ use thiserror::Error;
 const COMMIT_BUNDLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:commit-bundle:v1\0";
 const CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:carrier-instruction:v1\0";
+const ABORT_CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:abort-carrier-instruction:v1\0";
 
 fn canonical_digest_v1<T: Encode>(domain: &[u8], value: &T) -> Result<Hash, norito::Error> {
     let encoded = norito::encode_canonical(value)?;
@@ -44,23 +46,26 @@ pub(crate) fn private_settlement_carrier_instruction_digest_v1(
     canonical_digest_v1(CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1, instruction)
 }
 
+/// Hash the exact direct abort carrier instruction authorized by the sponsor.
+pub(crate) fn private_settlement_abort_carrier_instruction_digest_v1(
+    instruction: &AbortAtomicPrivateSettlementV1,
+) -> Result<Hash, norito::Error> {
+    canonical_digest_v1(ABORT_CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1, instruction)
+}
+
 /// One-shot identity installed from an exact signed carrier transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PrivateSettlementCarrierBindingV1 {
-    commit_bundle_digest: Hash,
+    payload_digest: Hash,
     instruction_digest: Hash,
     signed_transaction_bytes: u64,
     consumed: bool,
 }
 
 impl PrivateSettlementCarrierBindingV1 {
-    fn new(
-        commit_bundle_digest: Hash,
-        instruction_digest: Hash,
-        signed_transaction_bytes: u64,
-    ) -> Self {
+    fn new(payload_digest: Hash, instruction_digest: Hash, signed_transaction_bytes: u64) -> Self {
         Self {
-            commit_bundle_digest,
+            payload_digest,
             instruction_digest,
             signed_transaction_bytes,
             consumed: false,
@@ -70,12 +75,12 @@ impl PrivateSettlementCarrierBindingV1 {
     /// Consume the exact carrier once after all comparisons succeed.
     pub(crate) fn consume(
         &mut self,
-        commit_bundle_digest: Hash,
+        payload_digest: Hash,
         instruction_digest: Hash,
         max_signed_transaction_bytes: u64,
     ) -> Result<(), PrivateSettlementCarrierBindingErrorV1> {
-        if self.commit_bundle_digest != commit_bundle_digest {
-            return Err(PrivateSettlementCarrierBindingErrorV1::BundleMismatch);
+        if self.payload_digest != payload_digest {
+            return Err(PrivateSettlementCarrierBindingErrorV1::PayloadMismatch);
         }
         if self.instruction_digest != instruction_digest {
             return Err(PrivateSettlementCarrierBindingErrorV1::InstructionMismatch);
@@ -106,10 +111,13 @@ pub(crate) fn signed_private_settlement_carrier_binding_v1(
         .instructions()
         .explicit_instructions()
         .filter(|instruction| {
+            let instruction = instruction.as_any();
             instruction
-                .as_any()
                 .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
                 .is_some()
+                || instruction
+                    .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+                    .is_some()
         })
         .count();
     if explicit_carrier_count == 0 {
@@ -122,35 +130,53 @@ pub(crate) fn signed_private_settlement_carrier_binding_v1(
     if instructions.len() != 1 || explicit_carrier_count != 1 {
         return Err(not_permitted());
     }
-    let carrier = instructions[0]
-        .as_any()
-        .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
-        .ok_or_else(not_permitted)?;
-    let manifest = &carrier.commit_bundle.manifest;
-    let structural_receipt = carrier
-        .commit_bundle
-        .clone()
-        .into_receipt(manifest.authority_context_height);
-    structural_receipt
-        .validate_shape()
-        .map_err(|_| not_permitted())?;
+    let instruction = instructions[0].as_any();
+    let (manifest, payload_digest, instruction_digest) = if let Some(carrier) =
+        instruction.downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
+    {
+        let manifest = &carrier.commit_bundle.manifest;
+        let structural_receipt = carrier
+            .commit_bundle
+            .clone()
+            .into_receipt(manifest.authority_context_height);
+        structural_receipt
+            .validate_shape()
+            .map_err(|_| not_permitted())?;
+        let payload_digest = private_settlement_commit_bundle_digest_v1(&carrier.commit_bundle)
+            .map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "failed to encode private-settlement commit bundle: {error}"
+                ))
+            })?;
+        let instruction_digest = private_settlement_carrier_instruction_digest_v1(carrier)
+            .map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "failed to encode private-settlement carrier: {error}"
+                ))
+            })?;
+        (manifest, payload_digest, instruction_digest)
+    } else if let Some(carrier) = instruction.downcast_ref::<AbortAtomicPrivateSettlementV1>() {
+        carrier.manifest.validate().map_err(|_| not_permitted())?;
+        let payload_digest = carrier.manifest.manifest_digest().map_err(|error| {
+            ValidationFail::InternalError(format!(
+                "failed to encode private-settlement abort manifest: {error}"
+            ))
+        })?;
+        let instruction_digest = private_settlement_abort_carrier_instruction_digest_v1(carrier)
+            .map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "failed to encode private-settlement abort carrier: {error}"
+                ))
+            })?;
+        (&carrier.manifest, payload_digest, instruction_digest)
+    } else {
+        return Err(not_permitted());
+    };
     if transaction.authority() != &manifest.sponsor
         || transaction.fee_payment_intent() != &manifest.public_fee_intent
     {
         return Err(not_permitted());
     }
-    let commit_bundle_digest = private_settlement_commit_bundle_digest_v1(&carrier.commit_bundle)
-        .map_err(|error| {
-        ValidationFail::InternalError(format!(
-            "failed to encode private-settlement commit bundle: {error}"
-        ))
-    })?;
-    let instruction_digest =
-        private_settlement_carrier_instruction_digest_v1(carrier).map_err(|error| {
-            ValidationFail::InternalError(format!(
-                "failed to encode private-settlement carrier: {error}"
-            ))
-        })?;
     let encoded_transaction = transaction.encode_wire_v1().map_err(|error| {
         ValidationFail::InternalError(format!(
             "failed to encode private-settlement carrier transaction: {error}"
@@ -162,7 +188,7 @@ pub(crate) fn signed_private_settlement_carrier_binding_v1(
         )
     })?;
     Ok(Some(PrivateSettlementCarrierBindingV1::new(
-        commit_bundle_digest,
+        payload_digest,
         instruction_digest,
         signed_transaction_bytes,
     )))
@@ -170,7 +196,7 @@ pub(crate) fn signed_private_settlement_carrier_binding_v1(
 
 fn not_permitted() -> ValidationFail {
     ValidationFail::NotPermitted(
-        "private-settlement finalization requires one exact sponsor-signed direct carrier with the committed fee intent"
+        "private-settlement termination requires one exact sponsor-signed direct carrier with the committed fee intent"
             .to_owned(),
     )
 }
@@ -181,9 +207,9 @@ pub(crate) enum PrivateSettlementCarrierBindingErrorV1 {
     /// No exact direct carrier was installed from the current signed payload.
     #[error("the current signed transaction has no bound private-settlement carrier")]
     MissingBinding,
-    /// The certified bundle differs from the exact signed carrier.
-    #[error("private-settlement commit bundle differs from the signed carrier")]
-    BundleMismatch,
+    /// The certified bundle or abort manifest differs from the exact signed carrier.
+    #[error("private-settlement payload differs from the signed carrier")]
+    PayloadMismatch,
     /// The complete instruction differs from the exact signed carrier.
     #[error("private-settlement instruction differs from the signed carrier")]
     InstructionMismatch,
@@ -215,7 +241,7 @@ mod tests {
 
         assert_eq!(
             binding.consume(Hash::new(b"bundle-b"), instruction_digest, 1024),
-            Err(PrivateSettlementCarrierBindingErrorV1::BundleMismatch)
+            Err(PrivateSettlementCarrierBindingErrorV1::PayloadMismatch)
         );
         assert_eq!(
             binding.consume(bundle_digest, Hash::new(b"instruction-b"), 1024),
@@ -281,6 +307,80 @@ mod tests {
             binding.consume(bundle_digest, instruction_digest, exact_signed_bytes),
             Ok(())
         );
+    }
+
+    #[test]
+    fn signed_abort_carrier_binds_manifest_reason_and_complete_transaction() {
+        use iroha_data_model::nexus::PrivateSettlementAbortReasonV1;
+
+        let (bundle, sponsor_key) = certified_commit_bundle_fixture();
+        let manifest = bundle.manifest;
+        let instruction = AbortAtomicPrivateSettlementV1::new(
+            manifest.clone(),
+            PrivateSettlementAbortReasonV1::ParticipantRejected,
+        );
+        let transaction = TransactionBuilder::new(
+            manifest.network_id,
+            manifest.sponsor.clone(),
+            manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([instruction.clone()])
+        .sign(sponsor_key.private_key());
+        let exact_signed_bytes = u64::try_from(
+            transaction
+                .encode_wire_v1()
+                .expect("fixed V1 signed abort transaction encodes")
+                .len(),
+        )
+        .expect("fixture signed transaction length fits u64");
+        let mut binding = signed_private_settlement_carrier_binding_v1(&transaction)
+            .expect("abort carrier binding derives")
+            .expect("fixture contains one direct abort carrier");
+        assert_eq!(binding.signed_transaction_bytes, exact_signed_bytes);
+
+        let manifest_digest = manifest.manifest_digest().expect("manifest digest encodes");
+        let substituted =
+            AbortAtomicPrivateSettlementV1::new(manifest, PrivateSettlementAbortReasonV1::Expired);
+        let substituted_digest =
+            private_settlement_abort_carrier_instruction_digest_v1(&substituted)
+                .expect("substituted instruction digest encodes");
+        assert_eq!(
+            binding.consume(manifest_digest, substituted_digest, exact_signed_bytes),
+            Err(PrivateSettlementCarrierBindingErrorV1::InstructionMismatch)
+        );
+        let instruction_digest =
+            private_settlement_abort_carrier_instruction_digest_v1(&instruction)
+                .expect("abort instruction digest encodes");
+        assert_eq!(
+            binding.consume(manifest_digest, instruction_digest, exact_signed_bytes),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn mixed_terminal_carriers_are_rejected_before_execution() {
+        use iroha_data_model::{isi::InstructionBox, nexus::PrivateSettlementAbortReasonV1};
+
+        let (bundle, sponsor_key) = certified_commit_bundle_fixture();
+        let manifest = bundle.manifest.clone();
+        let instructions = vec![
+            InstructionBox::from(FinalizeAtomicPrivateSettlementV1::new(bundle)),
+            InstructionBox::from(AbortAtomicPrivateSettlementV1::new(
+                manifest.clone(),
+                PrivateSettlementAbortReasonV1::ParticipantRejected,
+            )),
+        ];
+        let transaction = TransactionBuilder::new(
+            manifest.network_id,
+            manifest.sponsor,
+            manifest.public_fee_intent,
+        )
+        .with_instructions(instructions)
+        .sign(sponsor_key.private_key());
+        assert!(matches!(
+            signed_private_settlement_carrier_binding_v1(&transaction),
+            Err(ValidationFail::NotPermitted(_))
+        ));
     }
 
     #[test]

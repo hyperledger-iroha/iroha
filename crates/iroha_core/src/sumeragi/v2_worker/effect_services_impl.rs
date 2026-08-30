@@ -116,7 +116,6 @@ impl V2EffectServices for ProductionV2Services {
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
-            | wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -277,7 +276,6 @@ impl V2EffectServices for ProductionV2Services {
                 let opened_chunks = manifest_upgrade
                     .then(|| {
                         V2ChunkSession::open(
-                            &self.chunk_root,
                             &self.context,
                             task.manifest()
                                 .expect("manifest upgrade was checked above")
@@ -338,7 +336,7 @@ impl V2EffectServices for ProductionV2Services {
         let chunks = task
             .manifest()
             .cloned()
-            .map(|manifest| V2ChunkSession::open(&self.chunk_root, &self.context, manifest))
+            .map(|manifest| V2ChunkSession::open(&self.context, manifest))
             .transpose()
             .map_err(|error| error.to_string())?;
         if let Some(hash) = manifest_hash {
@@ -463,9 +461,7 @@ impl V2EffectServices for ProductionV2Services {
             let session = fetch.chunks.as_mut().ok_or_else(|| {
                 "manifest-less certified body fetch cannot accept chunks".to_owned()
             })?;
-            let admission = session
-                .admit(chunk.chunk())
-                .map_err(|error| error.to_string())?;
+            let admission = session.admit(chunk).map_err(|error| error.to_string())?;
             if admission == crate::sumeragi::v2_chunks::ChunkAdmission::Duplicate {
                 operation.complete();
                 return Ok(AuthenticatedChunkDisposition::Accepted);
@@ -488,15 +484,6 @@ impl V2EffectServices for ProductionV2Services {
             .manifest()
             .expect("chunk reconstruction requires proposal manifest authority")
             .clone();
-        let canonical_manifest =
-            encode_payload(&self.context, manifest.round, manifest.subject, &body)
-                .map_err(|error| error.to_string())?
-                .manifest()
-                .clone();
-        if canonical_manifest != manifest {
-            operation.complete();
-            return Ok(AuthenticatedChunkDisposition::Rejected);
-        }
         if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
             return Err("Sumeragi v2 reconstructed fetch lost its exact live owner".to_owned());
         }
@@ -732,7 +719,6 @@ fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRou
         wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => Some(certificate.round),
         wire::ConsensusMessageV2Payload::TimeoutVote(vote) => Some(vote.round),
         wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => Some(certificate.round),
-        wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => Some(manifest.round),
         wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
             Some(response.certificate.round)
         }

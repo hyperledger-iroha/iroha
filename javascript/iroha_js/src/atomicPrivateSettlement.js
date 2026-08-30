@@ -324,7 +324,7 @@ function responseFields(route) {
     return ["bundle_id", "payload_digest", "leg_ordinal", "disposition", "lifecycle"];
   }
   if (route.endsWith("/bundles")) {
-    return ["bundle_id", "accepted_at_height", "carrier_id", "lifecycle"];
+    return ["bundle_id", "accepted_at_height", "carrier_id"];
   }
   if (route.includes("/bundles/")) {
     return ["manifest", "lifecycle", "finalized_height"];

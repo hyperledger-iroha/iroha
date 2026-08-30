@@ -297,7 +297,9 @@ pub enum ProtectedContractNamespacesError {
         index: usize,
     },
     /// Namespace entries must be unique so the policy has one canonical representation.
-    #[error("`{PROTECTED_CONTRACT_NAMESPACES_PARAMETER}` contains duplicate namespace `{namespace}`")]
+    #[error(
+        "`{PROTECTED_CONTRACT_NAMESPACES_PARAMETER}` contains duplicate namespace `{namespace}`"
+    )]
     DuplicateNamespace {
         /// Repeated namespace token.
         namespace: String,

@@ -845,7 +845,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                     "lifecycle",
                 )
             route.endsWith("/bundles") ->
-                setOf("bundle_id", "accepted_at_height", "carrier_id", "lifecycle")
+                setOf("bundle_id", "accepted_at_height", "carrier_id")
             route.endsWith("/status") ->
                 setOf(
                     "bundle_id",

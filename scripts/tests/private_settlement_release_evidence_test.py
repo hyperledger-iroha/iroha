@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -21,6 +22,52 @@ MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+FIXTURE_SOURCE_LOCKFILE_PAYLOAD = b"# exact release Cargo.lock\n"
+FIXTURE_SOURCE_BLOB = hashlib.sha1(
+    b"blob "
+    + str(len(FIXTURE_SOURCE_LOCKFILE_PAYLOAD)).encode("ascii")
+    + b"\0"
+    + FIXTURE_SOURCE_LOCKFILE_PAYLOAD
+).hexdigest()
+FIXTURE_SOURCE_ENTRY = {
+    "path": "Cargo.lock",
+    "mode": "100644",
+    "object": FIXTURE_SOURCE_BLOB,
+}
+FIXTURE_SOURCE_TREE = MODULE._git_inventory_tree_oid_v1(
+    {"Cargo.lock": ("100644", FIXTURE_SOURCE_BLOB)}, 40
+)
+FIXTURE_SOURCE_COMMIT_PAYLOAD = (
+    f"tree {FIXTURE_SOURCE_TREE}\n"
+    "author Release Fixture <fixture@example.invalid> 1787932800 +0000\n"
+    "committer Release Fixture <fixture@example.invalid> 1787932800 +0000\n"
+    "\nAtomicPrivateSettlementV1 release fixture\n"
+).encode("utf-8")
+RELEASE_COMMIT = hashlib.sha1(
+    b"commit "
+    + str(len(FIXTURE_SOURCE_COMMIT_PAYLOAD)).encode("ascii")
+    + b"\0"
+    + FIXTURE_SOURCE_COMMIT_PAYLOAD
+).hexdigest()
+
+
+def fixture_source_seal(payload: bytes) -> bytes:
+    """Build the one-member deterministic source seal used by the fixture."""
+
+    path = b"Cargo.lock"
+    return b"".join(
+        (
+            MODULE._SOURCE_SEAL_DOMAIN,
+            struct.pack(">Q", 1),
+            struct.pack(">Q", len(path)),
+            path,
+            b"F",
+            struct.pack(">I", 0o644),
+            struct.pack(">Q", len(payload)),
+            payload,
+        )
+    )
+
 
 class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
     """Exercise exact qualification, audit, inventory, and digest gates."""
@@ -30,12 +77,15 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         release_binary_payload = b"reproducible iroha3d candidate\n"
         release_binary_digest = hashlib.sha256(release_binary_payload).hexdigest()
         release_target = "aarch64-apple-darwin"
-        source_archive_path = Path("evidence") / "source.tar.zst"
-        source_archive_payload = b"canonical source archive\n"
+        source_archive_path = Path("evidence") / "source.seal"
+        source_archive_payload = fixture_source_seal(FIXTURE_SOURCE_LOCKFILE_PAYLOAD)
         source_archive_digest = hashlib.sha256(source_archive_payload).hexdigest()
         source_lockfile_path = Path("evidence") / "Cargo.lock"
-        source_lockfile_payload = b"# exact release Cargo.lock\n"
+        source_lockfile_payload = FIXTURE_SOURCE_LOCKFILE_PAYLOAD
         source_lockfile_digest = hashlib.sha256(source_lockfile_payload).hexdigest()
+        source_commit_path = Path("evidence") / "source.commit"
+        source_commit_payload = FIXTURE_SOURCE_COMMIT_PAYLOAD
+        source_commit_digest = hashlib.sha256(source_commit_payload).hexdigest()
         audit_report_path = Path("evidence") / "audit_report.txt"
         audit_report_payload = b"independent cryptographic audit report\n"
         audit_report_digest = hashlib.sha256(audit_report_payload).hexdigest()
@@ -43,7 +93,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         hardware_description = {
             "version": 1,
             "protocol": MODULE.PROTOCOL,
-            "commit": "a" * 40,
+            "commit": RELEASE_COMMIT,
             "collected_at_utc": "2026-08-29T00:00:00Z",
             "host_id": "bck26-lab-host-01",
             "operating_system": "macOS 15.6",
@@ -95,7 +145,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 {
                     "version": 1,
                     "protocol": MODULE.PROTOCOL,
-                    "commit": "a" * 40,
+                    "commit": RELEASE_COMMIT,
                     "configurations": [
                         {
                             "participants": participants,
@@ -121,6 +171,8 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         from scripts.tests.private_settlement_release_runner_test import (
             MODULE as RUNNER_MODULE,
             fault_payload as runner_fault_payload,
+            leakage_payload as runner_leakage_payload,
+            response as runner_response,
             write_fault_evidence,
         )
 
@@ -196,7 +248,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             return {
                 "version": 1,
                 "protocol": MODULE.PROTOCOL,
-                "commit": "a" * 40,
+                "commit": RELEASE_COMMIT,
                 "hardware_sha256": hardware_description_digest,
                 "configuration_sha256": configuration_digests[participants],
                 "participants": participants,
@@ -244,7 +296,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         {
                             "version": 1,
                             "protocol": MODULE.PROTOCOL,
-                            "commit": "a" * 40,
+                            "commit": RELEASE_COMMIT,
                             "independent": True,
                             "organization": "Independent Cryptography Laboratory",
                             "conclusion": "passed",
@@ -314,7 +366,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         {
                             "version": 1,
                             "protocol": MODULE.PROTOCOL,
-                            "commit": "a" * 40,
+                            "commit": RELEASE_COMMIT,
                             "source_date_epoch": 1787932800,
                             "targets": [release_target],
                             "archived_artifacts": [
@@ -361,16 +413,21 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     report = {
                         "version": 1,
                         "protocol": MODULE.PROTOCOL,
-                        "commit": "a" * 40,
-                        "tree": "e" * 40,
+                        "commit": RELEASE_COMMIT,
+                        "tree": FIXTURE_SOURCE_TREE,
                         "worktree_clean": True,
-                        "tracked_file_count": 10_000,
+                        "tracked_file_count": 1,
                         "modified": [],
                         "untracked": [],
                         "source_archive": {
                             "path": source_archive_path.as_posix(),
                             "sha256": source_archive_digest,
                             "bytes": len(source_archive_payload),
+                        },
+                        "source_commit": {
+                            "path": source_commit_path.as_posix(),
+                            "sha256": source_commit_digest,
+                            "bytes": len(source_commit_payload),
                         },
                         "source_lockfile": {
                             "path": source_lockfile_path.as_posix(),
@@ -384,7 +441,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     report = {
                         "version": 1,
                         "protocol": MODULE.PROTOCOL,
-                        "commit": "a" * 40,
+                        "commit": RELEASE_COMMIT,
                         "provider": "Independent HSM Laboratory",
                         "hsm_or_kms_backed": True,
                         "signing_encryption_keys_separate": True,
@@ -403,7 +460,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     report = {
                         "version": 1,
                         "protocol": MODULE.PROTOCOL,
-                        "commit": "a" * 40,
+                        "commit": RELEASE_COMMIT,
                         "tool": "TLC",
                         "tool_version": "2.19",
                         "tool_sha256": "b" * 64,
@@ -426,7 +483,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     report = {
                         "version": 1,
                         "protocol": MODULE.PROTOCOL,
-                        "commit": "a" * 40,
+                        "commit": RELEASE_COMMIT,
                         "seeds": list(range(10)),
                         "runs_per_seed": 1,
                         "failures": [],
@@ -437,7 +494,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     report = {
                         "version": 1,
                         "protocol": MODULE.PROTOCOL,
-                        "commit": "a" * 40,
+                        "commit": RELEASE_COMMIT,
                         "duration_seconds": 7200,
                         "iterations": 100,
                         "seeds": [0, 1],
@@ -471,12 +528,8 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 )
                 if kind == "release_inventory_report":
                     details: dict[str, object] = {
-                        "expected_count": 128,
-                        "actual_count": 128,
-                        "missing": [],
-                        "unexpected": [],
-                        "untracked": [],
-                        "incorrect_entries": [],
+                        "tree": FIXTURE_SOURCE_TREE,
+                        "entries": [dict(FIXTURE_SOURCE_ENTRY)],
                     }
                 elif kind == "sdk_test_report":
                     details = {
@@ -506,7 +559,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         {
                             "version": 1,
                             "protocol": MODULE.PROTOCOL,
-                            "commit": "a" * 40,
+                            "commit": RELEASE_COMMIT,
                             "gate": gate,
                             "command": f"release-gate {gate}",
                             "exit_code": 0,
@@ -530,6 +583,9 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             elif kind == "source_archive":
                 path = source_archive_path
                 payload = source_archive_payload
+            elif kind == "source_commit":
+                path = source_commit_path
+                payload = source_commit_payload
             elif kind == "source_lockfile":
                 path = source_lockfile_path
                 payload = source_lockfile_payload
@@ -564,7 +620,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                                 "properties": [
                                     {
                                         "name": "iroha.git.commit",
-                                        "value": "a" * 40,
+                                        "value": RELEASE_COMMIT,
                                     }
                                 ],
                             },
@@ -588,7 +644,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 ).encode()
             elif kind == "canary_manifest":
                 path = Path("evidence") / "canaries.json"
-                canary_manifest = RUNNER_MODULE.build_canary_manifest("a" * 40)
+                canary_manifest = RUNNER_MODULE.build_canary_manifest(RELEASE_COMMIT)
                 canary_manifest["canaries"] = [
                     entry
                     for entry in canary_manifest["canaries"]
@@ -597,17 +653,22 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 payload = (
                     json.dumps(canary_manifest, sort_keys=True) + "\n"
                 ).encode()
-            elif kind == "message_count_manifest":
-                path = Path("evidence") / "message_counts_left.json"
+            elif kind == "traffic_count_manifest":
+                path = Path("evidence") / "traffic-counts-left.json"
                 payload = (
                     json.dumps(
                         {
                             "version": 1,
                             "channels": {
-                                channel: index
-                                for index, channel in enumerate(
-                                    MODULE.REQUIRED_MESSAGE_COUNT_CHANNELS, 1
-                                )
+                                "torii_request_packets": 1,
+                                "torii_response_packets": 1,
+                                "public_p2p_packets": 1,
+                                "restricted_p2p_packets": 1,
+                                "block_messages": 1,
+                                "query_responses": 16,
+                                "event_records": 1,
+                                "log_records": 16,
+                                "telemetry_records": 16,
                             },
                         },
                         sort_keys=True,
@@ -633,7 +694,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                                     {
                                         "version": 1,
                                         "protocol": MODULE.PROTOCOL,
-                                        "commit": "a" * 40,
+                                        "commit": RELEASE_COMMIT,
                                         "hardware_sha256": hardware_description_digest,
                                         "hardware_profile_sha256": hardware_profile_digest,
                                         "configuration_sha256": configuration_digests[
@@ -672,7 +733,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         {
                             "version": 1,
                             "protocol": MODULE.PROTOCOL,
-                            "commit": "a" * 40,
+                            "commit": RELEASE_COMMIT,
                             "raw_inputs": [
                                 {
                                     "sha256": fault_raw_digest,
@@ -723,6 +784,13 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             elif kind == "leakage_report":
                 path = Path("evidence") / "leakage_report.json"
                 payload = b"pending leakage report\n"
+            elif kind == "leakage_capture_provenance":
+                path = (
+                    Path("evidence")
+                    / "leakage"
+                    / "capture-provenance-left.json"
+                )
+                payload = b"pending leakage provenance\n"
             elif kind == "torii_capture":
                 path = Path("evidence") / "torii_capture.json"
                 payload = b'{"bundle":"opaque","value":"left"}\n'
@@ -758,32 +826,34 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         differential_pairs = []
         differential_left_root = Path("evidence") / "differential" / "left"
         differential_right_root = Path("evidence") / "differential" / "right"
+        left_directory = root / differential_left_root
+        right_directory = root / differential_right_root
+        left_directory.mkdir(parents=True, exist_ok=True)
+        right_directory.mkdir(parents=True, exist_ok=True)
+        leakage_payloads: dict[str, dict[str, Any]] = {}
+        leakage_jobs: dict[str, dict[str, Any]] = {}
+        for index, (variant, directory) in enumerate(
+            (("left", left_directory), ("right", right_directory)), 1
+        ):
+            job = {
+                "request_id": f"{index}" * 64,
+                "invocation_nonce": "8" * 64,
+                "kind": "leakage",
+                "participants": 3,
+                "variant": variant,
+                "canary_names": [],
+                "canary_commitments": {},
+                "configuration_sha256": "c" * 64,
+            }
+            leakage_jobs[variant] = job
+            leakage_payloads[variant] = runner_leakage_payload(job, directory)
         for surface in MODULE.REQUIRED_DIFFERENTIAL_ARTIFACT_KINDS:
-            source = next(
-                artifact
-                for artifact in artifacts
-                if artifact["kind"] == surface
-                and artifact["path"]
-                == (
-                    "evidence/torii_capture.json"
-                    if surface == "torii_capture"
-                    else f"evidence/{surface}.txt"
-                )
-            )
-            left_payload = (root / source["path"]).read_bytes()
-            suffix = "json" if surface == "torii_capture" else "txt"
-            relative_name = Path(f"{surface}.{suffix}")
+            relative_name = Path(MODULE.DIFFERENTIAL_SURFACE_FILES[surface])
             left_path = differential_left_root / relative_name
             right_path = differential_right_root / relative_name
-            right_payload = (
-                b'{"bundle":"opaque","value":"rght"}\n'
-                if surface == "torii_capture"
-                else left_payload
-            )
+            left_payload = (root / left_path).read_bytes()
+            right_payload = (root / right_path).read_bytes()
             self.assertEqual(len(left_payload), len(right_payload))
-            left_destination = root / left_path
-            left_destination.parent.mkdir(parents=True, exist_ok=True)
-            left_destination.write_bytes(left_payload)
             left = {
                 "kind": surface,
                 "path": left_path.as_posix(),
@@ -791,9 +861,6 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 "bytes": len(left_payload),
             }
             artifacts.append(left)
-            right_destination = root / right_path
-            right_destination.parent.mkdir(parents=True, exist_ok=True)
-            right_destination.write_bytes(right_payload)
             right = {
                 "kind": surface,
                 "path": right_path.as_posix(),
@@ -817,12 +884,44 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     },
                 }
             )
+        for variant in ("left", "right"):
+            provenance_payload = (
+                json.dumps(
+                    runner_response(
+                        leakage_jobs[variant], leakage_payloads[variant]
+                    ),
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode()
+            provenance_path = (
+                Path("evidence")
+                / "leakage"
+                / f"capture-provenance-{variant}.json"
+            )
+            (root / provenance_path).parent.mkdir(parents=True, exist_ok=True)
+            (root / provenance_path).write_bytes(provenance_payload)
+            provenance_artifact = {
+                "kind": "leakage_capture_provenance",
+                "path": provenance_path.as_posix(),
+                "sha256": hashlib.sha256(provenance_payload).hexdigest(),
+                "bytes": len(provenance_payload),
+            }
+            if variant == "left":
+                existing = next(
+                    artifact
+                    for artifact in artifacts
+                    if artifact["kind"] == "leakage_capture_provenance"
+                )
+                existing.update(provenance_artifact)
+            else:
+                artifacts.append(provenance_artifact)
         differential_manifest_payload = (
             json.dumps(
                 {
                     "version": 1,
                     "protocol": MODULE.PROTOCOL,
-                    "commit": "a" * 40,
+                    "commit": RELEASE_COMMIT,
                     "left_root": differential_left_root.as_posix(),
                     "right_root": differential_right_root.as_posix(),
                     "pairs": differential_pairs,
@@ -847,14 +946,14 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         left_count = next(
             artifact
             for artifact in artifacts
-            if artifact["kind"] == "message_count_manifest"
+            if artifact["kind"] == "traffic_count_manifest"
         )
-        right_count_path = Path("evidence") / "message_counts_right.json"
+        right_count_path = Path("evidence") / "traffic-counts-right.json"
         right_count_payload = (root / left_count["path"]).read_bytes()
         (root / right_count_path).write_bytes(right_count_payload)
         artifacts.append(
             {
-                "kind": "message_count_manifest",
+                "kind": "traffic_count_manifest",
                 "path": right_count_path.as_posix(),
                 "sha256": hashlib.sha256(right_count_payload).hexdigest(),
                 "bytes": len(right_count_payload),
@@ -876,7 +975,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             (
                 {"sha256": artifact["sha256"], "bytes": artifact["bytes"]}
                 for artifact in artifacts
-                if artifact["kind"] == "message_count_manifest"
+                if artifact["kind"] == "traffic_count_manifest"
             ),
             key=lambda item: (item["sha256"], item["bytes"]),
         )
@@ -899,9 +998,10 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         "right_only": [],
                         "size_mismatches": [],
                         "json_shape_mismatches": [],
+                        "packet_length_mismatches": [],
                     },
-                    "message_count_manifests": count_bindings,
-                    "message_count_mismatches": [],
+                    "traffic_count_manifests": count_bindings,
+                    "traffic_count_mismatches": [],
                 },
                 sort_keys=True,
             )
@@ -918,7 +1018,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         manifest = {
             "version": 1,
             "protocol": MODULE.PROTOCOL,
-            "commit": "a" * 40,
+            "commit": RELEASE_COMMIT,
             "worktree_clean": True,
             "doi": "10.5281/zenodo.1234567",
             "qualification": {
@@ -959,7 +1059,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 + 7
                 + 4
                 + 2 * len(MODULE.REQUIRED_DIFFERENTIAL_ARTIFACT_KINDS)
-                + 2,
+                + 3,
             )
             self.assertRegex(report["bundle_binding_sha256"], r"^[0-9a-f]{64}$")
 
@@ -1213,8 +1313,12 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             (root / test_report["path"]).write_text("tampered\n", encoding="utf-8")
             with self.assertRaisesRegex(MODULE.EvidenceError, "byte count mismatch"):
                 MODULE.verify_bundle(manifest_path)
-            manifest_path = self.make_bundle(root)
-            (root / "unlisted.txt").write_text("not bound\n", encoding="utf-8")
+            second_root = root / "second"
+            second_root.mkdir()
+            manifest_path = self.make_bundle(second_root)
+            (second_root / "unlisted.txt").write_text(
+                "not bound\n", encoding="utf-8"
+            )
             with self.assertRaisesRegex(MODULE.EvidenceError, "inventory mismatch"):
                 MODULE.verify_bundle(manifest_path)
 
@@ -1275,21 +1379,41 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             root = Path(temporary)
             manifest_path = self.make_bundle(root)
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            artifact = next(
+            archive_artifact = next(
                 item
                 for item in manifest["artifacts"]
-                if item["kind"] == "release_inventory_report"
+                if item["kind"] == "source_archive"
             )
-            report_path = root / artifact["path"]
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-            report["details"]["untracked"] = ["new-sdk-surface.js"]
-            payload = (json.dumps(report, sort_keys=True) + "\n").encode()
-            report_path.write_bytes(payload)
-            artifact["bytes"] = len(payload)
-            artifact["sha256"] = hashlib.sha256(payload).hexdigest()
+            archive_payload = fixture_source_seal(b"# substituted Cargo.lock\n")
+            (root / archive_artifact["path"]).write_bytes(archive_payload)
+            archive_artifact["bytes"] = len(archive_payload)
+            archive_artifact["sha256"] = hashlib.sha256(archive_payload).hexdigest()
+
+            source_manifest_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "source_manifest"
+            )
+            source_manifest_path = root / source_manifest_artifact["path"]
+            source_manifest = json.loads(
+                source_manifest_path.read_text(encoding="utf-8")
+            )
+            source_manifest["source_archive"] = {
+                "path": archive_artifact["path"],
+                "sha256": archive_artifact["sha256"],
+                "bytes": archive_artifact["bytes"],
+            }
+            source_manifest_payload = (
+                json.dumps(source_manifest, sort_keys=True) + "\n"
+            ).encode()
+            source_manifest_path.write_bytes(source_manifest_payload)
+            source_manifest_artifact["bytes"] = len(source_manifest_payload)
+            source_manifest_artifact["sha256"] = hashlib.sha256(
+                source_manifest_payload
+            ).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(
-                MODULE.EvidenceError, "exact tracked inventory"
+                MODULE.EvidenceError, r"incorrect=\['Cargo\.lock'\]"
             ):
                 MODULE.verify_bundle(manifest_path)
 
@@ -1563,8 +1687,8 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             manifest_path = self.make_bundle(root)
             report_path = root / "evidence" / "leakage_report.json"
             report = json.loads(report_path.read_text(encoding="utf-8"))
-            report["message_count_mismatches"] = [
-                {"channel": "torii_requests", "left": 1, "right": 2}
+            report["traffic_count_mismatches"] = [
+                {"channel": "torii_request_packets", "left": 1, "right": 2}
             ]
             payload = (json.dumps(report, sort_keys=True) + "\n").encode()
             report_path.write_bytes(payload)
@@ -1577,7 +1701,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             artifact["bytes"] = len(payload)
             artifact["sha256"] = hashlib.sha256(payload).hexdigest()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            with self.assertRaisesRegex(MODULE.EvidenceError, "message-count finding"):
+            with self.assertRaisesRegex(MODULE.EvidenceError, "traffic-count finding"):
                 MODULE.verify_bundle(manifest_path)
 
     def test_leakage_report_must_bind_every_archived_privacy_surface(self) -> None:
@@ -1696,11 +1820,13 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             right = next(
                 item
                 for item in manifest["artifacts"]
-                if item["path"] == "evidence/differential/right/torii_capture.json"
+                if item["path"] == "evidence/differential/right/events.json"
             )
             old_binding = {"sha256": right["sha256"], "bytes": right["bytes"]}
             right_path = root / right["path"]
-            right_payload = b'{"bundle":"opaque","other":"rght"}\n'
+            right_payload = right_path.read_bytes().replace(
+                b'"source_bytes"', b'"source_bytez"', 1
+            )
             self.assertEqual(len(right_payload), right["bytes"])
             right_path.write_bytes(right_payload)
             right["sha256"] = hashlib.sha256(right_payload).hexdigest()
@@ -1717,7 +1843,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             pair = next(
                 item
                 for item in pair_manifest["pairs"]
-                if item["surface"] == "torii_capture"
+                if item["surface"] == "event_capture"
             )
             pair["right"] = {"path": right["path"], **new_binding}
             pair_payload = (json.dumps(pair_manifest, sort_keys=True) + "\n").encode()
@@ -1746,6 +1872,65 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "JSON public shapes differ"
+            ):
+                MODULE.verify_bundle(manifest_path)
+
+    def test_release_verifier_replays_archived_capture_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.make_bundle(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            provenance = next(
+                item
+                for item in manifest["artifacts"]
+                if item["path"]
+                == "evidence/leakage/capture-provenance-right.json"
+            )
+            old_binding = {
+                "sha256": provenance["sha256"],
+                "bytes": provenance["bytes"],
+            }
+            provenance_path = root / provenance["path"]
+            response = json.loads(provenance_path.read_text(encoding="utf-8"))
+            response["payload"]["capture_provenance"]["packet_counts"][
+                "sanitized_packets"
+            ] = 5
+            provenance_payload = (
+                json.dumps(response, sort_keys=True) + "\n"
+            ).encode()
+            provenance_path.write_bytes(provenance_payload)
+            provenance["sha256"] = hashlib.sha256(provenance_payload).hexdigest()
+            provenance["bytes"] = len(provenance_payload)
+            new_binding = {
+                "sha256": provenance["sha256"],
+                "bytes": provenance["bytes"],
+            }
+
+            leakage_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "leakage_report"
+            )
+            leakage_path = root / leakage_artifact["path"]
+            report = json.loads(leakage_path.read_text(encoding="utf-8"))
+            report["scanned_artifacts"].remove(old_binding)
+            report["scanned_artifacts"].append(new_binding)
+            report["scanned_artifacts"].sort(
+                key=lambda item: (item["sha256"], item["bytes"])
+            )
+            report["scanned_bytes"] = sum(
+                item["bytes"] for item in report["scanned_artifacts"]
+            )
+            leakage_payload = (json.dumps(report, sort_keys=True) + "\n").encode()
+            leakage_path.write_bytes(leakage_payload)
+            leakage_artifact["sha256"] = hashlib.sha256(
+                leakage_payload
+            ).hexdigest()
+            leakage_artifact["bytes"] = len(leakage_payload)
+
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.EvidenceError, "provenance replay failed"
             ):
                 MODULE.verify_bundle(manifest_path)
 
@@ -1794,7 +1979,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             ):
                 MODULE.verify_bundle(manifest_path)
 
-    def test_archived_differential_message_counts_must_match(self) -> None:
+    def test_archived_differential_traffic_counts_must_match(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest_path = self.make_bundle(root)
@@ -1802,12 +1987,12 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             right = next(
                 item
                 for item in manifest["artifacts"]
-                if item["path"] == "evidence/message_counts_right.json"
+                if item["path"] == "evidence/traffic-counts-right.json"
             )
             old_binding = {"sha256": right["sha256"], "bytes": right["bytes"]}
             right_path = root / right["path"]
             counts = json.loads(right_path.read_text(encoding="utf-8"))
-            counts["channels"][MODULE.REQUIRED_MESSAGE_COUNT_CHANNELS[0]] += 1
+            counts["channels"][MODULE.REQUIRED_TRAFFIC_COUNT_CHANNELS[0]] += 1
             right_payload = (json.dumps(counts, sort_keys=True) + "\n").encode()
             right_path.write_bytes(right_payload)
             right["sha256"] = hashlib.sha256(right_payload).hexdigest()
@@ -1821,9 +2006,9 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             report["scanned_artifacts"].sort(
                 key=lambda item: (item["sha256"], item["bytes"])
             )
-            report["message_count_manifests"].remove(old_binding)
-            report["message_count_manifests"].append(new_binding)
-            report["message_count_manifests"].sort(
+            report["traffic_count_manifests"].remove(old_binding)
+            report["traffic_count_manifests"].append(new_binding)
+            report["traffic_count_manifests"].sort(
                 key=lambda item: (item["sha256"], item["bytes"])
             )
             report["scanned_bytes"] = sum(
@@ -1841,7 +2026,7 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             manifest["artifacts"].sort(key=lambda item: item["path"])
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(
-                MODULE.EvidenceError, "message counts do not match"
+                MODULE.EvidenceError, "traffic counts do not match"
             ):
                 MODULE.verify_bundle(manifest_path)
 

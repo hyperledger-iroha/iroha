@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
+import struct
 import sys
 import tempfile
 import unittest
@@ -81,6 +83,394 @@ def process_inventory(participants: int) -> list[dict[str, Any]]:
         }
         for index, (role, dataspace, validator) in enumerate(rows)
     ]
+
+
+def _ethernet_ipv4_tcp(source_port: int, destination_port: int) -> bytes:
+    ethernet = bytes.fromhex("00112233445566778899aabb0800")
+    ipv4 = bytearray(20)
+    ipv4[0] = 0x45
+    ipv4[2:4] = (40).to_bytes(2, "big")
+    ipv4[8] = 64
+    ipv4[9] = 6
+    ipv4[12:16] = bytes((127, 0, 0, 1))
+    ipv4[16:20] = bytes((127, 0, 0, 1))
+    tcp = bytearray(20)
+    tcp[:2] = source_port.to_bytes(2, "big")
+    tcp[2:4] = destination_port.to_bytes(2, "big")
+    tcp[12] = 5 << 4
+    return ethernet + bytes(ipv4) + bytes(tcp)
+
+
+def _write_pcapng(path: Path, packets: list[bytes]) -> None:
+    body = bytearray(MODULE.capture_split.pcapng.PCAPNG_SECTION_HEADER)
+    body.extend(MODULE.capture_split.pcapng._interface_description(1, 65_535, 6))
+    for index, packet in enumerate(packets, 1):
+        body.extend(
+            MODULE.capture_split.pcapng._enhanced_packet(
+                index * 1_000_000, len(packet), len(packet), packet
+            )
+        )
+    path.write_bytes(bytes(body))
+
+
+def _write_pcap(path: Path, packets: list[bytes]) -> None:
+    body = bytearray(struct.pack("<IHHIIII", 0xA1B2C3D4, 2, 4, 0, 0, 65_535, 1))
+    for index, packet in enumerate(packets, 1):
+        body.extend(struct.pack("<IIII", index, 0, len(packet), len(packet)))
+        body.extend(packet)
+    path.write_bytes(bytes(body))
+    path.chmod(0o600)
+
+
+def _source_binding(sources: list[bytes]) -> dict[str, Any]:
+    digest = hashlib.sha256()
+    digest.update(b"iroha:aps-leakage-source-binding:v1\0")
+    digest.update(struct.pack("<Q", len(sources)))
+    for source in sources:
+        digest.update(struct.pack("<Q", len(source)))
+        digest.update(source)
+    return {
+        "source_sha256": digest.hexdigest(),
+        "source_bytes": sum(map(len, sources)),
+        "source_count": len(sources),
+    }
+
+
+def _atomicity_evidence(peer_index: int, participants: int) -> bytes:
+    count_names = (
+        "governance",
+        "pools",
+        "roots",
+        "nullifiers",
+        "commitments",
+        "encrypted_outputs",
+        "replay_markers",
+        "receipts",
+        "abort_markers",
+        "staged_pool_heads",
+        "staged_nullifiers",
+        "staged_output_commitments",
+        "staged_locks",
+    )
+    baseline = {name: 0 for name in count_names}
+    final = dict(baseline)
+    final.update(
+        {
+            "roots": participants,
+            "nullifiers": participants * 2,
+            "commitments": participants * 3,
+            "encrypted_outputs": participants * 3,
+            "replay_markers": 1,
+            "receipts": 1,
+        }
+    )
+    observations = []
+    empty_staged = _iroha_hash_literal("3" * 64)
+    for index, (counts, ledger) in enumerate(
+        (
+            (baseline, _iroha_hash_literal("1" * 64)),
+            (baseline, _iroha_hash_literal("1" * 64)),
+            (final, _iroha_hash_literal("2" * 64)),
+        )
+    ):
+        response = json.dumps(
+            {
+                "format_version": 1,
+                "height": index + 1,
+                "commitment": _iroha_hash_literal(
+                    f"{peer_index + index + 4:02X}" * 32
+                ),
+                "ledger_commitment": ledger,
+                "staged_lock_commitment": empty_staged,
+                "counts": counts,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        observations.append(
+            {
+                "peer_index": peer_index,
+                "response_sha256": hashlib.sha256(response).hexdigest(),
+                "response_hex": response.hex(),
+                "height": index + 1,
+                "commitment": _iroha_hash_literal(
+                    f"{peer_index + index + 4:02X}" * 32
+                ),
+                "ledger_commitment": ledger,
+                "staged_lock_commitment": empty_staged,
+                "counts": counts,
+            }
+        )
+    return json.dumps(
+        {"version": 1, "peer_index": peer_index, "observations": observations},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+
+def _write_restricted_archive(
+    path: Path, rows: list[tuple[str, str, bytes]]
+) -> dict[str, dict[str, Any]]:
+    rows.sort(key=lambda row: (row[0], row[1]))
+    body = bytearray(MODULE.LEAKAGE_RESTRICTED_SOURCE_DOMAIN_V1)
+    body.extend(struct.pack("<I", len(rows)))
+    grouped: dict[str, list[bytes]] = {}
+    for ordinal, (surface, relative, source) in enumerate(rows):
+        assert source
+        grouped.setdefault(surface, []).append(source)
+        encoded_surface = surface.encode("ascii")
+        encoded_relative = relative.encode("utf-8")
+        body.extend(struct.pack("<IH", ordinal, len(encoded_surface)))
+        body.extend(encoded_surface)
+        body.extend(struct.pack("<I", len(encoded_relative)))
+        body.extend(encoded_relative)
+        body.extend(struct.pack("<Q", len(source)))
+        body.extend(source)
+    path.write_bytes(bytes(body))
+    path.chmod(0o600)
+    return {surface: _source_binding(sources) for surface, sources in grouped.items()}
+
+
+def leakage_payload(job: dict[str, Any], evidence: Path) -> dict[str, Any]:
+    """Write one exact source-replayable leakage fixture."""
+
+    peer_count = 16
+    variant_marker = b"L" if job.get("variant", "left") == "left" else b"R"
+    torii_ports = list(range(20_000, 20_000 + peer_count))
+    public_ports = list(range(30_000, 30_004))
+    restricted_ports = list(range(40_000, 40_012))
+    request_packet = _ethernet_ipv4_tcp(50_000, torii_ports[0])
+    response_packet = _ethernet_ipv4_tcp(torii_ports[0], 50_000)
+    public_packet = _ethernet_ipv4_tcp(public_ports[0], 50_001)
+    restricted_packet = _ethernet_ipv4_tcp(50_002, restricted_ports[0])
+    all_packets = [
+        request_packet,
+        response_packet,
+        public_packet,
+        restricted_packet,
+    ]
+    raw_path = evidence / MODULE.SURFACE_FILES["restricted_packet_source"]
+    _write_pcap(raw_path, all_packets)
+    raw_binding = MODULE.file_binding(raw_path)
+    ports = {
+        "version": 1,
+        "torii_ports": torii_ports,
+        "public_p2p_ports": public_ports,
+        "restricted_p2p_ports": restricted_ports,
+    }
+    groups = MODULE.capture_split.validate_port_manifest(ports)
+    MODULE.capture_split.split_capture(raw_path, evidence, groups)
+    block = b"opaque-canonical-block-" + variant_marker
+    (evidence / MODULE.SURFACE_FILES["block_wire_capture"]).write_bytes(
+        MODULE.LEAKAGE_BLOCK_WIRE_MAGIC_V1
+        + struct.pack("<I", 1)
+        + struct.pack("<Q", len(block))
+        + block
+    )
+    digest = "5" * 64
+    event_sources = [b"opaque-event-source"]
+    event_records = [
+        {
+            "peer_index": 0,
+            "source_sha256": hashlib.sha256(event_sources[0]).hexdigest(),
+            "source_bytes": len(event_sources[0]),
+        }
+    ]
+    query_sources = [f"opaque-query-{index:03}".encode() for index in range(peer_count)]
+    query_records = [
+        {
+            "peer_index": index,
+            "source_sha256": hashlib.sha256(query_sources[index]).hexdigest(),
+            "source_bytes": len(query_sources[index]),
+        }
+        for index in range(peer_count)
+    ]
+    operator_sources = []
+    log_records = []
+    telemetry_sources = []
+    telemetry_records = []
+    for index in range(peer_count):
+        stdout = f"validator-{index:03}-stdout".encode()
+        stderr = b""
+        operator_sources.append(
+            struct.pack("<Q", len(stdout))
+            + stdout
+            + struct.pack("<Q", len(stderr))
+            + stderr
+        )
+        log_records.append(
+            {
+                "peer_index": index,
+                "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+                "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+                "stdout_bytes": len(stdout),
+                "stderr_bytes": len(stderr),
+            }
+        )
+        status = f"status-{index:03}".encode()
+        metrics = f"metrics-{index:03}".encode()
+        source = (
+            struct.pack("<Q", len(status))
+            + status
+            + struct.pack("<Q", len(metrics))
+            + metrics
+        )
+        telemetry_sources.append(source)
+        telemetry_records.append(
+            {
+                "peer_index": index,
+                "status_sha256": hashlib.sha256(status).hexdigest(),
+                "status_bytes": len(status),
+                "metrics_sha256": hashlib.sha256(metrics).hexdigest(),
+                "metrics_bytes": len(metrics),
+                "source_sha256": hashlib.sha256(source).hexdigest(),
+                "source_bytes": len(source),
+            }
+        )
+    for surface, records in (
+        ("event_capture", event_records),
+        ("query_capture", query_records),
+        ("operator_log", log_records),
+        ("telemetry_capture", telemetry_records),
+    ):
+        (evidence / MODULE.SURFACE_FILES[surface]).write_text(
+            json.dumps({"version": 1, "records": records}, sort_keys=True),
+            encoding="utf-8",
+        )
+    derivative_sources: dict[str, bytes] = {}
+    for surface, kind in (
+        ("kura_artifact", "kura"),
+        ("merge_artifact", "merge"),
+        ("snapshot_artifact", "snapshot"),
+    ):
+        source = f"opaque-source-{surface}-".encode() + variant_marker
+        derivative_sources[surface] = source
+        (evidence / MODULE.SURFACE_FILES[surface]).write_bytes(
+            MODULE.LEAKAGE_ARTIFACT_FRAME_DOMAIN_V1
+            + struct.pack("<H", len(kind))
+            + kind.encode()
+            + struct.pack("<I", 1)
+            + struct.pack("<I", 0)
+            + hashlib.sha256(f"path-{surface}".encode()).digest()
+            + struct.pack("<Q", len(source))
+            + hashlib.sha256(source).digest()
+        )
+    restricted_rows: list[tuple[str, str, bytes]] = [
+        ("block_wire_capture", "carrier-block-wire.bin", (evidence / MODULE.SURFACE_FILES["block_wire_capture"]).read_bytes()),
+        ("event_capture", "event-000.norito", event_sources[0]),
+        (
+            "coordinator_log",
+            "coordinator-000/stdout-stderr.log",
+            b"coordinator-log",
+        ),
+        ("confidential_da", "sidecar-000.bin", b"opaque-confidential-sidecar"),
+    ]
+    restricted_rows.extend(
+        ("query_capture", f"peer-{index:03}.norito", source)
+        for index, source in enumerate(query_sources)
+    )
+    restricted_rows.extend(
+        ("operator_log", f"validator-{index:03}.stdout-stderr", source)
+        for index, source in enumerate(operator_sources)
+    )
+    restricted_rows.extend(
+        ("telemetry_capture", f"peer-{index:03}.status-metrics", source)
+        for index, source in enumerate(telemetry_sources)
+    )
+    for surface, source in derivative_sources.items():
+        restricted_rows.append((surface, f"path-{surface}", source))
+    restricted_rows.extend(
+        ("atomicity_observation", f"peer-{index:03}.json", _atomicity_evidence(index, 3))
+        for index in range(peer_count)
+    )
+    restricted_path = evidence / MODULE.SURFACE_FILES["restricted_audit_source"]
+    source_groups = _write_restricted_archive(restricted_path, restricted_rows)
+    artifacts = []
+    for surface in sorted(MODULE.SURFACE_FILES):
+        path = evidence / MODULE.SURFACE_FILES[surface]
+        packet = path.suffix == ".pcapng"
+        if packet:
+            source_claim = {
+                "source_sha256": raw_binding["sha256"],
+                "source_bytes": raw_binding["bytes"],
+                "source_count": 1,
+            }
+        elif surface == "restricted_packet_source":
+            source_claim = {
+                "source_sha256": raw_binding["sha256"],
+                "source_bytes": raw_binding["bytes"],
+                "source_count": 1,
+            }
+        elif surface == "restricted_audit_source":
+            source_claim = MODULE._single_file_source_binding(path)
+        else:
+            source_claim = source_groups[surface]
+        artifacts.append(
+            {
+                "surface": surface,
+                "relative_name": MODULE.SURFACE_FILES[surface],
+                **MODULE.file_binding(path),
+                **source_claim,
+            }
+        )
+    packet_counts = {
+        "sanitized_packets": 4,
+        "torii_packets": 2,
+        "public_p2p_packets": 1,
+        "restricted_p2p_packets": 1,
+        "torii_request_packets": 1,
+        "torii_response_packets": 1,
+    }
+    port_binding = MODULE.capture_split.canonical_port_manifest_binding(
+        groups
+    )
+    tcpdump_stderr = (
+        b"tcpdump: listening on lo0\n"
+        b"4 packets captured\n"
+        b"4 packets received by filter\n"
+        b"0 packets dropped by kernel\n"
+    )
+    return {
+        "variant": job.get("variant", "left"),
+        "canaries_injected": job["canary_names"],
+        "canary_commitments": job["canary_commitments"],
+        "only_secret_fields_changed": True,
+        "capture_complete": True,
+        "finalized_receipt_observed": True,
+        "successful_leg_applications": 3,
+        "each_leg_applied_exactly_once": True,
+        "continuous_atomicity_checks": peer_count * 3,
+        "partial_visible_observations": 0,
+        "partial_spendable_observations": 0,
+        "capture_provenance": {
+            "raw_pcap": raw_binding,
+            "port_manifest": port_binding,
+            "ports": ports,
+            "packet_counts": packet_counts,
+            "tcpdump": {
+                "stderr_base64": MODULE.base64.b64encode(tcpdump_stderr).decode("ascii"),
+                "stderr_sha256": hashlib.sha256(tcpdump_stderr).hexdigest(),
+                "stderr_bytes": len(tcpdump_stderr),
+                "statistics": {
+                    "captured_packets": 4,
+                    "received_by_filter_packets": 4,
+                    "drop_counters": {"kernel": 0},
+                },
+            },
+        },
+        "artifacts": artifacts,
+        "traffic_counts": {
+            "torii_request_packets": 1,
+            "torii_response_packets": 1,
+            "public_p2p_packets": 1,
+            "restricted_p2p_packets": 1,
+            "block_messages": 1,
+            "query_responses": peer_count,
+            "event_records": 1,
+            "log_records": peer_count,
+            "telemetry_records": peer_count,
+        },
+    }
 
 
 def fault_job(participants: int = 3) -> dict[str, Any]:
@@ -1155,40 +1545,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary:
             evidence = Path(temporary)
-            artifact_rows = []
-            for index, surface in enumerate(sorted(MODULE.SURFACE_FILES)):
-                path = evidence / MODULE.SURFACE_FILES[surface]
-                if path.suffix == ".json":
-                    path.write_text(
-                        json.dumps({"opaque": f"capture-{index:02d}"}) + "\n",
-                        encoding="utf-8",
-                    )
-                else:
-                    path.write_bytes(f"opaque-capture-{index:02d}\n".encode())
-                artifact_rows.append(
-                    {
-                        "surface": surface,
-                        "relative_name": MODULE.SURFACE_FILES[surface],
-                        **MODULE.file_binding(path),
-                    }
-                )
-            payload = {
-                "variant": "left",
-                "canaries_injected": job["canary_names"],
-                "canary_commitments": job["canary_commitments"],
-                "only_secret_fields_changed": True,
-                "capture_complete": True,
-                "finalized_receipt_observed": True,
-                "successful_leg_applications": 3,
-                "each_leg_applied_exactly_once": True,
-                "partial_visible_observations": 0,
-                "partial_spendable_observations": 0,
-                "artifacts": artifact_rows,
-                "message_counts": {
-                    channel: 1
-                    for channel in MODULE.leakage_audit.REQUIRED_COUNT_CHANNELS
-                },
-            }
+            payload = leakage_payload(job, evidence)
             counts, surfaces = MODULE.validate_leakage_response(
                 response(job, payload),
                 plan=plan(),
@@ -1196,8 +1553,128 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 evidence_dir=evidence,
             )
             self.assertEqual(len(surfaces), len(MODULE.SURFACE_FILES))
-            self.assertTrue(all(value == 1 for value in counts.values()))
+            self.assertTrue(all(value >= 1 for value in counts.values()))
             self.assertTrue(all(binding["bytes"] > 0 for _, _, binding in surfaces))
+            fabricated_count = copy.deepcopy(payload)
+            fabricated_count["traffic_counts"]["query_responses"] = 1
+            with self.assertRaisesRegex(MODULE.RunnerError, "not source-backed"):
+                MODULE.validate_leakage_response(
+                    response(job, fabricated_count),
+                    plan=plan(),
+                    job=job,
+                    evidence_dir=evidence,
+                )
+            fabricated_split = copy.deepcopy(payload)
+            fabricated_split["capture_provenance"]["packet_counts"][
+                "torii_packets"
+            ] = 3
+            with self.assertRaisesRegex(MODULE.RunnerError, "final packet files"):
+                MODULE.validate_leakage_response(
+                    response(job, fabricated_split),
+                    plan=plan(),
+                    job=job,
+                    evidence_dir=evidence,
+                )
+            substituted_raw = copy.deepcopy(payload)
+            packet_row = next(
+                row
+                for row in substituted_raw["artifacts"]
+                if row["relative_name"].endswith(".pcapng")
+            )
+            packet_row["source_sha256"] = "4" * 64
+            with self.assertRaisesRegex(MODULE.RunnerError, "raw pcap"):
+                MODULE.validate_leakage_response(
+                    response(job, substituted_raw),
+                    plan=plan(),
+                    job=job,
+                    evidence_dir=evidence,
+                )
+            false_port_binding = copy.deepcopy(payload)
+            false_port_binding["capture_provenance"]["port_manifest"]["sha256"] = "4" * 64
+            with self.assertRaisesRegex(MODULE.RunnerError, "not derived"):
+                MODULE.validate_leakage_response(
+                    response(job, false_port_binding),
+                    plan=plan(),
+                    job=job,
+                    evidence_dir=evidence,
+                )
+            false_tcpdump = copy.deepcopy(payload)
+            false_tcpdump["capture_provenance"]["tcpdump"]["statistics"][
+                "received_by_filter_packets"
+            ] += 1
+            with self.assertRaisesRegex(MODULE.RunnerError, "retained stderr"):
+                MODULE.validate_leakage_response(
+                    response(job, false_tcpdump),
+                    plan=plan(),
+                    job=job,
+                    evidence_dir=evidence,
+                )
+            raw_path = evidence / MODULE.SURFACE_FILES["restricted_packet_source"]
+            original_raw = raw_path.read_bytes()
+            changed_raw = bytearray(original_raw)
+            changed_raw[-1] ^= 1
+            raw_path.write_bytes(bytes(changed_raw))
+            raw_rebound = copy.deepcopy(payload)
+            changed_binding = MODULE.file_binding(raw_path)
+            raw_rebound["capture_provenance"]["raw_pcap"] = changed_binding
+            for row in raw_rebound["artifacts"]:
+                if row["surface"] == "restricted_packet_source":
+                    row.update(changed_binding)
+                    row["source_sha256"] = changed_binding["sha256"]
+                    row["source_bytes"] = changed_binding["bytes"]
+                elif row["relative_name"].endswith(".pcapng"):
+                    row["source_sha256"] = changed_binding["sha256"]
+                    row["source_bytes"] = changed_binding["bytes"]
+            with self.assertRaisesRegex(MODULE.RunnerError, "exact derivatives"):
+                MODULE.validate_leakage_response(
+                    response(job, raw_rebound),
+                    plan=plan(),
+                    job=job,
+                    evidence_dir=evidence,
+                )
+            raw_path.write_bytes(original_raw)
+            split_path = evidence / MODULE.SURFACE_FILES["torii_capture"]
+            original_split = split_path.read_bytes()
+            changed_split = bytearray(original_split)
+            changed_split[-8] ^= 1
+            split_path.write_bytes(bytes(changed_split))
+            split_rebound = copy.deepcopy(payload)
+            split_row = next(
+                row
+                for row in split_rebound["artifacts"]
+                if row["surface"] == "torii_capture"
+            )
+            split_row.update(MODULE.file_binding(split_path))
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "exact derivatives|cannot be replayed"
+            ):
+                MODULE.validate_leakage_response(
+                    response(job, split_rebound),
+                    plan=plan(),
+                    job=job,
+                    evidence_dir=evidence,
+                )
+            split_path.write_bytes(original_split)
+            block_path = evidence / MODULE.SURFACE_FILES["block_wire_capture"]
+            original_block = block_path.read_bytes()
+            changed_block = bytearray(original_block)
+            changed_block[-1] ^= 1
+            block_path.write_bytes(bytes(changed_block))
+            block_rebound = copy.deepcopy(payload)
+            block_row = next(
+                row
+                for row in block_rebound["artifacts"]
+                if row["surface"] == "block_wire_capture"
+            )
+            block_row.update(MODULE.file_binding(block_path))
+            with self.assertRaisesRegex(MODULE.RunnerError, "retained raw source"):
+                MODULE.validate_leakage_response(
+                    response(job, block_rebound),
+                    plan=plan(),
+                    job=job,
+                    evidence_dir=evidence,
+                )
+            block_path.write_bytes(original_block)
             broken = copy.deepcopy(payload)
             broken["artifacts"] = broken["artifacts"][:-1]
             with self.assertRaisesRegex(MODULE.RunnerError, "every required surface"):
@@ -1221,7 +1698,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 )
             empty_counts = copy.deepcopy(payload)
             first_channel = MODULE.leakage_audit.REQUIRED_COUNT_CHANNELS[0]
-            empty_counts["message_counts"][first_channel] = 0
+            empty_counts["traffic_counts"][first_channel] = 0
             with self.assertRaisesRegex(MODULE.RunnerError, "must be in 1"):
                 MODULE.validate_leakage_response(
                     response(job, empty_counts),
@@ -1252,6 +1729,85 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                     expected=expected_binding,
                 )
 
+    def test_atomicity_replay_rejects_invalid_heights_and_terminal_staged_locks(
+        self,
+    ) -> None:
+        def rewrite_projection(observation: dict[str, Any]) -> None:
+            raw = json.loads(bytes.fromhex(observation["response_hex"]).decode())
+            raw["height"] = observation["height"]
+            raw["staged_lock_commitment"] = observation["staged_lock_commitment"]
+            raw["counts"] = observation["counts"]
+            encoded = json.dumps(
+                raw, sort_keys=True, separators=(",", ":")
+            ).encode()
+            observation["response_hex"] = encoded.hex()
+            observation["response_sha256"] = hashlib.sha256(encoded).hexdigest()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "restricted.bin"
+            valid_source = _atomicity_evidence(0, 3)
+            _write_restricted_archive(
+                archive, [("atomicity_observation", "peer-000.json", valid_source)]
+            )
+            rows = MODULE._validate_restricted_leakage_source_archive(archive)[
+                "atomicity_observation"
+            ]["rows"]
+            self.assertEqual(
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 1),
+                3,
+            )
+
+            negative_height = json.loads(valid_source)
+            negative_height["observations"][0]["height"] = -1
+            rewrite_projection(negative_height["observations"][0])
+            _write_restricted_archive(
+                archive,
+                [
+                    (
+                        "atomicity_observation",
+                        "peer-000.json",
+                        json.dumps(
+                            negative_height, sort_keys=True, separators=(",", ":")
+                        ).encode(),
+                    )
+                ],
+            )
+            rows = MODULE._validate_restricted_leakage_source_archive(archive)[
+                "atomicity_observation"
+            ]["rows"]
+            with self.assertRaisesRegex(MODULE.RunnerError, "height"):
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 1)
+
+            terminal_staged = json.loads(valid_source)
+            final = terminal_staged["observations"][-1]
+            final["counts"].update(
+                {
+                    "staged_pool_heads": 1,
+                    "staged_nullifiers": 2,
+                    "staged_output_commitments": 3,
+                    "staged_locks": 6,
+                }
+            )
+            final["staged_lock_commitment"] = _iroha_hash_literal("4" * 64)
+            rewrite_projection(final)
+            _write_restricted_archive(
+                archive,
+                [
+                    (
+                        "atomicity_observation",
+                        "peer-000.json",
+                        json.dumps(
+                            terminal_staged, sort_keys=True, separators=(",", ":")
+                        ).encode(),
+                    )
+                ],
+            )
+            rows = MODULE._validate_restricted_leakage_source_archive(archive)[
+                "atomicity_observation"
+            ]["rows"]
+            with self.assertRaisesRegex(MODULE.RunnerError, "retained staged locks"):
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 1)
+
     def test_differential_manifest_is_accepted_by_release_validator(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1260,7 +1816,14 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 for index, surface in enumerate(sorted(MODULE.SURFACE_FILES)):
                     path = root / "leakage" / variant / MODULE.SURFACE_FILES[surface]
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    if path.suffix == ".json":
+                    if surface == "restricted_audit_source":
+                        _write_restricted_archive(
+                            path,
+                            [("query_capture", "peer-000.norito", b"opaque-source")],
+                        )
+                    elif path.suffix == ".pcapng":
+                        _write_pcapng(path, [_ethernet_ipv4_tcp(20_000, 20_001)])
+                    elif path.suffix == ".json":
                         path.write_text(
                             json.dumps({"opaque": f"capture-{index:02d}"}) + "\n",
                             encoding="utf-8",
@@ -1305,7 +1868,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             MODULE.write_json(canary_path, MODULE.build_canary_manifest(COMMIT))
             count_paths = []
             for variant in ("left", "right"):
-                count_path = root / f"message-counts-{variant}.json"
+                count_path = root / f"traffic-counts-{variant}.json"
                 MODULE.write_json(
                     count_path,
                     {
@@ -1326,8 +1889,8 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 ],
                 differential_left=root / "leakage" / "left",
                 differential_right=root / "leakage" / "right",
-                message_counts_left=count_paths[0],
-                message_counts_right=count_paths[1],
+                traffic_counts_left=count_paths[0],
+                traffic_counts_right=count_paths[1],
             )
             self.assertTrue(audit["passed"])
             changed_surface = "block_wire_capture"

@@ -481,7 +481,6 @@ mod epoch_schedule_tests {
 }
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
-pub mod da;
 pub(crate) mod evidence;
 pub(crate) mod exec;
 pub(crate) mod lane_planner;
@@ -986,7 +985,6 @@ enum FairV2IngressMessageKind {
     V2QuorumCertificate,
     V2TimeoutVote,
     V2TimeoutCertificate,
-    V2PayloadManifest,
     V2PayloadChunk,
     V2CertifiedBodyRequest,
     V2CertifiedBodyResponse,
@@ -1033,8 +1031,7 @@ fn fair_v2_ingress_control_kind(message: &BlockMessage) -> Option<FairV2IngressC
         ConsensusMessageV2Payload::TimeoutCertificate(_) => {
             FairV2IngressControlKind::TimeoutCertificate
         }
-        ConsensusMessageV2Payload::PayloadManifest(_)
-        | ConsensusMessageV2Payload::PayloadChunk(_)
+        ConsensusMessageV2Payload::PayloadChunk(_)
         | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -1057,8 +1054,7 @@ fn fair_v2_ingress_same_control_slot(
             ConsensusMessageV2Payload::QuorumCertificate(certificate) => certificate.round,
             ConsensusMessageV2Payload::TimeoutVote(vote) => vote.round,
             ConsensusMessageV2Payload::TimeoutCertificate(certificate) => certificate.round,
-            ConsensusMessageV2Payload::PayloadManifest(_)
-            | ConsensusMessageV2Payload::PayloadChunk(_)
+            ConsensusMessageV2Payload::PayloadChunk(_)
             | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | ConsensusMessageV2Payload::CommitCertificateRequest(_)
@@ -1248,7 +1244,6 @@ fn fair_v2_ingress_history_serve_request(
         | ConsensusMessageV2Payload::QuorumCertificate(_)
         | ConsensusMessageV2Payload::TimeoutVote(_)
         | ConsensusMessageV2Payload::TimeoutCertificate(_)
-        | ConsensusMessageV2Payload::PayloadManifest(_)
         | ConsensusMessageV2Payload::PayloadChunk(_)
         | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
@@ -1416,8 +1411,7 @@ fn fair_v2_ingress_leader_wire_identity(
             FairV2IngressLeaderWirePhase::CertifiedResponse,
             None,
         ),
-        ConsensusMessageV2Payload::PayloadManifest(_)
-        | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
@@ -1643,23 +1637,22 @@ impl FairV2IngressMessageKind {
             Self::V2QuorumCertificate => 2,
             Self::V2TimeoutVote => 3,
             Self::V2TimeoutCertificate => 4,
-            Self::V2PayloadManifest => 5,
-            Self::V2PayloadChunk => 6,
-            Self::V2CertifiedBodyRequest => 7,
-            Self::V2CertifiedBodyResponse => 8,
-            Self::V2CommitCertificateRequest => 9,
-            Self::V2CommitCertificateResponse => 10,
-            Self::KuraReplicaAdvert => 11,
-            Self::LaneBlockProposal => 12,
-            Self::LaneExecutablePayload => 13,
-            Self::LaneBlockNewViewVote => 14,
-            Self::LaneBlockNewViewCertificate => 15,
-            Self::LaneBlockVote => 16,
-            Self::LaneBlockQc => 17,
-            Self::LaneBlockCertificate => 18,
-            Self::LaneHistoricalRecoveryRequest => 19,
-            Self::LaneHistoricalRecoveryResponse => 20,
-            Self::V2GlobalBeaconPartialSignature => 21,
+            Self::V2PayloadChunk => 5,
+            Self::V2CertifiedBodyRequest => 6,
+            Self::V2CertifiedBodyResponse => 7,
+            Self::V2CommitCertificateRequest => 8,
+            Self::V2CommitCertificateResponse => 9,
+            Self::KuraReplicaAdvert => 10,
+            Self::LaneBlockProposal => 11,
+            Self::LaneExecutablePayload => 12,
+            Self::LaneBlockNewViewVote => 13,
+            Self::LaneBlockNewViewCertificate => 14,
+            Self::LaneBlockVote => 15,
+            Self::LaneBlockQc => 16,
+            Self::LaneBlockCertificate => 17,
+            Self::LaneHistoricalRecoveryRequest => 18,
+            Self::LaneHistoricalRecoveryResponse => 19,
+            Self::V2GlobalBeaconPartialSignature => 20,
         }
     }
     fn classify(message: &BlockMessage) -> Option<Self> {
@@ -1671,7 +1664,6 @@ impl FairV2IngressMessageKind {
                 ConsensusMessageV2Payload::QuorumCertificate(_) => Self::V2QuorumCertificate,
                 ConsensusMessageV2Payload::TimeoutVote(_) => Self::V2TimeoutVote,
                 ConsensusMessageV2Payload::TimeoutCertificate(_) => Self::V2TimeoutCertificate,
-                ConsensusMessageV2Payload::PayloadManifest(_) => Self::V2PayloadManifest,
                 ConsensusMessageV2Payload::PayloadChunk(_) => Self::V2PayloadChunk,
                 ConsensusMessageV2Payload::CertifiedBodyRequest(_) => Self::V2CertifiedBodyRequest,
                 ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
@@ -1711,7 +1703,6 @@ impl FairV2IngressMessageKind {
                 | Self::V2QuorumCertificate
                 | Self::V2TimeoutVote
                 | Self::V2TimeoutCertificate
-                | Self::V2PayloadManifest
                 | Self::V2PayloadChunk
                 | Self::V2CertifiedBodyRequest
                 | Self::V2CertifiedBodyResponse
@@ -1730,7 +1721,6 @@ fn fair_v2_ingress_projection_codes_are_dense() {
         FairV2IngressMessageKind::V2QuorumCertificate,
         FairV2IngressMessageKind::V2TimeoutVote,
         FairV2IngressMessageKind::V2TimeoutCertificate,
-        FairV2IngressMessageKind::V2PayloadManifest,
         FairV2IngressMessageKind::V2PayloadChunk,
         FairV2IngressMessageKind::V2CertifiedBodyRequest,
         FairV2IngressMessageKind::V2CertifiedBodyResponse,
@@ -1765,7 +1755,6 @@ fn fair_v2_ingress_consensus_round(
         ConsensusMessageV2Payload::QuorumCertificate(certificate) => Some(certificate.round),
         ConsensusMessageV2Payload::TimeoutVote(vote) => Some(vote.round),
         ConsensusMessageV2Payload::TimeoutCertificate(certificate) => Some(certificate.round),
-        ConsensusMessageV2Payload::PayloadManifest(manifest) => Some(manifest.round),
         ConsensusMessageV2Payload::CertifiedBodyRequest(request) => Some(request.round),
         ConsensusMessageV2Payload::CertifiedBodyResponse(response) => Some(response.manifest.round),
         ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
@@ -2803,9 +2792,9 @@ impl FairV2IngressClass {
             | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => Self::Progress,
             ConsensusMessageV2Payload::PayloadChunk(_)
             | ConsensusMessageV2Payload::CertifiedBodyResponse(_) => Self::TransportCompletion,
-            ConsensusMessageV2Payload::Proposal(_)
-            | ConsensusMessageV2Payload::Vote(_)
-            | ConsensusMessageV2Payload::PayloadManifest(_) => Self::Auxiliary,
+            ConsensusMessageV2Payload::Proposal(_) | ConsensusMessageV2Payload::Vote(_) => {
+                Self::Auxiliary
+            }
         }
     }
 }

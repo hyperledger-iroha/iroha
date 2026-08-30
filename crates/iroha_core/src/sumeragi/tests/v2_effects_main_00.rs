@@ -79,8 +79,8 @@ fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
         "body worker disconnected",
     );
     outcome.record(
-        PostFinalityCleanupTarget::PayloadChunks,
-        "chunk root retained",
+        PostFinalityCleanupTarget::CleanupWorker,
+        "cleanup worker unavailable",
     );
     assert_eq!(outcome.warnings().len(), 3);
     assert_eq!(
@@ -92,7 +92,7 @@ fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
         vec![
             PostFinalityCleanupTarget::SafetyWal,
             PostFinalityCleanupTarget::DurableBodies,
-            PostFinalityCleanupTarget::PayloadChunks,
+            PostFinalityCleanupTarget::CleanupWorker,
         ]
     );
     assert_eq!(outcome.warnings()[0].reason(), "WAL directory sync");

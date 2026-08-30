@@ -2875,11 +2875,6 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
         BTreeSet::from([proposal.round])
     );
 }
-fn install_temporary_chunk_root(service: &mut ProductionV2Services) -> TempDir {
-    let directory = TempDir::new().expect("temporary chunk root");
-    service.chunk_root = directory.path().to_path_buf();
-    directory
-}
 fn certified_fetch_task(
     service: &ProductionV2Services,
     id: u64,

@@ -30,8 +30,6 @@ Processed 3 summary file(s) from `artifacts/sumeragi-da/20251005T190335Z`.
 - BG post queue depth max/median: 18 / 18
 - P2P queue drops max/median: 0 / 0
 - per-peer payload bytes: 11010048 - 11010048
-- per-peer allowed manifest guards: 1 - 1
-- per-peer availability votes ingested: 1 - 1
 
 | Run | Source | Block | Height | View | Signed DA available (ms) | Commit (ms) | Throughput (MiB/s) | DA<=Commit | Availability votes | Total chunks | Received | BG queue max | P2P drops |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -51,8 +49,6 @@ Processed 3 summary file(s) from `artifacts/sumeragi-da/20251005T190335Z`.
 - BG post queue depth max/median: 24 / 24
 - P2P queue drops max/median: 0 / 0
 - per-peer payload bytes: 11010048 - 11010048
-- per-peer allowed manifest guards: 1 - 1
-- per-peer availability votes ingested: 1 - 1
 
 | Run | Source | Block | Height | View | Signed DA available (ms) | Commit (ms) | Throughput (MiB/s) | DA<=Commit | Availability votes | Total chunks | Received | BG queue max | P2P drops |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -72,8 +68,6 @@ Processed 3 summary file(s) from `artifacts/sumeragi-da/20251005T190335Z`.
 - BG post queue depth max/median: 19 / 19
 - P2P queue drops max/median: 0 / 0
 - per-peer payload bytes: 11010048 - 11010048
-- per-peer allowed manifest guards: 1 - 1
-- per-peer availability votes ingested: 1 - 1
 
 | Run | Source | Block | Height | View | Signed DA available (ms) | Commit (ms) | Throughput (MiB/s) | DA<=Commit | Availability votes | Total chunks | Received | BG queue max | P2P drops |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

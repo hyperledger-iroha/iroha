@@ -60,8 +60,6 @@ pub enum ConsensusMessageControlKind {
     TimeoutVote,
     /// Timeout certificate.
     TimeoutCertificate,
-    /// Payload manifest.
-    PayloadManifest,
     /// Payload chunk. Chunks have no directly encoded height/view and are
     /// selected by their exact manifest hash and zero-based index.
     PayloadChunk,
@@ -84,7 +82,6 @@ impl ConsensusMessageControlKind {
             Self::CommitCertificate => "commit_certificate",
             Self::TimeoutVote => "timeout_vote",
             Self::TimeoutCertificate => "timeout_certificate",
-            Self::PayloadManifest => "payload_manifest",
             Self::PayloadChunk => "payload_chunk",
             Self::CertifiedBodyRequest => "certified_body_request",
             Self::CertifiedBodyResponse => "certified_body_response",
@@ -101,7 +98,6 @@ impl ConsensusMessageControlKind {
             "commit_certificate" => Ok(Self::CommitCertificate),
             "timeout_vote" => Ok(Self::TimeoutVote),
             "timeout_certificate" => Ok(Self::TimeoutCertificate),
-            "payload_manifest" => Ok(Self::PayloadManifest),
             "payload_chunk" => Ok(Self::PayloadChunk),
             "certified_body_request" => Ok(Self::CertifiedBodyRequest),
             "certified_body_response" => Ok(Self::CertifiedBodyResponse),
@@ -1898,14 +1894,6 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
                 && !has_single_signer
                 && has_certificate_signers
         }
-        ConsensusMessageControlKind::PayloadManifest => {
-            subject.is_some()
-                && execution_commitment.is_none()
-                && !has_single_signer
-                && !has_certificate_signers
-                && has_manifest_hash
-                && !has_chunk_index
-        }
         ConsensusMessageControlKind::PayloadChunk => {
             has_no_subject_or_execution
                 && has_single_signer
@@ -1928,7 +1916,6 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
     if !matches!(
         kind,
         ConsensusMessageControlKind::Proposal
-            | ConsensusMessageControlKind::PayloadManifest
             | ConsensusMessageControlKind::PayloadChunk
             | ConsensusMessageControlKind::CertifiedBodyResponse
     ) && (has_manifest_hash || has_chunk_index)
@@ -2402,7 +2389,6 @@ mod tests {
         };
         let (manifest_hash, chunk_index) = match kind {
             ConsensusMessageControlKind::Proposal
-            | ConsensusMessageControlKind::PayloadManifest
             | ConsensusMessageControlKind::CertifiedBodyResponse => (
                 Value::from(descriptor_manifest_hash().to_string()),
                 Value::Null,
@@ -2456,14 +2442,6 @@ mod tests {
                 Value::Null,
                 Value::Null,
                 vec![Value::from(0_u64), Value::from(1_u64), Value::from(2_u64)],
-            ),
-            ConsensusMessageControlKind::PayloadManifest => (
-                Value::from(9_u64),
-                Value::from(2_u64),
-                subject_value,
-                Value::Null,
-                Value::Null,
-                Vec::new(),
             ),
             ConsensusMessageControlKind::PayloadChunk => (
                 Value::Null,
@@ -3637,7 +3615,6 @@ mod tests {
             ConsensusMessageControlKind::CommitCertificate,
             ConsensusMessageControlKind::TimeoutVote,
             ConsensusMessageControlKind::TimeoutCertificate,
-            ConsensusMessageControlKind::PayloadManifest,
             ConsensusMessageControlKind::PayloadChunk,
             ConsensusMessageControlKind::CertifiedBodyRequest,
             ConsensusMessageControlKind::CertifiedBodyResponse,

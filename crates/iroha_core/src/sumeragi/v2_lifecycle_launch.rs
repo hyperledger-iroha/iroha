@@ -2918,7 +2918,6 @@ impl ProductionLifecycleOwnerV1 {
             inputs.local_validator,
             inputs.key_pair,
             inputs.network,
-            launch_storage.into_chunk_root(),
             body_store,
             payload_store_identity.clone(),
             inputs.state,

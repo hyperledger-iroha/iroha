@@ -64,6 +64,42 @@ impl ProductionV2Services {
             Some(V2IoCompletion::CertifiedFetchBodyPersisted(_))
         )
     }
+    fn sign_payload_chunks(
+        &self,
+        manifest: &wire::PayloadManifest,
+        chunks: Vec<Vec<u8>>,
+        sender: wire::ValidatorIndex,
+    ) -> Result<Vec<wire::PayloadChunk>, String> {
+        let validated_manifest = manifest
+            .validated_for_chunks(&self.context)
+            .map_err(|error| error.to_string())?;
+        if chunks.len() != manifest.chunk_hashes.len() {
+            return Err("encoded Sumeragi v2 chunk count differs from its manifest".to_owned());
+        }
+        chunks
+            .into_iter()
+            .enumerate()
+            .map(|(index, bytes)| {
+                let mut chunk = wire::PayloadChunk {
+                    manifest_hash: validated_manifest.manifest_hash(),
+                    index: u32::try_from(index)
+                        .map_err(|_| "Sumeragi v2 chunk index overflow".to_owned())?,
+                    bytes,
+                    sender,
+                    signature: Vec::new(),
+                };
+                let preimage = validated_manifest
+                    .signature_payload(&chunk)
+                    .map_err(|error| error.to_string())?
+                    .signature_preimage();
+                chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
+                    .map_err(|error| error.to_string())?
+                    .payload()
+                    .to_vec();
+                Ok(chunk)
+            })
+            .collect()
+    }
     /// Reserve output after a recovered Broadcast rejoins its LedgerV1 row,
     /// retaining that durable row as crash-recovery debt.
     pub(in crate::sumeragi) fn capture_recovered_lifecycle_signed_broadcast_refanout(
@@ -180,32 +216,16 @@ impl ProductionV2Services {
             .validate(&self.context)
             .map_err(|error| error.to_string())?;
         let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
-            .map_err(|error| error.to_string())?;
-        let manifest_hash = HashOf::new(&manifest);
         let sender = proposal.proposer;
-        let mut chunk_messages = Vec::with_capacity(chunks.len());
-        for (index, bytes) in chunks.into_iter().enumerate() {
-            let mut chunk = wire::PayloadChunk {
-                manifest_hash,
-                index: u32::try_from(index)
-                    .map_err(|_| "cold recovered Proposal chunk index overflowed".to_owned())?,
-                bytes,
-                sender,
-                signature: Vec::new(),
-            };
-            let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
-            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
-                .map_err(|error| error.to_string())?
-                .payload()
-                .to_vec();
-            chunk_messages.push(Self::preencode_v2_network_message(
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
-            )?);
-        }
+        let chunk_messages = self
+            .sign_payload_chunks(&manifest, chunks, sender)?
+            .into_iter()
+            .map(|chunk| {
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let peers = self.remote_voters();
         let control = PendingExactFanout::claimed(
             vec![Self::preencode_v2_network_message(message)?],
@@ -315,32 +335,16 @@ impl ProductionV2Services {
                 "recovered Proposal output could not retain its exact retry authority".to_owned()
             })?;
         let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
-            .map_err(|error| error.to_string())?;
-        let manifest_hash = HashOf::new(&manifest);
         let sender = proposal.proposer;
-        let mut chunk_messages = Vec::with_capacity(chunks.len());
-        for (index, bytes) in chunks.into_iter().enumerate() {
-            let mut chunk = wire::PayloadChunk {
-                manifest_hash,
-                index: u32::try_from(index)
-                    .map_err(|_| "recovered Proposal chunk index overflowed".to_owned())?,
-                bytes,
-                sender,
-                signature: Vec::new(),
-            };
-            let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
-            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
-                .map_err(|error| error.to_string())?
-                .payload()
-                .to_vec();
-            chunk_messages.push(Self::preencode_v2_network_message(
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk)),
-            )?);
-        }
+        let chunk_messages = self
+            .sign_payload_chunks(&manifest, chunks, sender)?
+            .into_iter()
+            .map(|chunk| {
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let peers = self.remote_voters();
         let control = PendingExactFanout::claimed(
             vec![Self::preencode_v2_network_message(message)?],
@@ -1033,7 +1037,6 @@ impl ProductionV2Services {
         local_validator: Option<wire::ValidatorIndex>,
         key_pair: KeyPair,
         network: IrohaNetwork,
-        chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
         state: Arc<crate::state::State>,
         queue: Arc<crate::queue::Queue>,
@@ -1077,7 +1080,6 @@ impl ProductionV2Services {
             local_validator,
             key_pair,
             network,
-            chunk_root,
             body_store,
             None,
             state,
@@ -1106,7 +1108,6 @@ impl ProductionV2Services {
         local_validator: Option<wire::ValidatorIndex>,
         key_pair: KeyPair,
         network: IrohaNetwork,
-        chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
         payload_store_identity: CertifiedServePayloadStoreInstanceIdentity,
         state: Arc<crate::state::State>,
@@ -1139,7 +1140,6 @@ impl ProductionV2Services {
             local_validator,
             key_pair,
             network,
-            chunk_root,
             body_store,
             Some(payload_store_identity),
             state,
@@ -1165,7 +1165,6 @@ impl ProductionV2Services {
         local_validator: Option<wire::ValidatorIndex>,
         key_pair: KeyPair,
         network: IrohaNetwork,
-        chunk_root: impl AsRef<Path>,
         body_store: V2BodyStore,
         lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
         state: Arc<crate::state::State>,
@@ -1193,9 +1192,6 @@ impl ProductionV2Services {
                 "Sumeragi v2 service tag is outside its immutable height context".to_owned(),
             );
         }
-        let context_chunk_root = chunk_root
-            .as_ref()
-            .join(hex::encode(context.id().0.as_ref()));
         let max_orphan_chunk_bytes = maximum_orphan_chunk_bytes(context.da_layout);
         let max_messages_per_fanout = usize::try_from(context.da_layout.max_chunk_count)
             .map_err(|_| "Sumeragi v2 outbound chunk count is not representable".to_owned())?
@@ -1238,7 +1234,6 @@ impl ProductionV2Services {
             max_peers_per_fanout,
             &frozen_semantic_targets,
         )?;
-        std::fs::create_dir_all(&context_chunk_root).map_err(|error| error.to_string())?;
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
         let certified_serve_validator_set_pops = validator_set_pops.clone();
@@ -1264,7 +1259,6 @@ impl ProductionV2Services {
             network,
             archive_peer_cursor: AtomicUsize::new(0),
             kura: durable_history,
-            chunk_root: context_chunk_root,
             io: Some(io),
             lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
             lifecycle_payload_store_identity,
@@ -1327,9 +1321,6 @@ impl ProductionV2Services {
             .local_validator
             .ok_or_else(|| "observer cannot disperse a Sumeragi v2 proposal".to_owned())?;
         let (manifest, chunks) = payload.into_parts();
-        manifest
-            .validate(&self.context)
-            .map_err(|error| error.to_string())?;
         let expected_round = wire::ConsensusRound {
             context_id: self.context.id(),
             height: self.context.height,
@@ -1341,28 +1332,14 @@ impl ProductionV2Services {
                     .to_owned(),
             );
         }
+        let messages = self
+            .sign_payload_chunks(&manifest, chunks, sender)?
+            .into_iter()
+            .map(|chunk| {
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk))
+            })
+            .collect();
         let manifest_hash = HashOf::new(&manifest);
-        let mut messages = Vec::with_capacity(chunks.len());
-        for (index, bytes) in chunks.into_iter().enumerate() {
-            let mut chunk = wire::PayloadChunk {
-                manifest_hash,
-                index: u32::try_from(index)
-                    .map_err(|_| "Sumeragi v2 chunk index overflow".to_owned())?,
-                bytes,
-                sender,
-                signature: Vec::new(),
-            };
-            let preimage = chunk
-                .signature_preimage(&self.context, &manifest)
-                .map_err(|error| error.to_string())?;
-            chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
-                .map_err(|error| error.to_string())?
-                .payload()
-                .to_vec();
-            messages.push(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
-            ));
-        }
         let retained = RetainedOutboundPayload {
             owner,
             round: manifest.round,
@@ -1965,7 +1942,7 @@ impl ProductionV2Services {
         ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<PayloadChunkDisposition, String> {
         let chunk_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
+            wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
         ));
         if !ingress_ownership.validate_exact()
             || !ingress_ownership.matches_message(&chunk_message)
@@ -1973,6 +1950,13 @@ impl ProductionV2Services {
         {
             return Err("payload chunk carried altered fair-ingress ownership".to_owned());
         }
+        let chunk = match chunk_message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ..
+            }) => chunk,
+            _ => return Err("payload chunk ownership envelope changed variant".to_owned()),
+        };
         let manifest_hash = chunk.manifest_hash;
         if let Some(work_id) = self.fetch_work_for_manifest(manifest_hash) {
             return self.deliver_payload_chunk(executor, work_id, sender, chunk, ingress_ownership);
@@ -3407,7 +3391,6 @@ impl ProductionV2Services {
             let mut command = V2IoCommand::Retire(V2RetireCommand {
                 receipt,
                 cleanup: supervisor.submission(),
-                chunk_root: self.chunk_root.clone(),
             });
             let retirement_guard = Arc::clone(&self.output_guard);
             'enqueue: loop {

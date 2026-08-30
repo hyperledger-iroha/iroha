@@ -427,7 +427,7 @@ def _response_fields(route: str) -> frozenset[str]:
             {"bundle_id", "payload_digest", "leg_ordinal", "disposition", "lifecycle"}
         )
     if route.endswith("/bundles"):
-        return frozenset({"bundle_id", "accepted_at_height", "carrier_id", "lifecycle"})
+        return frozenset({"bundle_id", "accepted_at_height", "carrier_id"})
     if "/bundles/" in route:
         return frozenset({"manifest", "lifecycle", "finalized_height"})
     raise ValueError("unknown atomic private settlement route")

@@ -6,7 +6,7 @@
 //! authentication all complete before an adapter may act on the payload.
 use super::v2::{SumeragiV2Adapter, VerifiedHeightContext, verify_historical_quorum_certificate};
 use core::fmt;
-use iroha_crypto::{HashOf, Signature};
+use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     block::{consensus_v2 as wire, decode_framed_signed_block},
     peer::PeerId,
@@ -194,11 +194,12 @@ impl From<wire::ValidationError> for V2TransportError {
 #[must_use]
 pub(crate) struct AuthenticatedPayloadChunk {
     chunk: wire::PayloadChunk,
+    chunk_hash: Hash,
 }
 impl AuthenticatedPayloadChunk {
-    /// Borrow the authenticated chunk.
-    pub(crate) const fn chunk(&self) -> &wire::PayloadChunk {
-        &self.chunk
+    /// Consume the seal into the exact wire chunk and its already-verified hash.
+    pub(crate) fn into_parts(self) -> (wire::PayloadChunk, Hash) {
+        (self.chunk, self.chunk_hash)
     }
 }
 /// Certified-body request admitted through structural, identity, signature,
@@ -328,21 +329,24 @@ pub(crate) fn authenticate_payload_chunk(
     chunk: wire::PayloadChunk,
     authenticated_sender: &PeerId,
 ) -> Result<AuthenticatedPayloadChunk, V2TransportError> {
-    chunk.validate(context, manifest)?;
     let claimed_sender = roster_peer(context, chunk.sender)?;
     bind_outer_identity(
         TransportIdentityKind::ChunkSender,
         claimed_sender,
         authenticated_sender,
     )?;
-    let preimage = chunk.signature_preimage(context, manifest)?;
+    let signature_payload = chunk.validated_signature_payload(context, manifest)?;
+    let preimage = signature_payload.signature_preimage();
     verify_signature(
         TransportSignatureKind::PayloadChunk,
         claimed_sender,
         &chunk.signature,
         &preimage,
     )?;
-    Ok(AuthenticatedPayloadChunk { chunk })
+    Ok(AuthenticatedPayloadChunk {
+        chunk,
+        chunk_hash: signature_payload.chunk_hash,
+    })
 }
 /// Authenticate a certified-body request against the live adapter's frozen
 /// roster authority.
@@ -1285,10 +1289,19 @@ mod tests {
         let authenticated =
             authenticate_payload_chunk(&fixture.context, &fixture.manifest, chunk.clone(), &sender)
                 .expect("valid chunk");
-        assert_eq!(authenticated.chunk(), &chunk);
+        let (authenticated_chunk, authenticated_hash) = authenticated.into_parts();
+        assert_eq!(authenticated_chunk, chunk);
+        assert_eq!(authenticated_hash, Hash::new(&chunk.bytes));
         let spoof = Fixture::peer(&fixture.validators[1]);
+        let mut malformed_spoof = chunk.clone();
+        malformed_spoof.bytes.pop();
         assert!(matches!(
-            authenticate_payload_chunk(&fixture.context, &fixture.manifest, chunk.clone(), &spoof),
+            authenticate_payload_chunk(
+                &fixture.context,
+                &fixture.manifest,
+                malformed_spoof,
+                &spoof
+            ),
             Err(V2TransportError::OuterIdentityMismatch {
                 kind: TransportIdentityKind::ChunkSender,
                 ..

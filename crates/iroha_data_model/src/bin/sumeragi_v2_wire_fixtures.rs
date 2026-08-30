@@ -365,12 +365,6 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             )),
         },
         NamedMessage {
-            name: "payload_manifest",
-            message: ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadManifest(
-                manifest.clone(),
-            )),
-        },
-        NamedMessage {
             name: "payload_chunk",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(
                 PayloadChunk {
@@ -548,20 +542,20 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             values.commit_response.signature_preimage(),
         ),
     ]);
-    let canonical_manifest = values.message("payload_manifest")?;
+    let canonical_payload_chunk = values.message("payload_chunk")?;
     let canonical_vote = values.message("vote")?;
     let canonical_reproposal_vote = values.message("commit_vote_reproposal")?;
     let canonical_reproposal_qc = values.message("commit_quorum_certificate_reproposal")?;
     let canonical_merge_carrier_qc = values.message("quorum_certificate_merge_carrier")?;
     let canonical_request = values.message("commit_certificate_request")?;
     let canonical_response = values.message("commit_certificate_response")?;
-    let mut wrong_protocol_version = canonical_manifest.clone();
+    let mut wrong_protocol_version = canonical_payload_chunk.clone();
     wrong_protocol_version.protocol_version = PROTOCOL_VERSION - 1;
-    let mut truncated = canonical_manifest.encode();
+    let mut truncated = canonical_payload_chunk.encode();
     truncated
         .pop()
-        .ok_or("canonical payload-manifest message was unexpectedly empty")?;
-    let mut trailing_byte = canonical_manifest.encode();
+        .ok_or("canonical payload-chunk message was unexpectedly empty")?;
+    let mut trailing_byte = canonical_payload_chunk.encode();
     trailing_byte.push(0);
     let mut noncanonical_qc = values.prepare.clone();
     noncanonical_qc.signers = vec![1, 0, 2];
@@ -649,12 +643,12 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             },
         ],
     };
-    let mut unknown_payload_tag = canonical_manifest.encode();
+    let mut unknown_payload_tag = canonical_payload_chunk.encode();
     replace_first_guarded(
         &mut unknown_payload_tag,
         &[5, 0, 0, 0],
         &[11, 0, 0, 0],
-        "payload-manifest discriminant",
+        "payload-chunk discriminant",
     )?;
     let mut wrong_nested_request = values.commit_request.clone();
     wrong_nested_request.protocol_version = PROTOCOL_VERSION - 1;

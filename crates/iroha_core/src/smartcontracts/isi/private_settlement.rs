@@ -3,6 +3,7 @@
 use super::*;
 use crate::private_settlement::{
     carrier::{
+        private_settlement_abort_carrier_instruction_digest_v1,
         private_settlement_carrier_instruction_digest_v1,
         private_settlement_commit_bundle_digest_v1,
     },
@@ -101,6 +102,19 @@ impl Execute for AbortAtomicPrivateSettlementV1 {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if authority != &self.manifest.sponsor {
+            return Err(invalid_abort());
+        }
+        let manifest_digest = self
+            .manifest
+            .manifest_digest()
+            .map_err(|_| invalid_abort())?;
+        let instruction_digest = private_settlement_abort_carrier_instruction_digest_v1(&self)
+            .map_err(|_| invalid_abort())?;
+        state_transaction
+            .consume_private_settlement_carrier_binding_v1(manifest_digest, instruction_digest)
+            .map_err(|_| invalid_abort())?;
+
         let finalized_height = state_transaction.block_height();
         let receipt = private_settlement_abort_receipt_v1(self, authority, finalized_height)?;
         state_transaction

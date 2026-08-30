@@ -1557,7 +1557,6 @@ mod tests {
                 signature: vec![2],
             }),
             ConsensusMessageV2Payload::TimeoutCertificate(timeout),
-            ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
             ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
                 manifest_hash: HashOf::new(&manifest),
                 index: 0,
@@ -1582,7 +1581,23 @@ mod tests {
             }),
             ConsensusMessageV2Payload::GlobalBeaconPartialSignature(beacon_partial),
         ];
-        for payload in variants {
+        assert_eq!(
+            variants.len(),
+            11,
+            "the first-release payload inventory is exact"
+        );
+        for (expected_tag, payload) in variants.into_iter().enumerate() {
+            let payload_encoding = payload.encode();
+            let tag = u32::from_le_bytes(
+                payload_encoding[..4]
+                    .try_into()
+                    .expect("Norito enum payload starts with a u32 tag"),
+            );
+            assert_eq!(
+                tag,
+                u32::try_from(expected_tag).expect("fixture tag fits u32"),
+                "payload discriminants follow the exact first-release declaration order"
+            );
             let message = ConsensusMessageV2::new(payload);
             let encoded = message.encode();
             let decoded = ConsensusMessageV2::decode(&mut &encoded[..])
@@ -1630,6 +1645,21 @@ mod tests {
         let payload = chunk
             .signature_payload(&context, &manifest)
             .expect("valid chunk signature payload");
+        let validated_manifest = manifest
+            .validated_for_chunks(&context)
+            .expect("valid manifest chunk seal");
+        assert_eq!(validated_manifest.manifest_hash(), HashOf::new(&manifest));
+        assert_eq!(validated_manifest.signature_payload(&chunk), Ok(payload));
+        assert_eq!(
+            validated_manifest.validated_signature_payload(&chunk),
+            Ok(payload)
+        );
+        assert_eq!(
+            chunk
+                .validated_signature_payload(&context, &manifest)
+                .expect("signed chunk validation payload"),
+            payload
+        );
         assert_eq!(payload.context_id, context.id());
         assert_eq!(payload.epoch, context.epoch);
         assert_eq!(payload.height, context.height);
@@ -1640,17 +1670,24 @@ mod tests {
             u32::try_from(manifest.chunk_hashes.len()).expect("fixture chunk count fits u32")
         );
         assert_eq!(payload.chunk_hash, Hash::new(b"body"));
-        assert!(
-            chunk
-                .signature_preimage(&context, &manifest)
-                .expect("valid signature preimage")
-                .starts_with(b"iroha:sumeragi:v2:payload-chunk")
-        );
+        let preimage = chunk
+            .signature_preimage(&context, &manifest)
+            .expect("valid signature preimage");
+        assert!(preimage.starts_with(b"iroha:sumeragi:v2:payload-chunk"));
+        assert_eq!(payload.signature_preimage(), preimage);
         let mut unsigned = chunk.clone();
         unsigned.signature.clear();
         assert!(unsigned.signature_preimage(&context, &manifest).is_ok());
         assert_eq!(
             unsigned.validate(&context, &manifest),
+            Err(ValidationError::MissingChunkSignature)
+        );
+        assert_eq!(
+            unsigned.validated_signature_payload(&context, &manifest),
+            Err(ValidationError::MissingChunkSignature)
+        );
+        assert_eq!(
+            validated_manifest.validated_signature_payload(&unsigned),
             Err(ValidationError::MissingChunkSignature)
         );
         let mut corrupted = chunk.clone();

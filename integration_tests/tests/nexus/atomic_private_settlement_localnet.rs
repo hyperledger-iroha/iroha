@@ -1067,6 +1067,28 @@ fn prepare_leg_with_private_data(
     authority_digest: Hash,
     private_data: &PrivateSettlementLegPrivateData,
 ) -> Result<PreparedLeg> {
+    let mut output_rng = iroha_crypto::rng_from_seed_slice(&bytes(0xF1 + ordinal as u8));
+    let mut capsule_rng = iroha_crypto::rng_from_seed_slice(&bytes(0xF4 + ordinal as u8));
+    prepare_leg_with_private_data_and_rngs(
+        ordinal,
+        governed,
+        manifest,
+        authority_digest,
+        private_data,
+        &mut output_rng,
+        &mut capsule_rng,
+    )
+}
+
+fn prepare_leg_with_private_data_and_rngs(
+    ordinal: usize,
+    governed: GovernedLeg,
+    manifest: &AtomicPrivateSettlementV1,
+    authority_digest: Hash,
+    private_data: &PrivateSettlementLegPrivateData,
+    output_rng: &mut (impl rand_core_06::RngCore + rand_core_06::CryptoRng),
+    capsule_rng: &mut impl rand::rand_core::TryCryptoRng,
+) -> Result<PreparedLeg> {
     let profile = PrivateSettlementProofProfileV1::IvmPrivateNoteFixed2In3Out;
     let placeholders = [
         placeholder_encrypted_output(0x11 + ordinal as u8 * 6),
@@ -1241,9 +1263,8 @@ fn prepare_leg_with_private_data(
             );
     }
     statement.audit_plaintext_commitment = plaintext.commitment()?;
-    let mut output_rng = iroha_crypto::rng_from_seed_slice(&bytes(0xF1 + ordinal as u8));
     statement.encrypted_outputs = prepare_atomic_private_settlement_outputs_v1(
-        &mut output_rng,
+        output_rng,
         manifest,
         &statement,
         &mut plaintext.outputs,
@@ -1265,13 +1286,12 @@ fn prepare_leg_with_private_data(
         audit_key_epoch: governed.policy.body.key_epoch,
         plaintext_commitment: statement.audit_plaintext_commitment,
     };
-    let mut capsule_rng = iroha_crypto::rng_from_seed_slice(&bytes(0xF4 + ordinal as u8));
     let capsule = seal_private_settlement_audit_capsule_v1_with_rng(
         &canonical_plaintext,
         aad,
         PrivateSettlementCapsulePaddingV1::KiB16,
         &governed.policy,
-        &mut capsule_rng,
+        capsule_rng,
     )?;
     statement.audit_capsule_digest = capsule.digest()?;
     let bootstrap = plan_atomic_private_settlement_bootstrap_v1(

@@ -31,7 +31,6 @@ fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
     let binding =
         RecoveredLifecycleOwnerKuraBindingV1::for_test(kura.as_ref(), Some(&local_signer));
     let storage_root = kura.sumeragi_v2_storage_root();
-    let expected_chunk_root = storage_root.join("chunks");
     let paths = binding
         .storage_paths_for_launch(kura.as_ref())
         .expect("the exact Kura projects its sealed launch paths");
@@ -39,7 +38,6 @@ fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
         paths.wal_path(),
         storage_root.join("wal").join(format!("{:020}.wal", 1_u64))
     );
-    assert_eq!(paths.chunk_root(), expected_chunk_root);
     assert!(binding.matches_launch_identity(kura.as_ref(), &local_signer));
     assert!(!binding.matches_launch_identity(kura.as_ref(), &foreign_signer));
     assert!(!binding.matches_launch_identity(foreign_kura.as_ref(), &local_signer));
@@ -49,7 +47,6 @@ fn recovered_lifecycle_kura_binding_releases_paths_only_to_exact_kura() {
             .is_none(),
         "a foreign Kura must not project launch storage paths"
     );
-    assert_eq!(paths.into_chunk_root(), expected_chunk_root);
 }
 #[derive(Debug)]
 struct TestAggregator;

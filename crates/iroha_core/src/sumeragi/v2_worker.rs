@@ -41,7 +41,7 @@ use super::{
         AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadStoreInstanceIdentity,
         CertifiedServePayloadStoreV1, CertifiedServeRetirementAuthenticationErrorV1,
     },
-    v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
+    v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession},
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask,
         CompletionDisposition, ConsensusBroadcastDisposition, ConsensusSignTask,
@@ -130,10 +130,11 @@ use iroha_p2p::{
         reliable_progress_class,
     },
 };
+#[cfg(test)]
+use std::path::Path;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     num::NonZeroUsize,
-    path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
@@ -827,7 +828,6 @@ enum V2IoCommand {
 struct V2RetireCommand {
     receipt: KuraV2CommitReceipt,
     cleanup: V2CleanupSubmission,
-    chunk_root: PathBuf,
 }
 const LOCAL_IO_CONTROL_RESERVE: usize = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

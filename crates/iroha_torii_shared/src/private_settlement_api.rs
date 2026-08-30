@@ -385,13 +385,13 @@ pub struct PrivateSettlementAuditApprovalResponseV1 {
     pub lifecycle: PrivateSettlementLifecycleDtoV1,
 }
 
-/// Sponsor-authenticated complete global carrier submission.
+/// Sponsor-authenticated complete global finalization or abort carrier submission.
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
 pub struct PrivateSettlementBundleSubmitRequestV1 {
-    /// Exact sponsor-signed transaction carrying one finalization instruction.
+    /// Exact sponsor-signed transaction carrying one finalization or abort instruction.
     pub transaction: SignedTransaction,
 }
 
@@ -415,8 +415,6 @@ pub struct PrivateSettlementBundleSubmitResponseV1 {
     pub accepted_at_height: u64,
     /// Public carrier hash or transaction identifier assigned by admission.
     pub carrier_id: Hash,
-    /// Initial lifecycle after bounded carrier admission.
-    pub lifecycle: PrivateSettlementLifecycleDtoV1,
 }
 
 /// Public allowlisted bundle status.
