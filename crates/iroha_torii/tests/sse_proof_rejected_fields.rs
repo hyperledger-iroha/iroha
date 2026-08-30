@@ -15,7 +15,7 @@ async fn proof_rejected_fields() {
         "/v1/events/sse",
         get({
             let events = events.clone();
-            move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }
+            move |q| async move { iroha_torii::handle_v1_events_sse_for_tests(events, q) }
         }),
     );
     // No filter

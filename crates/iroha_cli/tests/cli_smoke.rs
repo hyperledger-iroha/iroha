@@ -2407,8 +2407,8 @@ fn gov_vote_zk_emits_summary_and_json() {
     );
 }
 #[test]
-fn gov_rejects_retired_governance_mutation_commands() {
-    for command_name in ["finalize", "enact"] {
+fn gov_rejects_retired_governance_commands() {
+    for command_name in ["finalize", "enact", "council"] {
         let output = command()
             .args(["app", "gov", command_name])
             .output()
@@ -2439,108 +2439,6 @@ fn gov_queries_reject_retired_id_alias() {
             "unexpected {label} diagnostic: {stderr}"
         );
     }
-}
-#[test]
-fn gov_council_summary_against_mock() {
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
-    };
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!("skipping gov_council_summary_against_mock: mock server unavailable");
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-    let temp_dir = TempDir::new("gov_council_summary").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-    let guardian_0 = account_literal_for("guardian-0");
-    let guardian_1 = account_literal_for("guardian-1");
-    let council_members = Value::Array(vec![
-        Value::Object({
-            let mut map = Map::new();
-            map.insert("account_id".to_string(), Value::String(guardian_0.clone()));
-            map
-        }),
-        Value::Object({
-            let mut map = Map::new();
-            map.insert("account_id".to_string(), Value::String(guardian_1.clone()));
-            map
-        }),
-    ]);
-    let config_payload = Value::Object({
-        let mut map = Map::new();
-        map.insert("referenda".to_string(), Value::Array(Vec::new()));
-        map.insert(
-            "council_current".to_string(),
-            Value::Object({
-                let mut current = Map::new();
-                current.insert("epoch".to_string(), Value::from(64_u64));
-                current.insert("members".to_string(), council_members);
-                current.insert("alternates".to_string(), Value::Array(Vec::new()));
-                current.insert("candidate_count".to_string(), Value::from(2_u64));
-                current.insert(
-                    "derived_by".to_string(),
-                    Value::String("Manual".to_string()),
-                );
-                current
-            }),
-        );
-        map
-    });
-    configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-    let summary = command()
-        .arg("--config")
-        .arg(&config_path)
-        .arg("--output-format")
-        .arg("text")
-        .args(["app", "gov", "council"])
-        .output()
-        .expect("invoke iroha app gov council --output-format text");
-    assert!(
-        summary.status.success(),
-        "expected gov council summary to succeed, stderr: {}",
-        String::from_utf8_lossy(&summary.stderr)
-    );
-    let summary_line = String::from_utf8(summary.stdout).expect("summary output utf8");
-    let expected_summary = format!(
-        "council: epoch=64 members_count=2 alternates_count=0 candidate_count=2 derived_by=Manual members=[{}, {}] alternates=[]",
-        guardian_0, guardian_1
-    );
-    assert_eq!(summary_line.trim(), expected_summary);
-    let json_output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args(["app", "gov", "council"])
-        .output()
-        .expect("invoke iroha app gov council");
-    assert!(
-        json_output.status.success(),
-        "expected gov council JSON to succeed, stderr: {}",
-        String::from_utf8_lossy(&json_output.stderr)
-    );
-    let value: norito::json::Value =
-        norito::json::from_slice(&json_output.stdout).expect("parse council JSON");
-    assert_eq!(
-        value.get("epoch").and_then(norito::json::Value::as_u64),
-        Some(64)
-    );
-    let members = value
-        .get("members")
-        .and_then(norito::json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let member_ids: Vec<&str> = members
-        .iter()
-        .filter_map(|entry| {
-            entry
-                .get("account_id")
-                .and_then(norito::json::Value::as_str)
-        })
-        .collect();
-    assert_eq!(member_ids, vec![guardian_0.as_str(), guardian_1.as_str()]);
 }
 #[test]
 #[allow(clippy::too_many_lines)]

@@ -8,6 +8,7 @@
 use crate::{
     account_literal,
     json_macros::{JsonDeserialize, JsonSerialize},
+    routing::DataspaceReadVisibility,
 };
 use base64::{
     Engine as _,
@@ -64,7 +65,7 @@ pub(crate) const EXPLORER_CURSOR_MAX_LIMIT: u32 = 100;
 /// Hard ceiling for candidate keys inspected by one Explorer cursor page.
 pub(crate) const EXPLORER_CURSOR_MAX_SCAN: usize = 512;
 const EXPLORER_CURSOR_MAGIC: [u8; 4] = *b"IXC1";
-const EXPLORER_CURSOR_FILTER_DOMAIN: &[u8] = b"iroha-explorer-filter-v1";
+const EXPLORER_CURSOR_FILTER_DOMAIN: &[u8] = b"iroha-explorer-filter-v2";
 const EXPLORER_CURSOR_MAX_KEY_BYTES: usize = 1_024;
 const EXPLORER_CURSOR_MAX_ENCODED_BYTES: usize = 1_424;
 const EXPLORER_HISTORY_CURSOR_MAGIC: [u8; 4] = *b"IHC1";
@@ -337,13 +338,15 @@ pub(crate) fn decode_explorer_history_cursor(
         || frame[45..77] != filter_digest
         || frame[77..109] != visibility_digest
     {
-        return Err(if frame.len() == EXPLORER_HISTORY_CURSOR_FRAME_BYTES
-            && frame[..4] == EXPLORER_HISTORY_CURSOR_MAGIC
-        {
-            ExplorerCursorError::ScopeMismatch
-        } else {
-            ExplorerCursorError::InvalidFrame
-        });
+        return Err(
+            if frame.len() == EXPLORER_HISTORY_CURSOR_FRAME_BYTES
+                && frame[..4] == EXPLORER_HISTORY_CURSOR_MAGIC
+            {
+                ExplorerCursorError::ScopeMismatch
+            } else {
+                ExplorerCursorError::InvalidFrame
+            },
+        );
     }
     let snapshot_height = u64::from_be_bytes(
         frame[5..13]
@@ -1616,6 +1619,7 @@ fn format_rejection_reason_message(reason: &TransactionRejectionReason) -> Strin
 fn explorer_filter_digest(
     collection: ExplorerCursorCollection,
     filters: &[Option<String>],
+    visibility_digest: [u8; 32],
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(EXPLORER_CURSOR_FILTER_DOMAIN);
@@ -1639,6 +1643,7 @@ fn explorer_filter_digest(
             None => hasher.update([0]),
         }
     }
+    hasher.update(visibility_digest);
     hasher.finalize().into()
 }
 fn encode_explorer_cursor(
@@ -1821,50 +1826,82 @@ fn explorer_cursor_meta<K: ToString>(
 pub(crate) fn account_counters_from_world(
     world: &impl WorldReadOnly,
     id: &AccountId,
+    visibility: &DataspaceReadVisibility,
 ) -> AccountCounters {
     AccountCounters {
-        domains: world
-            .domains_by_owner()
-            .get(id)
-            .map_or(0, |domains| saturating_usize_to_u32(domains.len())),
-        assets: world
-            .assets_by_account()
-            .get(id)
-            .map_or(0, |assets| saturating_usize_to_u32(assets.len())),
-        nfts: world
-            .nfts_by_owner()
-            .get(id)
-            .map_or(0, |nfts| saturating_usize_to_u32(nfts.len())),
+        domains: world.domains_by_owner().get(id).map_or(0, |domains| {
+            saturating_usize_to_u32(
+                domains
+                    .iter()
+                    .filter(|domain| visibility.allows_domain(world, domain))
+                    .count(),
+            )
+        }),
+        assets: world.assets_by_account().get(id).map_or(0, |assets| {
+            saturating_usize_to_u32(
+                assets
+                    .iter()
+                    .filter(|asset| visibility.allows_asset(world, asset))
+                    .count(),
+            )
+        }),
+        nfts: world.nfts_by_owner().get(id).map_or(0, |nfts| {
+            saturating_usize_to_u32(
+                nfts.iter()
+                    .filter(|nft| visibility.allows_nft(world, nft))
+                    .count(),
+            )
+        }),
     }
 }
 pub(crate) fn domain_counters_from_world(
     world: &impl WorldReadOnly,
     id: &DomainId,
+    visibility: &DataspaceReadVisibility,
 ) -> DomainCounters {
     let accounts = world
         .account_scope_domain_key(id)
         .and_then(|key| world.account_scope_accounts().get(&key))
-        .map_or(0, |accounts| saturating_usize_to_u32(accounts.len()));
+        .map_or(0, |accounts| {
+            saturating_usize_to_u32(
+                accounts
+                    .iter()
+                    .filter(|account| visibility.allows_account(world, account))
+                    .count(),
+            )
+        });
     DomainCounters {
         accounts,
-        assets: world
-            .assets_by_domain()
-            .get(id)
-            .map_or(0, |assets| saturating_usize_to_u32(assets.len())),
-        nfts: world
-            .nfts_by_domain()
-            .get(id)
-            .map_or(0, |nfts| saturating_usize_to_u32(nfts.len())),
+        assets: world.assets_by_domain().get(id).map_or(0, |assets| {
+            saturating_usize_to_u32(
+                assets
+                    .iter()
+                    .filter(|asset| visibility.allows_asset(world, asset))
+                    .count(),
+            )
+        }),
+        nfts: world.nfts_by_domain().get(id).map_or(0, |nfts| {
+            saturating_usize_to_u32(
+                nfts.iter()
+                    .filter(|nft| visibility.allows_nft(world, nft))
+                    .count(),
+            )
+        }),
     }
 }
 pub(crate) fn definition_instance_count_from_world(
     world: &impl WorldReadOnly,
     id: &AssetDefinitionId,
+    visibility: &DataspaceReadVisibility,
 ) -> u32 {
-    world
-        .asset_definition_assets()
-        .get(id)
-        .map_or(0, |assets| saturating_usize_to_u32(assets.len()))
+    world.asset_definition_assets().get(id).map_or(0, |assets| {
+        saturating_usize_to_u32(
+            assets
+                .iter()
+                .filter(|asset| visibility.allows_asset(world, asset))
+                .count(),
+        )
+    })
 }
 fn account_holds_definition_from_world(
     world: &impl WorldReadOnly,
@@ -1880,6 +1917,7 @@ pub(crate) fn accounts_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
     domain_filter: Option<&'world DomainId>,
     definition_filter: Option<&'world AssetDefinitionId>,
+    visibility: &'world DataspaceReadVisibility,
     query: &ExplorerCursorQuery,
 ) -> Result<ExplorerAccountsPage, ExplorerCursorError> {
     let limit = query.validated_limit()?;
@@ -1889,69 +1927,76 @@ pub(crate) fn accounts_page_for_filters<'world>(
             domain_filter.map(ToString::to_string),
             definition_filter.map(ToString::to_string),
         ],
+        visibility.visible_route_set_digest(),
     );
     let after = canonical_cursor_key::<AccountId>(
         query.cursor.as_deref(),
         ExplorerCursorCollection::Accounts,
         filter_digest,
     )?;
-    let accounts: Box<dyn Iterator<Item = AccountEntry<'world>> + 'world> =
-        if let Some(definition) = definition_filter {
-            let holders = world.asset_definition_holders().get(definition);
-            let account_ids: Box<dyn Iterator<Item = &'world AccountId> + 'world> = match holders {
-                Some(holders) => match after.clone() {
-                    Some(after) => Box::new(holders.range((Excluded(after), Unbounded))),
-                    None => Box::new(holders.iter()),
-                },
-                None => Box::new(std::iter::empty()),
-            };
-            Box::new(account_ids.filter_map(move |account_id| {
-                world
-                    .accounts()
-                    .get_key_value(account_id)
-                    .map(|(id, value)| AccountEntry::new(id, value))
-            }))
-        } else if let Some(domain) = domain_filter {
-            let account_ids = world
-                .account_scope_domain_key(domain)
-                .and_then(|key| world.account_scope_accounts().get(&key));
-            let account_ids: Box<dyn Iterator<Item = &'world AccountId> + 'world> =
-                match account_ids {
-                    Some(account_ids) => match after.clone() {
-                        Some(after) => Box::new(account_ids.range((Excluded(after), Unbounded))),
-                        None => Box::new(account_ids.iter()),
-                    },
-                    None => Box::new(std::iter::empty()),
-                };
-            Box::new(account_ids.filter_map(move |account_id| {
-                world
-                    .accounts()
-                    .get_key_value(account_id)
-                    .map(|(id, value)| AccountEntry::new(id, value))
-            }))
-        } else {
-            match after {
-                Some(after) => Box::new(
-                    world
-                        .accounts()
-                        .range((Excluded(after), Unbounded))
-                        .map(|(id, value)| AccountEntry::new(id, value)),
-                ),
-                None => Box::new(world.accounts_iter()),
-            }
+    let selectors_visible = domain_filter
+        .is_none_or(|domain| visibility.allows_domain(world, domain))
+        && definition_filter
+            .is_none_or(|definition| visibility.allows_asset_definition(world, definition));
+    let accounts: Box<dyn Iterator<Item = AccountEntry<'world>> + 'world> = if !selectors_visible {
+        Box::new(std::iter::empty())
+    } else if let Some(definition) = definition_filter {
+        let holders = world.asset_definition_holders().get(definition);
+        let account_ids: Box<dyn Iterator<Item = &'world AccountId> + 'world> = match holders {
+            Some(holders) => match after.clone() {
+                Some(after) => Box::new(holders.range((Excluded(after), Unbounded))),
+                None => Box::new(holders.iter()),
+            },
+            None => Box::new(std::iter::empty()),
         };
+        Box::new(account_ids.filter_map(move |account_id| {
+            world
+                .accounts()
+                .get_key_value(account_id)
+                .map(|(id, value)| AccountEntry::new(id, value))
+        }))
+    } else if let Some(domain) = domain_filter {
+        let account_ids = world
+            .account_scope_domain_key(domain)
+            .and_then(|key| world.account_scope_accounts().get(&key));
+        let account_ids: Box<dyn Iterator<Item = &'world AccountId> + 'world> = match account_ids {
+            Some(account_ids) => match after.clone() {
+                Some(after) => Box::new(account_ids.range((Excluded(after), Unbounded))),
+                None => Box::new(account_ids.iter()),
+            },
+            None => Box::new(std::iter::empty()),
+        };
+        Box::new(account_ids.filter_map(move |account_id| {
+            world
+                .accounts()
+                .get_key_value(account_id)
+                .map(|(id, value)| AccountEntry::new(id, value))
+        }))
+    } else {
+        match after {
+            Some(after) => Box::new(
+                world
+                    .accounts()
+                    .range((Excluded(after), Unbounded))
+                    .map(|(id, value)| AccountEntry::new(id, value)),
+            ),
+            None => Box::new(world.accounts_iter()),
+        }
+    };
     let scanned = collect_explorer_cursor_page(
         accounts,
         limit,
         AccountEntry::id,
         |entry| {
-            domain_filter.is_none_or(|domain| world.account_has_alias_domain(entry.id(), domain))
+            visibility.allows_account(world, entry.id())
+                && domain_filter
+                    .is_none_or(|domain| world.account_has_alias_domain(entry.id(), domain))
                 && definition_filter.is_none_or(|definition| {
                     account_holds_definition_from_world(world, definition, entry.id())
                 })
         },
         |entry| {
-            let counts = account_counters_from_world(world, entry.id());
+            let counts = account_counters_from_world(world, entry.id(), visibility);
             ExplorerAccountDto::from_entry(entry, counts)
         },
     );
@@ -1970,46 +2015,54 @@ pub(crate) fn accounts_page_for_filters<'world>(
 pub(crate) fn domains_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
     owned_by: Option<&'world AccountId>,
+    visibility: &'world DataspaceReadVisibility,
     query: &ExplorerCursorQuery,
 ) -> Result<ExplorerDomainsPage, ExplorerCursorError> {
     let limit = query.validated_limit()?;
     let filter_digest = explorer_filter_digest(
         ExplorerCursorCollection::Domains,
         &[owned_by.map(ToString::to_string)],
+        visibility.visible_route_set_digest(),
     );
     let after = canonical_cursor_key::<DomainId>(
         query.cursor.as_deref(),
         ExplorerCursorCollection::Domains,
         filter_digest,
     )?;
-    let domains: Box<dyn Iterator<Item = &'world Domain> + 'world> = if let Some(owner) = owned_by {
-        let domain_ids = world.domains_by_owner().get(owner);
-        let domain_ids: Box<dyn Iterator<Item = &'world DomainId> + 'world> = match domain_ids {
-            Some(domain_ids) => match after {
-                Some(after) => Box::new(domain_ids.range((Excluded(after), Unbounded))),
-                None => Box::new(domain_ids.iter()),
-            },
-            None => Box::new(std::iter::empty()),
+    let domains: Box<dyn Iterator<Item = &'world Domain> + 'world> =
+        if owned_by.is_some_and(|owner| !visibility.allows_account(world, owner)) {
+            Box::new(std::iter::empty())
+        } else if let Some(owner) = owned_by {
+            let domain_ids = world.domains_by_owner().get(owner);
+            let domain_ids: Box<dyn Iterator<Item = &'world DomainId> + 'world> = match domain_ids {
+                Some(domain_ids) => match after {
+                    Some(after) => Box::new(domain_ids.range((Excluded(after), Unbounded))),
+                    None => Box::new(domain_ids.iter()),
+                },
+                None => Box::new(std::iter::empty()),
+            };
+            Box::new(domain_ids.filter_map(|domain_id| world.domains().get(domain_id)))
+        } else {
+            match after {
+                Some(after) => Box::new(
+                    world
+                        .domains()
+                        .range((Excluded(after), Unbounded))
+                        .map(|(_, domain)| domain),
+                ),
+                None => Box::new(world.domains_iter()),
+            }
         };
-        Box::new(domain_ids.filter_map(|domain_id| world.domains().get(domain_id)))
-    } else {
-        match after {
-            Some(after) => Box::new(
-                world
-                    .domains()
-                    .range((Excluded(after), Unbounded))
-                    .map(|(_, domain)| domain),
-            ),
-            None => Box::new(world.domains_iter()),
-        }
-    };
     let scanned = collect_explorer_cursor_page(
         domains,
         limit,
         |domain| domain.id(),
-        |domain| owned_by.is_none_or(|owner| domain.owned_by() == owner),
         |domain| {
-            let counts = domain_counters_from_world(world, domain.id());
+            visibility.allows_domain(world, domain.id())
+                && owned_by.is_none_or(|owner| domain.owned_by() == owner)
+        },
+        |domain| {
+            let counts = domain_counters_from_world(world, domain.id(), visibility);
             ExplorerDomainDto::from_domain(domain, counts)
         },
     );
@@ -2029,6 +2082,7 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
     owning_domain_filter: Option<&'world DomainId>,
     owner_filter: Option<&'world AccountId>,
+    visibility: &'world DataspaceReadVisibility,
     query: &ExplorerCursorQuery,
 ) -> Result<ExplorerAssetDefinitionsPage, ExplorerCursorError> {
     let limit = query.validated_limit()?;
@@ -2038,14 +2092,20 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
             owning_domain_filter.map(ToString::to_string),
             owner_filter.map(ToString::to_string),
         ],
+        visibility.visible_route_set_digest(),
     );
     let after = canonical_cursor_key::<AssetDefinitionId>(
         query.cursor.as_deref(),
         ExplorerCursorCollection::AssetDefinitions,
         filter_digest,
     )?;
+    let selectors_visible = owning_domain_filter
+        .is_none_or(|domain| visibility.allows_domain(world, domain))
+        && owner_filter.is_none_or(|owner| visibility.allows_account(world, owner));
     let definitions: Box<dyn Iterator<Item = &'world AssetDefinition> + 'world> =
-        if let Some(owner) = owner_filter {
+        if !selectors_visible {
+            Box::new(std::iter::empty())
+        } else if let Some(owner) = owner_filter {
             let definition_ids = world.asset_definitions_by_owner().get(owner);
             let definition_ids: Box<dyn Iterator<Item = &'world AssetDefinitionId> + 'world> =
                 match definition_ids {
@@ -2083,14 +2143,16 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
         limit,
         |definition| definition.id(),
         |definition| {
-            owning_domain_filter.is_none_or(|domain| {
-                world.asset_definition_domains().get(definition.id()) == Some(domain)
-            }) && owner_filter.is_none_or(|owner| definition.owned_by() == owner)
+            visibility.allows_asset_definition(world, definition.id())
+                && owning_domain_filter.is_none_or(|domain| {
+                    world.asset_definition_domains().get(definition.id()) == Some(domain)
+                })
+                && owner_filter.is_none_or(|owner| definition.owned_by() == owner)
         },
         |definition| {
             ExplorerAssetDefinitionDto::from_definition_with_asset_count(
                 definition,
-                definition_instance_count_from_world(world, definition.id()),
+                definition_instance_count_from_world(world, definition.id(), visibility),
             )
         },
     );
@@ -2111,6 +2173,7 @@ pub(crate) fn assets_page_for_filters<'world>(
     owned_by: Option<&'world AccountId>,
     definition_filter: Option<&'world AssetDefinitionId>,
     asset_filter: Option<&'world AssetId>,
+    visibility: &'world DataspaceReadVisibility,
     query: &ExplorerCursorQuery,
 ) -> Result<ExplorerAssetsPage, ExplorerCursorError> {
     let limit = query.validated_limit()?;
@@ -2121,6 +2184,7 @@ pub(crate) fn assets_page_for_filters<'world>(
             definition_filter.map(ToString::to_string),
             asset_filter.map(ToString::to_string),
         ],
+        visibility.visible_route_set_digest(),
     );
     let after = canonical_cursor_key::<AssetId>(
         query.cursor.as_deref(),
@@ -2138,73 +2202,79 @@ pub(crate) fn assets_page_for_filters<'world>(
     {
         return Err(ExplorerCursorError::InvalidKey);
     }
-    let assets: Box<dyn Iterator<Item = AssetEntry<'world>> + 'world> =
-        if let Some(asset_id) = asset_filter {
-            let entry = after
-                .as_ref()
-                .is_none_or(|after| asset_id > after)
-                .then(|| world.assets().get_key_value(asset_id))
-                .flatten()
-                .map(|(id, value)| AssetEntry::new(id, value));
-            Box::new(entry.into_iter())
-        } else if let Some(owner) = owned_by {
-            if let Some(definition) = definition_filter {
-                match after {
-                    Some(after) => Box::new(
-                        world
-                            .assets()
-                            .range((Excluded(after), Unbounded))
-                            .take_while(move |(id, _)| {
-                                id.account() == owner && id.definition() == definition
-                            })
-                            .map(|(id, value)| AssetEntry::new(id, value)),
-                    ),
-                    None => Box::new(world.assets_in_account_by_definition_iter(owner, definition)),
-                }
-            } else {
-                match after {
-                    Some(after) => Box::new(
-                        world
-                            .assets()
-                            .range((Excluded(after), Unbounded))
-                            .take_while(move |(id, _)| id.account() == owner)
-                            .map(|(id, value)| AssetEntry::new(id, value)),
-                    ),
-                    None => Box::new(world.assets_in_account_iter(owner)),
-                }
+    let selectors_visible = owned_by.is_none_or(|owner| visibility.allows_account(world, owner))
+        && definition_filter
+            .is_none_or(|definition| visibility.allows_asset_definition(world, definition))
+        && asset_filter.is_none_or(|asset| visibility.allows_asset(world, asset));
+    let assets: Box<dyn Iterator<Item = AssetEntry<'world>> + 'world> = if !selectors_visible {
+        Box::new(std::iter::empty())
+    } else if let Some(asset_id) = asset_filter {
+        let entry = after
+            .as_ref()
+            .is_none_or(|after| asset_id > after)
+            .then(|| world.assets().get_key_value(asset_id))
+            .flatten()
+            .map(|(id, value)| AssetEntry::new(id, value));
+        Box::new(entry.into_iter())
+    } else if let Some(owner) = owned_by {
+        if let Some(definition) = definition_filter {
+            match after {
+                Some(after) => Box::new(
+                    world
+                        .assets()
+                        .range((Excluded(after), Unbounded))
+                        .take_while(move |(id, _)| {
+                            id.account() == owner && id.definition() == definition
+                        })
+                        .map(|(id, value)| AssetEntry::new(id, value)),
+                ),
+                None => Box::new(world.assets_in_account_by_definition_iter(owner, definition)),
             }
-        } else if let Some(definition) = definition_filter {
-            let asset_ids = world.asset_definition_assets().get(definition);
-            let asset_ids: Box<dyn Iterator<Item = &'world AssetId> + 'world> = match asset_ids {
-                Some(asset_ids) => match after {
-                    Some(after) => Box::new(asset_ids.range((Excluded(after), Unbounded))),
-                    None => Box::new(asset_ids.iter()),
-                },
-                None => Box::new(std::iter::empty()),
-            };
-            Box::new(asset_ids.filter_map(move |asset_id| {
-                world
-                    .assets()
-                    .get_key_value(asset_id)
-                    .map(|(id, value)| AssetEntry::new(id, value))
-            }))
         } else {
             match after {
                 Some(after) => Box::new(
                     world
                         .assets()
                         .range((Excluded(after), Unbounded))
+                        .take_while(move |(id, _)| id.account() == owner)
                         .map(|(id, value)| AssetEntry::new(id, value)),
                 ),
-                None => Box::new(world.assets_iter()),
+                None => Box::new(world.assets_in_account_iter(owner)),
             }
+        }
+    } else if let Some(definition) = definition_filter {
+        let asset_ids = world.asset_definition_assets().get(definition);
+        let asset_ids: Box<dyn Iterator<Item = &'world AssetId> + 'world> = match asset_ids {
+            Some(asset_ids) => match after {
+                Some(after) => Box::new(asset_ids.range((Excluded(after), Unbounded))),
+                None => Box::new(asset_ids.iter()),
+            },
+            None => Box::new(std::iter::empty()),
         };
+        Box::new(asset_ids.filter_map(move |asset_id| {
+            world
+                .assets()
+                .get_key_value(asset_id)
+                .map(|(id, value)| AssetEntry::new(id, value))
+        }))
+    } else {
+        match after {
+            Some(after) => Box::new(
+                world
+                    .assets()
+                    .range((Excluded(after), Unbounded))
+                    .map(|(id, value)| AssetEntry::new(id, value)),
+            ),
+            None => Box::new(world.assets_iter()),
+        }
+    };
     let scanned = collect_explorer_cursor_page(
         assets,
         limit,
         AssetEntry::id,
         |asset| {
-            asset_filter.is_none_or(|expected| asset.id() == expected)
+            visibility.allows_asset(world, asset.id())
+                && asset_filter.is_none_or(|expected| asset.id() == expected)
                 && owned_by.is_none_or(|owner| asset.id().account() == owner)
                 && definition_filter.is_none_or(|definition| asset.id().definition() == definition)
         },
@@ -2226,6 +2296,7 @@ pub(crate) fn nfts_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
     owned_by: Option<&'world AccountId>,
     domain_filter: Option<&'world DomainId>,
+    visibility: &'world DataspaceReadVisibility,
     query: &ExplorerCursorQuery,
 ) -> Result<ExplorerNftsPage, ExplorerCursorError> {
     let limit = query.validated_limit()?;
@@ -2235,6 +2306,7 @@ pub(crate) fn nfts_page_for_filters<'world>(
             owned_by.map(ToString::to_string),
             domain_filter.map(ToString::to_string),
         ],
+        visibility.visible_route_set_digest(),
     );
     let after = canonical_cursor_key::<NftId>(
         query.cursor.as_deref(),
@@ -2247,7 +2319,11 @@ pub(crate) fn nfts_page_for_filters<'world>(
     {
         return Err(ExplorerCursorError::InvalidKey);
     }
-    let nfts: Box<dyn Iterator<Item = NftEntry<'world>> + 'world> = if let Some(owner) = owned_by {
+    let selectors_visible = owned_by.is_none_or(|owner| visibility.allows_account(world, owner))
+        && domain_filter.is_none_or(|domain| visibility.allows_domain(world, domain));
+    let nfts: Box<dyn Iterator<Item = NftEntry<'world>> + 'world> = if !selectors_visible {
+        Box::new(std::iter::empty())
+    } else if let Some(owner) = owned_by {
         let nft_ids = world.nfts_by_owner().get(owner);
         let nft_ids: Box<dyn Iterator<Item = &'world NftId> + 'world> = match nft_ids {
             Some(nft_ids) => match after {
@@ -2293,7 +2369,8 @@ pub(crate) fn nfts_page_for_filters<'world>(
         limit,
         NftEntry::id,
         |nft| {
-            owned_by.is_none_or(|owner| nft.value().owned_by == *owner)
+            visibility.allows_nft(world, nft.id())
+                && owned_by.is_none_or(|owner| nft.value().owned_by == *owner)
                 && domain_filter.is_none_or(|domain| nft.id().domain() == domain)
         },
         ExplorerNftDto::from_entry,
@@ -2314,6 +2391,7 @@ pub(crate) fn rwas_page_for_filters<'world>(
     world: &'world impl WorldReadOnly,
     owned_by: Option<&'world AccountId>,
     domain_filter: Option<&'world DomainId>,
+    visibility: &'world DataspaceReadVisibility,
     query: &ExplorerCursorQuery,
 ) -> Result<ExplorerRwasPage, ExplorerCursorError> {
     let limit = query.validated_limit()?;
@@ -2323,6 +2401,7 @@ pub(crate) fn rwas_page_for_filters<'world>(
             owned_by.map(ToString::to_string),
             domain_filter.map(ToString::to_string),
         ],
+        visibility.visible_route_set_digest(),
     );
     let after = canonical_cursor_key::<iroha_data_model::rwa::RwaId>(
         query.cursor.as_deref(),
@@ -2335,7 +2414,11 @@ pub(crate) fn rwas_page_for_filters<'world>(
     {
         return Err(ExplorerCursorError::InvalidKey);
     }
-    let rwas: Box<dyn Iterator<Item = RwaEntry<'world>> + 'world> = if let Some(owner) = owned_by {
+    let selectors_visible = owned_by.is_none_or(|owner| visibility.allows_account(world, owner))
+        && domain_filter.is_none_or(|domain| visibility.allows_domain(world, domain));
+    let rwas: Box<dyn Iterator<Item = RwaEntry<'world>> + 'world> = if !selectors_visible {
+        Box::new(std::iter::empty())
+    } else if let Some(owner) = owned_by {
         let rwa_ids = world.rwas_by_owner().get(owner);
         let rwa_ids: Box<dyn Iterator<Item = &'world iroha_data_model::rwa::RwaId> + 'world> =
             match rwa_ids {
@@ -2378,7 +2461,8 @@ pub(crate) fn rwas_page_for_filters<'world>(
         limit,
         RwaEntry::id,
         |rwa| {
-            owned_by.is_none_or(|owner| rwa.value().owned_by == *owner)
+            visibility.allows_rwa(world, rwa.id())
+                && owned_by.is_none_or(|owner| rwa.value().owned_by == *owner)
                 && domain_filter.is_none_or(|domain| rwa.id().domain() == domain)
         },
         ExplorerRwaDto::from_entry,
@@ -2488,8 +2572,13 @@ mod tests {
             cursor: None,
             limit: EXPLORER_CURSOR_MAX_LIMIT,
         };
-        let domain_page = asset_definitions_page_for_filters(&view, Some(&domain_id), None, &query)
-            .expect("domain-filtered page");
+        let visibility = DataspaceReadVisibility::new(
+            std::collections::BTreeSet::from([iroha_data_model::nexus::DataSpaceId::UNIVERSAL]),
+            false,
+        );
+        let domain_page =
+            asset_definitions_page_for_filters(&view, Some(&domain_id), None, &visibility, &query)
+                .expect("domain-filtered page");
         assert_eq!(domain_page.items.len(), 1);
         assert_eq!(domain_page.items[0].id, definition_id.to_string());
         let domain_text = domain_id.to_string();
@@ -2497,11 +2586,29 @@ mod tests {
             domain_page.items[0].owning_domain.as_deref(),
             Some(domain_text.as_str())
         );
-        let domain_and_owner_page =
-            asset_definitions_page_for_filters(&view, Some(&domain_id), Some(&ALICE_ID), &query)
-                .expect("domain-and-owner-filtered page");
+        let domain_and_owner_page = asset_definitions_page_for_filters(
+            &view,
+            Some(&domain_id),
+            Some(&ALICE_ID),
+            &visibility,
+            &query,
+        )
+        .expect("domain-and-owner-filtered page");
         assert_eq!(domain_and_owner_page.items.len(), 1);
         assert_eq!(domain_and_owner_page.items[0].id, definition_id.to_string());
+
+        let hidden_visibility = DataspaceReadVisibility::default();
+        let hidden_page = asset_definitions_page_for_filters(
+            &view,
+            Some(&domain_id),
+            Some(&ALICE_ID),
+            &hidden_visibility,
+            &query,
+        )
+        .expect("hidden selector must be indistinguishable from an empty result");
+        assert!(hidden_page.items.is_empty());
+        assert!(!hidden_page.pagination.has_more);
+        assert!(hidden_page.pagination.next_cursor.is_none());
     }
     use super::*;
     use nonzero_ext::nonzero;
@@ -2535,10 +2642,8 @@ mod tests {
     #[test]
     fn history_cursor_is_snapshot_filter_visibility_and_route_bound() {
         let collection = ExplorerHistoryCollection::Transactions;
-        let filter_digest = explorer_history_filter_digest(
-            collection,
-            &[Some("authority".to_owned()), None],
-        );
+        let filter_digest =
+            explorer_history_filter_digest(collection, &[Some("authority".to_owned()), None]);
         let visibility_digest = [0x22; 32];
         let snapshot_hash = [0x33; 32];
         let position = ExplorerHistoryPosition::transaction(41, 7);
@@ -2554,16 +2659,15 @@ mod tests {
         .expect("history cursor metadata");
         assert_eq!(meta.limit, 17);
         assert_eq!(meta.snapshot_height, 42);
-        assert_eq!(meta.snapshot_hash.as_deref(), Some(hex::encode(snapshot_hash).as_str()));
+        assert_eq!(
+            meta.snapshot_hash.as_deref(),
+            Some(hex::encode(snapshot_hash).as_str())
+        );
         assert!(meta.has_more);
         let encoded = meta.next_cursor.expect("continuation cursor");
-        let decoded = decode_explorer_history_cursor(
-            &encoded,
-            collection,
-            filter_digest,
-            visibility_digest,
-        )
-        .expect("valid scoped history cursor");
+        let decoded =
+            decode_explorer_history_cursor(&encoded, collection, filter_digest, visibility_digest)
+                .expect("valid scoped history cursor");
         assert_eq!(decoded.snapshot_height, 42);
         assert_eq!(decoded.snapshot_hash, snapshot_hash);
         assert_eq!(decoded.position, position);
@@ -2582,12 +2686,7 @@ mod tests {
             Err(ExplorerCursorError::ScopeMismatch),
         );
         assert_eq!(
-            decode_explorer_history_cursor(
-                &encoded,
-                collection,
-                filter_digest,
-                [0x44; 32],
-            ),
+            decode_explorer_history_cursor(&encoded, collection, filter_digest, [0x44; 32],),
             Err(ExplorerCursorError::ScopeMismatch),
         );
         assert_eq!(
@@ -2603,7 +2702,12 @@ mod tests {
     #[test]
     fn explorer_cursor_is_canonical_collection_and_filter_bound() {
         let filters = [Some("wonderland.universal".to_owned()), None];
-        let digest = explorer_filter_digest(ExplorerCursorCollection::Accounts, &filters);
+        let visibility_digest = [0x11; 32];
+        let digest = explorer_filter_digest(
+            ExplorerCursorCollection::Accounts,
+            &filters,
+            visibility_digest,
+        );
         let cursor = encode_explorer_cursor(
             ExplorerCursorCollection::Accounts,
             digest,
@@ -2619,13 +2723,27 @@ mod tests {
         .expect("cursor key");
         assert_eq!(decoded, ALICE_ID.clone());
         let other_filters = [Some("garden.universal".to_owned()), None];
-        let other_digest =
-            explorer_filter_digest(ExplorerCursorCollection::Accounts, &other_filters);
+        let other_digest = explorer_filter_digest(
+            ExplorerCursorCollection::Accounts,
+            &other_filters,
+            visibility_digest,
+        );
         assert_eq!(
             canonical_cursor_key::<AccountId>(
                 Some(&cursor),
                 ExplorerCursorCollection::Accounts,
                 other_digest,
+            )
+            .unwrap_err(),
+            ExplorerCursorError::ScopeMismatch,
+        );
+        let other_visibility_digest =
+            explorer_filter_digest(ExplorerCursorCollection::Accounts, &filters, [0x22; 32]);
+        assert_eq!(
+            canonical_cursor_key::<AccountId>(
+                Some(&cursor),
+                ExplorerCursorCollection::Accounts,
+                other_visibility_digest,
             )
             .unwrap_err(),
             ExplorerCursorError::ScopeMismatch,
@@ -2652,7 +2770,7 @@ mod tests {
     #[test]
     fn explorer_cursor_uses_canonical_typed_identifier_decoders() {
         let account_digest =
-            explorer_filter_digest(ExplorerCursorCollection::Accounts, &[None, None]);
+            explorer_filter_digest(ExplorerCursorCollection::Accounts, &[None, None], [0; 32]);
         let noncanonical_account = format!(" {} ", &*ALICE_ID);
         let account_cursor = encode_explorer_cursor(
             ExplorerCursorCollection::Accounts,
@@ -2672,7 +2790,8 @@ mod tests {
         );
         let domain =
             DomainId::try_new("wonderland", "universal").expect("canonical domain identifier");
-        let domain_digest = explorer_filter_digest(ExplorerCursorCollection::Domains, &[None]);
+        let domain_digest =
+            explorer_filter_digest(ExplorerCursorCollection::Domains, &[None], [0; 32]);
         let domain_cursor = encode_explorer_cursor(
             ExplorerCursorCollection::Domains,
             domain_digest,

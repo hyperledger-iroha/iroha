@@ -224,16 +224,16 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     RegisterSmartContractCode { manifest }
         .execute(&authority, &mut stx)
         .expect("register manifest");
-    let missing_subject_error = ActivateContractInstance {
+    let missing_lifecycle_error = ActivateContractInstance {
         contract_address: contract_address.clone(),
         expected_revision: 1,
         code_hash,
     }
     .execute(&authority, &mut stx)
-    .expect_err("the manifest contract-subject trigger authority must already exist");
+    .expect_err("raw activation must not create a lifecycle address");
     assert!(
-        format!("{missing_subject_error:?}").contains("must be registered before activation"),
-        "unexpected missing contract-subject error: {missing_subject_error}"
+        format!("{missing_lifecycle_error:?}").contains("lifecycle binding not found"),
+        "unexpected missing lifecycle error: {missing_lifecycle_error}"
     );
     assert!(
         stx.world.triggers().ids().get(&trigger_id).is_none(),
@@ -242,6 +242,8 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     Register::account(Account::new(contract_subject.clone()))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
+    stx.world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), authority.clone());
     assert!(
         !stx.can_register_trigger_for(&authority, &contract_subject),
         "the activation authority must not receive persistent trigger-registration permission"
@@ -296,7 +298,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     assert_eq!(metadata.get(&tag_key), Some(&Json::from("alpha")));
     DeactivateContractInstance {
         contract_address: contract_address.clone(),
-        expected_revision: 1,
+        expected_revision: 2,
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -325,6 +327,8 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     Register::account(Account::new(contract_subject))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
+    stx.world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), authority.clone());
     let trigger_id: TriggerId = "foreign_wake".parse().expect("trigger id");
     let trigger = TriggerDescriptor {
         id: trigger_id.clone(),
@@ -478,6 +482,8 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     Register::account(Account::new(contract_address.subject_id()))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
+    stx.world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), authority.clone());
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         expected_revision: 1,
@@ -529,7 +535,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     );
     DeactivateContractInstance {
         contract_address: contract_address.clone(),
-        expected_revision: 1,
+        expected_revision: 2,
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -610,6 +616,8 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     }
     .execute(&authority, &mut stx)
     .expect("register target manifest");
+    stx.world
+        .bind_inactive_contract_subject_for_testing(target_address.clone(), authority.clone());
     ActivateContractInstance {
         contract_address: target_address.clone(),
         expected_revision: 1,
@@ -669,6 +677,8 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     Register::account(Account::new(source_address.subject_id()))
         .execute(&authority, &mut stx)
         .expect("register the non-signable source contract-subject account");
+    stx.world
+        .bind_inactive_contract_subject_for_testing(source_address.clone(), authority.clone());
     ActivateContractInstance {
         contract_address: source_address.clone(),
         expected_revision: 1,
@@ -768,6 +778,8 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     }
     .execute(&authority, &mut stx)
     .expect("register source manifest");
+    stx.world
+        .bind_inactive_contract_subject_for_testing(source_address.clone(), authority.clone());
     let err = ActivateContractInstance {
         contract_address: source_address,
         expected_revision: 1,
@@ -839,6 +851,8 @@ seiyaku Test {{
     }
     .execute(&authority, &mut stx)
     .expect("register manifest");
+    stx.world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), authority.clone());
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         expected_revision: 1,

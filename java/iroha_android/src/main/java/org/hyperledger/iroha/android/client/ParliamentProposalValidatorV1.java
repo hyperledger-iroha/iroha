@@ -50,6 +50,7 @@ final class ParliamentProposalValidatorV1 {
       case "SorafsProviderGovernance" -> sorafsProvider(payload);
       case "ContractLifecycleGovernance" -> contractLifecycle(payload);
       case "ContractEmergencyHold" -> contractEmergencyHold(payload);
+      case "GlobalDataTriggerPermissionGovernance" -> globalDataTriggerPermission(payload);
       default -> throw invalid("proposal.kind is unknown or retired");
     }
     return proposal;
@@ -567,10 +568,15 @@ final class ParliamentProposalValidatorV1 {
         }
       }
       case "Deactivate" -> {
-        exact(payload, fields("expected_code_hash", "reason"), kind);
+        exact(
+            payload,
+            payload.containsKey("reason")
+                ? fields("expected_code_hash", "reason")
+                : fields("expected_code_hash"),
+            kind);
         lowerHex32(payload.get("expected_code_hash"), kind + ".expected_code_hash");
         if (payload.get("reason") != null) {
-          reason(string(payload.get("reason"), kind + ".reason"), kind + ".reason");
+          string(payload.get("reason"), kind + ".reason");
         }
       }
       case "OfferOwnership" -> {
@@ -607,6 +613,35 @@ final class ParliamentProposalValidatorV1 {
     }
   }
 
+  private static void globalDataTriggerPermission(final Map<String, Object> value) {
+    exact(
+        value,
+        fields("authority", "action"),
+        "GlobalDataTriggerPermissionGovernance");
+    account(
+        value.get("authority"),
+        "GlobalDataTriggerPermissionGovernance.authority");
+    final Map<String, Object> action =
+        objectValue(
+            value.get("action"),
+            "GlobalDataTriggerPermissionGovernance.action");
+    exact(
+        action,
+        fields("action", "value"),
+        "GlobalDataTriggerPermissionGovernance.action");
+    final String kind =
+        text(
+            action.get("action"),
+            "GlobalDataTriggerPermissionGovernance.action.action");
+    if (!"grant".equals(kind) && !"revoke".equals(kind)) {
+      throw invalid(
+          "GlobalDataTriggerPermissionGovernance.action.action must be grant or revoke");
+    }
+    if (action.get("value") != null) {
+      throw invalid("GlobalDataTriggerPermissionGovernance.action.value must be null");
+    }
+  }
+
   private static void contractEmergencyHold(final Map<String, Object> value) {
     exact(
         value,
@@ -626,9 +661,9 @@ final class ParliamentProposalValidatorV1 {
     lowerHex32(
         value.get("expected_code_hash"), "ContractEmergencyHold.expected_code_hash");
     bytes(value.get("incident_digest"), 32, "ContractEmergencyHold.incident_digest", true);
-    reason(
-        string(value.get("reason"), "ContractEmergencyHold.reason"),
-        "ContractEmergencyHold.reason");
+    if (string(value.get("reason"), "ContractEmergencyHold.reason").trim().isEmpty()) {
+      throw invalid("ContractEmergencyHold.reason must not be blank");
+    }
     final BigInteger duration =
         uint(value.get("duration_blocks"), "ContractEmergencyHold.duration_blocks");
     if (duration.signum() == 0 || duration.compareTo(BigInteger.valueOf(3_600)) > 0) {

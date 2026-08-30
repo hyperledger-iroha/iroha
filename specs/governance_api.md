@@ -15,9 +15,9 @@ eligible-citizen snapshot in its `SortitionRequestV1`; that request is committed
 before a strictly future finalized threshold-beacon pulse. The first consumed
 pulse covers all initially required bodies as one simultaneous draw batch.
 Roster sealing follows authenticated invitation responses. Reads never derive a
-missing roster from assets, epoch council state, module names, or another
-attempt. The independently maintained epoch-council projection is not an input
-to Parliament certification.
+missing roster from assets, compatibility-only roster snapshots, module names,
+or another attempt. Restored legacy roster records are inert and have no public
+projection.
 Every governance lock likewise carries its immutable asset, escrow, and slash
 custody binding; missing-custody JSON/Norito records are rejected and runtime
 configuration is never used to reconstruct retained lock custody.
@@ -49,8 +49,8 @@ Overview
 - This boundary covers the ZK roots, Merkle-path and vote-tally reads; active ABI,
   runtime-metrics, node/privacy-capability and projection-checkpoint reads; the
   Ministry draft/read routes; governance proposal, capability, citizen, lock,
-  referendum, tally, protected-namespace, unlock, governed-contract, and epoch-
-  council reads/drafts; and all typed validation-fee proof/proposal routes.
+  referendum, tally, protected-namespace, unlock, and governed-contract
+  reads/drafts; and all typed validation-fee proof/proposal routes.
   The Ministry agenda `authority`, citizenship-draft `owner`, and validation-fee
   proposal-draft `proposal_operator` must equal the verified account before
   state access.
@@ -640,8 +640,9 @@ Code Size Cap
     over `DeployContract`, `RuntimeUpgrade`, `SccpRouteGovernance`,
     `ValidationFeePolicy`, `ValidationFeePayoutLifecycle`,
     `MusubiRegistryGovernance`, `SorafsProviderGovernance`,
-    `ContractLifecycleGovernance`, and `ContractEmergencyHold`. Unknown
-    fields, unknown tags, externally tagged legacy kinds, and retired proposal
+    `ContractLifecycleGovernance`, `ContractEmergencyHold`, and
+    `GlobalDataTriggerPermissionGovernance`. Unknown fields, unknown tags,
+    externally tagged legacy kinds, and retired proposal
     pipeline/snapshot/finalization fields are rejected rather than projected.
     Every proposal-owned `u64` emitted as a JSON number, plus
     `created_height`, is bounded by `9,007,199,254,740,991` at draft,
@@ -662,21 +663,13 @@ Code Size Cap
     eligibility boundary as consensus, and finalized ZK projections include
     the optional abstain slot. None is a Parliament certificate projection.
 
-- GET `/v1/gov/council/current`
-  - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
-  - Notes: Returns the latest persisted independent epoch council through the ordered council
-    index. When none exists, returns the constant empty state; it never derives
-    a roster by scanning account assets, and the attempt reducer never consults
-    this response.
-
 - POST `/v1/gov/parliament/ballots` is retired and is not registered. Parliament
   jury participation uses only the authority-bound timed-OVN lifecycle above;
   Torii does not translate an equal public stage ballot into that protocol.
 
 ### Governance defaults (iroha_config `gov.*`)
 
-Governance execution is parameterised via `iroha_config`; these settings do not
-make the current-council read endpoint derive an implicit roster:
+Governance execution is parameterised via `iroha_config`:
 
 ```toml
 [gov]
@@ -684,6 +677,7 @@ make the current-council read endpoint derive an implicit roster:
   parliament_sortition_pulse_delay_blocks = 4
   parliament_invitation_phase_blocks = 3600
   parliament_public_finding_phase_blocks = 3600
+  parliament_alternate_size = 21
   citizenship_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
   citizenship_bond_amount = "10000"
 
@@ -692,7 +686,7 @@ make the current-council read endpoint derive an implicit roster:
   vk_ballot.name    = "ballot_v1"
   vk_tally.backend  = "halo2/ipa"
   vk_tally.name     = "tally_v1"
-  plain_voting_enabled = false
+  plain_voting_enabled = true
   conviction_step_blocks = 100
   max_conviction = 6
   approval_q_num = 1
@@ -705,7 +699,6 @@ make the current-council read endpoint derive an implicit roster:
   slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
   slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
-  parliament_term_blocks = 43200
 
 [gov.parliament_timed_ovn]
   registration_phase_blocks = 3600
@@ -752,11 +745,10 @@ land and released on expiry; their bond lifecycle is emitted via
 use the sealed body roster and immutable original-seat quorum denominator; they
 do not derive weight from a public conviction lock.
 
-`parliament_term_blocks` defines the epoch length for independent council
-persistence. Attempt sortition freezes its own complete eligible-citizen
-snapshot and the one future pulse at exactly
+Attempt sortition freezes its own complete eligible-citizen snapshot and the
+one future pulse at exactly
 `request_height + parliament_sortition_pulse_delay_blocks`; it does not reuse
-that epoch council. The delay is consensus-hashed, nonzero, frozen into the
+any standing roster. The delay is consensus-hashed, nonzero, frozen into the
 attempt, and checked with overflow rejection at admission and restore.
 `parliament_invitation_phase_blocks` fixes the response window;
 `parliament_public_finding_phase_blocks` independently fixes the endorsement
@@ -800,10 +792,12 @@ RBAC
     - Proposals: `CanProposeContractDeployment{ contract_address }`
     - Runtime-upgrade proposals: `CanProposeRuntimeUpgrade{ abi_version, abi_hash }`
     - SCCP proposals: a registered citizen or `CanProposeSccpRouteGovernance`
+    - Global data-trigger permission proposals: a registered bonded citizen
     - Standalone ballots: `CanSubmitGovernanceBallot{ referendum_id }`
     - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
     - Citizen service outcomes: `CanRecordCitizenService{ owner }`
-    - Council management: `CanManageParliament`
+    - Remaining managed Parliament and standalone ZK-election transitions:
+      `CanManageParliament`
 - Scoped governance capabilities are bootstrapped by genesis and thereafter
   delegable only by an existing holder of the exact same scope. In particular,
   direct native ISIs require the exact encoded target (not only the permission

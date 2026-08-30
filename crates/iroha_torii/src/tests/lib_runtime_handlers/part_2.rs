@@ -530,9 +530,9 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
         !app.state.has_committed_entrypoint(tx.hash_as_entrypoint()),
         "ingress rejection should not create committed history"
     );
-    let explorer_uri = format!("/v1/explorer/transactions/{tx_hash_hex}")
-        .parse::<axum::http::Uri>()
-        .expect("valid explorer transaction URI");
+    let explorer_uri: axum::http::Uri = format!("/v1/explorer/transactions/{tx_hash_hex}")
+        .parse()
+        .expect("valid Explorer transaction URI");
     let explorer = super::handler_explorer_transaction_detail(
         State(app),
         HeaderMap::new(),
@@ -1947,12 +1947,12 @@ fn long_lived_dataspace_context_rechecks_permission_revocation() {
         dataspace: restricted_dataspace,
     }
     .into();
+    grant_account_permission_for_test(&app, &caller, permission.clone());
     let context = super::ToriiAccountReadVisibility::Signed(caller.clone())
         .into_dataspace_context(app.clone());
 
-    assert!(!context.current_visibility().allows_dataspace(restricted_dataspace));
-    grant_account_permission_for_test(&app, &caller, permission.clone());
     assert!(context.current_visibility().allows_dataspace(restricted_dataspace));
+    assert!(context.authorization_is_current());
 
     let next_height = app
         .state
@@ -1981,6 +1981,10 @@ fn long_lived_dataspace_context_rechecks_permission_revocation() {
     assert!(
         !context.current_visibility().allows_dataspace(restricted_dataspace),
         "an established stream/read context must not retain a revoked grant"
+    );
+    assert!(
+        !context.authorization_is_current(),
+        "a long-lived stream must terminate after losing any admitted route"
     );
 }
 

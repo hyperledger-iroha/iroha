@@ -153,23 +153,6 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
     );
 }
 #[tokio::test]
-async fn gov_council_current_does_not_synthesize_an_unpersisted_roster() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_store = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query_store));
-    let resp = iroha_torii::handle_gov_council_current(state)
-        .await
-        .expect("handler ok")
-        .0;
-    assert!(resp.members.is_empty());
-    assert!(resp.alternates.is_empty());
-    assert_eq!(resp.candidate_count, 0);
-    assert_eq!(
-        resp.derived_by,
-        iroha_data_model::isi::governance::CouncilDerivationKind::Manual
-    );
-}
-#[tokio::test]
 async fn gov_referendum_and_locks_and_tally_endpoints() {
     let mut raw_state = State::new_for_testing(
         World::default(),

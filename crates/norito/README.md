@@ -76,7 +76,13 @@ compression, and columnar-layout micro-benchmarks.
 - `ncb_sink_vs_vec`: compares NCB encoders using a simple `Vec<u8>` growth pattern vs the internal `ByteSink` with aligned growth and coalesced writes.
   Run: `cargo bench -p norito --bench ncb_sink_vs_vec`.
 
-## Optional features
+## Codec features
+
+The shipping `node-codec` aggregate includes compression, columnar encoding,
+portable SIMD, CRC key hashing, SIMD UTF-8 validation, and deterministic
+parallel Stage-1 parsing. GPU compression, platform-specific Stage-1/CRC
+backends, and diagnostic features remain explicit because they require
+platform helpers or can produce a different compressed representation.
 
 - `columnar`: Enables experimental Norito Column Blocks (NCB) for adaptive columnar encodings used in scan-heavy paths.
 - Fallible decode always catches deserializer panics and returns `Error::DecodePanic`; this safety boundary is not feature-selectable.

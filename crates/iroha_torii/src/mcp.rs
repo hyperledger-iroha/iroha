@@ -794,7 +794,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_protected_namespaces_list_tool());
     tools.push(iroha_gov_protected_namespaces_update_tool());
     tools.push(iroha_gov_unlocks_stats_tool());
-    tools.push(iroha_gov_council_current_tool());
     tools.push(iroha_gov_citizens_count_tool());
     tools.push(iroha_aliases_resolve_tool());
     tools.push(iroha_aliases_resolve_index_tool());
@@ -1225,7 +1224,6 @@ fn is_audited_manual_read_tool_name(name: &str) -> bool {
             | "iroha.gov.tally.get"
             | "iroha.gov.protected_namespaces.list"
             | "iroha.gov.unlocks.stats"
-            | "iroha.gov.council.current"
             | "iroha.gov.citizens.count"
             | "iroha.nfts.chain.list"
             | "iroha.rwas.chain.list"
@@ -2266,12 +2264,6 @@ async fn handle_named_tool_call(
         }
         "iroha.gov.unlocks.stats" => {
             match dispatch_iroha_gov_unlocks_stats(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.gov.council.current" => {
-            match dispatch_iroha_gov_council_current(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4032,6 +4024,15 @@ fn apply_catalog_auth_schemas_to_tools(tools: &mut [ToolSpec], groups: &[Catalog
                     ),
                 );
             }
+            AuthenticationPolicy::OptionalCanonicalAccountSignature => {
+                properties.insert(
+                    "headers".to_owned(),
+                    canonical_account_auth_headers_schema(
+                        "Optional canonical proof signed for the exact target method, path, query, and body. Omit the envelope for the anonymous public-dataspace view.",
+                    ),
+                );
+                continue;
+            }
             AuthenticationPolicy::OperatorSignature => {
                 if properties.contains_key("operator_auth") {
                     continue;
@@ -4113,6 +4114,9 @@ fn validate_tool_registry(
             Some(AuthenticationPolicy::CanonicalAccountSignature) => {
                 validate_canonical_auth_tool_schema(tool)?;
             }
+            Some(AuthenticationPolicy::OptionalCanonicalAccountSignature) => {
+                validate_optional_canonical_auth_tool_schema(tool)?;
+            }
             Some(AuthenticationPolicy::OperatorSignature) => {
                 validate_operator_auth_tool_schema(tool)?;
             }
@@ -4156,6 +4160,15 @@ fn validate_tool_registry(
     Ok(())
 }
 fn validate_canonical_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
+    validate_canonical_auth_tool_schema_with_requirement(tool, true)
+}
+fn validate_optional_canonical_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
+    validate_canonical_auth_tool_schema_with_requirement(tool, false)
+}
+fn validate_canonical_auth_tool_schema_with_requirement(
+    tool: &ToolSpec,
+    authentication_required: bool,
+) -> Result<(), String> {
     let schema = tool.input_schema.as_object().ok_or_else(|| {
         format!(
             "canonical-auth tool `{}` must publish an object input schema",
@@ -4216,7 +4229,7 @@ fn validate_canonical_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
                     Some(CANONICAL_PADDED_BASE64_PATTERN),
                 )
         });
-        if schema_requires(schema, "canonical_auth")
+        if schema_requires(schema, "canonical_auth") == authentication_required
             && constrained
             && auth_schema_has_exclusive_branches(
                 auth,
@@ -4291,7 +4304,7 @@ fn validate_canonical_auth_tool_schema(tool: &ToolSpec) -> Result<(), String> {
         CANONICAL_WITNESS_MAX_ENCODED_BYTES,
         Some(CANONICAL_PADDED_BASE64_PATTERN),
     );
-    if !schema_requires(schema, "headers")
+    if schema_requires(schema, "headers") != authentication_required
         || !constrained
         || !auth_schema_has_exclusive_branches(
             headers.expect("closed headers schema exists"),
@@ -4912,7 +4925,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_runtime_upgrades_list => "/v1/runtime/upgrades";
         dispatch_iroha_gov_protected_namespaces_list => "/v1/gov/protected-namespaces";
         dispatch_iroha_gov_unlocks_stats => "/v1/gov/unlocks/stats";
-        dispatch_iroha_gov_council_current => "/v1/gov/council/current";
         dispatch_iroha_gov_citizens_count => "/v1/gov/citizens";
         dispatch_iroha_nfts_chain_list => "/v1/nfts";
         dispatch_iroha_rwas_chain_list => "/v1/rwas";
@@ -4943,9 +4955,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_assets_list => "/v1/explorer/assets";
         dispatch_iroha_nfts_list => "/v1/explorer/nfts";
         dispatch_iroha_rwas_list => "/v1/explorer/rwas";
-        dispatch_iroha_transactions_list => "/v1/explorer/transactions";
-        dispatch_iroha_instructions_list => "/v1/explorer/instructions";
-        dispatch_iroha_blocks_list => "/v1/explorer/blocks";
     }
     query_post {
         dispatch_iroha_accounts_query => "/v1/accounts/query";
@@ -4958,6 +4967,97 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_bridge_finality_proof => "/v1/bridge/finality/{height}";
         dispatch_iroha_bridge_finality_bundle => "/v1/bridge/finality/bundle/{height}";
     }
+}
+async fn dispatch_explorer_history_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+    route: &str,
+    query_fields: &[&str],
+    context: &str,
+) -> Result<Value, String> {
+    let route = append_explorer_history_query_arguments(
+        route.to_owned(),
+        arguments,
+        query_fields,
+        context,
+    )?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_transactions_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_explorer_history_list(
+        app,
+        inbound_headers,
+        arguments,
+        "/v1/explorer/transactions",
+        &[
+            "cursor",
+            "limit",
+            "authority",
+            "block",
+            "status",
+            "asset_id",
+        ],
+        "Explorer transaction history request",
+    )
+    .await
+}
+async fn dispatch_iroha_instructions_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_explorer_history_list(
+        app,
+        inbound_headers,
+        arguments,
+        "/v1/explorer/instructions",
+        &[
+            "cursor",
+            "limit",
+            "authority",
+            "account",
+            "transaction_hash",
+            "transaction_status",
+            "block",
+            "kind",
+            "asset_id",
+        ],
+        "Explorer instruction history request",
+    )
+    .await
+}
+async fn dispatch_iroha_blocks_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_explorer_history_list(
+        app,
+        inbound_headers,
+        arguments,
+        "/v1/explorer/blocks",
+        &["cursor", "limit"],
+        "Explorer block history request",
+    )
+    .await
 }
 /// Render an exact MCP account input into the strict ASCII auth-header form.
 fn vpn_canonical_auth_account_header_value(account: &str) -> Result<String, String> {
@@ -8057,6 +8157,7 @@ enum ExtraHeaderPolicy {
     Default,
     ConnectManagement,
     CanonicalAccountAuthentication,
+    OptionalCanonicalAccountAuthentication,
     OperatorAuthentication,
 }
 impl ExtraHeaderPolicy {
@@ -8064,7 +8165,9 @@ impl ExtraHeaderPolicy {
         match self {
             Self::Default => false,
             Self::ConnectManagement => lowered == "authorization",
-            Self::CanonicalAccountAuthentication => is_canonical_account_auth_header(lowered),
+            Self::CanonicalAccountAuthentication | Self::OptionalCanonicalAccountAuthentication => {
+                is_canonical_account_auth_header(lowered)
+            }
             Self::OperatorAuthentication => is_operator_auth_header(lowered),
         }
     }
@@ -8078,6 +8181,9 @@ fn target_extra_header_policy(
     Ok(match descriptor.authentication() {
         AuthenticationPolicy::CanonicalAccountSignature => {
             ExtraHeaderPolicy::CanonicalAccountAuthentication
+        }
+        AuthenticationPolicy::OptionalCanonicalAccountSignature => {
+            ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
         }
         AuthenticationPolicy::OperatorSignature => ExtraHeaderPolicy::OperatorAuthentication,
         AuthenticationPolicy::NestedRouteAuthentication => {
@@ -8368,7 +8474,8 @@ fn apply_extra_headers_with_policy(
     policy: ExtraHeaderPolicy,
 ) -> Result<(), String> {
     match policy {
-        ExtraHeaderPolicy::CanonicalAccountAuthentication => {
+        ExtraHeaderPolicy::CanonicalAccountAuthentication
+        | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication => {
             remove_canonical_account_auth_headers(out)
         }
         ExtraHeaderPolicy::OperatorAuthentication => remove_operator_auth_headers(out),
@@ -8380,6 +8487,7 @@ fn apply_extra_headers_with_policy(
             if matches!(
                 policy,
                 ExtraHeaderPolicy::CanonicalAccountAuthentication
+                    | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
                     | ExtraHeaderPolicy::OperatorAuthentication
             ) =>
         {
@@ -8401,6 +8509,7 @@ fn apply_extra_headers_with_policy(
         if matches!(
             policy,
             ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
                 | ExtraHeaderPolicy::OperatorAuthentication
         ) && !policy.allows_reserved_extra_header(&lowered)
         {
@@ -8417,6 +8526,7 @@ fn apply_extra_headers_with_policy(
         let mut header_value = if matches!(
             policy,
             ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
                 | ExtraHeaderPolicy::OperatorAuthentication
         ) {
             let exact = raw_value.as_str().ok_or_else(|| {
@@ -8436,6 +8546,7 @@ fn apply_extra_headers_with_policy(
         if matches!(
             policy,
             ExtraHeaderPolicy::CanonicalAccountAuthentication
+                | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication
                 | ExtraHeaderPolicy::OperatorAuthentication
         ) || (policy == ExtraHeaderPolicy::ConnectManagement && lowered == "authorization")
         {
@@ -8459,7 +8570,8 @@ fn validate_target_authentication_headers(
         }
     }
     match policy {
-        ExtraHeaderPolicy::CanonicalAccountAuthentication => {
+        ExtraHeaderPolicy::CanonicalAccountAuthentication
+        | ExtraHeaderPolicy::OptionalCanonicalAccountAuthentication => {
             let has = |name: &str| names.contains(name);
             let signature_tuple = has(HEADER_X_IROHA_ACCOUNT)
                 && has(HEADER_X_IROHA_SIGNATURE)
@@ -8867,12 +8979,12 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
 const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 62;
-const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 109_160;
+const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 112_201;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET_BLAKE3: [u8; 32] = [
-    0x0c, 0xc8, 0x36, 0xd3, 0xe6, 0xed, 0x66, 0x07, 0xd4, 0xef, 0x2f, 0xae, 0x0a, 0x0b, 0xe9, 0x3b,
-    0x8b, 0x25, 0x5f, 0xcb, 0xdb, 0x25, 0x5a, 0x1c, 0x93, 0x84, 0x98, 0xd4, 0x52, 0xeb, 0xc5, 0x92,
+    0xa2, 0xac, 0x7a, 0x48, 0xd9, 0xff, 0x12, 0x8c, 0x4c, 0x36, 0xc8, 0x1c, 0x81, 0x2a, 0x68, 0xea,
+    0xb2, 0x9e, 0x53, 0x2f, 0x0a, 0xff, 0xe2, 0x3b, 0xc5, 0x41, 0x2a, 0xd5, 0xc0, 0x80, 0xdd, 0x31,
 ];
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
 
@@ -10105,13 +10217,6 @@ fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
         "/v1/gov/unlocks/stats",
     )
 }
-fn iroha_gov_council_current_tool() -> ToolSpec {
-    simple_manual_get_tool(
-        "iroha.gov.council.current",
-        "Fetch current governance council set (`/v1/gov/council/current`).",
-        "/v1/gov/council/current",
-    )
-}
 fn iroha_gov_citizens_count_tool() -> ToolSpec {
     simple_manual_get_tool(
         "iroha.gov.citizens.count",
@@ -10603,7 +10708,6 @@ mod tests {
             iroha_runtime_upgrades_list_tool(),
             iroha_gov_protected_namespaces_list_tool(),
             iroha_gov_unlocks_stats_tool(),
-            iroha_gov_council_current_tool(),
             iroha_gov_citizens_count_tool(),
             iroha_nfts_chain_list_tool(),
             iroha_rwas_chain_list_tool(),

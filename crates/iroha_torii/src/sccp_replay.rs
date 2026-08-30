@@ -1608,7 +1608,7 @@ mod tests {
             });
             let config = ToriiSccpReplayArchive {
                 state_dir: canonical_root.join("sccp-replay"),
-                replicas,
+                replicas: replicas.clone(),
                 max_response_bytes: 1024 * 1024,
                 max_snapshot_bytes: 512 * 1024,
                 max_snapshot_leaves: 1024,

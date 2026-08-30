@@ -128,8 +128,19 @@ from iroha_torii_client.client_status_models import (
 )
 from iroha_torii_client.governance_proposals import (
     GovernanceCanonicalObject,
+    GovernanceContractLifecycleAction,
+    GovernanceContractLifecycleActionKind,
+    GovernanceContractLifecycleActionPayload,
+    GovernanceContractLifecycleActivate,
+    GovernanceContractLifecycleDeactivate,
+    GovernanceContractLifecycleEmergencyHoldRetrospective,
+    GovernanceContractLifecycleOfferOwnership,
+    GovernanceGlobalDataTriggerPermissionAction,
     GovernanceManifestProvenance,
     GovernanceMusubiActionKind,
+    GovernanceProposalContractEmergencyHold,
+    GovernanceProposalContractLifecycleGovernance,
+    GovernanceProposalGlobalDataTriggerPermissionGovernance,
     GovernanceProposalDeployContract,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
@@ -4801,7 +4812,11 @@ class ExplorerRwasPage:
 
 @dataclass(frozen=True)
 class IsoSubmissionRecord:
-    """Normalized ISO 20022 bridge status payload."""
+    """Normalized ISO record with immutable V2 participant and policy provenance.
+
+    Torii returns the record only to its original parties or to a separately
+    configured read-only ISO audit administrator.
+    """
 
     message_id: str
     status: str
@@ -5561,33 +5576,309 @@ class GovernanceTally:
 
 
 @dataclass(frozen=True)
+class GovernanceContractEmergencyHoldRecord:
+    """Retained bounded Parliament emergency-hold projection."""
+
+    incident_digest_hex: str
+    proposal_content_id_hex: str
+    governance_attempt_id_hex: str
+    reason: str
+    imposed_at_height: int
+    expires_at_height: int
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any], *, context: str
+    ) -> "GovernanceContractEmergencyHoldRecord":
+        expected = {
+            "incident_digest_hex",
+            "proposal_content_id_hex",
+            "governance_attempt_id_hex",
+            "reason",
+            "imposed_at_height",
+            "expires_at_height",
+        }
+        if set(payload) != expected:
+            raise TypeError(f"{context} must contain exactly the first-release hold fields")
+
+        def hash_field(name: str) -> str:
+            value = payload.get(name)
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise TypeError(f"{context}.{name} must be exact lowercase 32-byte hex")
+            return value
+
+        imposed = _normalize_positive_int(
+            payload.get("imposed_at_height"), f"{context}.imposed_at_height"
+        )
+        expires = _normalize_positive_int(
+            payload.get("expires_at_height"), f"{context}.expires_at_height"
+        )
+        if expires <= imposed:
+            raise ValueError(f"{context}.expires_at_height must follow imposed_at_height")
+        return cls(
+            incident_digest_hex=hash_field("incident_digest_hex"),
+            proposal_content_id_hex=hash_field("proposal_content_id_hex"),
+            governance_attempt_id_hex=hash_field("governance_attempt_id_hex"),
+            reason=_require_exact_non_empty_string(payload.get("reason"), f"{context}.reason"),
+            imposed_at_height=imposed,
+            expires_at_height=expires,
+        )
+
+
+@dataclass(frozen=True)
+class GovernanceContractLifecycleRecord:
+    """Complete retained ownership and lifecycle projection for one contract."""
+
+    version: int
+    origin: str
+    origin_account: str
+    origin_proposal_content_id_hex: Optional[str]
+    origin_governance_attempt_id_hex: Optional[str]
+    owner: str
+    pending_owner: Optional[str]
+    parliament_delegated: bool
+    active_code_hash_hex: Optional[str]
+    revision: int
+    emergency_hold: Optional[GovernanceContractEmergencyHoldRecord]
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any], *, context: str
+    ) -> "GovernanceContractLifecycleRecord":
+        expected = {
+            "version",
+            "origin",
+            "origin_account",
+            "origin_proposal_content_id_hex",
+            "origin_governance_attempt_id_hex",
+            "owner",
+            "pending_owner",
+            "parliament_delegated",
+            "active_code_hash_hex",
+            "revision",
+            "emergency_hold",
+        }
+        if set(payload) != expected:
+            raise TypeError(f"{context} must contain exactly the first-release lifecycle fields")
+        version = _normalize_positive_int(payload.get("version"), f"{context}.version")
+        if version != 1:
+            raise ValueError(f"{context}.version must be exactly 1")
+
+        def optional_hash(name: str) -> Optional[str]:
+            value = payload.get(name)
+            if value is None:
+                return None
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise TypeError(f"{context}.{name} must be exact lowercase 32-byte hex or null")
+            return value
+
+        origin = _require_exact_non_empty_string(payload.get("origin"), f"{context}.origin")
+        if origin not in {"direct", "parliament"}:
+            raise ValueError(f"{context}.origin must be direct or parliament")
+        revision = _normalize_positive_int(payload.get("revision"), f"{context}.revision")
+        parliament_delegated = payload.get("parliament_delegated")
+        if not isinstance(parliament_delegated, bool):
+            raise TypeError(f"{context}.parliament_delegated must be a boolean")
+        pending_owner = payload.get("pending_owner")
+        if pending_owner is not None:
+            pending_owner = _require_exact_non_empty_string(
+                pending_owner, f"{context}.pending_owner"
+            )
+        hold_value = payload.get("emergency_hold")
+        if hold_value is not None and not isinstance(hold_value, Mapping):
+            raise TypeError(f"{context}.emergency_hold must be an object or null")
+        origin_proposal_content_id_hex = optional_hash("origin_proposal_content_id_hex")
+        origin_governance_attempt_id_hex = optional_hash(
+            "origin_governance_attempt_id_hex"
+        )
+        if origin == "direct" and (
+            origin_proposal_content_id_hex is not None
+            or origin_governance_attempt_id_hex is not None
+        ):
+            raise ValueError(f"{context} direct origin must not carry Parliament identifiers")
+        if origin == "parliament" and (
+            origin_proposal_content_id_hex is None
+            or origin_governance_attempt_id_hex is None
+        ):
+            raise ValueError(
+                f"{context} Parliament origin requires both governance identifiers"
+            )
+
+        def owner(field: str) -> str:
+            value = payload.get(field)
+            if value == "parliament":
+                return "parliament"
+            return _normalize_exact_any_i105_account_id(value, f"{context}.{field}")
+
+        return cls(
+            version=version,
+            origin=origin,
+            origin_account=_normalize_exact_any_i105_account_id(
+                payload.get("origin_account"), f"{context}.origin_account"
+            ),
+            origin_proposal_content_id_hex=origin_proposal_content_id_hex,
+            origin_governance_attempt_id_hex=origin_governance_attempt_id_hex,
+            owner=owner("owner"),
+            pending_owner=None if pending_owner is None else owner("pending_owner"),
+            parliament_delegated=parliament_delegated,
+            active_code_hash_hex=optional_hash("active_code_hash_hex"),
+            revision=revision,
+            emergency_hold=(
+                GovernanceContractEmergencyHoldRecord.from_payload(
+                    hold_value, context=f"{context}.emergency_hold"
+                )
+                if hold_value is not None
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class GovernanceContractRecord:
     """Governance binding returned by `GET /v1/gov/contracts/{contract_address}`."""
 
     found: bool
     contract_address: str
+    contract_subject_account: Optional[str]
     dataspace: Optional[str]
+    active: Optional[bool]
+    lifecycle: Optional[GovernanceContractLifecycleRecord]
+    emergency_hold_active: Optional[bool]
     code_hash_hex: Optional[str]
+    abi_hash_hex: Optional[str]
+    public_entrypoints: Optional[Tuple[str, ...]]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceContractRecord":
         if not isinstance(payload, Mapping):
             raise TypeError("governance contract payload must be an object")
-        found = bool(payload.get("found", False))
+        allowed = {
+            "found",
+            "contract_address",
+            "contract_subject_account",
+            "dataspace",
+            "active",
+            "lifecycle",
+            "emergency_hold_active",
+            "code_hash_hex",
+            "abi_hash_hex",
+            "public_entrypoints",
+        }
+        if not {"found", "contract_address"}.issubset(payload) or set(payload) - allowed:
+            raise TypeError("governance contract payload has an incompatible first-release shape")
+        found = payload.get("found")
+        if not isinstance(found, bool):
+            raise TypeError("governance contract payload `found` must be a boolean")
         contract_address = payload.get("contract_address")
         if not isinstance(contract_address, str):
             raise TypeError("governance contract payload missing string `contract_address` field")
-        dataspace = payload.get("dataspace")
-        if dataspace is not None and not isinstance(dataspace, str):
-            raise TypeError("governance contract payload `dataspace` must be a string or null")
-        code_hash_hex = payload.get("code_hash_hex")
-        if code_hash_hex is not None and not isinstance(code_hash_hex, str):
-            raise TypeError("governance contract payload `code_hash_hex` must be a string or null")
+        active = payload.get("active")
+        if found and not isinstance(active, bool):
+            raise TypeError("governance contract payload `active` must be a boolean or null")
+        expected_fields = (
+            allowed
+            if active is True
+            else {
+                "found",
+                "contract_address",
+                "contract_subject_account",
+                "dataspace",
+                "active",
+                "lifecycle",
+                "emergency_hold_active",
+            }
+            if found
+            else {"found", "contract_address", "dataspace"}
+        )
+        if set(payload) != expected_fields:
+            raise TypeError("governance contract payload has an incompatible first-release shape")
+        contract_address = _require_exact_non_empty_string(
+            contract_address, "governance contract payload.contract_address"
+        )
+        dataspace = _require_exact_non_empty_string(
+            payload.get("dataspace"), "governance contract payload.dataspace"
+        )
+        subject = (
+            _normalize_exact_any_i105_account_id(
+                payload.get("contract_subject_account"),
+                "governance contract payload.contract_subject_account",
+            )
+            if found
+            else None
+        )
+        hold_active = payload.get("emergency_hold_active")
+        if found and not isinstance(hold_active, bool):
+            raise TypeError("governance contract payload hold state must be a boolean or null")
+        lifecycle_value = payload.get("lifecycle")
+        if lifecycle_value is not None and not isinstance(lifecycle_value, Mapping):
+            raise TypeError("governance contract payload `lifecycle` must be an object or null")
+
+        def optional_hash(name: str) -> Optional[str]:
+            value = payload.get(name)
+            if value is None:
+                return None
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise TypeError(f"governance contract payload `{name}` must be exact lowercase 32-byte hex")
+            return value
+
+        lifecycle = (
+            GovernanceContractLifecycleRecord.from_payload(
+                lifecycle_value, context="governance contract payload.lifecycle"
+            )
+            if lifecycle_value is not None
+            else None
+        )
+        code_hash_hex = optional_hash("code_hash_hex")
+        abi_hash_hex = optional_hash("abi_hash_hex")
+        entrypoints_value = payload.get("public_entrypoints")
+        if entrypoints_value is None:
+            public_entrypoints = None
+        elif isinstance(entrypoints_value, list):
+            public_entrypoints = tuple(
+                _require_exact_non_empty_string(
+                    entrypoint, f"governance contract payload.public_entrypoints[{index}]"
+                )
+                for index, entrypoint in enumerate(entrypoints_value)
+            )
+            if not public_entrypoints:
+                raise TypeError("governance contract payload.public_entrypoints must not be empty")
+            for index, entrypoint in enumerate(public_entrypoints):
+                if re.fullmatch(r"[a-z][a-z0-9_]{0,127}", entrypoint) is None:
+                    raise TypeError(
+                        "governance contract payload.public_entrypoints"
+                        f"[{index}] must be a canonical public entrypoint name"
+                    )
+            if public_entrypoints != tuple(sorted(set(public_entrypoints))):
+                raise TypeError(
+                    "governance contract payload.public_entrypoints must be sorted and unique"
+                )
+        else:
+            raise TypeError("governance contract payload `public_entrypoints` must be an array or null")
+        if found:
+            if subject is None or dataspace is None or active is None or lifecycle is None or hold_active is None:
+                raise TypeError("found governance contract payload must contain lifecycle identity and status")
+            if active:
+                if code_hash_hex is None or abi_hash_hex is None or public_entrypoints is None:
+                    raise TypeError("active governance contract payload must contain artifact fields")
+                if lifecycle.active_code_hash_hex != code_hash_hex:
+                    raise ValueError("governance lifecycle active code hash must match code_hash_hex")
+            elif lifecycle.active_code_hash_hex is not None:
+                raise TypeError(
+                    "inactive governance lifecycle must not carry an active code hash"
+                )
+            if hold_active and lifecycle.emergency_hold is None:
+                raise TypeError("active emergency-hold state requires a retained hold record")
         return cls(
             found=found,
             contract_address=contract_address,
+            contract_subject_account=subject,
             dataspace=dataspace,
+            active=active,
+            lifecycle=lifecycle,
+            emergency_hold_active=hold_active,
             code_hash_hex=code_hash_hex,
+            abi_hash_hex=abi_hash_hex,
+            public_entrypoints=public_entrypoints,
         )
 
 
@@ -13024,9 +13315,23 @@ __all__ = [
     "RuntimeInstruction",
     "RuntimeUpgradeActionResponse",
     "GovernanceCanonicalObject",
+    "GovernanceContractEmergencyHoldRecord",
+    "GovernanceContractLifecycleRecord",
+    "GovernanceContractRecord",
+    "GovernanceContractLifecycleAction",
+    "GovernanceContractLifecycleActionKind",
+    "GovernanceContractLifecycleActionPayload",
+    "GovernanceContractLifecycleActivate",
+    "GovernanceContractLifecycleDeactivate",
+    "GovernanceContractLifecycleEmergencyHoldRetrospective",
+    "GovernanceContractLifecycleOfferOwnership",
+    "GovernanceGlobalDataTriggerPermissionAction",
     "GovernanceManifestProvenance",
     "GovernanceMusubiActionKind",
     "GovernanceProposalDeployContract",
+    "GovernanceProposalContractEmergencyHold",
+    "GovernanceProposalContractLifecycleGovernance",
+    "GovernanceProposalGlobalDataTriggerPermissionGovernance",
     "GovernanceProposalKind",
     "GovernanceProposalKindTag",
     "GovernanceProposalMusubiRegistryGovernance",
@@ -22091,19 +22396,6 @@ class ToriiClient(
             "/v1/gov/protected-namespaces",
             canonical_auth=canonical_auth,
             context="protected namespaces",
-            expected_status=(200,),
-        )
-
-    def get_governance_council_current(
-        self, *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> Optional[Any]:
-        """GET `/v1/gov/council/current`."""
-
-        return self._account_request_json(
-            "GET",
-            "/v1/gov/council/current",
-            canonical_auth=canonical_auth,
-            context="governance council current",
             expected_status=(200,),
         )
 

@@ -50,8 +50,8 @@ release qualified.
    optional Parliament pulse or mandatory NPoS pulse produced from the parent
    state is verified against the key session active at its own height, not the
    successor pointer visible after the block's transactions execute. The
-   retired consensus VRF commit/reveal protocol and independent epoch-council
-   records are neither entropy sources nor fallbacks.
+   retired consensus VRF commit/reveal protocol and restored compatibility
+   roster records are neither entropy sources nor fallbacks.
 4. The future pulse deterministically ranks primaries and alternates. Candidates
    accept or decline their own invitations under their transaction authority;
    `BeginInvitationAcceptance` is permissionless and carries only the election
@@ -70,7 +70,7 @@ release qualified.
    authenticated absence makes the immutable original-seat public-finding
    quorum mathematically unreachable, Core sets that body to `NoResult` and
    rejects the governance attempt.
-   The independent epoch-council read is not a roster source or fallback.
+   No public compatibility-roster read exists.
    Every member of a frozen candidate snapshot retains its citizenship bond
    while its election is `AwaitingPulse`, `Drawing`, or
    `AcceptingInvitations`. `NoRoster` and superseded elections release unseated
@@ -132,22 +132,24 @@ release qualified.
    the ordered registration corpus, survivor subset, and roots from those
    accepted records; a manager cannot submit replacement registration corpora
    or survivor subsets. The survivor set is immutable before ballots are
-   accepted. The complete survivor-ordered masked-ballot batch remains a
-   manager-authorized freeze payload because verifying as many as 1,000
-   attacker-controlled one-hot proofs is not a permissionless checkpoint. Core
-   performs that authorization before cryptographic work, then requires one
-   proof-valid record for every frozen survivor, so the manager cannot forge,
-   omit, reorder, or alter one member's ballot. Payload-minimal close, survivor
-   freeze, release, failure, and finalization triggers remain permissionless.
-   Before close or freeze replays a registration or ballot corpus, Core checks
+   accepted. `FreezeTimedOvnCorpus` is a permissionless exact-next append. Core
+   derives the committed survivor offset and checks the active ballot, exact
+   phase and containing-height window, body and predecessor bindings, nonempty
+   chunk width, canonical record widths, capacity, and every one-hot proof
+   before advancing the replay-checkable prefix. A relayer therefore cannot
+   forge, omit, overlap, reorder, or alter one member's ballot, and only the
+   terminal prefix seals the complete survivor-ordered corpus. Payload-minimal
+   close, survivor freeze, release, failure, and finalization triggers remain
+   permissionless.
+   Before registration close, survivor freeze, or a corpus append, Core checks
    the reducer-owned active ballot, exact phase, body binding, predecessor
    checkpoint, and containing height using only bounded scalar state. Wrong-
    height and replayed checkpoint traffic therefore fails before proof work;
-   an exact-height transition still performs the complete replay. Aggregate
-   finalization similarly verifies the fixed-size public TLE/session/release
-   binding and final threshold signature before either corpus is replayed, then
-   retains the full replay and second signature verification before mutation.
-   Core replays the public aggregate transcript and persists no secret shares or
+   an exact-height append still verifies every new record. Aggregate
+   finalization first verifies the fixed-size public TLE/session/release binding
+   and final threshold signature, then verifies the committed public aggregate
+   transcript before mutation. Snapshot restore replays the complete raw
+   evidence instead of trusting the cache. Core persists no secret shares or
    individual openings. A finalized release pulse and verified threshold-BLS
    signature open only the aggregate Aye/Nay/Abstain tally.
 8. If a phase deadline is missed, Core derives the eligible `NoResult` reason
@@ -232,6 +234,14 @@ Michalas's July 2026 SACMAT construction obtains coercion resistance through a
 specific anamorphic-encryption voting design. Timed OVN neither implements nor
 analyzes that construction, so its publication does not support a coercion-
 resistance claim for Parliament.
+The August 2026 `somewhat deniable voting` construction instead assumes a
+trusted teller and deliberately trades away part of individual verifiability
+to obtain its stated deniability boundary. The 2026 journal version of Yin et
+al.'s scalable blockchain construction likewise proves its claims for a
+different dummy-voting and liquid-democracy protocol. Timed OVN implements
+neither construction nor threat model, so those publications strengthen the
+requirement for a protocol-specific proof rather than extending their claims to
+Parliament.
 
 “Aggregate-only” is not “winner-only” and does not make participation
 unlinkable. V1 publishes the exact Aye/Nay/Abstain counts and the accepted
@@ -352,7 +362,7 @@ separately specified, reviewed, consensus-enacted protocol revision and new
 fixtures; current lattice DKG/beacon proposals are research inputs, not
 standards or drop-in implementations.
 
-Research boundary reviewed through 2026-08-29:
+Research boundary reviewed through 2026-08-30:
 
 - Das and Ren, [*Adaptively Secure BLS Threshold Signatures from DDH and
   co-CDH*](https://eprint.iacr.org/2023/1553).
@@ -363,6 +373,16 @@ Research boundary reviewed through 2026-08-29:
 - Michalas, [*Coercion-Resistant Voting via Anamorphic
   Encryption*](https://doi.org/10.1145/3750555.3811888), ACM SACMAT 2026,
   published 8 July 2026.
+- Jia, Shi, Ye, Huang, and Peng, [*Somewhat Deniable Voting:
+  Coercion-Resistant Electronic Voting Scheme with Privacy Preservation
+  Property*](https://doi.org/10.32604/cmc.2026.084123), *Computers, Materials
+  & Continua* 89(1), published 13 August 2026. Its trusted-teller and reduced
+  individual-verifiability boundary is not the Timed OVN threat model.
+- Yin, Zhang, Nastenko, Oliynykov, and Ren, [*A Scalable Coercion-Resistant
+  Voting Scheme for Blockchain Decision-Making*](https://doi.org/10.1109/TDSC.2026.3651473),
+  *IEEE Transactions on Dependable and Secure Computing*, 2026. Its
+  construction and proof do not apply to Timed OVN without implementing and
+  analyzing that protocol.
 - IRTF, [RFC 9380: Hashing to Elliptic
   Curves](https://www.rfc-editor.org/rfc/rfc9380).
 - CFRG, [*BLS Signatures*, draft-irtf-cfrg-bls-signature-07
@@ -429,7 +449,7 @@ Research boundary reviewed through 2026-08-29:
   Practices*, CSWP
   39upd1](https://doi.org/10.6028/NIST.CSWP.39-upd1), 29 June 2026.
 
-As of 29 August 2026, the NIST Threshold Call remains in its three-round
+As of 30 August 2026, the NIST Threshold Call remains in its three-round
 preview phase; package submissions are expected in November 2026. The BBDL
 tBLS document above is a preview writeup, not a completed package, NIST
 standard, or approval of Parliament's construction.

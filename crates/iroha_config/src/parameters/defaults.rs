@@ -1018,8 +1018,8 @@ pub mod streaming {
     pub const FEATURE_BITS: u32 = 0b11 | CapabilityFlags::FEATURE_ENTROPY_BUNDLED;
     /// Defaults applied to the streaming audio/video sync enforcement gate.
     pub mod sync {
-        /// Enable sync enforcement gate (disabled by default until rollout).
-        pub const ENABLED: bool = false;
+        /// Enable sync enforcement in observe-only mode by default.
+        pub const ENABLED: bool = true;
         /// Observe-only mode keeps logging metrics without rejecting segments.
         pub const OBSERVE_ONLY: bool = true;
         /// Minimum rolling window (milliseconds) required before enforcement.
@@ -2533,10 +2533,10 @@ pub mod torii {
     pub fn internal_api_trusted_cidrs() -> Vec<String> {
         vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
     }
-    /// Enable app-facing webhook routes and workers. Disabled by default.
-    pub const WEBHOOKS_ENABLED: bool = false;
-    /// Enable app-facing ZK attachment routes and workers. Disabled by default.
-    pub const ZK_ATTACHMENTS_ENABLED: bool = false;
+    /// Enable app-facing webhook routes and workers.
+    pub const WEBHOOKS_ENABLED: bool = true;
+    /// Enable app-facing ZK attachment routes and workers.
+    pub const ZK_ATTACHMENTS_ENABLED: bool = true;
     /// Default TTL for app API ZK attachments (seconds)
     pub const ATTACHMENTS_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
     /// Default maximum size per ZK attachment (bytes)
@@ -2571,8 +2571,8 @@ pub mod torii {
     pub const ATTACHMENTS_SANITIZE_TIMEOUT_MS: u64 = 1_000;
     /// Attachment sanitizer execution mode (`subprocess` or `in_process`).
     pub const ATTACHMENTS_SANITIZER_MODE: &str = "subprocess";
-    /// Background ZK prover worker enable flag (disabled by default)
-    pub const ZK_PROVER_ENABLED: bool = false;
+    /// Background ZK prover worker enable flag.
+    pub const ZK_PROVER_ENABLED: bool = true;
     /// Background ZK prover scan period (seconds)
     pub const ZK_PROVER_SCAN_PERIOD_SECS: u64 = 30;
     /// Background ZK prover reports retention TTL (seconds)
@@ -2791,7 +2791,7 @@ pub mod torii {
                 vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
             }
             /// Default rollout stage label for Norito-RPC.
-            pub const STAGE: &str = "disabled";
+            pub const STAGE: &str = "ga";
             /// Default allowlist of clients permitted to use Norito-RPC (empty = unrestricted).
             #[must_use]
             pub fn allowed_clients() -> Vec<String> {
@@ -2801,8 +2801,8 @@ pub mod torii {
     }
     /// MCP endpoint defaults surfaced via `torii.mcp`.
     pub mod mcp {
-        /// Enable native Torii MCP server.
-        pub const ENABLED: bool = false;
+        /// Enable the bounded read-only native Torii MCP server.
+        pub const ENABLED: bool = true;
         /// Maximum accepted MCP request payload size (bytes).
         pub const MAX_REQUEST_BYTES: usize = 1_048_576; // 1 MiB
         /// Maximum number of tools returned per `tools/list` response page.
@@ -3783,7 +3783,7 @@ pub mod zk {
     /// Halo2 verifier configuration for host-side proof checking.
     pub mod halo2 {
         /// Feature toggle for Halo2 verification in hosts.
-        pub const ENABLED: bool = false;
+        pub const ENABLED: bool = true;
         /// Default curve identifier used for Halo2 verification.
         pub const CURVE: &str = "pallas";
         /// Backend implementation identifier (e.g., IPA).
@@ -3819,9 +3819,8 @@ pub mod zk {
     pub mod stark {
         /// Runtime toggle for STARK verification in hosts.
         ///
-        /// Acceptance still requires binaries built with `zk-stark`; this default
-        /// remains `false` so operators must explicitly opt in at runtime.
-        pub const ENABLED: bool = false;
+        /// Acceptance still requires binaries built with `zk-stark`.
+        pub const ENABLED: bool = true;
         /// Maximum accepted outer STARK OpenVerifyEnvelope length (bytes).
         pub const MAX_ENVELOPE_BYTES: usize = 1024 * 1024; // 1 MiB
         /// Maximum accepted proof payload length (bytes).
@@ -4140,6 +4139,8 @@ pub mod sumeragi {
 /// Governance defaults (voting & parliament).
 pub mod governance {
     use super::*;
+    /// Enable standalone plain-ballot governance alongside ZK voting.
+    pub const PLAIN_VOTING_ENABLED: bool = true;
     /// Default public key used for governance escrow account derivation.
     pub const BOND_ESCROW_PUBLIC_KEY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -4232,22 +4233,8 @@ pub mod governance {
             .map(str::to_string)
             .collect()
     }
-    /// Default sortition council committee size.
-    pub const PARLIAMENT_COMMITTEE_SIZE: usize = 21;
-    /// Default term length for the council (blocks). ~12h at 1s blocks.
-    pub const PARLIAMENT_TERM_BLOCKS: u64 = 43_200;
-    /// Minimum stake required to qualify for council selection.
-    pub fn parliament_min_stake() -> Quantity {
-        Quantity::from(1_u64)
-    }
-    /// Default stake asset definition used for council eligibility.
-    pub fn parliament_eligibility_asset_id() -> String {
-        super::canonical_asset_definition_literal("stake.universal", "SORA")
-    }
-    /// Default alternates drawn per parliament term (None = committee size).
-    pub const PARLIAMENT_ALTERNATE_SIZE: Option<usize> = None;
-    /// Default council quorum requirement expressed in basis points (ceil-divided).
-    pub const PARLIAMENT_QUORUM_BPS: u16 = 6_667;
+    /// Default alternates retained for each attempt-local Parliament body draw.
+    pub const PARLIAMENT_ALTERNATE_SIZE: usize = 21;
     /// Exact number of blocks between a Parliament sortition request and its beacon pulse.
     pub const PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS: u64 = 4;
     /// Consensus block-height span during which selected primaries and alternates may respond.
@@ -4492,8 +4479,8 @@ pub mod governance {
 /// Confidential asset/verifier defaults.
 pub mod confidential {
     use super::*;
-    /// Confidential features disabled by default.
-    pub const ENABLED: bool = false;
+    /// Enable confidential verification; validators require this capability.
+    pub const ENABLED: bool = true;
     /// Observer-only assume-valid disabled by default.
     pub const ASSUME_VALID: bool = false;
     /// Default verifier backend identifier.

@@ -10,9 +10,12 @@ pub mod availability;
 pub(crate) mod carrier;
 /// Committee verification and durable Prepare staging.
 pub(crate) mod committee;
-// TODO: Compile the coordinator in production once the global coordinator
-// runtime owns this deterministic projection; today only its model tests use it.
-/// Bundle-level all-Prepare/all-Commit phase barriers.
+/// Test-only reference projection for bundle-level phase ordering.
+///
+/// Production coordination belongs to the neutral sponsor and is implemented
+/// by `iroha::client::private_settlement`; participant nodes independently
+/// validate the complete barrier and the global carrier. Keeping this model
+/// test-only avoids creating a second node-owned coordinator path.
 #[cfg(test)]
 pub(crate) mod coordinator;
 /// Globally replicated roots, replay items, outputs, and receipts.
@@ -63,5 +66,5 @@ pub use sidecar_store::{
     PrivateSettlementReconciliationOutcomeV1, PrivateSettlementReconciliationPageV1,
     PrivateSettlementRestrictedSidecarV1, PrivateSettlementSidecarLifecycleV1,
     PrivateSettlementSidecarStoreConfigV1, PrivateSettlementSidecarStoreErrorV1,
-    PrivateSettlementSidecarStoreOutcomeV1,
+    PrivateSettlementSidecarStoreOutcomeV1, PrivateSettlementSponsorPhaseCertificatesV1,
 };

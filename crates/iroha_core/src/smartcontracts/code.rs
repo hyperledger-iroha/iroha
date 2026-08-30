@@ -570,8 +570,9 @@ pub struct ContractCodeRecord {
 }
 /// Register a smart contract manifest on-chain via the canonical ISI.
 ///
-/// The authority must hold `CanRegisterSmartContractCode`. Networks can add
-/// `CanEnactGovernance` for specific namespaces via `gov_protected_namespaces`.
+/// The authority must hold `CanRegisterSmartContractCode`. This permission only
+/// registers an artifact; it cannot create a contract address. Namespaces listed
+/// in `gov_protected_namespaces` remain deployable only through Parliament.
 /// The manifest must include `code_hash` and `abi_hash`, and the corresponding
 /// bytecode must already be stored as a verified self-describing artifact.
 ///
@@ -753,9 +754,12 @@ pub fn borrow_bound_contract_subject_from_world<'a>(
     world: &'a impl WorldReadOnly,
     contract_address: &ContractAddress,
 ) -> Option<&'a AccountId> {
-    world.contract_instances().get(contract_address)?;
+    let code_hash = world.contract_instances().get(contract_address)?;
     let binding = world.contract_subject_bindings().get(contract_address)?;
     binding.validate_for(contract_address).ok()?;
+    if binding.lifecycle.active_code_hash.as_ref() != Some(code_hash) {
+        return None;
+    }
     Some(&binding.subject)
 }
 /// Resolve a bound instance without cloning its manifest or bytecode.
@@ -1092,16 +1096,12 @@ mod tests {
         assert_eq!(borrowed.0, stored_ptr, "borrow helper must not clone bytes");
     }
     #[test]
-    fn protected_contract_activation_succeeds_with_governance_permission() {
+    fn protected_contract_activation_uses_existing_owner_lifecycle() {
         let (state, authority, kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
-        // Grant only the governance/parameter permissions needed to protect a namespace.
-        let enact: permission::Permission =
-            iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
-        Grant::account_permission(enact, authority.clone())
-            .execute(&authority, &mut stx)
-            .expect("grant CanEnactGovernance");
+        // Namespace protection applies to address deployment. Once Parliament has
+        // established a lifecycle binding, its owner may perform revision-CAS activation.
         let set_params: permission::Permission = CanSetParameters.into();
         Grant::account_permission(set_params, authority.clone())
             .execute(&authority, &mut stx)
@@ -1269,37 +1269,6 @@ seiyaku LifecycleTwo {
             .expect("register v2 bytecode");
         register_manifest(&authority, v2_manifest.signed(&keypair), &mut transaction)
             .expect("register v2 manifest");
-        let unauthorized_kaizen = activate_instance(
-            &authority,
-            contract_address.clone(),
-            2,
-            v2_hash,
-            &mut transaction,
-        )
-        .expect_err("in-place replacement requires governance authorization");
-        assert!(
-            unauthorized_kaizen
-                .to_string()
-                .contains("CanEnactGovernance")
-        );
-        assert_eq!(
-            transaction
-                .world
-                .contract_instances
-                .get(&contract_address)
-                .copied(),
-            Some(v1_hash),
-            "rejected kaizen must preserve the old binding"
-        );
-        Grant::account_permission(
-            iroha_data_model::permission::Permission::new(
-                "CanEnactGovernance".to_owned(),
-                Json::new(()),
-            ),
-            authority.clone(),
-        )
-        .execute(&authority, &mut transaction)
-        .expect("grant in-place kaizen governance permission");
         activate_instance(
             &authority,
             contract_address.clone(),
@@ -1307,7 +1276,7 @@ seiyaku LifecycleTwo {
             v2_hash,
             &mut transaction,
         )
-        .expect("replace the active binding");
+        .expect("the lifecycle owner may replace the active binding");
         let kaizen = pending_contract_lifecycle(&transaction.world, &contract_address)
             .expect("valid lifecycle state")
             .expect("replacement staged kaizen");
@@ -1764,6 +1733,10 @@ seiyaku LifecycleAba {
         let error = fetch_contract_lifecycle(&world_view, &address)
             .expect_err("active-index drift must fail closed");
         assert!(error.contains("does not match the active-instance index"));
+        assert!(
+            borrow_bound_contract_subject_from_world(&world_view, &address).is_none(),
+            "active execution identity must fail closed on lifecycle/index drift"
+        );
     }
     #[test]
     fn subject_binding_initialization_rejects_mismatched_existing_binding() {

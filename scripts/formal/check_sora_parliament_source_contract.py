@@ -411,7 +411,7 @@ def main() -> int:
         reducer_path,
         redraw_lineage,
         (
-            "attempts.sort_unstable_by_key(|attempt| attempt.attempt.sequence)",
+            "attempts.sort_unstable_by_key(|attempt| attempt.borrow().attempt.sequence)",
             "attempt.randomness_redraws_before_attempt != expected_prefix",
             "attempt.randomness_redraws_before_attempt >= MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
             "expected_prefix = attempt.randomness_redraws_used_v1()?",

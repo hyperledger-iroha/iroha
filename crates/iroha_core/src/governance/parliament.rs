@@ -452,7 +452,8 @@ pub(crate) fn parliament_attempt_policy_v1(
         }
         ProposalKind::RuntimeUpgrade(_)
         | ProposalKind::MusubiRegistryGovernance(_)
-        | ProposalKind::SorafsProviderGovernance(_) => &[
+        | ProposalKind::SorafsProviderGovernance(_)
+        | ProposalKind::GlobalDataTriggerPermissionGovernance(_) => &[
             ParliamentBody::RulesCommittee,
             ParliamentBody::AgendaCouncil,
             ParliamentBody::InterestPanel,
@@ -1536,12 +1537,6 @@ impl ParliamentAttemptStateV1 {
         &self.attempt
     }
 
-    /// Return the proposal-wide redraw prefix frozen when this attempt began.
-    #[must_use]
-    pub(crate) const fn randomness_redraws_before_attempt(&self) -> u32 {
-        self.randomness_redraws_before_attempt
-    }
-
     fn sortition_generation_slots_v1(&self) -> BTreeSet<ParliamentPulseSlotV1> {
         self.elections
             .values()
@@ -2286,17 +2281,23 @@ impl ParliamentAttemptStateV1 {
 /// Returns an error when the first attempt does not start at zero, a successor
 /// does not inherit its predecessor's exact terminal count, proposals are
 /// mixed, or any attempt exceeds the V1 cumulative ceiling.
-pub(crate) fn validate_parliament_randomness_redraw_lineage_v1<'a>(
-    attempts: impl IntoIterator<Item = &'a ParliamentAttemptStateV1>,
-) -> Result<(), ParliamentReducerErrorV1> {
+pub(crate) fn validate_parliament_randomness_redraw_lineage_v1<I, A>(
+    attempts: I,
+) -> Result<(), ParliamentReducerErrorV1>
+where
+    I: IntoIterator<Item = A>,
+    A: core::borrow::Borrow<ParliamentAttemptStateV1>,
+{
     let mut attempts = attempts.into_iter().collect::<Vec<_>>();
-    attempts.sort_unstable_by_key(|attempt| attempt.attempt.sequence);
-    let Some(first) = attempts.first().copied() else {
+    attempts.sort_unstable_by_key(|attempt| attempt.borrow().attempt.sequence);
+    let Some(first) = attempts.first() else {
         return Ok(());
     };
+    let first = first.borrow();
     let proposal_content_id = first.proposal_content_id();
     let mut expected_prefix = 0;
     for attempt in attempts {
+        let attempt = attempt.borrow();
         if attempt.proposal_content_id() != proposal_content_id
             || attempt.randomness_redraws_before_attempt != expected_prefix
         {

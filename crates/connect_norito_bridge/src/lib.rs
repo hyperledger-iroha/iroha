@@ -36,9 +36,7 @@ use iroha_data_model::{
     isi::{
         InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
         decode_instruction_from_pair, framed_instruction_payload,
-        governance::{
-            CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
-        },
+        governance::{CastPlainBallot, CastZkBallot, ProposeDeployContract},
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
         transfer::Transfer,
@@ -252,7 +250,6 @@ const ERR_METADATA_KEY: c_int = -26;
 const ERR_METADATA_VALUE: c_int = -27;
 const ERR_GOVERNANCE: c_int = -28;
 const ERR_HEX: c_int = -29;
-const ERR_ACCOUNT_LIST: c_int = -30;
 const ERR_INVALID_NONCE: c_int = -31;
 const ERR_TRANSACTION_SIGN: c_int = -32;
 const ERR_SM2_SIGN: c_int = -33;
@@ -326,7 +323,6 @@ enum BridgeError {
     MetadataValue,
     Governance,
     Hex,
-    AccountList,
     MultisigSpec,
     IdentifierReceipt,
     VerifyingKeyId,
@@ -380,7 +376,6 @@ impl BridgeError {
             BridgeError::MetadataValue => ERR_METADATA_VALUE,
             BridgeError::Governance => ERR_GOVERNANCE,
             BridgeError::Hex => ERR_HEX,
-            BridgeError::AccountList => ERR_ACCOUNT_LIST,
             BridgeError::MultisigSpec => ERR_MULTISIG_SPEC,
             BridgeError::IdentifierReceipt => ERR_IDENTIFIER_RECEIPT,
             BridgeError::VerifyingKeyId => ERR_VERIFYING_KEY_ID,
@@ -1448,10 +1443,6 @@ fn zk_hint_present(map: &JsonMap, key: &str) -> bool {
     map.get(key)
         .map(|value| !matches!(value, JsonValue::Null))
         .unwrap_or(false)
-}
-fn parse_account_list(bytes: &[u8]) -> BridgeResult<Vec<AccountId>> {
-    let raw: Vec<String> = norito::json::from_slice(bytes).map_err(|_| BridgeError::AccountList)?;
-    raw.into_iter().map(parse_account_id).collect()
 }
 enum MetadataTarget {
     Domain(DomainId),
@@ -24075,57 +24066,6 @@ define_ed25519_signed_transaction_wrapper! {
         )?;
     }
 }
-define_ed25519_signed_transaction_wrapper! {
-    connect_norito_encode_governance_persist_council_signed_transaction =>
-        connect_norito_encode_governance_persist_council_signed_transaction_alg(
-            network_id_ptr: *const c_char,
-            network_id_len: c_ulong,
-            authority_ptr: *const c_char,
-            authority_len: c_ulong,
-            creation_time_ms: u64,
-            ttl_ms: u64,
-            ttl_present: c_uchar,
-            epoch: u64,
-            members_json_ptr: *const c_uchar,
-            members_json_len: c_ulong,
-            fee_payment_json_ptr: *const c_uchar,
-            fee_payment_json_len: c_ulong,
-            private_key_ptr: *const c_uchar,
-            private_key_len: c_ulong,
-        )
-    identifiers: (algorithm_code, signed_bytes, hash_bytes);
-    {
-        if private_key_ptr.is_null() || members_json_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let algorithm = parse_algorithm_code(algorithm_code)?;
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let members_slice =
-            unsafe { slice::from_raw_parts(members_json_ptr, members_json_len as usize) };
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let members = parse_account_list(members_slice)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
-        let persist = PersistCouncilForEpoch {
-            epoch,
-            members,
-            alternates: Vec::new(),
-        };
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(persist),
-        )?;
-    }
-}
 const SECP256K1_PRIVATE_LEN: usize = 32;
 const SECP256K1_PUBLIC_LEN: usize = 33;
 const SECP256K1_SIGNATURE_LEN: usize = 64;
@@ -24588,14 +24528,13 @@ mod accel_tests {
             "governance_propose_deploy_v1",
             "governance_cast_plain_ballot",
             "governance_cast_zk_ballot",
-            "governance_persist_council",
             "mint",
             "multisig_register",
             "burn",
             "claim_identifier",
         ];
         let macro_marker = ["define_ed25519_signed_", "transaction_wrapper!{"].concat();
-        assert_eq!(compact_source.matches(macro_marker.as_str()).count(), 12);
+        assert_eq!(compact_source.matches(macro_marker.as_str()).count(), 11);
         for family in families {
             let default = format!("connect_norito_encode_{family}_signed_transaction");
             let with_algorithm = format!("{default}_alg");

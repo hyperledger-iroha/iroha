@@ -66,6 +66,14 @@
       "expiry_height": 200,
       "lifecycle": {"status": "audited", "value": null}
     },
+    "phase_certificates": {
+      "bundle_id": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
+      "payload_digest": "hash:2222222222222222222222222222222222222222222222222222222222222223#F3BF",
+      "leg_ordinal": 0,
+      "lifecycle": {"status": "prepared", "value": null},
+      "prepare_certificate": {},
+      "commit_certificate": null
+    },
     "bundle_status_aborted": {
       "manifest": null,
       "lifecycle": {"status": "aborted", "value": null},

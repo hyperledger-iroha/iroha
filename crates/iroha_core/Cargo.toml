@@ -60,7 +60,16 @@ test-network-native-amx-fault-injection = ["json"]
 # default/node/release feature sets never include it.
 test-network-parliament-signers = []
 runtime = ["json", "bls", "proofs-halo2"]
-node = ["runtime", "proofs-stark"]
+node = [
+    "runtime",
+    "proofs-stark",
+    "app_api",
+    "gost",
+    "sm",
+    "telemetry",
+    "simd",
+    "zk-preverify",
+]
 proofs-halo2 = ["zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"]
 proofs-stark = ["zk-stark"]
 proofs-full = ["proofs-halo2", "proofs-stark"]
@@ -78,14 +87,26 @@ sm = [
     "iroha_crypto/sm",
     "iroha_data_model/sm",
 ]
+# Enable TC26 GOST algorithm family plumbing in dependent crates.
+gost = [
+    "iroha_config/gost",
+    "iroha_crypto/gost",
+    "iroha_data_model/gost",
+]
+# Optional OpenSSL/Tongsuo SM provider remains a separately qualified preview.
+sm-ffi-openssl = [
+    "sm",
+    "iroha_config/sm-ffi-openssl",
+    "iroha_crypto/sm-ffi-openssl",
+]
 # Enable app-facing convenience helpers (testing utilities shared with Torii).
 app_api = []
 # Support lightweight telemetry, including diagnostics
-telemetry = []
+telemetry = ["ivm/telemetry"]
 # Support Prometheus metrics. See https://prometheus.io/.
 expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
 # Enable portable SIMD acceleration for small-set helpers.
-simd = []
+simd = ["iroha_primitives/simd-accel"]
 profiling = []
 # Enable FASTPQ GPU helper paths used by the daemon feature of the same name.
 fastpq-gpu = ["fastpq_prover/fastpq-gpu"]

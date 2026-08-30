@@ -135,6 +135,11 @@ pub const PHASE_CERTIFICATE: RouteDescriptor = account_post(
     "private_settlement.phase.certificate",
     "/v1/nexus/private-settlements/phases/certificates",
 );
+/// Recover exact locally durable Prepare and Commit certificates as the sponsor.
+pub const PHASE_CERTIFICATES_GET: RouteDescriptor = account_get(
+    "private_settlement.phase.certificates_get",
+    "/v1/nexus/private-settlements/legs/{payload_digest}/phase-certificates",
+);
 /// Read redacted lifecycle information for an uploaded leg.
 pub const LEG_STATUS: RouteDescriptor = account_get(
     "private_settlement.leg.status",
@@ -177,6 +182,7 @@ pub const ROUTES: &[RouteDescriptor] = &[
     PREPARE_VOTE,
     COMMIT_VOTE,
     PHASE_CERTIFICATE,
+    PHASE_CERTIFICATES_GET,
     LEG_UPLOAD,
     LEG_STATUS,
     COMMITTEE_PROOF,
@@ -220,6 +226,7 @@ mod tests {
             PREPARE_VOTE,
             COMMIT_VOTE,
             PHASE_CERTIFICATE,
+            PHASE_CERTIFICATES_GET,
             LEG_UPLOAD,
             LEG_STATUS,
             BUNDLE_SUBMIT,

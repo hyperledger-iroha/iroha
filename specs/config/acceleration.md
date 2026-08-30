@@ -185,11 +185,11 @@ comparing CPU-only vs. accel-on runs.
 Norito’s layout and compression heuristics live in `crates/norito/src/core/heuristics.rs`
 and are compiled into every binary. They are not configurable at runtime; SDK and
 operator teams should treat the Norito profile as part of the release.
-The workspace now builds Norito with the `gpu-compression` feature enabled by default,
-so GPU zstd backends are compiled in; runtime availability still depends on hardware,
-the helper backend and the `allow_gpu_compression` config flag. On Apple Silicon
-workspace builds, `gpuzstd_metal` is a target dependency of `norito`, so it is built
-automatically as part of normal Cargo builds (no separate helper build step). On
+GPU zstd remains an explicit platform acceleration selected with Norito's
+`gpu-compression` feature; runtime availability also depends on hardware, the helper
+backend and the `allow_gpu_compression` config flag. On Apple Silicon builds that
+select the feature, `gpuzstd_metal` is a target dependency of `norito`, so it is built
+automatically as part of that Cargo build (no separate helper build step). On
 Unix/Windows non-macOS hosts, the workspace now also ships a dedicated
 `gpuzstd_cuda` helper crate, so `cargo build -p gpuzstd_cuda` produces
 `libgpuzstd_cuda.so` / `gpuzstd_cuda.dll` in-tree. Norito loads only the CUDA-named

@@ -416,7 +416,7 @@ fn parliament_test_governance(
     requirements: &[RequiredParliamentBodyV1],
 ) -> iroha_config::parameters::actual::Governance {
     let mut governance = iroha_config::parameters::actual::Governance {
-        parliament_alternate_size: Some(0),
+        parliament_alternate_size: 0,
         ..iroha_config::parameters::actual::Governance::default()
     };
     for requirement in requirements {
@@ -866,12 +866,16 @@ fn install_canonical_post_enactment_validation_fee_state(
         &mut state_transaction,
     )
     .expect("register signed payout-contract manifest");
+    let payout_contract_address_for_activation = payout_contract_address();
     state_transaction
         .world
-        .bind_inactive_contract_subject_for_testing(payout_contract_address(), authority.clone());
+        .bind_inactive_contract_subject_for_testing(
+            payout_contract_address_for_activation.clone(),
+            authority.clone(),
+        );
     iroha_core::smartcontracts::code::activate_instance(
         authority,
-        payout_contract_address(),
+        payout_contract_address_for_activation,
         1,
         registered_code_hash,
         &mut state_transaction,
@@ -891,12 +895,16 @@ fn install_canonical_post_enactment_validation_fee_state(
         &mut state_transaction,
     )
     .expect("register signed pool-contract manifest");
+    let pool_contract_address_for_activation = pool_contract_address();
     state_transaction
         .world
-        .bind_inactive_contract_subject_for_testing(pool_contract_address(), authority.clone());
+        .bind_inactive_contract_subject_for_testing(
+            pool_contract_address_for_activation.clone(),
+            authority.clone(),
+        );
     iroha_core::smartcontracts::code::activate_instance(
         authority,
-        pool_contract_address(),
+        pool_contract_address_for_activation,
         1,
         pool_code_hash,
         &mut state_transaction,

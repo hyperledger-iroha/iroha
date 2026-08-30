@@ -1105,7 +1105,7 @@ fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     let digest = der_public_digest_v1(&shape).expect("DER public digest");
     assert_eq!(
         hex::encode(digest.to_le_bytes()),
-        "b4837637f1bf0678fa78729a4fb2d9ae62da60c7768cf5bdf061abfe96a7443d"
+        "822b3ef0098867d3f3a071b51d462eb028c71bbb4bc6c1f20ac6aa109aeb0040083b2c261a330ce15aef34983dedea37"
     );
     let claims = ZkX509DerStarkTerminalClaimsV1 {
         input_byte: [F(3), F(5), F(7), F(11)],

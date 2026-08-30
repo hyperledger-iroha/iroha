@@ -1288,7 +1288,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             slash_double_vote_bps: 0,
             slash_invalid_proof_bps: 0,
             slash_ineligible_proof_bps: 0,
-            parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
             citizen_service: A::CitizenServiceDiscipline {
                 seat_cooldown_blocks: defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS,
                 max_seats_per_epoch: defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH,
@@ -1331,13 +1330,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             approval_threshold_q_num: 1,
             approval_threshold_q_den: 2,
             min_turnout: 0,
-            parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-            parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake: defaults::governance::parliament_min_stake(),
-            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
-            )
-            .parse()
-            .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_sortition_pulse_delay_blocks:
                 defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,

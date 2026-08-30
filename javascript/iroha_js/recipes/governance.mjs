@@ -5,7 +5,6 @@
  * Builds sample transactions for:
  *   1. Proposing a contract deployment
  *   2. Casting a plain ballot
- *   3. Persisting a council snapshot
  *
  * Every transaction is quoted before signing. By default the script only
  * prints the resulting hashes. Set
@@ -17,7 +16,6 @@ import { NetworkId, ToriiClient } from "../src/index.js";
 import {
   buildProposeDeployContractInstruction,
   buildCastPlainBallotInstruction,
-  buildPersistCouncilForEpochInstruction,
   hashSignedTransaction,
   quoteAndSignTransaction,
 } from "../src/index.js";
@@ -106,14 +104,6 @@ async function main() {
           amount: "2500",
           durationBlocks: 7200,
           direction: "aye",
-        }),
-    },
-    {
-      label: "PersistCouncilForEpoch",
-      buildInstruction: () =>
-        buildPersistCouncilForEpochInstruction({
-          epoch: 42,
-          members: [AUTHORITY],
         }),
     },
   ];

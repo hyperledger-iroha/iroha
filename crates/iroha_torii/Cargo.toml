@@ -26,19 +26,30 @@ default = ["node-api"]
 # excluded; tests can request `ws_integration_tests` explicitly.
 node-api = [
     "app_api",
+    "app_api_https",
     "transparent_api",
     "app_api_wss",
     "connect",
     "push",
+    "telemetry",
+    "schema",
     "circuit-params",
     "proofs-full",
     "ipa-commitment",
+    "zk-verify-batch",
+    "gost",
+    "sm",
 ]
 proofs-halo2 = ["zk-halo2", "zk-halo2-ipa"]
 proofs-stark = ["zk-stark"]
 proofs-full = ["proofs-halo2", "proofs-stark"]
 # Enables Telemetry (i.e. Status, Metrics, and API Version) endpoints
-telemetry = ["iroha_telemetry", "iroha_core/telemetry", "dep:prometheus"]
+telemetry = [
+    "iroha_telemetry",
+    "iroha_core/telemetry",
+    "iroha_futures/telemetry",
+    "dep:prometheus",
+]
 # Enables profiling endpoint
 profiling = ["pprof"]
 # Enables Data Model Schema endpoint
@@ -49,6 +60,21 @@ app_api = []
 zk-verify-batch = ["dep:iroha_zkp_halo2", "app_api"]
 # Forward `transparent_api` to data model so Torii can gate fields like authority/timestamp
 transparent_api = ["iroha_data_model/transparent_api"]
+# Enable TC26 GOST algorithm family plumbing in dependent crates.
+gost = [
+    "iroha_config/gost",
+    "iroha_core/gost",
+    "iroha_crypto/gost",
+    "iroha_data_model/gost",
+]
+# Enable portable SM support and advertise it through capability telemetry.
+sm = [
+    "iroha_config/sm",
+    "iroha_core/sm",
+    "iroha_crypto/sm",
+    "iroha_data_model/sm",
+    "iroha_telemetry?/sm",
+]
 ## WalletConnect-style WS + minimal in-node relay. Non-consensus.
 connect = []
 ## Enable HTTPS webhook delivery using reqwest + rustls native roots (client-only).

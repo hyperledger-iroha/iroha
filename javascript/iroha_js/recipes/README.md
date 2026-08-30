@@ -222,8 +222,8 @@ Environment variables:
 
 ## governance.mjs
 
-- Builds sample transactions for governance flows (propose deploy, cast a
-  standalone plain ballot, and persist a council snapshot) using the SDK builders.
+- Builds sample transactions for governance flows (propose deploy and cast a
+  standalone plain ballot) using the SDK builders.
 - Prints deterministic hashes for each transaction; optionally submits them to
   Torii when `GOV_SUBMIT=1`.
 - When `GOV_FETCH=1`, reuses the new `ToriiClient` governance helpers to fetch proposals, tallies,

@@ -43,7 +43,6 @@ import {
   buildProposeSccpRouteGovernanceTransaction,
   buildCastZkBallotTransaction,
   buildCastPlainBallotTransaction,
-  buildPersistCouncilForEpochTransaction,
   buildRegisterZkAssetTransaction,
   buildScheduleConfidentialPolicyTransitionTransaction,
   buildCancelConfidentialPolicyTransitionTransaction,
@@ -3310,34 +3309,6 @@ test("buildCastPlainBallotTransaction normalizes amount", () => {
       }),
   );
   assert.equal(captures[0].CastPlainBallot.direction, 0);
-});
-
-test("buildPersistCouncilForEpochTransaction wraps council", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x15]),
-    hash: Buffer.alloc(32, 0x15),
-  };
-  withNativeBinding(
-    {
-      buildTransaction: (_chain, authority, instructions) => {
-        captures.push(JSON.parse(instructions[0]));
-        return fakeResult;
-      },
-    },
-    () =>
-      buildPersistCouncilForEpochTransaction({
-        networkId: NETWORK_ID,
-        authority: AUTHORITY_ID_INPUT,
-        feePayment: AUTHORITY_FEE_PAYMENT,
-        record: {
-          epoch: 1,
-          members: [AUTHORITY_ID_INPUT],
-        },
-        privateKey: PRIVATE_KEY,
-      }),
-  );
-  assert.equal(captures[0].PersistCouncilForEpoch.members.length, 1);
 });
 
 test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () => {

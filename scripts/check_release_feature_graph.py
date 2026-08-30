@@ -30,7 +30,6 @@ def feature_graph(repo: Path, package: str) -> str:
             "normal,build,features",
             "--prefix",
             "none",
-            "--no-dedupe",
         ],
         cwd=repo,
         check=False,

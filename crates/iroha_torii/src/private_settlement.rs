@@ -40,7 +40,8 @@ use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementLegUploadDispositionV1, PrivateSettlementLegUploadRequestV1,
     PrivateSettlementLegUploadResponseV1, PrivateSettlementLifecycleDtoV1,
     PrivateSettlementPhaseCertificateRequestV1, PrivateSettlementPhaseCertificateResponseV1,
-    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
+    PrivateSettlementPhaseCertificatesResponseV1, PrivateSettlementPhaseVoteResponseV1,
+    PrivateSettlementPrepareVoteRequestV1,
 };
 use std::{path::PathBuf, str::FromStr as _, sync::Arc, time::Duration};
 
@@ -415,14 +416,16 @@ async fn reconcile_private_settlement_finality_tick_v1(
         let (authoritative_height, work) =
             snapshot_private_settlement_reconciliation_work_v1(&state, page.candidates)?;
         let blocking_store = Arc::clone(&store);
-        tokio::task::spawn_blocking(move || {
-            reconcile_and_prune_private_settlement_page_v1(
-                &blocking_store,
-                work,
-                authoritative_height,
-            )
-            .map(|_| ())
-        })
+        crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+            move || {
+                reconcile_and_prune_private_settlement_page_v1(
+                    &blocking_store,
+                    work,
+                    authoritative_height,
+                )
+                .map(|_| ())
+            },
+        ))
         .await
         .map_err(|_| PrivateSettlementReconciliationFailureV1::BlockingWorkerFailed)??;
         cursor = page.next_cursor;
@@ -465,20 +468,20 @@ pub(crate) fn spawn_private_settlement_finality_reconciliation_v1(
         return;
     };
     let worker_shutdown = shutdown_signal.clone();
-    let worker = tokio::spawn(run_private_settlement_finality_reconciliation_v1(
-        store,
-        state,
-        worker_shutdown,
-    ));
+    let worker = crate::panic_recovery::spawn_joined_recoverable(
+        run_private_settlement_finality_reconciliation_v1(store, state, worker_shutdown),
+    );
     tokio::spawn(async move {
-        let failure = match worker.await {
+        let failure = match crate::panic_recovery::join_recoverable(worker).await {
             Ok(Ok(())) if shutdown_signal.is_sent() => return,
             Ok(Ok(())) => PrivateSettlementReconciliationFailureV1::WorkerExitedUnexpectedly,
             Ok(Err(failure)) => failure,
-            Err(error) if error.is_panic() => {
+            Err(crate::panic_recovery::RecoverableTaskError::Panicked) => {
                 PrivateSettlementReconciliationFailureV1::WorkerPanicked
             }
-            Err(_) => PrivateSettlementReconciliationFailureV1::WorkerCancelled,
+            Err(crate::panic_recovery::RecoverableTaskError::Join(_)) => {
+                PrivateSettlementReconciliationFailureV1::WorkerCancelled
+            }
         };
         iroha_logger::error!(
             code = failure.code(),
@@ -649,6 +652,22 @@ fn lifecycle_dto(
         }
         PrivateSettlementSidecarLifecycleV1::Aborted => PrivateSettlementLifecycleDtoV1::Aborted,
         PrivateSettlementSidecarLifecycleV1::Expired => PrivateSettlementLifecycleDtoV1::Expired,
+    }
+}
+
+fn phase_certificate_acknowledges_lifecycle_v1(
+    phase: PrivateSettlementPhaseV1,
+    lifecycle: PrivateSettlementSidecarLifecycleV1,
+) -> bool {
+    match phase {
+        PrivateSettlementPhaseV1::Prepare => matches!(
+            lifecycle,
+            PrivateSettlementSidecarLifecycleV1::Prepared
+                | PrivateSettlementSidecarLifecycleV1::CommitCertified
+        ),
+        PrivateSettlementPhaseV1::Commit => {
+            lifecycle == PrivateSettlementSidecarLifecycleV1::CommitCertified
+        }
     }
 }
 
@@ -1020,11 +1039,9 @@ pub(crate) async fn handler_phase_certificate(
         Ok(status) => status,
         Err(_) => return map_phase_error(PrivateSettlementPhaseErrorV1),
     };
-    let expected_lifecycle = match phase {
-        PrivateSettlementPhaseV1::Prepare => PrivateSettlementSidecarLifecycleV1::Prepared,
-        PrivateSettlementPhaseV1::Commit => PrivateSettlementSidecarLifecycleV1::CommitCertified,
-    };
-    if status.leg_ordinal != leg_ordinal || status.lifecycle != expected_lifecycle {
+    if status.leg_ordinal != leg_ordinal
+        || !phase_certificate_acknowledges_lifecycle_v1(phase, status.lifecycle)
+    {
         return map_phase_error(PrivateSettlementPhaseErrorV1);
     }
     JsonBody(PrivateSettlementPhaseCertificateResponseV1 {
@@ -1033,6 +1050,43 @@ pub(crate) async fn handler_phase_certificate(
         leg_ordinal,
         phase,
         lifecycle: lifecycle_dto(status.lifecycle),
+    })
+    .into_response()
+}
+
+/// Recover exact durable Prepare and Commit QCs as the immutable bundle sponsor.
+pub(crate) async fn handler_phase_certificates_get(
+    State(app): State<SharedAppState>,
+    Extension(runtime): Extension<PrivateSettlementToriiRuntimeV1>,
+    Extension(authenticated): Extension<VerifiedCanonicalRequest>,
+    Path(payload_digest): Path<String>,
+) -> Response {
+    let payload_digest = match parse_digest(&payload_digest) {
+        Ok(digest) => digest,
+        Err(response) => return response,
+    };
+    let height = match authoritative_height(&app) {
+        Ok(height) => height,
+        Err(response) => return response,
+    };
+    if active_config(&app, height).is_err() {
+        return private_settlement_unavailable();
+    }
+    let recovered = match runtime.store().and_then(|store| {
+        store
+            .sponsor_phase_certificates(payload_digest, &authenticated.account, height)
+            .map_err(map_store_error)
+    }) {
+        Ok(recovered) => recovered,
+        Err(response) => return response,
+    };
+    JsonBody(PrivateSettlementPhaseCertificatesResponseV1 {
+        bundle_id: recovered.bundle_id,
+        payload_digest: recovered.payload_digest,
+        leg_ordinal: recovered.leg_ordinal,
+        lifecycle: lifecycle_dto(recovered.lifecycle),
+        prepare_certificate: recovered.prepare_certificate,
+        commit_certificate: recovered.commit_certificate,
     })
     .into_response()
 }
@@ -1487,4 +1541,33 @@ pub(crate) async fn handler_bundle_receipt(
         lifecycle: lifecycle_dto(status.lifecycle),
     })
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phase_certificate_acknowledgement_is_monotonic() {
+        assert!(phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementSidecarLifecycleV1::Prepared,
+        ));
+        assert!(phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementSidecarLifecycleV1::CommitCertified,
+        ));
+        assert!(!phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementSidecarLifecycleV1::Audited,
+        ));
+        assert!(phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Commit,
+            PrivateSettlementSidecarLifecycleV1::CommitCertified,
+        ));
+        assert!(!phase_certificate_acknowledges_lifecycle_v1(
+            PrivateSettlementPhaseV1::Commit,
+            PrivateSettlementSidecarLifecycleV1::Prepared,
+        ));
+    }
 }

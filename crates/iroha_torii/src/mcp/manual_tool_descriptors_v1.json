@@ -2768,28 +2768,62 @@
       "function": "iroha_transactions_list_tool",
       "name": "iroha.transactions.list",
       "effect": "read",
-      "description": "List explorer transactions with optional flat query filters.",
+      "description": "List visible explorer transactions through a snapshot-bound keyset cursor. Optional canonical target authentication expands the anonymous public-dataspace view.",
       "method": "GET",
       "path_template": "/v1/explorer/transactions",
       "input_schema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "query": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1424,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 25
+              },
+              "authority": {
+                "type": "string"
+              },
+              "block": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "status": {
+                "type": "string"
+              },
+              "asset_id": {
+                "type": "string"
+              }
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1424,
+            "pattern": "^[A-Za-z0-9_-]+$"
           },
           "limit": {
-            "type": "integer"
-          },
-          "offset": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 25
           },
           "authority": {
             "type": "string"
           },
           "block": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1
           },
           "status": {
             "type": "string"
@@ -2851,22 +2885,64 @@
       "function": "iroha_instructions_list_tool",
       "name": "iroha.instructions.list",
       "effect": "read",
-      "description": "List explorer instructions with optional flat query filters.",
+      "description": "List visible explorer instructions through a snapshot-bound keyset cursor. Optional canonical target authentication expands the anonymous public-dataspace view.",
       "method": "GET",
       "path_template": "/v1/explorer/instructions",
       "input_schema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "query": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1424,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 25
+              },
+              "authority": {
+                "type": "string"
+              },
+              "account": {
+                "type": "string"
+              },
+              "transaction_hash": {
+                "type": "string"
+              },
+              "transaction_status": {
+                "type": "string"
+              },
+              "block": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "kind": {
+                "type": "string"
+              },
+              "asset_id": {
+                "type": "string"
+              }
+            }
           },
-          "page": {
-            "type": "integer"
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1424,
+            "pattern": "^[A-Za-z0-9_-]+$"
           },
-          "per_page": {
-            "type": "integer"
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 25
           },
           "authority": {
             "type": "string"
@@ -2881,7 +2957,8 @@
             "type": "string"
           },
           "block": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 1
           },
           "kind": {
             "type": "string"
@@ -2947,22 +3024,42 @@
       "function": "iroha_blocks_list_tool",
       "name": "iroha.blocks.list",
       "effect": "read",
-      "description": "List explorer blocks with optional flat query filters.",
+      "description": "List visible explorer block summaries through a snapshot-bound keyset cursor. Optional canonical target authentication expands the anonymous public-dataspace view.",
       "method": "GET",
       "path_template": "/v1/explorer/blocks",
       "input_schema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "query": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1424,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 25
+              }
+            }
           },
-          "page": {
-            "type": "integer"
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1424,
+            "pattern": "^[A-Za-z0-9_-]+$"
           },
-          "per_page": {
-            "type": "integer"
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 25
           },
           "headers": {
             "type": "object",

@@ -9,7 +9,8 @@ bound without enumerating interchangeable leg subsets:
 - every sidecar is certified by an exact 3-of-4 committee;
 - a Prepare QC follows durable staging;
 - Commit starts only after the complete ordered Prepare barrier has one exact
-  digest;
+  logical digest; quorum-equivalent 3-of-4 signer encodings certify the same
+  body and do not fork that digest;
 - global application changes either every leg or no leg;
 - abort and expiry are byte-silent for private state;
 - replay cannot apply a finalized bundle twice; and
@@ -67,13 +68,54 @@ bounded-fault result; the current N=2 and paper-primary N=3 fault configurations
 remain unclaimed until their full TLC runs complete. These bounded
 configurations are not a substitute for the 255-leg count-symmetry run.
 
-Run the model with the repository-pinned TLA+ toolchain, once installed:
+Run the complete release matrix with the repository-pinned TLA+ toolchain,
+once installed. The runner authenticates the TLA+ tools 1.7.4 JAR, fixes the
+TLC seed and fingerprint index, preserves stdout and stderr separately, and
+requires a clean settled commit before it emits release evidence:
 
 ```text
 TLA2TOOLS_JAR=<tla2tools.jar> \
 JAVA_BIN=<java> \
-scripts/formal/run_atomic_private_settlement_tlc.sh
+scripts/formal/run_atomic_private_settlement_tlc.sh \
+  --workers <pinned-count> \
+  --output-dir <new-evidence-directory>
 ```
+
+The complete run writes `formal_model_report.json` plus its digest-bound
+`formal_model_report.log`. The report's `model_sha256` is the framed aggregate
+SHA-256 of both TLA modules and all eleven ordered configuration files, so a
+configuration-only change cannot reuse old evidence. Existing evidence paths
+are never replaced. Each aggregate entry is encoded as the eight-byte
+big-endian UTF-8 path length, the relative path bytes, the eight-byte
+big-endian payload length, and the exact file bytes.
+Before semantic analysis, the runner copies both modules and every selected
+configuration into an owner-only `inputs/` directory and runs exclusively from
+those frozen bytes. Long runs therefore cannot mix source revisions if the
+checkout changes concurrently. The runner pins `HEAD` before invoking the
+toolchain and verifies the same clean commit both before and after report
+construction. It also freezes and commit-checks the report builder before
+executing it, so a long run cannot consume a later evidence normalizer.
+
+For development or resumable qualification, run one or more allowlisted
+configurations explicitly. Partial runs retain their per-configuration logs but
+cannot emit the complete release report:
+
+```text
+TLA2TOOLS_JAR=<tla2tools.jar> \
+scripts/formal/run_atomic_private_settlement_tlc.sh \
+  --config AtomicPrivateSettlementV1CommitteeFaults_2.cfg \
+  --workers 4 \
+  --output-dir <new-partial-evidence-directory>
+
+scripts/formal/run_atomic_private_settlement_tlc.sh --list-configs
+```
+
+`--seed`, `--fingerprint-index`, and `--workers` are explicit reproducibility
+controls. The seed defaults to `20260829` and the fingerprint index to `0`.
+Partial development and pull-request runs may use automatic workers, but the
+complete release matrix requires an explicit numeric worker count. The report
+is generated only for the exact ordered matrix and checks that count against
+every TLC invocation header.
 
 The indexed refinement can also be checked directly with the same authenticated
 toolchain:

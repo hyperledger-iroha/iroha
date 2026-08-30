@@ -2599,7 +2599,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             }),
         ),
         (10332, "iroha.gov.unlocks.stats", norito::json!({})),
-        (10333, "iroha.gov.council.current", norito::json!({})),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -3113,9 +3112,12 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.gov.unlocks.stats"),
         "expected agent-friendly governance unlocks-stats MCP tool"
     );
+    let retired_current_council_tool = ["iroha.gov.", "council.", "current"].concat();
     assert!(
-        names.iter().any(|name| name == "iroha.gov.council.current"),
-        "expected agent-friendly governance council snapshot MCP tool"
+        names
+            .iter()
+            .all(|name| name != retired_current_council_tool.as_str()),
+        "retired current-council MCP tool must remain absent"
     );
     assert!(
         !names.iter().any(|name| name == "iroha.gov.council.persist"),
@@ -3809,7 +3811,7 @@ mcp_alias_dispatch_test! {
     async fn mcp_jsonrpc_tools_call_agent_alias_instructions_list_accepts_flat_query_fields => success(
         10613,
         "iroha.instructions.list",
-        PageOne,
+        LimitTwo,
         "instructions list alias with flat query fields should dispatch successfully",
     )
 }
@@ -4075,7 +4077,7 @@ mcp_alias_dispatch_test! {
     async fn mcp_jsonrpc_tools_call_agent_alias_blocks_list_accepts_flat_query_fields => success(
         10616,
         "iroha.blocks.list",
-        PageOne,
+        LimitTwo,
         "blocks list alias with flat query fields should dispatch successfully",
     )
 }

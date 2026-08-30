@@ -56,9 +56,9 @@ mod model {
         ReferendumClosed(GovernanceReferendumClosed),
         /// A governance lock expired and was unlocked.
         LockUnlocked(GovernanceLockUnlocked),
-        /// Council membership was persisted for an epoch.
+        /// Compatibility event emitted by the retired manual epoch-council instruction.
         CouncilPersisted(GovernanceCouncilPersisted),
-        /// Parliament bodies were derived for an epoch.
+        /// Compatibility event emitted by the retired independent epoch-council subsystem.
         ParliamentSelected(GovernanceParliamentSelected),
         /// A canonical attempt was created from immutable proposal content.
         ParliamentAttemptCreated(GovernanceParliamentAttemptCreated),
@@ -90,6 +90,8 @@ mod model {
         CitizenRevoked(GovernanceCitizenRevoked),
         /// A citizen service discipline event was recorded.
         CitizenServiceRecorded(GovernanceCitizenServiceRecorded),
+        /// A standalone governance referendum reached an exact final decision.
+        ReferendumDecided(GovernanceReferendumDecided),
     }
 
     /// Public audit record for one QC-authorized threshold-key lifecycle action.
@@ -328,7 +330,7 @@ mod model {
         /// Amount returned from escrow.
         pub amount: Quantity,
     }
-    /// Council persisted payload.
+    /// Compatibility payload from the retired manual epoch-council instruction.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
@@ -340,13 +342,13 @@ mod model {
         /// Number of alternates stored alongside members.
         #[norito(default)]
         pub alternates_count: u32,
-        /// Total eligible candidates considered, or roster entries for a manual roster.
+        /// Total eligible candidates considered by the historical subsystem.
         #[norito(default)]
         pub candidates_count: u32,
         /// Derivation method.
         pub derived_by: crate::isi::governance::CouncilDerivationKind,
     }
-    /// Parliament selection recorded for an epoch.
+    /// Compatibility payload from the retired independent epoch-council subsystem.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
@@ -534,6 +536,22 @@ mod model {
         #[norito(default)]
         pub cooldown_until: u64,
     }
+    /// Exact decision for one standalone governance referendum.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    pub struct GovernanceReferendumDecided {
+        /// Original standalone referendum selector, without normalization.
+        pub referendum_id: String,
+        /// Exact accumulated approval weight.
+        pub approve: u128,
+        /// Exact accumulated rejection weight.
+        pub reject: u128,
+        /// Exact accumulated abstention weight.
+        pub abstain: u128,
+        /// Whether the configured turnout and approval thresholds were met.
+        pub approved: bool,
+    }
 }
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
@@ -568,6 +586,7 @@ impl_json_via_norito_bytes!(
     GovernanceCitizenRegistered,
     GovernanceCitizenRevoked,
     GovernanceCitizenServiceRecorded,
+    GovernanceReferendumDecided,
 );
 /// Prelude exports
 pub mod prelude {
@@ -582,8 +601,9 @@ pub mod prelude {
         GovernanceParliamentCertificateIssued, GovernanceParliamentConcentrationWarning,
         GovernanceParliamentLifecycleTransitionApplied, GovernanceParliamentSelected,
         GovernanceProposalApproved, GovernanceProposalEnacted, GovernanceProposalRejected,
-        GovernanceProposalSubmitted, GovernanceReferendumClosed, GovernanceReferendumOpened,
-        GovernanceSlashReason, GovernanceThresholdKeyLifecycleAppliedV1,
+        GovernanceProposalSubmitted, GovernanceReferendumClosed, GovernanceReferendumDecided,
+        GovernanceReferendumOpened, GovernanceSlashReason,
+        GovernanceThresholdKeyLifecycleAppliedV1,
     };
 }
 
@@ -608,6 +628,23 @@ mod tests {
         let decoded = norito::decode_from_bytes::<GovernanceEvent>(&bytes)
             .expect("decode canonical governance event");
         assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn standalone_referendum_decision_roundtrips_exact_identity_and_tally() {
+        let event = GovernanceEvent::ReferendumDecided(GovernanceReferendumDecided {
+            referendum_id: "0XAbCd-referendum".to_owned(),
+            approve: u128::MAX,
+            reject: u128::from(u64::MAX) + 1,
+            abstain: 17,
+            approved: true,
+        });
+        assert_eq!(
+            event.encode().get(..4),
+            Some(28_u32.to_le_bytes().as_slice()),
+            "the standalone decision event must retain its append-only enum tag"
+        );
+        assert_roundtrip(event);
     }
 
     #[test]

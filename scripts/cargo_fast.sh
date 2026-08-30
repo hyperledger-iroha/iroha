@@ -29,6 +29,7 @@ Options:
   --target-dir DIR        Set CARGO_TARGET_DIR=DIR
   --target-slot NAME      Reuse <repo>/target/cargo-fast/NAME
   --jobs N                Set CARGO_BUILD_JOBS=N (default: Cargo jobserver)
+  --preserve-build-limits Keep an inherited local single-worker build fingerprint
   --no-sccache            Do not auto-enable sccache
   --sccache-dir DIR       Set SCCACHE_DIR; otherwise use sccache's default
   --incremental           Set CARGO_INCREMENTAL=1 for warm local edit loops
@@ -55,6 +56,7 @@ target_slot=""
 target_slot_set=false
 jobs=""
 jobs_set=false
+preserve_build_limits=false
 auto_sccache=true
 sccache_dir=""
 incremental=false
@@ -97,6 +99,9 @@ while [[ $# -gt 0 ]]; do
 			fi
 			jobs="$1"
 			jobs_set=true
+			;;
+		--preserve-build-limits)
+			preserve_build_limits=true
 			;;
 		--no-sccache)
 			auto_sccache=false
@@ -162,6 +167,44 @@ if [[ ${#cargo_args[@]} -eq 0 ]]; then
 	echo "error: missing cargo arguments" >&2
 	usage >&2
 	exit 1
+fi
+
+# Some local automation environments export a complete single-worker resource
+# fingerprint to every child shell. That is useful for unwrapped commands but
+# defeats this wrapper's fast-path defaults. Clear only the exact fingerprint:
+# partial caller settings, conventional CI environments, and an explicit
+# --preserve-build-limits request remain untouched.
+has_inherited_single_worker_fingerprint() {
+	[[ "${CARGO_BUILD_JOBS:-}" == "1" ]] \
+		&& [[ "${CARGO_INCREMENTAL:-}" == "0" ]] \
+		&& [[ "${CARGO_PROFILE_DEV_CODEGEN_UNITS:-}" == "1" ]] \
+		&& [[ "${CARGO_PROFILE_DEV_BUILD_OVERRIDE_CODEGEN_UNITS:-}" == "1" ]] \
+		&& [[ "${CARGO_PROFILE_TEST_CODEGEN_UNITS:-}" == "1" ]] \
+		&& [[ "${CARGO_PROFILE_TEST_BUILD_OVERRIDE_CODEGEN_UNITS:-}" == "1" ]] \
+		&& [[ "${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-}" == "1" ]] \
+		&& [[ "${CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS:-}" == "1" ]] \
+		&& [[ "${CARGO_PROFILE_BENCH_CODEGEN_UNITS:-}" == "1" ]] \
+		&& [[ "${CARGO_PROFILE_BENCH_BUILD_OVERRIDE_CODEGEN_UNITS:-}" == "1" ]] \
+		&& [[ "${CMAKE_BUILD_PARALLEL_LEVEL:-}" == "1" ]]
+}
+
+cleared_inherited_build_limits=false
+if [[ "${preserve_build_limits}" == false ]] \
+	&& [[ -z "${CI:-}" ]] \
+	&& [[ -z "${GITHUB_ACTIONS:-}" ]] \
+	&& has_inherited_single_worker_fingerprint; then
+	unset CARGO_BUILD_JOBS
+	unset CARGO_INCREMENTAL
+	unset CARGO_PROFILE_DEV_CODEGEN_UNITS
+	unset CARGO_PROFILE_DEV_BUILD_OVERRIDE_CODEGEN_UNITS
+	unset CARGO_PROFILE_TEST_CODEGEN_UNITS
+	unset CARGO_PROFILE_TEST_BUILD_OVERRIDE_CODEGEN_UNITS
+	unset CARGO_PROFILE_RELEASE_CODEGEN_UNITS
+	unset CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS
+	unset CARGO_PROFILE_BENCH_CODEGEN_UNITS
+	unset CARGO_PROFILE_BENCH_BUILD_OVERRIDE_CODEGEN_UNITS
+	unset CMAKE_BUILD_PARALLEL_LEVEL
+	cleared_inherited_build_limits=true
 fi
 
 cargo_serial_jobs=false
@@ -369,6 +412,9 @@ if selected_linker="$(select_linker "${linker_mode}" 2>/dev/null)"; then
 fi
 
 echo "[cargo-fast] repo=${REPO_ROOT}"
+if [[ "${cleared_inherited_build_limits}" == true ]]; then
+	echo "[cargo-fast] cleared inherited local single-worker build limits (use --preserve-build-limits to retain them)"
+fi
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
 	echo "[cargo-fast] CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
 else

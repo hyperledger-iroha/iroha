@@ -168,6 +168,15 @@ func governanceRequireExactJSONIntegers(
                 )
             )
         }
+    case .integer:
+        guard exactIntegerLexemes?[governanceCodingPathKey(codingPath)] != nil else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: codingPath,
+                    debugDescription: "\(context) is outside the exact first-release JSON integer range"
+                )
+            )
+        }
     case .string, .bool, .null:
         break
     }
@@ -299,19 +308,16 @@ private func governanceLowercaseHash32(
     return bytes
 }
 
-private func governanceBoundedReason(
+private func governanceNonBlankReason(
     _ raw: String,
     codingPath: [CodingKey],
     field: String
 ) throws -> String {
-    guard !raw.isEmpty,
-          raw.utf8.count <= 1_024,
-          raw == raw.trimmingCharacters(in: .whitespacesAndNewlines),
-          !raw.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+    guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         throw DecodingError.dataCorrupted(
             .init(
                 codingPath: codingPath,
-                debugDescription: "\(field) must be bounded canonical public text"
+                debugDescription: "\(field) must contain non-whitespace text"
             )
         )
     }
@@ -3985,24 +3991,7 @@ public struct ToriiGovernanceContractDeactivateActionV1: Decodable, Sendable, Eq
             codingPath: container.codingPath + [CodingKeys.expectedCodeHash],
             field: "expected_code_hash"
         )
-        guard container.contains(.reason) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.reason,
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "reason must be explicit, including null"
-                )
-            )
-        }
-        if let reason = try container.decodeIfPresent(String.self, forKey: .reason) {
-            self.reason = try governanceBoundedReason(
-                reason,
-                codingPath: container.codingPath + [CodingKeys.reason],
-                field: "reason"
-            )
-        } else {
-            self.reason = nil
-        }
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
     }
 }
 
@@ -4253,7 +4242,7 @@ public struct ToriiGovernanceContractEmergencyHoldProposalV1: Decodable, Sendabl
             codingPath: container.codingPath + [CodingKeys.incidentDigest],
             field: "incident_digest"
         )
-        reason = try governanceBoundedReason(
+        reason = try governanceNonBlankReason(
             container.decode(String.self, forKey: .reason),
             codingPath: container.codingPath + [CodingKeys.reason],
             field: "reason"
@@ -4266,5 +4255,66 @@ public struct ToriiGovernanceContractEmergencyHoldProposalV1: Decodable, Sendabl
                 debugDescription: "duration_blocks must be between 1 and 3600"
             )
         }
+    }
+}
+
+/// Closed exact-account global data-trigger permission transition.
+public enum ToriiGovernanceGlobalDataTriggerPermissionActionV1: String, Decodable, Sendable, Equatable {
+    case grant
+    case revoke
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case action, value }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "global data-trigger permission action"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.value), try container.decodeNil(forKey: .value) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .value,
+                in: container,
+                debugDescription: "global data-trigger permission action value must be explicit null"
+            )
+        }
+        let raw = try container.decode(String.self, forKey: .action)
+        guard let action = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .action,
+                in: container,
+                debugDescription: "global data-trigger permission action must be grant or revoke"
+            )
+        }
+        self = action
+    }
+}
+
+/// Complete Parliament proposal for one exact account's global data-trigger capability.
+public struct ToriiGovernanceGlobalDataTriggerPermissionProposalV1:
+    Decodable, Sendable, Equatable
+{
+    public let authority: String
+    public let action: ToriiGovernanceGlobalDataTriggerPermissionActionV1
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case authority, action }
+
+    public init(from decoder: Decoder) throws {
+        try governanceRejectUnknownFields(
+            decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            name: "global data-trigger permission governance proposal"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        authority = try governanceCanonicalAccount(
+            container.decode(String.self, forKey: .authority),
+            codingPath: container.codingPath + [CodingKeys.authority],
+            field: "authority"
+        )
+        action = try container.decode(
+            ToriiGovernanceGlobalDataTriggerPermissionActionV1.self,
+            forKey: .action
+        )
     }
 }

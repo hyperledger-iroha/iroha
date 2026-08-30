@@ -140,6 +140,10 @@ export class AtomicPrivateSettlementToriiClientV1 {
     payloadDigest: string | AtomicPrivateSettlementIdentifierV1,
     options?: AtomicPrivateSettlementSponsorOptionsV1,
   ): Promise<AtomicPrivateSettlementJsonResponseV1>;
+  getPhaseCertificates(
+    payloadDigest: string | AtomicPrivateSettlementIdentifierV1,
+    options?: AtomicPrivateSettlementSponsorOptionsV1,
+  ): Promise<AtomicPrivateSettlementJsonResponseV1>;
   getCommitteeProof(
     payloadDigest: string | AtomicPrivateSettlementIdentifierV1,
     options: AtomicPrivateSettlementRoleOptionsV1,

@@ -16,7 +16,7 @@ async fn proof_event_json_includes_call_hash() {
         "/v1/events/sse",
         get({
             let events = events.clone();
-            move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }
+            move |q| async move { iroha_torii::handle_v1_events_sse_for_tests(events, q) }
         }),
     );
     // Spawn request to SSE endpoint

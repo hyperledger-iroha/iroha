@@ -259,6 +259,8 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     Register::account(Account::new(contract_address.subject_id()))
         .execute(&account_id, &mut stx1)
         .expect("register non-signable contract-subject account");
+    stx1.world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), account_id.clone());
     iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
         contract_address: contract_address.clone(),
         expected_revision: 1,
@@ -414,6 +416,8 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     Register::account(Account::new(contract_address.subject_id()))
         .execute(&account_id, &mut stx1)
         .expect("register non-signable V1 contract-subject account");
+    stx1.world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), account_id.clone());
     iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
         contract_address: contract_address.clone(),
         expected_revision: 1,

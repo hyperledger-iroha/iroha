@@ -3485,9 +3485,11 @@ pub(crate) mod taikai_ingest {
         let owned_path = path.to_path_buf();
         let owned_label = label.to_owned();
         let display_path = owned_path.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            read_regular_taikai_file_bounded(&owned_path, &owned_label, maximum)
-        })
+        let result = crate::panic_recovery::join_recoverable(
+            crate::panic_recovery::spawn_blocking_recoverable(move || {
+                read_regular_taikai_file_bounded(&owned_path, &owned_label, maximum)
+            }),
+        )
         .await
         .map_err(|err| {
             format!(

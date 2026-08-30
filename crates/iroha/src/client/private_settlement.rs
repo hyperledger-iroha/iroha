@@ -29,8 +29,8 @@ use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementCommitteeProofResponseV1, PrivateSettlementLegStatusResponseV1,
     PrivateSettlementLegUploadRequestV1, PrivateSettlementLegUploadResponseV1,
     PrivateSettlementLifecycleDtoV1, PrivateSettlementPhaseCertificateRequestV1,
-    PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseVoteResponseV1,
-    PrivateSettlementPrepareVoteRequestV1,
+    PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseCertificatesResponseV1,
+    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
 use std::collections::BTreeMap;
 
@@ -376,6 +376,22 @@ fn validate_phase_certificate_v1(
     .map_err(|_| eyre!("private-settlement phase certificate is invalid"))
 }
 
+fn phase_certificate_acknowledgement_is_valid_v1(
+    phase: PrivateSettlementPhaseV1,
+    lifecycle: PrivateSettlementLifecycleDtoV1,
+) -> bool {
+    match phase {
+        PrivateSettlementPhaseV1::Prepare => matches!(
+            lifecycle,
+            PrivateSettlementLifecycleDtoV1::Prepared
+                | PrivateSettlementLifecycleDtoV1::CommitCertified
+        ),
+        PrivateSettlementPhaseV1::Commit => {
+            lifecycle == PrivateSettlementLifecycleDtoV1::CommitCertified
+        }
+    }
+}
+
 fn aggregate_phase_votes_v1(
     body: PrivateSettlementPhaseBodyV1,
     authority_catalog_index: u8,
@@ -477,6 +493,81 @@ fn validate_leg_status_response_v1(
         ));
     }
     Ok(())
+}
+
+fn validate_phase_certificates_response_v1(
+    requested: Hash,
+    response: &PrivateSettlementPhaseCertificatesResponseV1,
+) -> Result<()> {
+    if response.payload_digest != requested {
+        return Err(eyre!(
+            "private-settlement phase-certificate recovery response is substituted"
+        ));
+    }
+    let validate = |certificate: &PrivateSettlementPhaseCertificateV1,
+                    phase: PrivateSettlementPhaseV1|
+     -> Result<()> {
+        certificate.validate_shape().map_err(|_| {
+            eyre!("private-settlement phase-certificate recovery response is invalid")
+        })?;
+        if certificate.body.bundle_id != response.bundle_id
+            || certificate.body.leg_ordinal != response.leg_ordinal
+            || certificate.body.phase != phase
+        {
+            return Err(eyre!(
+                "private-settlement phase-certificate recovery response is substituted"
+            ));
+        }
+        Ok(())
+    };
+    if let Some(prepare) = response.prepare_certificate.as_ref() {
+        validate(prepare, PrivateSettlementPhaseV1::Prepare)?;
+    }
+    if let Some(commit) = response.commit_certificate.as_ref() {
+        validate(commit, PrivateSettlementPhaseV1::Commit)?;
+        let prepare = response.prepare_certificate.as_ref().ok_or_else(|| {
+            eyre!("private-settlement phase-certificate recovery response is incomplete")
+        })?;
+        if commit.body.network_id != prepare.body.network_id
+            || commit.body.manifest_digest != prepare.body.manifest_digest
+            || commit.body.route != prepare.body.route
+            || commit.body.delta_digest != prepare.body.delta_digest
+            || commit.body.authority_digest != prepare.body.authority_digest
+            || commit.body.authority_context_height != prepare.body.authority_context_height
+            || commit.body.expiry_height != prepare.body.expiry_height
+        {
+            return Err(eyre!(
+                "private-settlement phase-certificate recovery response is inconsistent"
+            ));
+        }
+    }
+    if response.lifecycle == PrivateSettlementLifecycleDtoV1::CommitCertified
+        && (response.prepare_certificate.is_none() || response.commit_certificate.is_none())
+    {
+        return Err(eyre!(
+            "private-settlement phase-certificate recovery response is incomplete"
+        ));
+    }
+    Ok(())
+}
+
+fn phase_certificates_are_quorum_equivalent_v1(
+    left: &PrivateSettlementPhaseCertificateV1,
+    right: &PrivateSettlementPhaseCertificateV1,
+) -> bool {
+    left.body == right.body && left.authority_catalog_index == right.authority_catalog_index
+}
+
+fn retain_canonical_phase_certificate_v1(
+    recovered: &mut Option<PrivateSettlementPhaseCertificateV1>,
+    candidate: PrivateSettlementPhaseCertificateV1,
+) {
+    if recovered
+        .as_ref()
+        .is_none_or(|existing| &candidate < existing)
+    {
+        *recovered = Some(candidate);
+    }
 }
 
 fn validate_restricted_proof_response_v1(
@@ -982,21 +1073,166 @@ impl Client {
                 response,
                 "private-settlement phase certificate persistence failed",
             )?;
-        let expected_lifecycle = match certificate.body.phase {
-            PrivateSettlementPhaseV1::Prepare => PrivateSettlementLifecycleDtoV1::Prepared,
-            PrivateSettlementPhaseV1::Commit => PrivateSettlementLifecycleDtoV1::CommitCertified,
-        };
         if decoded.bundle_id != manifest.bundle_id
             || decoded.payload_digest != payload_digest
             || decoded.leg_ordinal != certificate.body.leg_ordinal
             || decoded.phase != certificate.body.phase
-            || decoded.lifecycle != expected_lifecycle
+            || !phase_certificate_acknowledgement_is_valid_v1(
+                certificate.body.phase,
+                decoded.lifecycle,
+            )
         {
             return Err(eyre!(
                 "private-settlement phase certificate acknowledgement is substituted"
             ));
         }
         Ok(decoded)
+    }
+
+    fn recover_private_settlement_phase_certificate_v1(
+        &self,
+        committee_endpoints: &[Url],
+        manifest: &AtomicPrivateSettlementV1,
+        payload_digest: Hash,
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+        phase: PrivateSettlementPhaseV1,
+        prepared_bundle_digest: Hash,
+        expected_prepare: Option<&PrivateSettlementPhaseCertificateV1>,
+    ) -> Result<Option<PrivateSettlementPhaseCertificateV1>> {
+        if committee_endpoints.len() != authority.validators.len() {
+            return Err(eyre!(
+                "private-settlement recovery endpoints must match the four-validator roster"
+            ));
+        }
+        for (index, endpoint) in committee_endpoints.iter().enumerate() {
+            if committee_endpoints[..index].contains(endpoint) {
+                return Err(eyre!(
+                    "private-settlement recovery endpoints must be distinct"
+                ));
+            }
+        }
+        if manifest.sponsor != self.account {
+            return Err(eyre!(
+                "private-settlement phase recovery requires the manifest sponsor"
+            ));
+        }
+        let ordinal = private_settlement_leg_ordinal_for_payload_v1(manifest, payload_digest)?;
+        let expected =
+            expected_phase_body_v1(manifest, ordinal, authority, phase, prepared_bundle_digest)?;
+        let expected_prepare_body = expected_phase_body_v1(
+            manifest,
+            ordinal,
+            authority,
+            PrivateSettlementPhaseV1::Prepare,
+            private_settlement_reserved_prepared_digest_v1(),
+        )?;
+        let mut recovered: Option<PrivateSettlementPhaseCertificateV1> = None;
+        let mut valid_responses = 0_usize;
+        for endpoint in committee_endpoints {
+            let response = match self
+                .private_settlement_phase_certificates_from_v1(endpoint, payload_digest)
+            {
+                Ok(response) => response,
+                Err(_) => continue,
+            };
+            if response.bundle_id != manifest.bundle_id || response.leg_ordinal != ordinal {
+                continue;
+            }
+            if let Some(prepare) = response.prepare_certificate.as_ref() {
+                if validate_phase_certificate_v1(
+                    prepare,
+                    &expected_prepare_body,
+                    ordinal,
+                    authority,
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                if expected_prepare.is_some_and(|expected| {
+                    !phase_certificates_are_quorum_equivalent_v1(expected, prepare)
+                }) {
+                    continue;
+                }
+            }
+            let candidate = match phase {
+                PrivateSettlementPhaseV1::Prepare => response.prepare_certificate,
+                PrivateSettlementPhaseV1::Commit => response.commit_certificate,
+            };
+            if let Some(candidate) = candidate {
+                if validate_phase_certificate_v1(&candidate, &expected, ordinal, authority).is_err()
+                {
+                    continue;
+                }
+                retain_canonical_phase_certificate_v1(&mut recovered, candidate);
+            }
+            valid_responses += 1;
+        }
+        if valid_responses < usize::from(PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1) {
+            return Err(eyre!(
+                "private-settlement phase recovery requires three valid committee responses"
+            ));
+        }
+        Ok(recovered)
+    }
+
+    /// Recover one exact durable Prepare QC after a coordinator restart.
+    ///
+    /// At least three endpoints must answer. Quorum-equivalent certificates
+    /// over the same body are ordered canonically; their signer-set encodings
+    /// do not alter the normalized complete-bundle digest.
+    ///
+    /// # Errors
+    ///
+    /// Fails with fewer than three valid endpoint responses or without a
+    /// cryptographically valid certificate when one is returned.
+    pub fn recover_private_settlement_prepare_certificate_v1(
+        &self,
+        committee_endpoints: &[Url],
+        manifest: &AtomicPrivateSettlementV1,
+        payload_digest: Hash,
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+    ) -> Result<Option<PrivateSettlementPhaseCertificateV1>> {
+        self.recover_private_settlement_phase_certificate_v1(
+            committee_endpoints,
+            manifest,
+            payload_digest,
+            authority,
+            PrivateSettlementPhaseV1::Prepare,
+            private_settlement_reserved_prepared_digest_v1(),
+            None,
+        )
+    }
+
+    /// Recover one exact durable Commit QC against an already recovered barrier.
+    ///
+    /// # Errors
+    ///
+    /// Fails with fewer than three valid endpoint responses, malformed
+    /// evidence, or a certified statement mismatch with the barrier.
+    pub fn recover_private_settlement_commit_certificate_v1(
+        &self,
+        committee_endpoints: &[Url],
+        payload_digest: Hash,
+        barrier: &PrivateSettlementPrepareBarrierV1,
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+    ) -> Result<Option<PrivateSettlementPhaseCertificateV1>> {
+        validate_prepare_barrier_v1(barrier)?;
+        let ordinal =
+            private_settlement_leg_ordinal_for_payload_v1(&barrier.manifest, payload_digest)?;
+        let expected_prepare = barrier
+            .prepare_certificates
+            .get(usize::from(ordinal))
+            .ok_or_else(|| eyre!("private-settlement Prepare barrier is incomplete"))?;
+        self.recover_private_settlement_phase_certificate_v1(
+            committee_endpoints,
+            &barrier.manifest,
+            payload_digest,
+            authority,
+            PrivateSettlementPhaseV1::Commit,
+            barrier.prepared_bundle_digest,
+            Some(expected_prepare),
+        )
     }
 
     /// Fan out to all four validators, select exactly three votes canonically,
@@ -1015,6 +1251,60 @@ impl Client {
         manifest: &AtomicPrivateSettlementV1,
         payload_digest: Hash,
         authority: &PrivateSettlementCommitteeAuthorityV1,
+    ) -> Result<PrivateSettlementPhaseCertificateV1> {
+        self.certify_private_settlement_prepare_with_recovered_v1(
+            committee_endpoints,
+            manifest,
+            payload_digest,
+            authority,
+            None,
+            false,
+        )
+    }
+
+    /// Recover an existing Prepare QC or safely create one after checking every node.
+    ///
+    /// This is the restart-safe counterpart to
+    /// [`Self::certify_private_settlement_prepare_v1`]. All four recovery reads
+    /// must reach quorum before fresh votes are allowed. A certificate orphaned
+    /// by an interrupted prior handoff can be reused, while another valid
+    /// signer subset over the same body remains logically equivalent.
+    ///
+    /// # Errors
+    ///
+    /// Fails under the recovery or certification conditions documented by the
+    /// corresponding lower-level methods.
+    pub fn recover_or_certify_private_settlement_prepare_v1(
+        &self,
+        committee_endpoints: &[Url],
+        manifest: &AtomicPrivateSettlementV1,
+        payload_digest: Hash,
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+    ) -> Result<PrivateSettlementPhaseCertificateV1> {
+        let recovered = self.recover_private_settlement_prepare_certificate_v1(
+            committee_endpoints,
+            manifest,
+            payload_digest,
+            authority,
+        )?;
+        self.certify_private_settlement_prepare_with_recovered_v1(
+            committee_endpoints,
+            manifest,
+            payload_digest,
+            authority,
+            recovered,
+            true,
+        )
+    }
+
+    fn certify_private_settlement_prepare_with_recovered_v1(
+        &self,
+        committee_endpoints: &[Url],
+        manifest: &AtomicPrivateSettlementV1,
+        payload_digest: Hash,
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+        recovered: Option<PrivateSettlementPhaseCertificateV1>,
+        verify_durable_handoff: bool,
     ) -> Result<PrivateSettlementPhaseCertificateV1> {
         if committee_endpoints.len() != authority.validators.len() {
             return Err(eyre!(
@@ -1049,7 +1339,12 @@ impl Client {
             responders.push(index);
         }
         let selected = canonical_phase_vote_quorum_v1(&votes)?;
-        let certificate = aggregate_phase_votes_v1(body, ordinal, authority, selected)?;
+        let certificate = if let Some(certificate) = recovered {
+            validate_phase_certificate_v1(&certificate, &body, ordinal, authority)?;
+            certificate
+        } else {
+            aggregate_phase_votes_v1(body, ordinal, authority, selected)?
+        };
         for index in responders {
             let endpoint = &committee_endpoints[index];
             self.persist_private_settlement_phase_certificate_v1(
@@ -1058,6 +1353,21 @@ impl Client {
                 payload_digest,
                 &certificate,
             )?;
+        }
+        if verify_durable_handoff {
+            let confirmed = self
+                .recover_private_settlement_prepare_certificate_v1(
+                    committee_endpoints,
+                    manifest,
+                    payload_digest,
+                    authority,
+                )?
+                .ok_or_else(|| eyre!("private-settlement recovered Prepare QC was not durable"))?;
+            if !phase_certificates_are_quorum_equivalent_v1(&confirmed, &certificate) {
+                return Err(eyre!(
+                    "private-settlement recovered Prepare statement did not converge durably"
+                ));
+            }
         }
         Ok(certificate)
     }
@@ -1126,6 +1436,59 @@ impl Client {
                 return Err(eyre!("private-settlement Prepare matrix is substituted"));
             }
             certificates.push(self.certify_private_settlement_prepare_v1(
+                endpoints,
+                manifest,
+                manifest.legs[index].payload_digest,
+                authority,
+            )?);
+        }
+        Self::build_private_settlement_prepare_barrier_v1(
+            manifest.clone(),
+            authority_catalog.to_vec(),
+            deltas.to_vec(),
+            certificates,
+        )
+    }
+
+    /// Restart-safe Prepare certification and complete-barrier reconstruction.
+    ///
+    /// Every committee is queried to quorum for an orphaned valid Prepare QC
+    /// before fresh certification. Quorum-equivalent signer subsets reconstruct
+    /// the same normalized prepared-bundle digest after a coordinator restart.
+    ///
+    /// # Errors
+    ///
+    /// Fails on an incomplete or substituted matrix, any unavailable recovery
+    /// quorum, invalid certified statements, or a certification/handoff failure.
+    pub fn recover_or_prepare_private_settlement_bundle_v1(
+        &self,
+        committee_endpoints: &[Vec<Url>],
+        manifest: &AtomicPrivateSettlementV1,
+        authority_catalog: &[PrivateSettlementCommitteeAuthorityV1],
+        deltas: &[PrivateSettlementDeltaV1],
+    ) -> Result<PrivateSettlementPrepareBarrierV1> {
+        if committee_endpoints.len() != manifest.legs.len()
+            || authority_catalog.len() != manifest.legs.len()
+            || deltas.len() != manifest.legs.len()
+        {
+            return Err(eyre!("private-settlement Prepare matrix is incomplete"));
+        }
+        let mut certificates = Vec::with_capacity(manifest.legs.len());
+        for (index, ((endpoints, authority), delta)) in committee_endpoints
+            .iter()
+            .zip(authority_catalog)
+            .zip(deltas)
+            .enumerate()
+        {
+            if usize::from(delta.leg_ordinal) != index
+                || delta
+                    .digest()
+                    .map_err(|_| eyre!("private-settlement delta encoding failed"))?
+                    != manifest.legs[index].delta_digest
+            {
+                return Err(eyre!("private-settlement Prepare matrix is substituted"));
+            }
+            certificates.push(self.recover_or_certify_private_settlement_prepare_v1(
                 endpoints,
                 manifest,
                 manifest.legs[index].payload_digest,
@@ -1209,6 +1572,54 @@ impl Client {
         barrier: &PrivateSettlementPrepareBarrierV1,
         authority: &PrivateSettlementCommitteeAuthorityV1,
     ) -> Result<PrivateSettlementPhaseCertificateV1> {
+        self.certify_private_settlement_commit_with_recovered_v1(
+            committee_endpoints,
+            payload_digest,
+            barrier,
+            authority,
+            None,
+            false,
+        )
+    }
+
+    /// Recover an existing Commit QC or safely create one after checking every node.
+    ///
+    /// # Errors
+    ///
+    /// Fails under the recovery or certification conditions documented by the
+    /// corresponding lower-level methods.
+    pub fn recover_or_certify_private_settlement_commit_v1(
+        &self,
+        committee_endpoints: &[Url],
+        payload_digest: Hash,
+        barrier: &PrivateSettlementPrepareBarrierV1,
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+    ) -> Result<PrivateSettlementPhaseCertificateV1> {
+        let recovered = self.recover_private_settlement_commit_certificate_v1(
+            committee_endpoints,
+            payload_digest,
+            barrier,
+            authority,
+        )?;
+        self.certify_private_settlement_commit_with_recovered_v1(
+            committee_endpoints,
+            payload_digest,
+            barrier,
+            authority,
+            recovered,
+            true,
+        )
+    }
+
+    fn certify_private_settlement_commit_with_recovered_v1(
+        &self,
+        committee_endpoints: &[Url],
+        payload_digest: Hash,
+        barrier: &PrivateSettlementPrepareBarrierV1,
+        authority: &PrivateSettlementCommitteeAuthorityV1,
+        recovered: Option<PrivateSettlementPhaseCertificateV1>,
+        verify_durable_handoff: bool,
+    ) -> Result<PrivateSettlementPhaseCertificateV1> {
         if committee_endpoints.len() != authority.validators.len() {
             return Err(eyre!(
                 "private-settlement Commit endpoints must match the four-validator roster"
@@ -1243,7 +1654,12 @@ impl Client {
             responders.push(index);
         }
         let selected = canonical_phase_vote_quorum_v1(&votes)?;
-        let certificate = aggregate_phase_votes_v1(body, ordinal, authority, selected)?;
+        let certificate = if let Some(certificate) = recovered {
+            validate_phase_certificate_v1(&certificate, &body, ordinal, authority)?;
+            certificate
+        } else {
+            aggregate_phase_votes_v1(body, ordinal, authority, selected)?
+        };
         for index in responders {
             let endpoint = &committee_endpoints[index];
             self.persist_private_settlement_phase_certificate_v1(
@@ -1252,6 +1668,21 @@ impl Client {
                 payload_digest,
                 &certificate,
             )?;
+        }
+        if verify_durable_handoff {
+            let confirmed = self
+                .recover_private_settlement_commit_certificate_v1(
+                    committee_endpoints,
+                    payload_digest,
+                    barrier,
+                    authority,
+                )?
+                .ok_or_else(|| eyre!("private-settlement recovered Commit QC was not durable"))?;
+            if !phase_certificates_are_quorum_equivalent_v1(&confirmed, &certificate) {
+                return Err(eyre!(
+                    "private-settlement recovered Commit statement did not converge durably"
+                ));
+            }
         }
         Ok(certificate)
     }
@@ -1276,6 +1707,39 @@ impl Client {
             .enumerate()
             .map(|(index, (endpoints, authority))| {
                 self.certify_private_settlement_commit_v1(
+                    endpoints,
+                    barrier.manifest.legs[index].payload_digest,
+                    barrier,
+                    authority,
+                )
+            })
+            .collect()
+    }
+
+    /// Restart-safe Commit certification for every participant leg.
+    ///
+    /// Every four-validator committee is queried to quorum for orphaned durable
+    /// QCs before any fresh Commit certificate is created.
+    ///
+    /// # Errors
+    ///
+    /// Fails on an incomplete endpoint matrix or any per-leg recovery,
+    /// certification, substitution, or persistence error.
+    pub fn recover_or_commit_private_settlement_bundle_v1(
+        &self,
+        committee_endpoints: &[Vec<Url>],
+        barrier: &PrivateSettlementPrepareBarrierV1,
+    ) -> Result<Vec<PrivateSettlementPhaseCertificateV1>> {
+        validate_prepare_barrier_v1(barrier)?;
+        if committee_endpoints.len() != barrier.manifest.legs.len() {
+            return Err(eyre!("private-settlement Commit matrix is incomplete"));
+        }
+        committee_endpoints
+            .iter()
+            .zip(&barrier.authority_catalog)
+            .enumerate()
+            .map(|(index, (endpoints, authority))| {
+                self.recover_or_certify_private_settlement_commit_v1(
                     endpoints,
                     barrier.manifest.legs[index].payload_digest,
                     barrier,
@@ -1462,6 +1926,49 @@ impl Client {
         )?;
         validate_leg_status_response_v1(payload_digest, &decoded)?;
         Ok(decoded)
+    }
+
+    /// Recover exact locally durable Prepare and Commit QCs from one participant node.
+    ///
+    /// This sponsor-authenticated read is intended for coordinator restart
+    /// recovery. It returns only public quorum material and never proof bytes,
+    /// capsules, approvals, or audit plaintext.
+    ///
+    /// # Errors
+    ///
+    /// Fails on request signing/transport failure, authorization denial, or a
+    /// malformed/substituted recovery response.
+    pub fn private_settlement_phase_certificates_from_v1(
+        &self,
+        endpoint: &Url,
+        payload_digest: Hash,
+    ) -> Result<PrivateSettlementPhaseCertificatesResponseV1> {
+        let path =
+            private_settlement_resource_path_v1("legs", &payload_digest, "/phase-certificates");
+        let url = join_torii_url(endpoint, &path);
+        let response = self.send_private_settlement_builder_v1(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        let decoded = Self::decode_private_settlement_response_v1(
+            response,
+            "private-settlement phase-certificate recovery failed",
+        )?;
+        validate_phase_certificates_response_v1(payload_digest, &decoded)?;
+        Ok(decoded)
+    }
+
+    /// Recover exact locally durable Prepare and Commit QCs from the default Torii node.
+    ///
+    /// # Errors
+    ///
+    /// Fails under the same conditions as
+    /// [`Self::private_settlement_phase_certificates_from_v1`].
+    pub fn private_settlement_phase_certificates_v1(
+        &self,
+        payload_digest: Hash,
+    ) -> Result<PrivateSettlementPhaseCertificatesResponseV1> {
+        self.private_settlement_phase_certificates_from_v1(&self.torii_url, payload_digest)
     }
 
     /// Fetch proof material as one exact committee validator identity.
@@ -1778,6 +2285,10 @@ mod tests {
             private_settlement_resource_path_v1("bundles", &digest, "/receipt"),
             format!("v1/nexus/private-settlements/bundles/{encoded}/receipt")
         );
+        assert_eq!(
+            private_settlement_resource_path_v1("legs", &digest, "/phase-certificates"),
+            format!("v1/nexus/private-settlements/legs/{encoded}/phase-certificates")
+        );
     }
 
     #[test]
@@ -1826,6 +2337,111 @@ mod tests {
             canonical_phase_vote_quorum_v1(&phase_votes_v1(&authority, &keys, body, &[0, 1],))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn phase_certificate_recovery_response_is_exact_and_monotonic() {
+        let (authority, keys, prepare_body) = phase_fixture_v1();
+        let prepare = aggregate_phase_votes_v1(
+            prepare_body,
+            0,
+            &authority,
+            &phase_votes_v1(&authority, &keys, prepare_body, &[0, 1, 2]),
+        )
+        .expect("Prepare QC");
+        let payload_digest = Hash::new(b"client-recovered-phase-payload");
+        let prepared = PrivateSettlementPhaseCertificatesResponseV1 {
+            bundle_id: prepare_body.bundle_id,
+            payload_digest,
+            leg_ordinal: 0,
+            lifecycle: PrivateSettlementLifecycleDtoV1::Prepared,
+            prepare_certificate: Some(prepare.clone()),
+            commit_certificate: None,
+        };
+        assert!(validate_phase_certificates_response_v1(payload_digest, &prepared).is_ok());
+
+        let mut incomplete = prepared.clone();
+        incomplete.lifecycle = PrivateSettlementLifecycleDtoV1::CommitCertified;
+        assert!(validate_phase_certificates_response_v1(payload_digest, &incomplete).is_err());
+
+        let mut commit_body = prepare_body;
+        commit_body.phase = PrivateSettlementPhaseV1::Commit;
+        commit_body.prepared_bundle_digest = Hash::new(b"client-recovered-prepared-bundle");
+        let commit = aggregate_phase_votes_v1(
+            commit_body,
+            0,
+            &authority,
+            &phase_votes_v1(&authority, &keys, commit_body, &[0, 1, 2]),
+        )
+        .expect("Commit QC");
+        let complete = PrivateSettlementPhaseCertificatesResponseV1 {
+            lifecycle: PrivateSettlementLifecycleDtoV1::CommitCertified,
+            commit_certificate: Some(commit),
+            ..prepared
+        };
+        assert!(validate_phase_certificates_response_v1(payload_digest, &complete).is_ok());
+
+        let mut substituted = complete;
+        substituted.payload_digest = Hash::new(b"substituted-recovery-payload");
+        assert!(validate_phase_certificates_response_v1(payload_digest, &substituted).is_err());
+    }
+
+    #[test]
+    fn phase_certificate_acknowledgement_accepts_monotonic_prepare_replay() {
+        assert!(phase_certificate_acknowledgement_is_valid_v1(
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementLifecycleDtoV1::Prepared,
+        ));
+        assert!(phase_certificate_acknowledgement_is_valid_v1(
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementLifecycleDtoV1::CommitCertified,
+        ));
+        assert!(!phase_certificate_acknowledgement_is_valid_v1(
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementLifecycleDtoV1::Audited,
+        ));
+        assert!(phase_certificate_acknowledgement_is_valid_v1(
+            PrivateSettlementPhaseV1::Commit,
+            PrivateSettlementLifecycleDtoV1::CommitCertified,
+        ));
+        assert!(!phase_certificate_acknowledgement_is_valid_v1(
+            PrivateSettlementPhaseV1::Commit,
+            PrivateSettlementLifecycleDtoV1::Prepared,
+        ));
+    }
+
+    #[test]
+    fn recovered_phase_certificates_normalize_quorum_equivalent_signer_sets() {
+        let (authority, keys, body) = phase_fixture_v1();
+        let first = aggregate_phase_votes_v1(
+            body,
+            0,
+            &authority,
+            &phase_votes_v1(&authority, &keys, body, &[0, 1, 2]),
+        )
+        .expect("first exact quorum");
+        let second = aggregate_phase_votes_v1(
+            body,
+            0,
+            &authority,
+            &phase_votes_v1(&authority, &keys, body, &[1, 2, 3]),
+        )
+        .expect("second exact quorum");
+        assert_ne!(first, second);
+        assert!(phase_certificates_are_quorum_equivalent_v1(&first, &second));
+
+        let expected = std::cmp::min(first.clone(), second.clone());
+        let mut recovered = None;
+        retain_canonical_phase_certificate_v1(&mut recovered, second);
+        retain_canonical_phase_certificate_v1(&mut recovered, first.clone());
+        assert_eq!(recovered, Some(expected));
+
+        let mut different_statement = first;
+        different_statement.body.delta_digest = Hash::new(b"different recovered statement");
+        assert!(!phase_certificates_are_quorum_equivalent_v1(
+            recovered.as_ref().expect("canonical recovery"),
+            &different_statement,
+        ));
     }
 
     #[test]
@@ -1957,5 +2573,55 @@ mod tests {
         assert!(request.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case(HEADER_OPERATOR_PUBLIC_KEY) && value == &expected_key
         }));
+    }
+
+    #[test]
+    fn phase_certificate_recovery_uses_sponsor_auth_and_exact_path() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(base_url());
+        let payload_digest = Hash::new(b"sponsor-phase-recovery-payload");
+        let response = PrivateSettlementPhaseCertificatesResponseV1 {
+            bundle_id: Hash::new(b"sponsor-phase-recovery-bundle"),
+            payload_digest,
+            leg_ordinal: 0,
+            lifecycle: PrivateSettlementLifecycleDtoV1::Audited,
+            prepare_certificate: None,
+            commit_certificate: None,
+        };
+        let response_body = norito::json::to_vec(&response).expect("encode recovery response");
+        let decoded = with_mock_http(
+            respond_with(
+                &snapshots,
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(response_body)
+                    .expect("response build"),
+            ),
+            || client.private_settlement_phase_certificates_v1(payload_digest),
+        )
+        .expect("sponsor recovery response");
+        assert_eq!(decoded, response);
+
+        let snapshots = snapshots.lock().expect("lock snapshots");
+        assert_eq!(snapshots.len(), 1);
+        let request = &snapshots[0];
+        assert_eq!(request.method, HttpMethod::GET);
+        assert_eq!(
+            request.url.path(),
+            format!("/v1/nexus/private-settlements/legs/{payload_digest}/phase-certificates")
+        );
+        assert!(request.body.is_empty());
+        assert!(
+            request
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_ACCOUNT))
+        );
+        assert!(
+            request
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE))
+        );
     }
 }

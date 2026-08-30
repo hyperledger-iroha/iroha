@@ -1841,7 +1841,34 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         .and_then(|schema| schema.get("oneOf"))
         .and_then(Value::as_array)
         .expect("Parliament proposal variants");
-    assert_eq!(proposal_variants.len(), 7);
+    let proposal_tags = proposal_variants
+        .iter()
+        .map(|variant| {
+            variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("kind"))
+                .and_then(Value::as_object)
+                .and_then(|kind| kind.get("const"))
+                .and_then(Value::as_str)
+                .expect("closed proposal tag")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        proposal_tags,
+        [
+            "DeployContract",
+            "RuntimeUpgrade",
+            "SccpRouteGovernance",
+            "ValidationFeePolicy",
+            "ValidationFeePayoutLifecycle",
+            "MusubiRegistryGovernance",
+            "SorafsProviderGovernance",
+            "ContractLifecycleGovernance",
+            "ContractEmergencyHold",
+            "GlobalDataTriggerPermissionGovernance",
+        ]
+    );
 
     let transition_variants = schemas
         .get("GovernanceParliamentLifecycleTransitionV1")

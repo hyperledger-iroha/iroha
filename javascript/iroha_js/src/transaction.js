@@ -55,7 +55,6 @@ import {
   buildProposeSccpRouteGovernanceInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
-  buildPersistCouncilForEpochInstruction,
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
@@ -4389,38 +4388,6 @@ export function buildCastPlainBallotTransaction(input) {
     privateKeyAlgorithm = null,
   } = input;
   const instruction = buildCastPlainBallotInstruction(ballot);
-  return buildTransaction({
-    networkId,
-    authority,
-    feePayment,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-    privateKeyAlgorithm,
-  });
-}
-
-/**
- * Build a transaction containing a `PersistCouncilForEpoch` instruction.
- */
-export function buildPersistCouncilForEpochTransaction(input) {
-  transactionNetworkIdBytes(input, "input");
-  const {
-    networkId,
-    authority,
-    feePayment,
-    record,
-    metadata = null,
-    creationTimeMs = null,
-    ttlMs = null,
-    nonce = null,
-    privateKey,
-    privateKeyAlgorithm = null,
-  } = input;
-  const instruction = buildPersistCouncilForEpochInstruction(record);
   return buildTransaction({
     networkId,
     authority,

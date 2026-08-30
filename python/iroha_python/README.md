@@ -1742,8 +1742,6 @@ protected = client.get_protected_namespaces()
 governed_contract = client.get_governance_contract_typed(
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
 )
-council = client.get_governance_council_current()
-audit = client.get_governance_council_audit(epoch=42)
 proposal = client.get_governance_proposal_typed("ab" * 32)
 referendum = client.get_governance_referendum_typed("ref-1")
 tally = client.get_governance_tally_typed("ref-1")

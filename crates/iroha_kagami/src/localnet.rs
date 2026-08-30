@@ -3165,6 +3165,10 @@ fn render_peer_config(
                 .expect("LOCALNET_TORII_MAX_CONTENT_LEN fits i64"),
         ),
     );
+    // Generated localnet and prepared-Compose bundles do not yet project an
+    // immutable prover-key directory into every validator container.
+    // TODO: enable this profile once the key directory is captured and mounted.
+    torii.insert("zk_prover_enabled".into(), Value::Boolean(false));
     if mcp_enabled {
         let mut mcp = Table::new();
         mcp.insert("enabled".into(), Value::Boolean(true));

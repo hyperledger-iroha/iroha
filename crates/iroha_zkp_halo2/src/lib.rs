@@ -22,33 +22,50 @@
 //!   targets `std` for simplicity.
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
+#[cfg(feature = "full")]
 pub mod backend;
+#[cfg(feature = "full")]
 pub mod confidential;
+#[cfg(feature = "full")]
 mod errors;
+#[cfg(feature = "full")]
 mod field;
+#[cfg(feature = "full")]
 pub mod generalized_bulletproof;
+#[cfg(feature = "full")]
 mod group;
+#[cfg(feature = "full")]
 mod hash;
+#[cfg(feature = "full")]
 mod ipa;
+#[cfg(feature = "full")]
 mod norito_types;
+#[cfg(feature = "full")]
 mod params;
+#[cfg(feature = "full")]
 mod poly;
+#[cfg(feature = "model-primitives")]
 pub mod poseidon;
-#[cfg(test)]
+#[cfg(all(test, feature = "full"))]
 #[allow(
     dead_code,
     reason = "shared test-directory helper is retained for parked storage-backed tests"
 )]
 mod testing;
+#[cfg(feature = "full")]
 mod transcript;
+#[cfg(feature = "full")]
 pub mod vega;
+#[cfg(feature = "model-primitives")]
+pub mod vega_constants;
 // Re-exports for the default (Pallas) backend.
-#[cfg(feature = "goldilocks_backend")]
+#[cfg(all(feature = "full", feature = "goldilocks_backend"))]
 pub use backend::goldilocks::{
     Group as GoldilocksGroup, IpaProof as GoldilocksIpaProof, IpaProver as GoldilocksIpaProver,
     IpaVerifier as GoldilocksIpaVerifier, Params as GoldilocksParams,
     Polynomial as GoldilocksPolynomial, Scalar as GoldilocksScalar,
 };
+#[cfg(feature = "full")]
 pub use backend::{
     IpaBackend, IpaGroup, IpaScalar, bn254,
     bn254::{
@@ -62,7 +79,9 @@ pub use backend::{
         Scalar as PrimeField64,
     },
 };
+#[cfg(feature = "full")]
 pub use errors::Error;
+#[cfg(feature = "full")]
 pub use ipa::{
     IpaRoundChallenge, IpaVerifierAccumulation, IpaVerifierAccumulationRound,
     IpaVerifierBVectorReduction, IpaVerifierBVectorReductionRound, IpaVerifierTranscriptBinding,
@@ -73,15 +92,18 @@ pub use ipa::{
     validate_ipa_verifier_transcript_binding, validate_ipa_verifier_transcript_projection,
     validate_ipa_verifier_witness,
 };
+#[cfg(feature = "full")]
 pub use norito_types::{
     IpaParams, IpaProofData, OpenVerifyEnvelope, PolyOpenPublic, PolyOpenTranscriptMetadata,
     ZkCurveId,
 };
+#[cfg(feature = "full")]
 pub use transcript::Transcript;
 /// Resource limits for standalone `OpenVerifyEnvelope` decoding.
 ///
 /// Limits are always finite. Runtime callers should construct this value from their configured ZK
 /// policy; convenience APIs use the conservative V1 defaults.
+#[cfg(feature = "full")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OpenVerifyLimits {
     /// Maximum allowed circuit/domain size exponent (`n <= 2^max_k`).
@@ -89,6 +111,7 @@ pub struct OpenVerifyLimits {
     /// Maximum allowed transcript label length in bytes.
     max_transcript_label_len: usize,
 }
+#[cfg(feature = "full")]
 impl OpenVerifyLimits {
     /// Conservative V1 circuit/domain size exponent ceiling.
     pub const DEFAULT_MAX_K: u32 = 16;
@@ -103,12 +126,14 @@ impl OpenVerifyLimits {
         }
     }
 }
+#[cfg(feature = "full")]
 impl Default for OpenVerifyLimits {
     fn default() -> Self {
         Self::new(Self::DEFAULT_MAX_K, Self::DEFAULT_MAX_TRANSCRIPT_LABEL_LEN)
     }
 }
 /// Crate constants and domain separation tags.
+#[cfg(feature = "full")]
 pub mod constants {
     /// Domain Separation Tag for IPA transcripts and challenges.
     pub const DST: &str = "IROHA-ZK-HALO2-IPA-v1";
@@ -116,8 +141,9 @@ pub mod constants {
     pub const GENERATOR_HASH_TO_CURVE_DST: &str = "IROHA-ZK-HALO2-IPA-v1-generator";
 }
 // Test module (private)
-#[cfg(test)]
+#[cfg(all(test, feature = "full"))]
 mod tests;
+#[cfg(feature = "full")]
 pub mod norito_helpers {
     //! Conversions between internal types and Norito wire types.
     use super::*;
@@ -510,6 +536,7 @@ pub mod norito_helpers {
     }
 }
 /// Batch verification helpers for OpenVerify envelopes.
+#[cfg(feature = "full")]
 pub mod batch {
     use super::*;
     use core::num::NonZeroUsize;

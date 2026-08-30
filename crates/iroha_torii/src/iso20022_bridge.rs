@@ -1042,13 +1042,18 @@ fn load_participant_catalog(
     {
         eyre::bail!("iso_bridge must configure at least one originator participant");
     }
-    if !participants_by_key
-        .values()
-        .any(|participant| participant.roles.contains(&IsoParticipantRole::Counterparty))
-    {
+    if !participants_by_key.values().any(|participant| {
+        participant
+            .roles
+            .contains(&IsoParticipantRole::Counterparty)
+    }) {
         eyre::bail!("iso_bridge must configure at least one counterparty participant");
     }
-    let audit_admin_keys = config.audit_admin_keys.iter().cloned().collect::<BTreeSet<_>>();
+    let audit_admin_keys = config
+        .audit_admin_keys
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     if audit_admin_keys.len() != config.audit_admin_keys.len() {
         eyre::bail!("iso_bridge audit_admin_keys must be duplicate-free");
     }
@@ -1825,8 +1830,9 @@ impl Iso20022BridgeRuntime {
         {
             return Err(IsoAdmissionError::NotAuthorized);
         }
-        let originator_financial_id = app_header_financial_identifier(parsed, AppHeaderParty::From)?
-            .ok_or(IsoAdmissionError::NotAuthorized)?;
+        let originator_financial_id =
+            app_header_financial_identifier(parsed, AppHeaderParty::From)?
+                .ok_or(IsoAdmissionError::NotAuthorized)?;
         if !participant
             .financial_identifiers
             .contains(&originator_financial_id)
@@ -1964,9 +1970,7 @@ impl Iso20022BridgeRuntime {
                 records.insert(entry.key().clone(), value);
             }
         }
-        Some(persisted_audit_index_value(
-            records.into_values().collect(),
-        ))
+        Some(persisted_audit_index_value(records.into_values().collect()))
     }
     /// Sign a domain-separated outbound ISO XML document with the bridge key.
     pub(crate) fn sign_outbound_document(
@@ -2179,9 +2183,7 @@ impl Iso20022BridgeRuntime {
         let (_, operator_key, participant) = configured
             .iter()
             .copied()
-            .find(|(_, _, participant)| {
-                participant.roles.contains(&IsoParticipantRole::Originator)
-            })
+            .find(|(_, _, participant)| participant.roles.contains(&IsoParticipantRole::Originator))
             .expect("enabled ISO runtime validates an originator participant");
         let counterparty = configured
             .iter()
@@ -2194,9 +2196,7 @@ impl Iso20022BridgeRuntime {
                 configured
                     .iter()
                     .map(|(_, _, candidate)| *candidate)
-                    .find(|candidate| {
-                        candidate.roles.contains(&IsoParticipantRole::Counterparty)
-                    })
+                    .find(|candidate| candidate.roles.contains(&IsoParticipantRole::Counterparty))
             })
             .unwrap_or(participant);
         let originator_financial_id = participant
@@ -2254,11 +2254,7 @@ impl Iso20022BridgeRuntime {
         let _state_guard = self.state_lock.lock();
         self.update_message_context_locked(message_id, context)
     }
-    fn update_message_context_locked(
-        &self,
-        message_id: &str,
-        context: IsoMessageContext,
-    ) -> bool {
+    fn update_message_context_locked(&self, message_id: &str, context: IsoMessageContext) -> bool {
         let now = Instant::now();
         if let Some(mut existing) = self.records.get_mut(message_id) {
             existing.last_seen = now;
@@ -3014,7 +3010,9 @@ impl Iso20022BridgeRuntime {
             });
         let status_code = lifecycle_status_code(message_type, parsed).map(ToOwned::to_owned);
         if message_type == "pacs.002"
-            && status_code.as_deref().is_some_and(is_settlement_status_code)
+            && status_code
+                .as_deref()
+                .is_some_and(is_settlement_status_code)
             && !settlement_committed
         {
             return Err(MsgError::ValidationFailed);
@@ -3599,7 +3597,7 @@ impl Iso20022BridgeRuntime {
             .filter_map(|entry| {
                 (!entry.retention_protected()
                     && wall_now.duration_since(entry.replay_expires_at).is_ok())
-                    .then(|| entry.key().clone())
+                .then(|| entry.key().clone())
             })
             .collect::<Vec<_>>();
         for message_id in expired {
@@ -3712,8 +3710,8 @@ impl Iso20022BridgeRuntime {
             return Ok(());
         }
         let now = SystemTime::now();
-        let entries = fs::read_dir(&tombstones_dir)
-            .wrap_err("failed to enumerate ISO replay tombstones")?;
+        let entries =
+            fs::read_dir(&tombstones_dir).wrap_err("failed to enumerate ISO replay tombstones")?;
         for entry in entries {
             let entry = entry.wrap_err("failed to read an ISO replay tombstone directory entry")?;
             let path = entry.path();
@@ -3733,7 +3731,10 @@ impl Iso20022BridgeRuntime {
                 )
             })?;
             let value = norito::json::from_json::<JsonValue>(&text).wrap_err_with(|| {
-                format!("ISO replay tombstone `{}` is not valid JSON", path.display())
+                format!(
+                    "ISO replay tombstone `{}` is not valid JSON",
+                    path.display()
+                )
             })?;
             if let Some(version) = value
                 .as_object()
@@ -3865,8 +3866,7 @@ impl Iso20022BridgeRuntime {
                                     continue;
                                 }
                                 self.insert_tombstone_indexes(&message_id, &tombstone);
-                                self.replay_tombstones
-                                    .insert(message_id.clone(), tombstone);
+                                self.replay_tombstones.insert(message_id.clone(), tombstone);
                             }
                         }
                         let _ = fs::remove_file(path);
@@ -3947,10 +3947,13 @@ impl Iso20022BridgeRuntime {
                     && record.parties.pinned_signature_policy
                         == signature_policy_label(profile.embedded_signature_policy)
             });
-        let admitting_operator_matches = PublicKey::from_str(&record.parties.admitting_operator_key)
-            .ok()
-            .and_then(|key| self.participants_by_key.get(&key))
-            .is_some_and(|participant| participant.id == record.parties.admitting_participant_id);
+        let admitting_operator_matches =
+            PublicKey::from_str(&record.parties.admitting_operator_key)
+                .ok()
+                .and_then(|key| self.participants_by_key.get(&key))
+                .is_some_and(|participant| {
+                    participant.id == record.parties.admitting_participant_id
+                });
         let originator_identity_matches = self
             .participants_by_financial_id
             .get(&record.parties.originator_financial_id)
@@ -4010,11 +4013,7 @@ impl Iso20022BridgeRuntime {
         let _ = fs::remove_file(path);
         self.persist_audit_index();
     }
-    fn persist_replay_tombstone(
-        &self,
-        message_id: &str,
-        tombstone: &IsoReplayTombstone,
-    ) -> bool {
+    fn persist_replay_tombstone(&self, message_id: &str, tombstone: &IsoReplayTombstone) -> bool {
         let Some(store_dir) = self.store_dir.as_deref() else {
             return false;
         };
@@ -4022,10 +4021,9 @@ impl Iso20022BridgeRuntime {
         if !ensure_real_directory(&tombstones_dir) {
             return false;
         }
-        let Ok(json) = norito::json::to_string_pretty(&replay_tombstone_value(
-            message_id,
-            tombstone,
-        )) else {
+        let Ok(json) =
+            norito::json::to_string_pretty(&replay_tombstone_value(message_id, tombstone))
+        else {
             return false;
         };
         if !persisted_json_fits_record_cap(&json) {
@@ -4493,10 +4491,7 @@ fn replay_tombstone_value(message_id: &str, tombstone: &IsoReplayTombstone) -> J
         "business_message_id".to_owned(),
         string_or_null(tombstone.business_message_id.as_deref()),
     );
-    map.insert(
-        "uetr".to_owned(),
-        string_or_null(tombstone.uetr.as_deref()),
-    );
+    map.insert("uetr".to_owned(), string_or_null(tombstone.uetr.as_deref()));
     let digest = persisted_record_digest(&JsonValue::Object(map.clone()));
     map.insert(
         ISO_PERSISTED_REPLAY_TOMBSTONE_DIGEST_FIELD.to_owned(),
@@ -4543,10 +4538,7 @@ fn record_matches_replay_tombstone(
 fn persisted_json_fits_record_cap(json: &str) -> bool {
     u64::try_from(json.len()).is_ok_and(|len| len <= ISO_PERSISTED_RECORD_MAX_BYTES)
 }
-fn persisted_record_body_value(
-    message_id: &str,
-    record: &IsoMessageRecordV2,
-) -> norito::json::Map {
+fn persisted_record_body_value(message_id: &str, record: &IsoMessageRecordV2) -> norito::json::Map {
     let mut root = norito::json::Map::new();
     root.insert(
         "version".to_owned(),

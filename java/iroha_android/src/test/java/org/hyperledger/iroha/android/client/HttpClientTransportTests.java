@@ -5313,19 +5313,48 @@ public final class HttpClientTransportTests {
   private static void governanceContractRequestParsesResponse() {
     final String contractAddress =
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+    final String owner = TestAccountIds.ed25519Authority(0x11);
+    final String responseBody =
+        "{"
+            + "\"found\":true,"
+            + "\"contract_address\":\""
+            + contractAddress
+            + "\","
+            + "\"contract_subject_account\":\""
+            + owner
+            + "\","
+            + "\"dataspace\":\"router\","
+            + "\"active\":true,"
+            + "\"lifecycle\":{"
+            + "\"version\":1,"
+            + "\"origin\":\"direct\","
+            + "\"origin_account\":\""
+            + owner
+            + "\","
+            + "\"origin_proposal_content_id_hex\":null,"
+            + "\"origin_governance_attempt_id_hex\":null,"
+            + "\"owner\":\""
+            + owner
+            + "\","
+            + "\"pending_owner\":\"parliament\","
+            + "\"parliament_delegated\":true,"
+            + "\"active_code_hash_hex\":\""
+            + "77".repeat(32)
+            + "\","
+            + "\"revision\":7,"
+            + "\"emergency_hold\":null},"
+            + "\"emergency_hold_active\":false,"
+            + "\"code_hash_hex\":\""
+            + "77".repeat(32)
+            + "\","
+            + "\"abi_hash_hex\":\""
+            + "88".repeat(32)
+            + "\","
+            + "\"public_entrypoints\":[\"transfer\",\"view_balance\"]}";
     final StubResponseExecutor executor =
         new StubResponseExecutor(
             200,
-            ("{"
-                    + "\"found\":true,"
-                    + "\"contract_address\":\""
-                    + contractAddress
-                    + "\","
-                    + "\"dataspace\":\"router\","
-                    + "\"code_hash_hex\":\""
-                    + "77".repeat(32)
-                    + "\"}")
-                .getBytes(StandardCharsets.UTF_8),
+            responseBody.getBytes(StandardCharsets.UTF_8),
             "ok");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
@@ -5349,12 +5378,52 @@ public final class HttpClientTransportTests {
     assert contractAddress.equals(response.contractAddress()) : "Governance contract address mismatch";
     assert "router".equals(response.dataspace()) : "Governance dataspace mismatch";
     assert "77".repeat(32).equals(response.codeHashHex()) : "Governance code hash mismatch";
+    assert response.lifecycle() != null && response.lifecycle().version() == 1
+        : "Governance lifecycle version mismatch";
+    assert response.lifecycle() != null && response.lifecycle().revision() == 7L
+        : "Governance lifecycle revision mismatch";
+    assert "parliament".equals(response.lifecycle().pendingOwner())
+        : "Governance pending owner mismatch";
+    assert "77".repeat(32).equals(response.lifecycle().activeCodeHashHex())
+        : "Governance lifecycle active code hash mismatch";
+    assert response.publicEntrypoints().equals(List.of("transfer", "view_balance"))
+        : "Governance public entrypoints mismatch";
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Governance contract request must be captured";
     assert request.uri().toString().equals("https://torii.example/api/v1/gov/contracts/" + contractAddress)
         : "Governance contract URI mismatch";
     assert "GET".equals(request.method()) : "Governance contract must use GET";
+
+    expectIllegalState(
+        () -> ContractJsonParser.parseGovernanceContractResponse(
+            responseBody
+                .replace(
+                    "\"active_code_hash_hex\":\"" + "77".repeat(32) + "\"",
+                    "\"active_code_hash_hex\":\"" + "66".repeat(32) + "\"")
+                .getBytes(StandardCharsets.UTF_8)),
+        "Governance response must bind the active lifecycle hash");
+    expectIllegalState(
+        () -> ContractJsonParser.parseGovernanceContractResponse(
+            responseBody
+                .replace(
+                    "[\"transfer\",\"view_balance\"]",
+                    "[\"view_balance\",\"transfer\"]")
+                .getBytes(StandardCharsets.UTF_8)),
+        "Governance response must require sorted public entrypoints");
+    expectIllegalState(
+        () -> ContractJsonParser.parseGovernanceContractResponse(
+            responseBody
+                .replace("\"version\":1", "\"version\":2")
+                .getBytes(StandardCharsets.UTF_8)),
+        "Governance response must reject incompatible lifecycle versions");
+    expectIllegalState(
+        () -> ContractJsonParser.parseGovernanceContractResponse(
+            ("{\"found\":false,\"contract_address\":\""
+                    + contractAddress
+                    + "\",\"dataspace\":\"router\",\"active\":null}")
+                .getBytes(StandardCharsets.UTF_8)),
+        "Governance absent response must reject extra fields");
   }
 
   private static void resolveAccountAliasRequestParsesResponse() {

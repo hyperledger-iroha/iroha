@@ -175,6 +175,28 @@ pub struct PrivateSettlementPhaseCertificateResponseV1 {
     pub lifecycle: PrivateSettlementLifecycleDtoV1,
 }
 
+/// Sponsor-only recovery view for exact locally durable phase certificates.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(deny_unknown_fields)]
+pub struct PrivateSettlementPhaseCertificatesResponseV1 {
+    /// Public bundle identifier.
+    pub bundle_id: Hash,
+    /// Content address of the exact local encrypted leg.
+    pub payload_digest: Hash,
+    /// Canonical participant leg ordinal.
+    pub leg_ordinal: u8,
+    /// Current durable local lifecycle.
+    pub lifecycle: PrivateSettlementLifecycleDtoV1,
+    /// Exact locally durable Prepare QC, or explicit absence.
+    #[norito(required)]
+    pub prepare_certificate: Option<PrivateSettlementPhaseCertificateV1>,
+    /// Exact locally durable Commit QC, or explicit absence.
+    #[norito(required)]
+    pub commit_certificate: Option<PrivateSettlementPhaseCertificateV1>,
+}
+
 /// Idempotent encrypted-leg upload disposition.
 #[derive(
     JsonDeserialize,
@@ -477,5 +499,44 @@ mod tests {
         let decoded_json: PrivateSettlementBundleReceiptResponseV1 =
             norito::json::from_json(&json).expect("DTO JSON decodes");
         assert_eq!(decoded_json, response);
+    }
+
+    #[test]
+    fn phase_certificate_recovery_requires_explicit_optional_fields() {
+        let response = PrivateSettlementPhaseCertificatesResponseV1 {
+            bundle_id: Hash::new(b"private-settlement-recovery-bundle"),
+            payload_digest: Hash::new(b"private-settlement-recovery-payload"),
+            leg_ordinal: 1,
+            lifecycle: PrivateSettlementLifecycleDtoV1::Prepared,
+            prepare_certificate: None,
+            commit_certificate: None,
+        };
+        let value = norito::json::to_value(&response).expect("encode recovery JSON");
+        assert_eq!(
+            value.get("prepare_certificate"),
+            Some(&norito::json::Value::Null)
+        );
+        assert_eq!(
+            value.get("commit_certificate"),
+            Some(&norito::json::Value::Null)
+        );
+        let decoded =
+            norito::json::from_value::<PrivateSettlementPhaseCertificatesResponseV1>(value.clone())
+                .expect("explicit null recovery fields decode");
+        assert_eq!(decoded, response);
+
+        let mut omitted = value;
+        omitted
+            .as_object_mut()
+            .expect("recovery response is an object")
+            .remove("prepare_certificate");
+        let error =
+            norito::json::from_value::<PrivateSettlementPhaseCertificatesResponseV1>(omitted)
+                .expect_err("omitted recovery field must reject");
+        assert!(
+            error
+                .to_string()
+                .contains("missing field `prepare_certificate`")
+        );
     }
 }

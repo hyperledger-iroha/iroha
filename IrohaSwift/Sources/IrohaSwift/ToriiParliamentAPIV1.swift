@@ -41,7 +41,7 @@ public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
     fileprivate let exactWireData: Data
     private let requiresExactIntegerEncoding: Bool
 
-    /// Validate one exact nine-kind proposal wire value before it can enter a draft request.
+    /// Validate one exact ten-kind proposal wire value before it can enter a draft request.
     public init(validating data: Data) throws {
         do {
             try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
@@ -703,6 +703,7 @@ public enum ToriiParliamentAPIV1 {
         "SorafsProviderGovernance",
         "ContractLifecycleGovernance",
         "ContractEmergencyHold",
+        "GlobalDataTriggerPermissionGovernance",
     ]
 
     public static let publicTransitionDigestDomain =

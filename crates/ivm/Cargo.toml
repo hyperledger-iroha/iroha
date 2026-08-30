@@ -13,7 +13,7 @@ build = "build.rs"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("iroha_telemetry"))',
+    'cfg(feature, values("telemetry"))',
     'cfg(feature, values("schema-structural"))',
 ] }
 
@@ -90,6 +90,8 @@ hex-literal = "1.1.0"
 # - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
 # - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
 dev-tools = []
+# Collect bounded register-usage metrics for the shipping telemetry surface.
+telemetry = []
 # Expose benchmark-only backend selection hooks. Production builds must leave
 # this disabled so field dispatch is immutable after hardware selection.
 bench = []

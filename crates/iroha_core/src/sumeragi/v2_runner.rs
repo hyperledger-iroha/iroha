@@ -3133,9 +3133,9 @@ pub(super) enum V2RunnerError {
     /// Bounded lane-local/merge/Native-AMX adapter failed closed.
     #[error(transparent)]
     LaneWork(#[from] super::v2_lane_work::V2LaneWorkError),
-    /// Retired NPoS VRF tombstone or committed epoch-parameter boundary failed closed.
+    /// The committed NPoS epoch-parameter boundary failed closed.
     #[error(transparent)]
-    NposVrf(#[from] super::v2_npos::V2NposError),
+    Npos(#[from] super::v2_npos::V2NposError),
     /// Durable lane reservation ownership could not be reconciled exactly.
     #[error(transparent)]
     Reservation(#[from] V2ReservationLifecycleError),

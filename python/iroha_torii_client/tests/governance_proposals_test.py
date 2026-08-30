@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 import pytest
 from client_test_support import CANONICAL_OWNER
 from iroha_torii_client.governance_proposals import (
+    GovernanceContractLifecycleActionKind,
+    GovernanceContractLifecycleEmergencyHoldRetrospective,
+    GovernanceGlobalDataTriggerPermissionAction,
+    GovernanceProposalContractEmergencyHold,
+    GovernanceProposalContractLifecycleGovernance,
+    GovernanceProposalGlobalDataTriggerPermissionGovernance,
     GovernanceProposalDeployContract,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
@@ -311,7 +319,56 @@ def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
             },
             GovernanceProposalSorafsProviderGovernance,
         ),
+        (
+            "ContractLifecycleGovernance",
+            {
+                "contract_address": CONTRACT_ADDRESS,
+                "expected_revision": 3,
+                "action": {
+                    "action": "CompleteEmergencyHoldRetrospective",
+                    "payload": {
+                        "hold_proposal_content_id": [81] * 32,
+                        "hold_governance_attempt_id": [82] * 32,
+                        "incident_digest": [83] * 32,
+                        "retrospective_finding_root": [84] * 32,
+                    },
+                },
+            },
+            GovernanceProposalContractLifecycleGovernance,
+        ),
+        (
+            "ContractEmergencyHold",
+            {
+                "contract_address": CONTRACT_ADDRESS,
+                "expected_revision": 2,
+                "expected_code_hash": "33" * 32,
+                "incident_digest": [85] * 32,
+                "reason": "contain active exploit",
+                "duration_blocks": 3_600,
+            },
+            GovernanceProposalContractEmergencyHold,
+        ),
+        (
+            "GlobalDataTriggerPermissionGovernance",
+            {
+                "authority": CANONICAL_OWNER,
+                "action": {"action": "grant", "value": None},
+            },
+            GovernanceProposalGlobalDataTriggerPermissionGovernance,
+        ),
     ]
+
+
+def test_shared_fixture_pins_closed_proposal_inventory() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "governance"
+        / "parliament_api_v1.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    assert fixture["proposal_kinds"] == [kind.value for kind in GovernanceProposalKindTag]
 
 
 @pytest.mark.parametrize(("tag", "payload", "payload_type"), _variants())
@@ -395,6 +452,64 @@ def test_closed_nested_action_tags_reject_unknown_values() -> None:
     with pytest.raises(TypeError, match="one-field string tuple"):
         GovernanceProposalKind.from_payload(
             {"kind": "MusubiRegistryGovernance", "payload": scalar_package_name}
+        )
+
+
+def test_contract_lifecycle_retrospective_and_unit_actions_are_closed() -> None:
+    lifecycle = copy.deepcopy(_variants()[7][1])
+    proposal = GovernanceProposalKind.from_payload(
+        {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+    )
+    assert proposal.payload.action.action is (  # type: ignore[union-attr]
+        GovernanceContractLifecycleActionKind.COMPLETE_EMERGENCY_HOLD_RETROSPECTIVE
+    )
+    assert isinstance(  # type: ignore[union-attr]
+        proposal.payload.action.payload,
+        GovernanceContractLifecycleEmergencyHoldRetrospective,
+    )
+
+    for action in ("CancelOwnershipOffer", "AcceptParliamentOwnership"):
+        lifecycle["action"] = {"action": action, "payload": None}
+        GovernanceProposalKind.from_payload(
+            {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+        )
+        del lifecycle["action"]["payload"]  # type: ignore[index]
+        with pytest.raises(TypeError, match="missing required field `payload`"):
+            GovernanceProposalKind.from_payload(
+                {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+            )
+
+
+def test_contract_hold_bounds_and_retrospective_root_fail_closed() -> None:
+    lifecycle = copy.deepcopy(_variants()[7][1])
+    lifecycle["action"]["payload"]["retrospective_finding_root"] = [0] * 32  # type: ignore[index]
+    with pytest.raises(TypeError, match="must be non-zero"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+        )
+
+    emergency = copy.deepcopy(_variants()[8][1])
+    emergency["duration_blocks"] = 3_601
+    with pytest.raises(TypeError, match=r"1\.\.3600"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "ContractEmergencyHold", "payload": emergency}
+        )
+
+
+def test_global_data_trigger_permission_is_exact_account_and_closed_action() -> None:
+    proposal = GovernanceProposalKind.from_payload(
+        {
+            "kind": "GlobalDataTriggerPermissionGovernance",
+            "payload": _variants()[9][1],
+        }
+    )
+    assert proposal.payload.action is GovernanceGlobalDataTriggerPermissionAction.GRANT  # type: ignore[union-attr]
+
+    malformed = copy.deepcopy(_variants()[9][1])
+    malformed["action"]["value"] = {}  # type: ignore[index]
+    with pytest.raises(TypeError, match="must be null"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "GlobalDataTriggerPermissionGovernance", "payload": malformed}
         )
 
 

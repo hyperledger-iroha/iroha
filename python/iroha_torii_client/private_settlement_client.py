@@ -337,6 +337,19 @@ _RESPONSE_FIELDS: tuple[tuple[str, frozenset[str]], ...] = (
         frozenset({"bundle_id", "payload_digest", "leg_ordinal", "vote"}),
     ),
     (
+        "/phase-certificates",
+        frozenset(
+            {
+                "bundle_id",
+                "payload_digest",
+                "leg_ordinal",
+                "lifecycle",
+                "prepare_certificate",
+                "commit_certificate",
+            }
+        ),
+    ),
+    (
         "/certificates",
         frozenset({"bundle_id", "payload_digest", "leg_ordinal", "phase", "lifecycle"}),
     ),
@@ -583,6 +596,13 @@ def create_atomic_private_settlement_client_mixin(
                 if expected_identifier is not None and expected_identifier_field is not None:
                     if parsed.get(expected_identifier_field) != expected_identifier.json_literal:
                         raise ValueError("settlement response identifier is substituted")
+                if route.endswith("/phase-certificates"):
+                    for field in ("prepare_certificate", "commit_certificate"):
+                        certificate = parsed[field]
+                        if certificate is not None and not isinstance(certificate, dict):
+                            raise ValueError(
+                                "settlement phase certificate must be null or an opaque object"
+                            )
                 if route.endswith("/receipt"):
                     if expected_identifier is None:
                         raise ValueError("settlement receipt request identity is missing")
@@ -731,6 +751,30 @@ def create_atomic_private_settlement_client_mixin(
                 else AtomicPrivateSettlementIdentifierV1(payload_digest)
             )
             path = f"/v1/nexus/private-settlements/legs/{identifier.path_component}/status"
+            response = self._private_settlement_sponsor_request(
+                "GET", path, b"", canonical_auth
+            )
+            return self._private_settlement_validate_response(
+                response, path, _RESPONSE_SMALL_MAX_BYTES, identifier, "payload_digest"
+            )
+
+        def private_settlement_phase_certificates_v1(
+            self,
+            payload_digest: Union[str, AtomicPrivateSettlementIdentifierV1],
+            *,
+            canonical_auth: Any,
+        ) -> AtomicPrivateSettlementJsonResponseV1:
+            """Recover the persisted Prepare and Commit certificates for one local leg."""
+
+            identifier = (
+                payload_digest
+                if isinstance(payload_digest, AtomicPrivateSettlementIdentifierV1)
+                else AtomicPrivateSettlementIdentifierV1(payload_digest)
+            )
+            path = (
+                "/v1/nexus/private-settlements/legs/"
+                f"{identifier.path_component}/phase-certificates"
+            )
             response = self._private_settlement_sponsor_request(
                 "GET", path, b"", canonical_auth
             )

@@ -153,11 +153,21 @@ dev-tools = []
 # containment is part of every decoder and is not feature-selectable.
 base-codec = ["json"]
 # Canonical codec surface used by node, CLI, and network-facing crates.
-# Hardware backends remain explicit leaf features.
-node-codec = ["base-codec", "compression", "columnar", "json-std-io"]
+# Portable accelerators are always compiled and retain deterministic scalar
+# fallbacks; platform-specific Stage-1/CRC backends remain explicit leaves.
+node-codec = [
+    "base-codec",
+    "compression",
+    "columnar",
+    "json-std-io",
+    "simd-accel",
+    "crc-key-hash",
+    "simdutf8-validate",
+    "parallel-stage1-rayon",
+]
 simd-accel = []
 compression = []
-gpu-compression = ["compression"]
+gpu-compression = ["compression", "dep:gpuzstd_metal"]
 schema-structural = ["iroha_audio/schema-structural"]
 json = []
 json-std-io = []

@@ -9417,6 +9417,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
+        iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
@@ -11875,6 +11876,38 @@ mod tests {
                 .contains("threshold-key lifecycle certificate authentication failed"),
             "the Initial executor must route the instruction to exact Core QC verification: {error:?}"
         );
+    }
+    #[test]
+    fn initial_executor_cannot_bypass_native_asset_transfer_control_metadata() {
+        let authority = checked_account_id();
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        let key: Name = iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY
+            .parse()
+            .expect("asset transfer control metadata key");
+        let instructions: [InstructionBox; 2] = [
+            SetKeyValue::account(
+                authority.clone(),
+                key.clone(),
+                Json::new("generic replacement"),
+            )
+            .into(),
+            RemoveKeyValue::account(authority.clone(), key).into(),
+        ];
+
+        for instruction in instructions {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &authority, instruction)
+                .expect_err("Initial executor must preserve Core's reserved metadata guard");
+            assert!(
+                error
+                    .to_string()
+                    .contains("reserved for native asset transfer controls"),
+                "unexpected Initial-executor rejection: {error}"
+            );
+        }
     }
     #[test]
     fn initial_executor_keeps_the_complete_vpn_lifecycle_allowlisted() {

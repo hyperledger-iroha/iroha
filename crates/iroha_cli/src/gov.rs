@@ -1,11 +1,9 @@
 //! Governance helpers (app API convenience). Build/submit governance transactions.
 mod audit;
-mod council;
 mod deploy;
 mod parliament;
 mod shared;
 mod vote;
-use self::council::CouncilArgs;
 use crate::{Run, RunContext};
 pub use audit::AuditDeployArgs;
 pub use deploy::{
@@ -31,7 +29,6 @@ pub enum Command {
     #[command(subcommand)]
     Locks(LocksCommand),
     /// Get the latest explicitly persisted council roster.
-    Council(CouncilArgs),
     /// Unlock helpers (expired lock stats)
     #[command(subcommand)]
     Unlock(UnlockCommand),
@@ -55,7 +52,6 @@ impl Run for Command {
             Command::Vote(args) => args.run(context),
             Command::Proposal(cmd) => cmd.run(context),
             Command::Locks(cmd) => cmd.run(context),
-            Command::Council(args) => args.run(context),
             Command::Unlock(cmd) => cmd.run(context),
             Command::Referendum(cmd) => cmd.run(context),
             Command::Tally(cmd) => cmd.run(context),

@@ -603,6 +603,43 @@ mod tests {
         );
     }
     #[test]
+    fn lifecycle_activation_payloads_reject_missing_cas_revision() {
+        let flags = norito::core::default_encode_flags();
+        assert_eq!(
+            flags & norito::core::header_flags::PACKED_STRUCT,
+            0,
+            "truncation fixture requires the canonical AoS layout"
+        );
+        let activation = ActivateContractInstance {
+            contract_address: contract_address(),
+            expected_revision: 8,
+            code_hash: code_hash(),
+        }
+        .encode();
+        let mut activation_offset = 0usize;
+        crate::isi::read_aos_field(&activation, &mut activation_offset, flags)
+            .expect("contract address field");
+        assert!(
+            ActivateContractInstance::decode_from_slice(&activation[..activation_offset]).is_err(),
+            "activation payloads must never infer a missing lifecycle revision"
+        );
+
+        let deactivation = DeactivateContractInstance {
+            contract_address: contract_address(),
+            expected_revision: 9,
+            reason: None,
+        }
+        .encode();
+        let mut deactivation_offset = 0usize;
+        crate::isi::read_aos_field(&deactivation, &mut deactivation_offset, flags)
+            .expect("contract address field");
+        assert!(
+            DeactivateContractInstance::decode_from_slice(&deactivation[..deactivation_offset])
+                .is_err(),
+            "deactivation payloads must never infer a missing lifecycle revision"
+        );
+    }
+    #[test]
     fn smart_contract_code_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::InstructionRegistry::new()
             .register_with_id_slice::<RegisterSmartContractCode>(

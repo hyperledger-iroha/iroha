@@ -97,10 +97,6 @@ export function registerToriiClientGovernanceTests({
   test("governance helpers validate options", async () => {
     const client = new ToriiClient(BASE_URL);
 
-    await assert.rejects(
-      () => client.getGovernanceCouncilCurrent("invalid"),
-      /getGovernanceCouncilCurrent options must be an object/,
-    );
     const optionTypeCases = [
       [
         "getGovernanceProposal",
@@ -423,7 +419,7 @@ export function registerToriiClientGovernanceTests({
     assert.deepEqual(missingTyped, { found: false, proposal: null });
   });
 
-  test("getGovernanceProposalTyped closes over all seven V1 proposal kinds", async () => {
+  test("getGovernanceProposalTyped closes over all ten V1 proposal kinds", async () => {
     const contractAddress =
       "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     const payoutBinding = {
@@ -543,6 +539,43 @@ export function registerToriiClientGovernanceTests({
           },
         },
         "sorafs_provider_governance",
+      ],
+      [
+        "ContractLifecycleGovernance",
+        {
+          contract_address: contractAddress,
+          expected_revision: 3,
+          action: {
+            action: "CompleteEmergencyHoldRetrospective",
+            payload: {
+              hold_proposal_content_id: Array(32).fill(0x51),
+              hold_governance_attempt_id: Array(32).fill(0x52),
+              incident_digest: Array(32).fill(0x53),
+              retrospective_finding_root: Array(32).fill(0x54),
+            },
+          },
+        },
+        "contract_lifecycle_governance",
+      ],
+      [
+        "ContractEmergencyHold",
+        {
+          contract_address: contractAddress,
+          expected_revision: 2,
+          expected_code_hash: "33".repeat(32),
+          incident_digest: Array(32).fill(0x55),
+          reason: "contain active exploit",
+          duration_blocks: 3_600,
+        },
+        "contract_emergency_hold",
+      ],
+      [
+        "GlobalDataTriggerPermissionGovernance",
+        {
+          authority: FIXTURE_ALICE_ID,
+          action: { action: "grant", value: null },
+        },
+        "global_data_trigger_permission_governance",
       ],
     ];
     for (const [variant, payload, resultField] of variants) {
@@ -1491,6 +1524,9 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       "ValidationFeePayoutLifecycle",
       "MusubiRegistryGovernance",
       "SorafsProviderGovernance",
+      "ContractLifecycleGovernance",
+      "ContractEmergencyHold",
+      "GlobalDataTriggerPermissionGovernance",
     ]) {
       assert.match(proposalKind[1], new RegExp(`variant: "${variant}"`, "u"));
     }
@@ -2418,10 +2454,6 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         throw new Error("fetch should not be invoked for option validation");
       },
     });
-    await assert.rejects(
-      () => client.getGovernanceCouncilCurrent({ signal: undefined, extra: true }),
-      /getGovernanceCouncilCurrent options contains unsupported fields: extra/,
-    );
     const ballotPayload = {
       authority: FIXTURE_ALICE_ID,
       networkId: GOVERNANCE_NETWORK_ID,
@@ -2828,47 +2860,6 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       );
     }
     assert.equal(fetchCalls, 0);
-  });
-
-  test("getGovernanceCouncilCurrent normalizes roster payload", async () => {
-    let callCount = 0;
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => {
-        callCount += 1;
-        const payload = cloneFixture(toriiFixtures.governance.councilCurrent);
-        if (Array.isArray(payload.members) && payload.members.length >= 2) {
-          payload.members[0].account_id = FIXTURE_ALICE_ID;
-          payload.members[1].account_id = FIXTURE_BOB_ID;
-        }
-        if (Array.isArray(payload.alternates) && payload.alternates.length > 0) {
-          payload.alternates[0].account_id = FIXTURE_CAROL_ID;
-        }
-        return createResponse({
-          status: 200,
-          jsonData: payload,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    const roster = await client.getGovernanceCouncilCurrent(governanceReadOptions());
-    assert.equal(callCount, 1);
-    assert.equal(roster.epoch, 77);
-    assert.deepEqual(roster.members, [
-      { account_id: FIXTURE_ALICE_ID },
-      { account_id: FIXTURE_BOB_ID },
-    ]);
-  });
-
-  test("getGovernanceCouncilCurrent rejects non-object options", async () => {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => {
-        throw new Error("fetch should not run");
-      },
-    });
-    await assert.rejects(
-      () => client.getGovernanceCouncilCurrent("bad-options"),
-      /getGovernanceCouncilCurrent options must be an object/,
-    );
   });
 
   test("setProtectedNamespaces posts exact namespace list", async () => {

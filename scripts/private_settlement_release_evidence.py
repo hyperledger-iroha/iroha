@@ -16,7 +16,7 @@ import math
 import re
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -1223,7 +1223,37 @@ def _validate_audit_attestation(
         raise EvidenceError("audit attestation binds a different audit report")
 
 
-def _validate_hardware_description(path: Path, *, commit: str) -> None:
+_HARDWARE_PROFILE_FIELDS = (
+    "version",
+    "protocol",
+    "host_id",
+    "operating_system",
+    "kernel",
+    "architecture",
+    "cpu_model",
+    "physical_cores",
+    "logical_cores",
+    "memory_bytes",
+    "storage_model",
+    "network_description",
+    "clock_policy",
+    "power_profile",
+    "virtualized",
+)
+
+
+def _hardware_profile_sha256(report: Mapping[str, Any]) -> str:
+    """Hash stable benchmark-host properties, excluding release-specific metadata."""
+
+    profile = {field: report[field] for field in _HARDWARE_PROFILE_FIELDS}
+    canonical = json.dumps(
+        profile, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _validate_hardware_description(path: Path, *, commit: str) -> str:
+    """Validate the exact artifact and return its stable benchmark profile digest."""
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
@@ -1292,6 +1322,7 @@ def _validate_hardware_description(path: Path, *, commit: str) -> None:
         or memory <= 0
     ):
         raise EvidenceError("hardware description resource counts are invalid")
+    return _hardware_profile_sha256(report)
 
 
 def _validate_configuration_manifest(
@@ -2185,6 +2216,7 @@ def _load_benchmark_raw(
     paths: Sequence[Path],
     commit: str,
     hardware_sha256: str,
+    hardware_profile_sha256: str,
     configuration_sha256_by_participants: dict[int, str],
 ) -> dict[tuple[str, int], dict[str, Any]]:
     """Validate the raw benchmark matrix retained in the publication bundle."""
@@ -2194,6 +2226,7 @@ def _load_benchmark_raw(
         "protocol",
         "commit",
         "hardware_sha256",
+        "hardware_profile_sha256",
         "configuration_sha256",
         "profile",
         "participants",
@@ -2244,6 +2277,7 @@ def _load_benchmark_raw(
                 )
             if (
                 row["hardware_sha256"] != hardware_sha256
+                or row["hardware_profile_sha256"] != hardware_profile_sha256
                 or row["configuration_sha256"]
                 != configuration_sha256_by_participants[participants]
             ):
@@ -2346,6 +2380,7 @@ def _validate_benchmark_report(
     raw_paths: Sequence[Path],
     commit: str,
     hardware_sha256: str,
+    hardware_profile_sha256: str,
     configuration_sha256_by_participants: dict[int, str],
 ) -> None:
     """Require a passing report whose sample identities match retained raw data."""
@@ -2379,7 +2414,11 @@ def _validate_benchmark_report(
         raise EvidenceError("benchmark report contains release regressions")
     environment = _exact_fields(
         record["environment"],
-        {"hardware_sha256", "configuration_sha256_by_participants"},
+        {
+            "hardware_sha256",
+            "hardware_profile_sha256",
+            "configuration_sha256_by_participants",
+        },
         "benchmark_report.environment",
     )
     expected_configurations = {
@@ -2388,6 +2427,7 @@ def _validate_benchmark_report(
     }
     if (
         environment["hardware_sha256"] != hardware_sha256
+        or environment["hardware_profile_sha256"] != hardware_profile_sha256
         or environment["configuration_sha256_by_participants"]
         != expected_configurations
     ):
@@ -2538,7 +2578,7 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
         raise EvidenceError(
             "evidence bundle must contain exactly one hardware description"
         )
-    _validate_hardware_description(
+    hardware_profile_sha256 = _validate_hardware_description(
         root.joinpath(*hardware_artifacts[0].path.parts), commit=manifest["commit"]
     )
     configuration_manifests = [
@@ -2736,11 +2776,13 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
             benchmark_raw_paths,
             manifest["commit"],
             hardware_artifacts[0].sha256,
+            hardware_profile_sha256,
             configuration_digests,
         ),
         benchmark_raw_paths,
         manifest["commit"],
         hardware_artifacts[0].sha256,
+        hardware_profile_sha256,
         configuration_digests,
     )
 

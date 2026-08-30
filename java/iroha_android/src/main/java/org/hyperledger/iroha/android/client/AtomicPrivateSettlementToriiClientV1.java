@@ -160,6 +160,21 @@ public final class AtomicPrivateSettlementToriiClientV1 {
         "payload_digest");
   }
 
+  /** Recover the persisted Prepare and Commit certificates for one local leg. */
+  public CompletableFuture<AtomicPrivateSettlementJsonResponseV1> getPhaseCertificates(
+      final AtomicPrivateSettlementIdentifierV1 payloadDigest,
+      final ToriiCanonicalRequestAuth sponsorAuth) {
+    Objects.requireNonNull(payloadDigest, "payloadDigest");
+    return executeGet(
+        "/v1/nexus/private-settlements/legs/"
+            + payloadDigest.pathComponent()
+            + "/phase-certificates",
+        RESPONSE_SMALL_MAX_BYTES,
+        (target, body) -> sponsorHeaders("GET", target, body, sponsorAuth),
+        payloadDigest,
+        "payload_digest");
+  }
+
   /** Fetch proof and opaque delta material as one exact participant validator. */
   public CompletableFuture<AtomicPrivateSettlementJsonResponseV1> getCommitteeProof(
       final AtomicPrivateSettlementIdentifierV1 payloadDigest,
@@ -374,6 +389,15 @@ public final class AtomicPrivateSettlementToriiClientV1 {
       throw new AtomicPrivateSettlementToriiExceptionV1(
           "atomic private settlement response identifier is substituted");
     }
+    if (route.endsWith("/phase-certificates")) {
+      final Object prepare = parsed.get("prepare_certificate");
+      final Object commit = parsed.get("commit_certificate");
+      if ((prepare != null && !(prepare instanceof Map<?, ?>))
+          || (commit != null && !(commit instanceof Map<?, ?>))) {
+        throw new AtomicPrivateSettlementToriiExceptionV1(
+            "settlement phase certificates must be null or opaque objects");
+      }
+    }
     if (route.endsWith("/receipt")) {
       validateReceiptIdentity(parsed, Objects.requireNonNull(expectedIdentifier));
     } else if (route.contains("/bundles/") && !route.endsWith("/receipt")) {
@@ -559,6 +583,15 @@ public final class AtomicPrivateSettlementToriiClientV1 {
     }
     if (route.endsWith("/prepare-votes") || route.endsWith("/commit-votes")) {
       return Set.of("bundle_id", "payload_digest", "leg_ordinal", "vote");
+    }
+    if (route.endsWith("/phase-certificates")) {
+      return Set.of(
+          "bundle_id",
+          "payload_digest",
+          "leg_ordinal",
+          "lifecycle",
+          "prepare_certificate",
+          "commit_certificate");
     }
     if (route.endsWith("/certificates")) {
       return Set.of("bundle_id", "payload_digest", "leg_ordinal", "phase", "lifecycle");

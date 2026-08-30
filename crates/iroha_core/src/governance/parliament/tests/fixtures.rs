@@ -448,7 +448,7 @@ fn casting_state_at_height(
 
 fn governance_for_pending_draws(state: &ParliamentAttemptStateV1) -> Governance {
     let mut governance = Governance {
-        parliament_alternate_size: Some(16),
+        parliament_alternate_size: 16,
         ..Governance::default()
     };
     for election in state

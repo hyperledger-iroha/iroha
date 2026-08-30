@@ -4434,11 +4434,6 @@ await torii.governanceSubmitZkBallotV1({
 // Protected namespace labels are exact printable-ASCII tokens and are never
 // trimmed.
 
-const council = await torii.getGovernanceCouncilCurrent({
-  canonicalAuth: governanceCanonicalAuth,
-});
-console.log(`active council epoch=${council.epoch} members=${council.members.length}`);
-
 const protectedNamespaceAbort = new AbortController();
 await torii.setProtectedNamespaces(["apps", "system"], {
   signal: protectedNamespaceAbort.signal,

@@ -4648,8 +4648,26 @@ def test_get_governance_contract_parses_response() -> None:
             payload={
                 "found": True,
                 "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+                "contract_subject_account": CANONICAL_OWNER,
                 "dataspace": "universal",
+                "active": True,
+                "lifecycle": {
+                    "version": 1,
+                    "origin": "direct",
+                    "origin_account": CANONICAL_OWNER,
+                    "origin_proposal_content_id_hex": None,
+                    "origin_governance_attempt_id_hex": None,
+                    "owner": CANONICAL_OWNER,
+                    "pending_owner": "parliament",
+                    "parliament_delegated": True,
+                    "active_code_hash_hex": "22" * 32,
+                    "revision": 7,
+                    "emergency_hold": None,
+                },
+                "emergency_hold_active": False,
                 "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+                "public_entrypoints": ["transfer", "view_balance"],
             },
         )
     )
@@ -4663,10 +4681,78 @@ def test_get_governance_contract_parses_response() -> None:
     assert isinstance(result, GovernanceContractResponse)
     assert result.found is True
     assert result.code_hash_hex == "22" * 32
+    assert result.lifecycle is not None
+    assert result.lifecycle.revision == 7
+    assert result.lifecycle.active_code_hash_hex == "22" * 32
+    assert result.lifecycle.pending_owner == "parliament"
+    assert result.public_entrypoints == ["transfer", "view_balance"]
     assert session.calls[0]["url"] == (
         "http://node.test/v1/gov/contracts/"
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     )
+
+
+def test_governance_contract_response_enforces_the_exact_lifecycle_shape() -> None:
+    contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+    active = {
+        "found": True,
+        "contract_address": contract_address,
+        "contract_subject_account": CANONICAL_OWNER,
+        "dataspace": "universal",
+        "active": True,
+        "lifecycle": {
+            "version": 1,
+            "origin": "direct",
+            "origin_account": CANONICAL_OWNER,
+            "origin_proposal_content_id_hex": None,
+            "origin_governance_attempt_id_hex": None,
+            "owner": CANONICAL_OWNER,
+            "pending_owner": None,
+            "parliament_delegated": False,
+            "active_code_hash_hex": "22" * 32,
+            "revision": 7,
+            "emergency_hold": None,
+        },
+        "emergency_hold_active": False,
+        "code_hash_hex": "22" * 32,
+        "abi_hash_hex": "33" * 32,
+        "public_entrypoints": ["transfer", "view_balance"],
+    }
+    absent = ToriiClient._parse_governance_contract_response(
+        {
+            "found": False,
+            "contract_address": contract_address,
+            "dataspace": "universal",
+        },
+        context="governance contract response",
+    )
+    assert absent.found is False
+    assert absent.active is None
+    assert absent.lifecycle is None
+
+    invalid_cases = []
+    mismatched = copy.deepcopy(active)
+    mismatched["lifecycle"]["active_code_hash_hex"] = "44" * 32
+    invalid_cases.append(mismatched)
+    unsorted = copy.deepcopy(active)
+    unsorted["public_entrypoints"] = ["view_balance", "transfer"]
+    invalid_cases.append(unsorted)
+    alias_owner = copy.deepcopy(active)
+    alias_owner["lifecycle"]["owner"] = "alice@universal"
+    invalid_cases.append(alias_owner)
+    absent_with_retired_null = {
+        "found": False,
+        "contract_address": contract_address,
+        "dataspace": "universal",
+        "code_hash_hex": None,
+    }
+    invalid_cases.append(absent_with_retired_null)
+    for payload in invalid_cases:
+        with pytest.raises((RuntimeError, ValueError)):
+            ToriiClient._parse_governance_contract_response(
+                payload,
+                context="governance contract response",
+            )
 
 
 @pytest.mark.parametrize(
@@ -5381,8 +5467,26 @@ def test_contract_helpers_against_mock_server() -> None:
                 "gov_contracts": {
                     contract_address: {
                         "found": True,
+                        "contract_subject_account": CANONICAL_OWNER,
                         "dataspace": "universal",
+                        "active": True,
+                        "lifecycle": {
+                            "version": 1,
+                            "origin": "direct",
+                            "origin_account": CANONICAL_OWNER,
+                            "origin_proposal_content_id_hex": None,
+                            "origin_governance_attempt_id_hex": None,
+                            "owner": CANONICAL_OWNER,
+                            "pending_owner": None,
+                            "parliament_delegated": False,
+                            "active_code_hash_hex": "22" * 32,
+                            "revision": 1,
+                            "emergency_hold": None,
+                        },
+                        "emergency_hold_active": False,
                         "code_hash_hex": "22" * 32,
+                        "abi_hash_hex": "33" * 32,
+                        "public_entrypoints": ["ping"],
                     }
                 },
                 "contract_call_response": _contract_call_draft(

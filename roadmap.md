@@ -1,24 +1,59 @@
 # Roadmap
 
-Last updated: 2026-08-29
+Last updated: 2026-08-30
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Security-audit release qualification
+
+- Settle the 21 source-level dispositions in
+  [`docs/audit_closeout_matrix.md`](./docs/audit_closeout_matrix.md) into one
+  immutable candidate. Rerun every named focused regression from that matrix,
+  the panic-recovery and release-feature source guards, formatting, strict
+  all-target Clippy, and the workspace test gate. Record blocked, timed-out, or
+  deferred commands as non-passes.
+- From that same candidate, regenerate and compare the route catalog, served
+  OpenAPI mirrors, fixtures, and Rust/CLI, Kotlin, mirrored Java, Swift, Python,
+  and JavaScript projections. Keep `Cargo.lock` unchanged and do not promote a
+  dirty-tree generated artifact as release evidence.
+- Run relevant four-validator restart and authorization scenarios for contract
+  ownership/holds, scoped Torii history and streams, mixed-route visibility,
+  transaction admission, and any ledger-backed ISO settlement transition.
+  Preserve mandatory signed RS16 DA/RBC and capture exact candidate, topology,
+  configuration, and results.
+- Validate the three affected public-documentation routes in English and all 20
+  maintained translations (21 locale routes) in the sibling `iroha-docs`
+  repository. Publish contract lifecycle,
+  Torii visibility/cursor/full-block restrictions, ISO participant and replay
+  rules, public local SoraFS gateways, and relay verifier-roster operations only
+  from the release-qualified candidate.
+
 ## Atomic private settlement release qualification
 
-- Finish release-candidate qualification of the implemented prepared-leg,
-  audit, coordination, carrier, status, and receipt APIs in Rust/CLI, Kotlin,
-  mirrored Java, Swift, Python, and JavaScript. Rebuild the missing Swift native
-  bridge from the same settled commit, run every complete SDK suite against the
-  shared canonical fixture, and preserve opaque witness handles and plaintext
-  redaction through packaging and clean-consumer tests.
+- Release-candidate-qualify the implemented prepared-leg, audit, coordination,
+  restart-certificate recovery, carrier, status, and receipt APIs in Rust/CLI,
+  Kotlin, mirrored Java, Swift, Python, and JavaScript. The checked OpenAPI now
+  covers all 13 operations with strict V1 DTO/auth/redaction contracts; run its
+  focused Rust test and every complete SDK suite from the settled candidate.
+  Rebuild the missing Swift native bridge from that same commit and preserve
+  opaque witness handles and plaintext redaction through packaging and
+  clean-consumer tests.
 - Run real four-validator processes for every participating dataspace at
   N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
   DA/RBC throughout. Exercise one validator unavailable per committee,
   coordinator/global restarts, acknowledged authenticated 5/10/20-percent
   message loss, phase-cut partitions, delay/healing, and crashes after every
   sidecar, staged-delta, QC, Kura, WSV, and receipt-publication boundary.
+  The strict campaign planner/validator, acknowledged feature-isolated
+  process-cut hooks, and private-profile plus transparent Native-AMX
+  N=2,3,4,8,16 real-process benchmark entrypoints exist. Because transparent
+  DvP V1 is bilateral, its N-participant control is one atomic carrier with
+  N-1 consented star-topology DvPs whose Native-AMX receipt covers exactly N
+  participant routes. Finish the fault and leakage paths; compile and execute
+  the complete matrix; execute every hook; and archive the
+  controller acknowledgements instead of promoting the fixed N=3 smoke test,
+  an unexecuted harness, or synthetic responses.
   Continuously assert that no strict subset of legs becomes visible or
   spendable. Bind each raw run to the settled commit, the archived structured
   hardware description, and the exact N-specific configuration through the
@@ -457,12 +492,17 @@ Completed history lives in [`status.md`](./status.md).
   enactment, and rollback-isolated execution failure. The reservation-bound
   carrier attestation, manifest-less certified-Fetch Phase-B completion, and
   ordinary/recovered exact-retransmission ownership-history refresh are
-  implemented and covered by focused source/regression checks, but fresh strict
+  implemented and covered by focused source/regression checks. Include the
+  sealed QC/timeout-only pacemaker escape from a missing Validate sidecar and
+  certified-view supersession of only an unprotected older wait. Fresh strict
   four-validator evidence for their resulting source is still required.
 - Carry the completed zero/singleton hidden-electorate capacity path, bounded
   generation-16 exhaustion, live-candidate bond retention, atomic narrow-Policy
-  Confirmation capacity decision, account-rekey containment, and protected
-  validation-fee restore checks through that four-peer matrix. Preserve the
+  Confirmation capacity decision, the persisted proposal-wide sixteen-redraw
+  budget across successor attempts, sortition, and timed-OVN retries,
+  permissionless exact-next proof-checked ballot-corpus chunks, account-rekey
+  containment, and protected validation-fee restore checks through that
+  four-peer matrix. Preserve the
   fail-closed terminal shapes and prove that retries, restore, and exact-height
   execution cannot strand a bond, an unfillable body requirement, an account
   identity, or fee admission behind missing provenance. The isolated target now
@@ -502,9 +542,11 @@ Completed history lives in [`status.md`](./status.md).
   threshold, and re-fetches and revalidates the primary context and aggregate at
   the refreshed finalized height immediately before normal signed submission.
   Qualify the implemented certified
-  public-session install, atomic active-pointer cutover/retirement, new-ballot
-  selection guard, immutable session-to-ordered-roster binding, and
-  local-custody retirement guard against every committed ballot/retry deadline.
+  public-session install, atomic active-pointer cutover/retirement, mandatory
+  next-height activation, inclusive selection/expiry and use bounds, new-ballot
+  selection guard, immutable session-to-ordered-roster/lifecycle binding,
+  committed-use recount, and local-custody retirement guard against every
+  committed ballot/retry deadline.
   Startup now derives the local seat separately for the active and every
   deadline-retained historical session and requires an exact non-signing
   key-session/transcript/seat lookup through the same signer. The authenticated
@@ -552,15 +594,14 @@ Completed history lives in [`status.md`](./status.md).
 - Finish the generated public-contract closure from a settled candidate.
   Regenerate the static served OpenAPI authority and truthful provenance after
   the source and pinned Cargo input are sealed, then publish the exact
-  proposal-kind/body/route inventory. Keep the retired equal Parliament ballot
+  ten-kind proposal, ten-kind no-result, six-action contract-lifecycle, body,
+  and route inventory. Keep the retired equal Parliament ballot
   route and proposal-backed referendum/finalize/enact surfaces absent from the
-  served OpenAPI as they already are from source and SDKs. The three current
-  mirrors are byte-identical at 3,078,501 bytes and SHA-256
-  `6f1d88fe8503d56e8fb1bb1b0115d5a1cef8228b41c953bab4fc565be706e8bd`,
-  with the retired `GovernanceFinalizeRequestV1` and
-  `GovernanceEnactRequestV1` schemas removed, and the focused Python Parliament
-  API gate is green at 36/36. Their deliberately unchanged provenance manifests
-  remain unsigned dirty-tree output and cannot be promoted. Standalone
+  served OpenAPI as they already are from source and SDKs. Current dirty-tree
+  artifacts and their deliberately unchanged provenance manifests are not
+  candidate evidence and cannot be promoted, even where focused enum/schema
+  parity checks pass. Regenerate and byte-compare every mirror from the sealed
+  candidate, then rerun the complete SDK matrix. Standalone
   referenda must remain explicitly separate from Parliament attempts, and
   automatic execution must remain only its non-submit-able audit outcome.
 - Review and candidate-qualify the implemented aggregate-only Parliament alert
@@ -577,12 +618,19 @@ Completed history lives in [`status.md`](./status.md).
   candidate, then pass focused data-model/Core/Torii tests, the legacy-codec
   guard, workspace tests, strict all-target Clippy, formatting, strict TLAPS,
   pinned Verus, chaos/soak qualification, and a clean externally signed release
-  corridor. The local exhaustive run covered 11,488,938 generated and 8,495,064
-  distinct states through complete-graph depth 52 with no error; the
-  deterministic source/model gate and all 15 lifecycle corridor source checks
-  with 173 adversarial contexts are green. Model checking remains regression
-  evidence and does not replace cryptographic review, real-HSM custody, or
-  multi-peer tests.
+  corridor. The earlier 11,488,938-generated/8,495,064-distinct-state TLC run
+  predates the proposal-wide redraw model revision and is not current evidence.
+  The changed model's deterministic source/model gate and all 15 lifecycle
+  corridor source checks are green, but a compatible pinned JAR is not present
+  in this checkout and no replacement exhaustive TLC run is claimed. Model
+  checking remains regression evidence and does not replace cryptographic
+  review, real-HSM custody, or multi-peer tests.
+- Candidate-qualify both contract-governance effects and the append-only
+  emergency-hold retrospective. Exercise exact revision/head supersession,
+  owner and delegation changes, activation/deactivation, ABI/artifact mismatch,
+  hold expiry without erasure, early and cross-bound retrospective rejection,
+  certified clearing, replay rejection, complete event post-state, and a later
+  independent hold across persistence restore and four peers.
 
 ## ZK algorithm release qualification
 
@@ -21007,9 +21055,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   rejection shims. The first-release HTTP surface contains only typed
   readiness, top-up, redeem, and operation-status resources under
   `/v1/offline`; it has no nested route version or whole-payload wrapper.
-  Governance council selection now uses only the canonical on-chain
-  bonded-citizen sortition path; the unshipped `gov_vrf` derivation prototype
-  and its HTTP/MCP surface are removed. The shared
+  Attempt-local Parliament body selection uses the canonical bonded-citizen
+  snapshot and finalized threshold-beacon pulse; the unshipped
+  `gov_vrf`/manual epoch-roster paths are removed. The shared
 	  Offline V2 interop fixture now uses the chain-admissible key-certificate
 	  version directly, and Swift, Kotlin/JVM, and Java Android SDK constructors
 	  mirror that version for wallet-side fixture parity.

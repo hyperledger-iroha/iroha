@@ -1359,32 +1359,6 @@ fn replace_account_id_in_governance(
             slashes.slashes = updated;
         }
     }
-    let council_epochs: Vec<_> = state_transaction
-        .world
-        .council
-        .iter()
-        .map(|(epoch, _)| *epoch)
-        .collect();
-    for epoch in council_epochs {
-        if let Some(term) = state_transaction.world.council.get_mut(&epoch) {
-            replace_account_id_in_vec(&mut term.members, old, new);
-            replace_account_id_in_vec(&mut term.alternates, old, new);
-        }
-    }
-    let body_epochs: Vec<_> = state_transaction
-        .world
-        .parliament_bodies
-        .iter()
-        .map(|(epoch, _)| *epoch)
-        .collect();
-    for epoch in body_epochs {
-        if let Some(bodies) = state_transaction.world.parliament_bodies.get_mut(&epoch) {
-            for roster in bodies.rosters.values_mut() {
-                replace_account_id_in_vec(&mut roster.members, old, new);
-                replace_account_id_in_vec(&mut roster.alternates, old, new);
-            }
-        }
-    }
 }
 fn replace_account_id_in_oracle(
     state_transaction: &mut StateTransaction<'_, '_>,

@@ -398,6 +398,7 @@ object ParliamentApiV1 {
         "SorafsProviderGovernance",
         "ContractLifecycleGovernance",
         "ContractEmergencyHold",
+        "GlobalDataTriggerPermissionGovernance",
     )
 
     /** One recursively validated closed first-release proposal wire value. */

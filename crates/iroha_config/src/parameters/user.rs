@@ -2486,7 +2486,10 @@ pub struct Governance {
     #[config(env = "GOV_WINDOW_SPAN", default = "100")]
     pub window_span: u64,
     /// Enable non‑ZK quadratic voting globally (plain ballots)
-    #[config(env = "GOV_PLAIN_VOTING_ENABLED", default = "false")]
+    #[config(
+        env = "GOV_PLAIN_VOTING_ENABLED",
+        default = "defaults::governance::PLAIN_VOTING_ENABLED"
+    )]
     pub plain_voting_enabled: bool,
     /// Approval threshold numerator (approve/(approve+reject) >= num/den)
     #[config(env = "GOV_APPROVAL_Q_NUM", default = "1")]
@@ -2497,39 +2500,9 @@ pub struct Governance {
     /// Minimum turnout required (approve+reject+abstain)
     #[config(env = "GOV_MIN_TURNOUT", default = "0")]
     pub min_turnout: u128,
-    /// Size of the sortition council committee.
-    #[config(
-        env = "GOV_PARLIAMENT_COMMITTEE_SIZE",
-        default = "crate::parameters::defaults::governance::PARLIAMENT_COMMITTEE_SIZE"
-    )]
-    pub parliament_committee_size: usize,
-    /// Length of a council term in blocks.
-    #[config(
-        env = "GOV_PARLIAMENT_TERM_BLOCKS",
-        default = "crate::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS"
-    )]
-    pub parliament_term_blocks: u64,
-    /// Minimum required stake to qualify for sortition.
-    #[config(
-        env = "GOV_PARLIAMENT_MIN_STAKE",
-        default = "crate::parameters::defaults::governance::parliament_min_stake()"
-    )]
-    pub parliament_min_stake: Quantity,
-    /// Asset definition id that provides voting stake eligibility.
-    #[config(
-        env = "GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID",
-        default = "crate::parameters::defaults::governance::parliament_eligibility_asset_id()"
-    )]
-    pub parliament_eligibility_asset_id: String,
-    /// Number of alternates to draw per term (None = committee size).
-    #[config(env = "GOV_PARLIAMENT_ALTERNATE_SIZE")]
-    pub parliament_alternate_size: Option<usize>,
-    /// Council quorum requirement expressed in basis points (ceil-divided).
-    #[config(
-        env = "GOV_PARLIAMENT_QUORUM_BPS",
-        default = "crate::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS"
-    )]
-    pub parliament_quorum_bps: u16,
+    /// Alternates retained for each attempt-local Parliament body draw.
+    #[config(default = "crate::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE")]
+    pub parliament_alternate_size: usize,
     /// Exact nonzero delay from a committed Parliament sortition request to its beacon pulse.
     #[config(
         default = "crate::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS"
@@ -2659,17 +2632,11 @@ impl Default for Governance {
             max_conviction: 6,
             min_enactment_delay: 20,
             window_span: 100,
-            plain_voting_enabled: false,
+            plain_voting_enabled: defaults::governance::PLAIN_VOTING_ENABLED,
             approval_threshold_q_num: 1,
             approval_threshold_q_den: 2,
             min_turnout: 0,
-            parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-            parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake: defaults::governance::parliament_min_stake(),
-            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
-            ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
-            parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
             parliament_sortition_pulse_delay_blocks:
                 defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
             parliament_invitation_phase_blocks:
@@ -2711,10 +2678,6 @@ impl Governance {
         assert!(
             self.min_enactment_delay > 0,
             "min_enactment_delay must be non-zero"
-        );
-        assert!(
-            (1..=10_000).contains(&self.parliament_quorum_bps),
-            "parliament_quorum_bps must be within 1..=10_000 (basis points)"
         );
         assert!(
             self.parliament_sortition_pulse_delay_blocks > 0,
@@ -2882,15 +2845,7 @@ impl Governance {
             approval_threshold_q_num: self.approval_threshold_q_num,
             approval_threshold_q_den: self.approval_threshold_q_den,
             min_turnout: self.min_turnout,
-            parliament_committee_size: self.parliament_committee_size,
-            parliament_term_blocks: self.parliament_term_blocks,
-            parliament_min_stake: self.parliament_min_stake,
-            parliament_eligibility_asset_id: self
-                .parliament_eligibility_asset_id
-                .parse()
-                .expect("invalid parliament eligibility asset id"),
             parliament_alternate_size: self.parliament_alternate_size,
-            parliament_quorum_bps: self.parliament_quorum_bps,
             parliament_sortition_pulse_delay_blocks: self.parliament_sortition_pulse_delay_blocks,
             parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
             parliament_public_finding_phase_blocks: self.parliament_public_finding_phase_blocks,
@@ -32911,12 +32866,7 @@ mod offline_cfg_tests {
             approval_threshold_q_num: 2,
             approval_threshold_q_den: 3,
             min_turnout: 123,
-            parliament_committee_size: 11,
-            parliament_term_blocks: 12_345,
-            parliament_min_stake: 456_u64.into(),
-            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
-            ),
-            parliament_alternate_size: Some(13),
+            parliament_alternate_size: 13,
             parliament_tle_key_lifecycle: ParliamentTleKeyLifecycle {
                 session_lifetime_blocks: 77,
                 max_fresh_ballots_per_session: 2,
@@ -32969,17 +32919,7 @@ mod offline_cfg_tests {
         assert_eq!(parsed.approval_threshold_q_num, 2);
         assert_eq!(parsed.approval_threshold_q_den, 3);
         assert_eq!(parsed.min_turnout, 123);
-        assert_eq!(parsed.parliament_committee_size, 11);
-        assert_eq!(parsed.parliament_term_blocks, 12_345);
-        assert_eq!(parsed.parliament_min_stake, Quantity::from(456_u64));
-        assert_eq!(
-            parsed.parliament_eligibility_asset_id,
-            iroha_data_model::asset::prelude::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("stake", "universal").unwrap(),
-                "SORA".parse().unwrap()
-            )
-        );
-        assert_eq!(parsed.parliament_alternate_size, Some(13));
+        assert_eq!(parsed.parliament_alternate_size, 13);
     }
 
     #[test]

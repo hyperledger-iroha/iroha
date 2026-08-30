@@ -3160,8 +3160,8 @@ mod tests {
         ))]
         assert_eq!(
             expected.len(),
-            552,
-            "the supported full Torii documentation profile must remain exactly 552 cataloged operations"
+            553,
+            "the supported full Torii documentation profile must remain exactly 553 cataloged operations"
         );
         let spec = generate_spec();
         let paths = spec
@@ -5489,7 +5489,6 @@ mod tests {
                 "conviction_step_blocks",
                 "max_conviction",
                 "min_turnout",
-                "parliament_quorum_bps",
                 "plain_voting_enabled",
                 "validation_fee_plain_electorate_rules",
                 "validation_fee_plain_requires_explicit_finalization",
@@ -5812,6 +5811,7 @@ mod tests {
     include!("openapi/tests/iso20022_auth.rs");
     include!("openapi/tests/json_value_contract.rs");
     include!("openapi/tests/prepared_account_contracts.rs");
+    include!("openapi/tests/private_settlement_contract.rs");
     include!("openapi/tests/soracloud_lease_contracts.rs");
     include!("openapi/tests/vpn_da.rs");
 }

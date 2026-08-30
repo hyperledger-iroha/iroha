@@ -32,7 +32,6 @@ use iroha_data_model::{
         MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentNoResultKindV1, ProposalContentId,
         ProposalKind, SccpRouteGovernanceProposal,
     },
-    isi::governance::CouncilDerivationKind,
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
     smart_contract::manifest::{EntryPointKind, ManifestProvenance},
 };
@@ -280,17 +279,11 @@ fn validate_governance_selector_v1(field: &str, value: &str) -> Result<(), Strin
 }
 
 fn is_stored_typed_proposal_fingerprint(state: &iroha_core::state::State, selector: &str) -> bool {
-    if selector.len() != 64
-        || !selector
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
+    let Some(proposal_id) =
+        iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(selector)
+    else {
         return false;
-    }
-    let mut proposal_id = [0_u8; 32];
-    if hex::decode_to_slice(selector, &mut proposal_id).is_err() {
-        return false;
-    }
+    };
     state
         .world_view()
         .governance_proposals()
@@ -615,20 +608,6 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         tx_instructions,
     }))
 }
-/// A single council member (account id string)
-#[derive(Debug, JsonSerialize)]
-pub struct CouncilMemberDto {
-    pub account_id: String,
-}
-/// Current council response (epoch + members)
-#[derive(Debug, JsonSerialize)]
-pub struct CouncilCurrentResponse {
-    pub epoch: u64,
-    pub members: Vec<CouncilMemberDto>,
-    pub alternates: Vec<CouncilMemberDto>,
-    pub candidate_count: usize,
-    pub derived_by: CouncilDerivationKind,
-}
 /// Citizenship status response for an account.
 #[derive(Debug, JsonSerialize)]
 pub struct CitizenStatusResponse {
@@ -740,6 +719,18 @@ pub struct GovernanceCapabilitiesV1 {
     pub supported_routes: Vec<String>,
 }
 const GOVERNANCE_APPROVAL_MODE_V1: &str = "PARLIAMENT_ATTEMPT_TIMED_OVN_V1";
+const GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1: [&str; 10] = [
+    "DEPLOY_CONTRACT",
+    "RUNTIME_UPGRADE",
+    "SCCP_ROUTE_GOVERNANCE",
+    "VALIDATION_FEE_POLICY",
+    "VALIDATION_FEE_PAYOUT_LIFECYCLE",
+    "MUSUBI_REGISTRY_GOVERNANCE",
+    "SORAFS_PROVIDER_GOVERNANCE",
+    "CONTRACT_LIFECYCLE_GOVERNANCE",
+    "CONTRACT_EMERGENCY_HOLD",
+    "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
+];
 /// GET `/v1/gov/capabilities` — return strict public governance readiness.
 ///
 /// # Errors
@@ -805,15 +796,10 @@ pub async fn handle_gov_capabilities(
             policy_jury: gov.policy_jury_size.to_string(),
             confirmation_jury: gov.confirmation_jury_size.to_string(),
         },
-        supported_proposal_kinds: vec![
-            "DEPLOY_CONTRACT".to_owned(),
-            "MUSUBI_REGISTRY_GOVERNANCE".to_owned(),
-            "RUNTIME_UPGRADE".to_owned(),
-            "SCCP_ROUTE_GOVERNANCE".to_owned(),
-            "SORAFS_PROVIDER_GOVERNANCE".to_owned(),
-            "VALIDATION_FEE_PAYOUT_LIFECYCLE".to_owned(),
-            "VALIDATION_FEE_POLICY".to_owned(),
-        ],
+        supported_proposal_kinds: GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1
+            .iter()
+            .map(|kind| (*kind).to_owned())
+            .collect(),
         supported_routes: vec![
             "/v1/gov/capabilities".to_owned(),
             "/v1/gov/citizens/draft".to_owned(),
@@ -2190,6 +2176,8 @@ pub struct GovernedContractEmergencyHoldV1 {
 #[derive(Debug, JsonSerialize)]
 /// Stable app-facing projection of the canonical contract lifecycle record.
 pub struct GovernedContractLifecycleV1 {
+    /// Exact persisted lifecycle schema version.
+    pub version: u16,
     /// Immutable deployment kind: `direct` or `parliament`.
     pub origin: String,
     /// Direct deployer or Parliament proposer recorded as immutable provenance.
@@ -2230,32 +2218,36 @@ impl From<&iroha_data_model::smart_contract::ContractLifecycleControlV1>
         use iroha_data_model::smart_contract::{
             ContractDeploymentOriginV1, ContractParliamentDelegationV1,
         };
-        let (origin, origin_account, origin_proposal_content_id_hex, origin_governance_attempt_id_hex) =
-            match &lifecycle.origin {
-                ContractDeploymentOriginV1::Direct(origin) => (
-                    "direct".to_owned(),
-                    origin.deployer.to_string(),
-                    None,
-                    None,
-                ),
-                ContractDeploymentOriginV1::Parliament(origin) => (
-                    "parliament".to_owned(),
-                    origin.proposer.to_string(),
-                    Some(hex::encode(origin.proposal_content_id)),
-                    Some(hex::encode(origin.governance_attempt_id)),
-                ),
-            };
-        let emergency_hold = lifecycle.emergency_hold.as_ref().map(|hold| {
-            GovernedContractEmergencyHoldV1 {
-                incident_digest_hex: hex::encode(hold.incident_digest),
-                proposal_content_id_hex: hex::encode(hold.proposal_content_id),
-                governance_attempt_id_hex: hex::encode(hold.governance_attempt_id),
-                reason: hold.reason.clone(),
-                imposed_at_height: hold.imposed_at_height,
-                expires_at_height: hold.expires_at_height,
+        let (
+            origin,
+            origin_account,
+            origin_proposal_content_id_hex,
+            origin_governance_attempt_id_hex,
+        ) = match &lifecycle.origin {
+            ContractDeploymentOriginV1::Direct(origin) => {
+                ("direct".to_owned(), origin.deployer.to_string(), None, None)
             }
-        });
+            ContractDeploymentOriginV1::Parliament(origin) => (
+                "parliament".to_owned(),
+                origin.proposer.to_string(),
+                Some(hex::encode(origin.proposal_content_id)),
+                Some(hex::encode(origin.governance_attempt_id)),
+            ),
+        };
+        let emergency_hold =
+            lifecycle
+                .emergency_hold
+                .as_ref()
+                .map(|hold| GovernedContractEmergencyHoldV1 {
+                    incident_digest_hex: hex::encode(hold.incident_digest),
+                    proposal_content_id_hex: hex::encode(hold.proposal_content_id),
+                    governance_attempt_id_hex: hex::encode(hold.governance_attempt_id),
+                    reason: hold.reason.clone(),
+                    imposed_at_height: hold.imposed_at_height,
+                    expires_at_height: hold.expires_at_height,
+                });
         Self {
+            version: lifecycle.version,
             origin,
             origin_account,
             origin_proposal_content_id_hex,
@@ -2729,46 +2721,6 @@ pub async fn handle_gov_ballot_plain_with_policy(
         tx_instructions,
     }))
 }
-/// GET /v1/gov/council/current — fetch the latest persisted council membership.
-///
-/// # Errors
-/// This handler never returns an error; empty councils are represented with an empty member list.
-pub async fn handle_gov_council_current(
-    state: Arc<iroha_core::state::State>,
-) -> Result<JsonBody<CouncilCurrentResponse>, crate::Error> {
-    let world = state.world_view();
-    if let Some((epoch, council)) = world.council().last_key_value() {
-        return Ok(JsonBody(CouncilCurrentResponse {
-            epoch: *epoch,
-            members: council
-                .members
-                .iter()
-                .map(|account| CouncilMemberDto {
-                    account_id: account.to_string(),
-                })
-                .collect(),
-            alternates: council
-                .alternates
-                .iter()
-                .map(|account| CouncilMemberDto {
-                    account_id: account.to_string(),
-                })
-                .collect(),
-            candidate_count: council.candidate_count as usize,
-            derived_by: council.derived_by,
-        }));
-    }
-    let height = state.committed_height() as u64;
-    let term_blocks = state.gov.parliament_term_blocks.max(1);
-    let epoch = height / term_blocks;
-    Ok(JsonBody(CouncilCurrentResponse {
-        epoch,
-        members: Vec::new(),
-        alternates: Vec::new(),
-        candidate_count: 0,
-        derived_by: CouncilDerivationKind::Manual,
-    }))
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2782,7 +2734,7 @@ mod tests {
         queue::{Queue, TransactionGuard},
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
-            CouncilState, ElectionState, GovernanceLockCustody, GovernanceLockRecord,
+            ElectionState, GovernanceLockCustody, GovernanceLockRecord,
             GovernanceLocksForReferendum, GovernanceProposalRecord, GovernanceProposalStatus,
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
             State, World,
@@ -2806,6 +2758,25 @@ mod tests {
     use std::sync::Arc;
     const ACCOUNT_AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    #[test]
+    fn governance_capability_proposal_kinds_match_the_append_only_v1_inventory() {
+        assert_eq!(
+            GOVERNANCE_SUPPORTED_PROPOSAL_KINDS_V1,
+            [
+                "DEPLOY_CONTRACT",
+                "RUNTIME_UPGRADE",
+                "SCCP_ROUTE_GOVERNANCE",
+                "VALIDATION_FEE_POLICY",
+                "VALIDATION_FEE_PAYOUT_LIFECYCLE",
+                "MUSUBI_REGISTRY_GOVERNANCE",
+                "SORAFS_PROVIDER_GOVERNANCE",
+                "CONTRACT_LIFECYCLE_GOVERNANCE",
+                "CONTRACT_EMERGENCY_HOLD",
+                "GLOBAL_DATA_TRIGGER_PERMISSION_GOVERNANCE",
+            ]
+        );
+    }
 
     #[test]
     fn casting_context_route_holds_heavy_admission_through_blocking_replay() {
@@ -3112,18 +3083,6 @@ mod tests {
         let citizen_handler = &citizen_tail[..citizen_end];
         assert!(citizen_handler.contains("world.citizens().len()"));
         assert!(!citizen_handler.contains("citizens().iter()"));
-        let council_start = source
-            .find("pub async fn handle_gov_council_current(")
-            .expect("current council handler");
-        let council_tail = &source[council_start..];
-        let council_end = council_tail
-            .find("#[cfg(test)]\nmod tests")
-            .expect("current council handler terminator");
-        let council_handler = &council_tail[..council_end];
-        assert!(council_handler.contains("world.council().last_key_value()"));
-        assert!(!council_handler.contains("world.council().iter()"));
-        assert!(!council_handler.contains(".max_by"));
-        assert!(!council_handler.contains(".max_by_key"));
     }
     #[test]
     fn optional_ballot_direction_is_closed() {
@@ -3254,6 +3213,27 @@ mod tests {
             .commit_world_overlay_for_testing()
             .expect("commit typed proposal ballot guard fixture");
         hex::encode(proposal_id)
+    }
+    fn typed_proposal_selector_aliases(canonical: &str) -> [String; 5] {
+        let uppercase = canonical.to_ascii_uppercase();
+        let mixed = canonical
+            .chars()
+            .enumerate()
+            .map(|(index, character)| {
+                if index % 2 == 0 {
+                    character.to_ascii_uppercase()
+                } else {
+                    character
+                }
+            })
+            .collect::<String>();
+        [
+            canonical.to_owned(),
+            uppercase.clone(),
+            mixed,
+            format!("0x{canonical}"),
+            format!("0X{uppercase}"),
+        ]
     }
     struct GovHarness {
         state: Arc<State>,
@@ -3747,45 +3727,6 @@ seiyaku GovernedReadFixture {
             .expect("citizen count response")
             .0;
         assert_eq!(response.total, "1");
-    }
-    #[tokio::test]
-    async fn council_current_projects_latest_epoch_from_multi_epoch_history() {
-        let (state, _queue, _chain_id) = mk_basic_context();
-        let latest_member = AccountId::of(
-            checked_governance_ed25519_keypair(0xA4)
-                .public_key()
-                .clone(),
-        );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        for epoch in 0_u64..128 {
-            transaction.world.council_mut().insert(
-                epoch,
-                CouncilState {
-                    epoch,
-                    members: vec![if epoch == 127 {
-                        latest_member.clone()
-                    } else {
-                        ALICE_ID.clone()
-                    }],
-                    candidate_count: 1,
-                    ..CouncilState::default()
-                },
-            );
-        }
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit multi-epoch council history");
-        let response = handle_gov_council_current(state)
-            .await
-            .expect("current council response")
-            .0;
-        assert_eq!(response.epoch, 127);
-        assert_eq!(response.candidate_count, 1);
-        assert_eq!(response.members.len(), 1);
-        assert_eq!(response.members[0].account_id, latest_member.to_string());
     }
     #[test]
     fn serde_shapes_compile() {
@@ -4400,29 +4341,31 @@ seiyaku GovernedReadFixture {
         let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         let canonical = canonical_literal(ACCOUNT_AUTHORITY);
         let proposal_id = seed_typed_proposal_fingerprint_for_ballot_test(&state, &authenticated);
-        let dto = PlainBallotDto {
-            authority: canonical.clone(),
-            network_id: *state.network_id_ref(),
-            referendum_id: proposal_id,
-            owner: canonical,
-            amount: 100_u64.into(),
-            duration_blocks: "600".to_owned(),
-            direction: "Aye".to_owned(),
-        };
-        let error = handle_gov_ballot_plain_with_policy(
-            state,
-            &authenticated,
-            NoritoJson(dto),
-            MaybeTelemetry::disabled(),
-        )
-        .await
-        .expect_err("typed proposal must not enter the standalone plain ballot path");
-        assert!(
-            error
-                .to_string()
-                .contains("authenticated Parliament lifecycle"),
-            "unexpected error: {error:?}"
-        );
+        for selector in typed_proposal_selector_aliases(&proposal_id) {
+            let dto = PlainBallotDto {
+                authority: canonical.clone(),
+                network_id: *state.network_id_ref(),
+                referendum_id: selector.clone(),
+                owner: canonical.clone(),
+                amount: 100_u64.into(),
+                duration_blocks: "600".to_owned(),
+                direction: "Aye".to_owned(),
+            };
+            let error = handle_gov_ballot_plain_with_policy(
+                Arc::clone(&state),
+                &authenticated,
+                NoritoJson(dto),
+                MaybeTelemetry::disabled(),
+            )
+            .await
+            .expect_err("typed proposal alias must not enter the standalone plain ballot path");
+            assert!(
+                error
+                    .to_string()
+                    .contains("authenticated Parliament lifecycle"),
+                "unexpected error for {selector:?}: {error:?}"
+            );
+        }
     }
     #[tokio::test]
     async fn ballot_plain_accepts_account_aliases() {
@@ -5282,41 +5225,45 @@ seiyaku GovernedReadFixture {
         let (state, _queue, _chain_id) = mk_basic_context();
         let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         let proposal_id = seed_typed_proposal_fingerprint_for_ballot_test(&state, &authenticated);
-        let dto = super::ZkBallotV1Dto {
-            authority: ACCOUNT_AUTHORITY.to_string(),
-            network_id: *state.network_id_ref(),
-            election_id: proposal_id,
-            backend: "halo2/ipa".to_owned(),
-            envelope_b64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
-            root_hint: None,
-            owner: None,
-            amount: None,
-            duration_blocks: None,
-            direction: None,
-            nullifier: None,
-        };
-        let raw = norito::json::to_vec(&dto).expect("encode exact ZK ballot DTO");
-        let response = super::handle_gov_ballot_zk_v1(
-            state,
-            &authenticated,
-            MaybeTelemetry::disabled(),
-            crate::NoritoJsonWithBytes {
-                value: dto,
-                raw: raw.into(),
-            },
-        )
-        .await
-        .expect("typed-proposal collision is a deterministic ballot rejection")
-        .0;
-        assert!(!response.ok);
-        assert!(!response.accepted);
-        assert!(response.tx_instructions.is_empty());
-        assert!(
-            response
-                .reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("authenticated Parliament lifecycle"))
-        );
+        for selector in typed_proposal_selector_aliases(&proposal_id) {
+            let dto = super::ZkBallotV1Dto {
+                authority: ACCOUNT_AUTHORITY.to_string(),
+                network_id: *state.network_id_ref(),
+                election_id: selector.clone(),
+                backend: "halo2/ipa".to_owned(),
+                envelope_b64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+                root_hint: None,
+                owner: None,
+                amount: None,
+                duration_blocks: None,
+                direction: None,
+                nullifier: None,
+            };
+            let raw = norito::json::to_vec(&dto).expect("encode exact ZK ballot DTO");
+            let response = super::handle_gov_ballot_zk_v1(
+                Arc::clone(&state),
+                &authenticated,
+                MaybeTelemetry::disabled(),
+                crate::NoritoJsonWithBytes {
+                    value: dto,
+                    raw: raw.into(),
+                },
+            )
+            .await
+            .expect("typed-proposal alias collision is a deterministic ballot rejection")
+            .0;
+            assert!(!response.ok, "selector {selector:?}");
+            assert!(!response.accepted, "selector {selector:?}");
+            assert!(response.tx_instructions.is_empty(), "selector {selector:?}");
+            assert!(
+                response
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("authenticated Parliament lifecycle")),
+                "selector {selector:?}: {:?}",
+                response.reason
+            );
+        }
     }
     #[tokio::test]
     async fn ballot_zk_v1_rejects_invalid_root_hint() {

@@ -31,14 +31,33 @@ class HttpClientTransportGovernanceTest {
     @Test
     fun getGovernanceContractParsesResponse() {
         val contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+        val owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
                 {
                   "found": true,
                   "contract_address": "$contractAddress",
+                  "contract_subject_account": "$owner",
                   "dataspace": "router",
-                  "code_hash_hex": "${"77".repeat(32)}"
+                  "active": true,
+                  "lifecycle": {
+                    "version": 1,
+                    "origin": "direct",
+                    "origin_account": "$owner",
+                    "origin_proposal_content_id_hex": null,
+                    "origin_governance_attempt_id_hex": null,
+                    "owner": "$owner",
+                    "pending_owner": "parliament",
+                    "parliament_delegated": true,
+                    "active_code_hash_hex": "${"77".repeat(32)}",
+                    "revision": 7,
+                    "emergency_hold": null
+                  },
+                  "emergency_hold_active": false,
+                  "code_hash_hex": "${"77".repeat(32)}",
+                  "abi_hash_hex": "${"88".repeat(32)}",
+                  "public_entrypoints": ["transfer", "view_balance"]
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
         )
@@ -63,6 +82,11 @@ class HttpClientTransportGovernanceTest {
         assertEquals(contractAddress, response.contractAddress)
         assertEquals("router", response.dataspace)
         assertEquals("77".repeat(32), response.codeHashHex)
+        assertEquals(1, response.lifecycle?.version)
+        assertEquals(7L, response.lifecycle?.revision)
+        assertEquals("parliament", response.lifecycle?.pendingOwner)
+        assertEquals("77".repeat(32), response.lifecycle?.activeCodeHashHex)
+        assertEquals(listOf("transfer", "view_balance"), response.publicEntrypoints)
 
         val request = assertNotNull(executor.lastRequest)
         assertEquals("GET", request.method)
@@ -71,6 +95,57 @@ class HttpClientTransportGovernanceTest {
             request.uri.toString(),
         )
         assertTrue(request.body.isEmpty())
+    }
+
+    @Test
+    fun governanceContractResponseRejectsShapeAndCrossFieldDrift() {
+        val contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+        val owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        val active = """
+            {
+              "found": true,
+              "contract_address": "$contractAddress",
+              "contract_subject_account": "$owner",
+              "dataspace": "router",
+              "active": true,
+              "lifecycle": {
+                "version": 1,
+                "origin": "direct",
+                "origin_account": "$owner",
+                "origin_proposal_content_id_hex": null,
+                "origin_governance_attempt_id_hex": null,
+                "owner": "$owner",
+                "pending_owner": null,
+                "parliament_delegated": false,
+                "active_code_hash_hex": "${"77".repeat(32)}",
+                "revision": 7,
+                "emergency_hold": null
+              },
+              "emergency_hold_active": false,
+              "code_hash_hex": "${"77".repeat(32)}",
+              "abi_hash_hex": "${"88".repeat(32)}",
+              "public_entrypoints": ["transfer", "view_balance"]
+            }
+        """.trimIndent()
+        val invalid = listOf(
+            active.replace(
+                "\"active_code_hash_hex\": \"${"77".repeat(32)}\"",
+                "\"active_code_hash_hex\": \"${"66".repeat(32)}\"",
+            ),
+            active.replace(
+                "[\"transfer\", \"view_balance\"]",
+                "[\"view_balance\", \"transfer\"]",
+            ),
+            active.replace("\"version\": 1", "\"version\": 2"),
+            """{"found":false,"contract_address":"$contractAddress","dataspace":"router","active":null}""",
+        )
+        for (payload in invalid) {
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseGovernanceContractResponse(
+                    payload.toByteArray(StandardCharsets.UTF_8),
+                )
+            }
+        }
     }
 
     @Test

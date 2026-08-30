@@ -53,6 +53,20 @@ export const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1 =
 export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1 =
   8 * 1024 * 1024;
 
+// Closed ProposalKind inventory in append-only Norito index order.
+export const PARLIAMENT_PROPOSAL_KINDS_V1 = Object.freeze([
+  "DeployContract",
+  "RuntimeUpgrade",
+  "SccpRouteGovernance",
+  "ValidationFeePolicy",
+  "ValidationFeePayoutLifecycle",
+  "MusubiRegistryGovernance",
+  "SorafsProviderGovernance",
+  "ContractLifecycleGovernance",
+  "ContractEmergencyHold",
+  "GlobalDataTriggerPermissionGovernance",
+]);
+
 export const PARLIAMENT_PUBLIC_TRANSITIONS_V1 = Object.freeze([
   [0, "EscalateRisk", true, 0],
   [1, "CompleteQualification", false, 1],

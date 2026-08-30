@@ -341,6 +341,19 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
             expectedIdentifierField = "payload_digest",
         )
 
+    /** Recover the persisted Prepare and Commit certificates for one local leg. */
+    fun getPhaseCertificates(
+        payloadDigest: AtomicPrivateSettlementIdentifierV1,
+        sponsorAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> =
+        executeGet(
+            "/v1/nexus/private-settlements/legs/${payloadDigest.pathComponent()}/phase-certificates",
+            RESPONSE_SMALL_MAX_BYTES,
+            identityHeaders = { target, body -> sponsorHeaders("GET", target, body, sponsorAuth) },
+            expectedIdentifier = payloadDigest,
+            expectedIdentifierField = "payload_digest",
+        )
+
     /** Fetch proof and opaque delta material as one exact participant validator. */
     fun getCommitteeProof(
         payloadDigest: AtomicPrivateSettlementIdentifierV1,
@@ -569,6 +582,16 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 "atomic private settlement response identifier is substituted"
             }
         }
+        if (route.endsWith("/phase-certificates")) {
+            require(
+                parsed["prepare_certificate"] == null ||
+                    parsed["prepare_certificate"] is Map<*, *>,
+            ) { "settlement Prepare certificate must be null or an opaque object" }
+            require(
+                parsed["commit_certificate"] == null ||
+                    parsed["commit_certificate"] is Map<*, *>,
+            ) { "settlement Commit certificate must be null or an opaque object" }
+        }
         if (route.endsWith("/receipt")) {
             validateReceiptIdentity(parsed, checkNotNull(expectedIdentifier))
         } else if (route.contains("/bundles/") && !route.endsWith("/receipt")) {
@@ -792,6 +815,15 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 setOf("bundle_id", "payload_digest", "leg_ordinal", "disposition", "share")
             route.endsWith("/prepare-votes") || route.endsWith("/commit-votes") ->
                 setOf("bundle_id", "payload_digest", "leg_ordinal", "vote")
+            route.endsWith("/phase-certificates") ->
+                setOf(
+                    "bundle_id",
+                    "payload_digest",
+                    "leg_ordinal",
+                    "lifecycle",
+                    "prepare_certificate",
+                    "commit_certificate",
+                )
             route.endsWith("/certificates") ->
                 setOf("bundle_id", "payload_digest", "leg_ordinal", "phase", "lifecycle")
             route.endsWith("/legs") ->

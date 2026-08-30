@@ -41,6 +41,7 @@ def sample(
     return MODULE.Sample(
         commit="a" * 40,
         hardware_sha256="b" * 64,
+        hardware_profile_sha256="c" * 64,
         configuration_sha256=f"{participants:064x}",
         profile=profile,
         participants=participants,
@@ -103,10 +104,24 @@ class PrivateSettlementBenchmarkReportTests(unittest.TestCase):
     def test_baseline_from_different_hardware_is_rejected(self) -> None:
         baseline = MODULE.build_report(complete_matrix(1.0), 100)
         candidate = MODULE.build_report(complete_matrix(1.0), 100)
-        baseline["environment"]["hardware_sha256"] = "e" * 64
+        baseline["environment"]["hardware_profile_sha256"] = "e" * 64
         with self.assertRaisesRegex(
-            MODULE.EvidenceError, "identical hardware and configurations"
+            MODULE.EvidenceError, "identical hardware profiles and configurations"
         ):
+            MODULE.compare_baseline(candidate, baseline)
+
+    def test_baseline_allows_new_commit_bound_hardware_artifact(self) -> None:
+        baseline = MODULE.build_report(complete_matrix(1.0), 100)
+        candidate = MODULE.build_report(complete_matrix(1.0), 100)
+        candidate["commit"] = "d" * 40
+        candidate["environment"]["hardware_sha256"] = "e" * 64
+        self.assertEqual(MODULE.compare_baseline(candidate, baseline), [])
+
+    def test_baseline_rejects_malformed_configuration_binding(self) -> None:
+        baseline = MODULE.build_report(complete_matrix(1.0), 100)
+        candidate = MODULE.build_report(complete_matrix(1.0), 100)
+        baseline["environment"]["configuration_sha256_by_participants"] = []
+        with self.assertRaisesRegex(MODULE.EvidenceError, "environment is malformed"):
             MODULE.compare_baseline(candidate, baseline)
 
     def test_percentile_and_mad_are_deterministic(self) -> None:
@@ -126,6 +141,7 @@ class PrivateSettlementBenchmarkReportTests(unittest.TestCase):
         samples[-1] = MODULE.Sample(
             commit="b" * 40,
             hardware_sha256=original.hardware_sha256,
+            hardware_profile_sha256=original.hardware_profile_sha256,
             configuration_sha256=original.configuration_sha256,
             profile=original.profile,
             participants=original.participants,
@@ -143,7 +159,8 @@ class PrivateSettlementBenchmarkReportTests(unittest.TestCase):
         original = samples[-1]
         samples[-1] = MODULE.Sample(
             commit=original.commit,
-            hardware_sha256="c" * 64,
+            hardware_sha256="d" * 64,
+            hardware_profile_sha256=original.hardware_profile_sha256,
             configuration_sha256=original.configuration_sha256,
             profile=original.profile,
             participants=original.participants,
@@ -163,6 +180,25 @@ class PrivateSettlementBenchmarkReportTests(unittest.TestCase):
         samples[-1] = MODULE.Sample(
             commit=original.commit,
             hardware_sha256=original.hardware_sha256,
+            hardware_profile_sha256="e" * 64,
+            configuration_sha256=original.configuration_sha256,
+            profile=original.profile,
+            participants=original.participants,
+            seed=original.seed,
+            run=original.run,
+            warmup=original.warmup,
+            stages_ms=original.stages_ms,
+            resources=original.resources,
+        )
+        with self.assertRaisesRegex(MODULE.EvidenceError, "one pinned hardware profile"):
+            MODULE.build_report(samples, 100)
+
+        samples = complete_matrix()
+        original = samples[-1]
+        samples[-1] = MODULE.Sample(
+            commit=original.commit,
+            hardware_sha256=original.hardware_sha256,
+            hardware_profile_sha256=original.hardware_profile_sha256,
             configuration_sha256="d" * 64,
             profile=original.profile,
             participants=original.participants,

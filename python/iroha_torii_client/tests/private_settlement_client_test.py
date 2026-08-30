@@ -8,11 +8,13 @@ from typing import Any
 
 import pytest
 import requests
+from client_test_support import CANONICAL_OWNER
 from iroha_torii_client import (
     AtomicPrivateSettlementIdentifierV1,
     AtomicPrivateSettlementOperationV1,
     AtomicPrivateSettlementPreparedRequestV1,
     AtomicPrivateSettlementToriiErrorV1,
+    ToriiCanonicalRequestAuth,
     ToriiClient,
 )
 
@@ -52,6 +54,25 @@ class _ExactSession(requests.Session):
         self.calls.append({"method": method, "url": url, **kwargs})
         self.response.url = url
         self.response.history = []
+        return self.response
+
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": request.url,
+                "headers": dict(request.headers),
+                "data": request.body,
+                **kwargs,
+            }
+        )
+        self.response.url = request.url
+        self.response.history = []
+        self.response.request = request
         return self.response
 
 
@@ -101,6 +122,62 @@ def test_public_receipt_is_path_bound_bounded_and_allowlisted() -> None:
     result.close()
     with pytest.raises(RuntimeError, match="closed"):
         result.bytes()
+
+
+def test_sponsor_phase_certificate_recovery_is_bound_and_strictly_allowlisted() -> None:
+    fixture = _fixture()
+    payload = AtomicPrivateSettlementIdentifierV1(fixture["identifiers"]["payload_hex"])
+    response = _ExactResponse(fixture["responses"]["phase_certificates"])
+    session = _ExactSession(response)
+    client = ToriiClient("https://node.test", session=session)
+    signed_messages: list[bytes] = []
+    auth = ToriiCanonicalRequestAuth(
+        network_id=fixture["identifiers"]["bundle_json"],
+        account_id=CANONICAL_OWNER,
+        signer=lambda message: signed_messages.append(message) or b"\x55" * 64,
+        timestamp_ms=1_700_000_000_000,
+        nonce="settlement-phase-certificate-recovery-1",
+    )
+
+    result = client.private_settlement_phase_certificates_v1(
+        payload,
+        canonical_auth=auth,
+    )
+
+    assert json.loads(result.bytes()) == fixture["responses"]["phase_certificates"]
+    assert len(signed_messages) == 1
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["url"].endswith(
+        f"/v1/nexus/private-settlements/legs/{payload.path_component}/phase-certificates"
+    )
+    assert "X-Iroha-Signature" in session.calls[0]["headers"]
+    assert "X-Iroha-Operator-Signature" not in session.calls[0]["headers"]
+    assert "[REDACTED]" in repr(result)
+
+    missing = dict(fixture["responses"]["phase_certificates"])
+    missing.pop("commit_certificate")
+    with pytest.raises(AtomicPrivateSettlementToriiErrorV1, match="response is invalid"):
+        ToriiClient(
+            "https://node.test",
+            session=_ExactSession(_ExactResponse(missing)),
+        ).private_settlement_phase_certificates_v1(payload, canonical_auth=auth)
+
+    non_object = dict(fixture["responses"]["phase_certificates"])
+    non_object["prepare_certificate"] = []
+    with pytest.raises(AtomicPrivateSettlementToriiErrorV1, match="response is invalid"):
+        ToriiClient(
+            "https://node.test",
+            session=_ExactSession(_ExactResponse(non_object)),
+        ).private_settlement_phase_certificates_v1(payload, canonical_auth=auth)
+
+    leaked = dict(fixture["responses"]["phase_certificates"])
+    leaked["plaintext"] = "LEAK_CANARY"
+    with pytest.raises(AtomicPrivateSettlementToriiErrorV1) as caught:
+        ToriiClient(
+            "https://node.test",
+            session=_ExactSession(_ExactResponse(leaked)),
+        ).private_settlement_phase_certificates_v1(payload, canonical_auth=auth)
+    assert "LEAK_CANARY" not in str(caught.value)
 
 
 def test_response_from_substituted_url_fails_without_leaking_body() -> None:

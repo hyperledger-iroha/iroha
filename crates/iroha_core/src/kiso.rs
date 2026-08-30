@@ -1757,23 +1757,13 @@ mod tests {
                 max_conviction: 6,
                 min_enactment_delay: 20,
                 window_span: 100,
-                plain_voting_enabled: false,
+                plain_voting_enabled:
+                    iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
                 approval_threshold_q_num: 1,
                 approval_threshold_q_den: 2,
                 min_turnout: 0,
-                parliament_committee_size:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-                parliament_term_blocks:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
-                parliament_min_stake:
-                    iroha_config::parameters::defaults::governance::parliament_min_stake(),
-                parliament_eligibility_asset_id: iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
-                    .parse()
-                    .expect("valid default governance asset id"),
                 parliament_alternate_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
-                parliament_quorum_bps:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
                 parliament_sortition_pulse_delay_blocks:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
                 parliament_invitation_phase_blocks:

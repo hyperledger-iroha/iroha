@@ -104,11 +104,6 @@ fn is_self_delimiting(ty: &syn::Type) -> bool {
     }
 }
 
-fn needs_packed_size(field: &syn::Field) -> bool {
-    let attrs = FieldAttr::parse_validated(&field.attrs);
-    needs_packed_size_with_attrs(&field.ty, &attrs)
-}
-
 fn needs_packed_size_with_attrs(ty: &syn::Type, attrs: &FieldAttr) -> bool {
     attrs.needs_size
         || is_staged_wrapper(ty)
@@ -1310,22 +1305,24 @@ fn packed_size_headers(fields: &[StructField<'_>]) -> (TokenStream2, TokenStream
         .collect::<Vec<_>>();
     let bytes = packed_field_bitset_from(fields);
     let bitset = quote! { [ #( #bytes ),* ] };
-    let writes = needs
+    let sized_indices = needs
         .into_iter()
         .enumerate()
         .filter(|(_, needs_size)| *needs_size)
-        .map(|(index, _)| {
-            quote! {
-                norito::core::write_len_header(
-                    writer,
-                    u64::try_from(__field_lens[#index])
-                        .map_err(|_| norito::core::Error::LengthMismatch)?,
-                )?;
-            }
-        })
+        .map(|(index, _)| index)
         .collect::<Vec<_>>();
     let all_needs_false = bytes.is_empty() || bytes.iter().all(|byte| *byte == 0);
-    (bitset, quote! { #(#writes)* }, all_needs_false)
+    (
+        bitset,
+        quote! {
+            norito::core::write_packed_size_headers(
+                writer,
+                &__field_lens,
+                &[#(#sized_indices),*],
+            )?;
+        },
+        all_needs_false,
+    )
 }
 
 /// Generate `NoritoSerialize` implementation for a struct.
@@ -1443,17 +1440,7 @@ fn derive_struct_serialize(
                         #(
                             { #packed_field_len_stmts }
                         )*
-                        let mut __acc: usize = 0;
-                        writer.write_u64::<norito::core::LittleEndian>(0)?;
-                        for &__field_len in &__field_lens {
-                            __acc = __acc
-                                .checked_add(__field_len)
-                                .ok_or(norito::core::Error::LengthMismatch)?;
-                            writer.write_u64::<norito::core::LittleEndian>(
-                                u64::try_from(__acc)
-                                    .map_err(|_| norito::core::Error::LengthMismatch)?,
-                            )?;
-                        }
+                        norito::core::write_packed_offset_table(writer, &__field_lens)?;
                         #( #packed_field_checked_ser_calls )*
                         Ok(())
                     }
@@ -1483,27 +1470,18 @@ fn derive_decode_from_slice_impl(
         impl<'a> #impl_generics norito::core::DecodeFromSlice<'a> for #ident #ty_generics #where_clause {
             #[inline]
             fn decode_from_slice(bytes: &'a [u8]) -> ::core::result::Result<(Self, usize), norito::core::Error> {
-                let __logical_len = bytes.len();
-                let __min_size = norito::core::archived_payload_size::<Self>();
-                if __min_size > 0 && __logical_len == 0 {
-                    return Err(norito::core::Error::LengthMismatch);
-                }
-                let __decode_bytes: ::std::borrow::Cow<'a, [u8]> =
-                    if __min_size > 0 && __logical_len < __min_size {
-                        let mut __pad = ::std::vec::Vec::with_capacity(__min_size);
-                        __pad.extend_from_slice(bytes);
-                        __pad.resize(__min_size, 0);
-                        ::std::borrow::Cow::Owned(__pad)
-                    } else {
-                        ::std::borrow::Cow::Borrowed(bytes)
-                    };
-                let __archived =
-                    norito::core::archived_from_slice::<Self>(__decode_bytes.as_ref())?;
-                let __archived_bytes = __archived.bytes();
+                let __prepared = norito::core::prepare_decode_from_slice(
+                    bytes,
+                    norito::core::archived_payload_size::<Self>(),
+                    norito::core::archived_payload_align::<Self>(),
+                )?;
+                let __logical_len = __prepared.logical_len();
+                let __archived_bytes = __prepared.bytes();
                 let _pg = norito::core::PayloadCtxGuard::enter_with_len(
                     __archived_bytes,
                     __logical_len,
                 );
+                let __archived = __prepared.archived::<Self>();
                 #decode_body
             }
         }
@@ -1513,7 +1491,7 @@ fn derive_decode_from_slice_impl(
 fn decode_from_archived_body() -> TokenStream2 {
     quote! {
         let value = <Self as norito::core::NoritoDeserialize>::try_deserialize(
-            __archived.archived(),
+            __archived,
         )?;
         Ok((value, __logical_len))
     }
@@ -1804,47 +1782,12 @@ fn derive_struct_deserialize(
                     .collect(),
                 _ => Vec::new(),
             };
-            // Build per-field size-read statements for fields that require explicit sizes
-            let read_sizes_stmts_named: Vec<TokenStream2> = match fields {
-                Fields::Named(named) => named
-                    .named
-                    .iter()
-                    .filter_map(|f| {
-                        let attrs = FieldAttr::parse_validated(&f.attrs);
-                        if attrs.skip || !needs_packed_size(f) {
-                            return None;
-                        }
-                        let name = f.ident.as_ref().unwrap();
-                        Some(quote! {
-                            let __size_payload = norito::core::payload_slice_from_ptr(ptr)?;
-                            let __size_bytes = __size_payload
-                                .get(__o..)
-                                .ok_or(norito::core::Error::LengthMismatch)?;
-                            let (sz, hdr) = norito::core::read_len_dyn_slice(__size_bytes)?;
-                            __o = __o
-                                .checked_add(hdr)
-                                .ok_or(norito::core::Error::LengthMismatch)?;
-                            #[cfg(debug_assertions)]
-                            if norito::debug_trace_enabled() {
-                                eprintln!(
-                                    "packed decode {}::{} size header={}",
-                                    stringify!(#ident),
-                                    stringify!(#name),
-                                    sz
-                                );
-                            }
-                            __sizes.push(sz);
-                        })
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
             let __decode_from_slice_impl = derive_decode_from_slice_impl(
                 ident,
                 &r#gen,
                 container_attrs,
                 quote! {
-                    let ptr = __archived.archived() as *const _ as *const u8;
+                    let ptr = __archived as *const _ as *const u8;
                     let mut offset = 0usize;
                     let value = Self { #(#deserialize_fields),* };
                     Ok((value, offset))
@@ -1905,15 +1848,13 @@ fn derive_struct_deserialize(
                             // are fixed-width in v1.
                             if #field_bitset_enabled_decode_named {
                                 // Hybrid: read bitset, then sizes for needed fields; decode sequentially.
-                                let __bitset_len: usize = (#packed_named_count).div_ceil(8);
-                                let __bitset = norito::core::payload_range_from_ptr(
-                                    ptr.wrapping_add(__o),
-                                    __bitset_len,
-                                )?;
                                 let __expected_bitset: &[u8] = &#expected_field_bitset;
-                                if __bitset != __expected_bitset {
-                                    return Err(norito::core::Error::NonCanonicalEncoding);
-                                }
+                                let (__bitset, __sizes, __header_len) =
+                                    norito::core::decode_context_packed_header(
+                                        ptr,
+                                        __count,
+                                        __expected_bitset,
+                                    )?;
                                 if norito::debug_trace_enabled() {
                                     eprintln!(
                                         "decode struct {} bitset bytes={:?}",
@@ -1921,11 +1862,7 @@ fn derive_struct_deserialize(
                                         __bitset
                                     );
                                 }
-                                __o += __bitset_len;
-                                // Read sizes for fields that require explicit sizes
-                                let mut __sizes: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
-                                // Read sizes in field order for those that require explicit size
-                                { #(#read_sizes_stmts_named)* }
+                                __o = __header_len;
                                 let data_base = unsafe { ptr.add(__o) };
                                 let (base, total) = if let Some(ctx) = norito::core::payload_ctx() {
                                     ctx
@@ -1940,49 +1877,26 @@ fn derive_struct_deserialize(
                                 Self { #(#packed_named_inits_hybrid),* }
                             } else {
                                 // Read the advertised offset-table layout.
-                                let mut __offs: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
-                                let mut __packed_data_len: usize = 0;
-                                let mut __packed_tail_len: usize = 0;
-                                if __count == 0 {
-                                    __offs.push(0);
-                                } else {
-                                    let (ctx_base, ctx_total) = if let Some(ctx) = norito::core::payload_ctx() {
-                                        ctx
-                                    } else {
-                                        return Err(norito::core::Error::MissingPayloadContext);
-                                    };
-                                    let struct_start =
-                                        (ptr as usize).saturating_sub(ctx_base);
-                                    let payload_bytes = unsafe {
-                                        ::std::slice::from_raw_parts(
-                                            ctx_base as *const u8,
-                                            ctx_total,
-                                        )
-                                    };
-                                    let offsets_slice = payload_bytes
-                                        .get(struct_start + __o..)
-                                        .ok_or(norito::core::Error::LengthMismatch)?;
-                                    let (computed_offs, used_offs, data_len, tail_len) =
-                                        norito::core::decode_packed_offsets_slice(
-                                            offsets_slice,
-                                            __count,
-                                        )?;
-                                    __packed_data_len = data_len;
-                                    __packed_tail_len = tail_len;
-                                    __offs = computed_offs;
-                                    __o += used_offs;
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        eprintln!(
-                                            "decode struct {} offsets {:?} used={} count={} data_len={} tail_len={}",
-                                            stringify!(#ident),
-                                            __offs,
-                                            used_offs,
-                                            __count,
-                                            __packed_data_len,
-                                            __packed_tail_len
-                                        );
-                                    }
+                                let (
+                                    __offs,
+                                    __used_offs,
+                                    __packed_data_len,
+                                    __packed_tail_len,
+                                ) = norito::core::decode_context_packed_offsets(ptr, __count)?;
+                                __o = __o
+                                    .checked_add(__used_offs)
+                                    .ok_or(norito::core::Error::LengthMismatch)?;
+                                #[cfg(debug_assertions)]
+                                if norito::debug_trace_enabled() {
+                                    eprintln!(
+                                        "decode struct {} offsets {:?} used={} count={} data_len={} tail_len={}",
+                                        stringify!(#ident),
+                                        __offs,
+                                        __used_offs,
+                                        __count,
+                                        __packed_data_len,
+                                        __packed_tail_len
+                                    );
                                 }
                                 let data_base = unsafe { ptr.add(__o) };
                                 let __packed_data_len_local = __packed_data_len;
@@ -2114,31 +2028,6 @@ fn derive_struct_deserialize(
                     .collect(),
                 _ => Vec::new(),
             };
-            let read_sizes_stmts_unnamed: Vec<TokenStream2> = match fields {
-                Fields::Unnamed(unnamed) => unnamed
-                    .unnamed
-                    .iter()
-                    .filter_map(|f| {
-                        let attrs = FieldAttr::parse_validated(&f.attrs);
-                        if attrs.skip || !needs_packed_size(f) {
-                            return None;
-                        }
-                        Some(quote! {
-                            let __size_payload = norito::core::payload_slice_from_ptr(ptr)?;
-                            let __size_bytes = __size_payload
-                                .get(__o..)
-                                .ok_or(norito::core::Error::LengthMismatch)?;
-                            let (__sz, __hdr) =
-                                norito::core::read_len_dyn_slice(__size_bytes)?;
-                            __o = __o
-                                .checked_add(__hdr)
-                                .ok_or(norito::core::Error::LengthMismatch)?;
-                            __sizes.push(__sz);
-                        })
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
             let __decode_from_slice_impl = derive_decode_from_slice_impl(
                 ident,
                 &r#gen,
@@ -2173,19 +2062,14 @@ fn derive_struct_deserialize(
                             // offset flags are reserved and unused for structs.
                             if #field_bitset_enabled_decode_unnamed {
                                 // Read the presence bitset for unnamed fields (hybrid decoding)
-                                let __bitset_len: usize = __count.div_ceil(8);
-                                let __bitset = norito::core::payload_range_from_ptr(
-                                    ptr.wrapping_add(__o),
-                                    __bitset_len,
-                                )?;
                                 let __expected_bitset: &[u8] = &#expected_field_bitset;
-                                if __bitset != __expected_bitset {
-                                    return Err(norito::core::Error::NonCanonicalEncoding);
-                                }
-                                __o += __bitset_len;
-                                // Read sizes for variable-length fields that are present
-                                let mut __sizes: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
-                                { #(#read_sizes_stmts_unnamed)* }
+                                let (__bitset, __sizes, __header_len) =
+                                    norito::core::decode_context_packed_header(
+                                        ptr,
+                                        __count,
+                                        __expected_bitset,
+                                    )?;
+                                __o = __header_len;
                                 // Decode payload sequentially
                                 let data_base = unsafe { ptr.add(__o) };
                                 let mut __data_off = 0usize;
@@ -2193,49 +2077,26 @@ fn derive_struct_deserialize(
                                 #(#packed_unnamed_stmts_hybrid)*
                                 Self( #(#vars),* )
                             } else {
-                                let mut __offs: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
-                                let mut __packed_data_len: usize = 0;
-                                let mut __packed_tail_len: usize = 0;
-                                if __count == 0 {
-                                    __offs.push(0);
-                                } else {
-                                    let (ctx_base, ctx_total) = if let Some(ctx) = norito::core::payload_ctx() {
-                                        ctx
-                                    } else {
-                                        return Err(norito::core::Error::MissingPayloadContext);
-                                    };
-                                    let struct_start =
-                                        (ptr as usize).saturating_sub(ctx_base);
-                                    let payload_bytes = unsafe {
-                                        ::std::slice::from_raw_parts(
-                                            ctx_base as *const u8,
-                                            ctx_total,
-                                        )
-                                    };
-                                    let offsets_slice = payload_bytes
-                                        .get(struct_start + __o..)
-                                        .ok_or(norito::core::Error::LengthMismatch)?;
-                                    let (computed_offs, used_offs, data_len, tail_len) =
-                                        norito::core::decode_packed_offsets_slice(
-                                            offsets_slice,
-                                            __count,
-                                        )?;
-                                    __packed_data_len = data_len;
-                                    __packed_tail_len = tail_len;
-                                    __offs = computed_offs;
-                                    __o += used_offs;
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        eprintln!(
-                                            "decode struct {} offsets {:?} used={} count={} data_len={} tail_len={}",
-                                            stringify!(#ident),
-                                            __offs,
-                                            used_offs,
-                                            __count,
-                                            __packed_data_len,
-                                            __packed_tail_len
-                                        );
-                                    }
+                                let (
+                                    __offs,
+                                    __used_offs,
+                                    __packed_data_len,
+                                    __packed_tail_len,
+                                ) = norito::core::decode_context_packed_offsets(ptr, __count)?;
+                                __o = __o
+                                    .checked_add(__used_offs)
+                                    .ok_or(norito::core::Error::LengthMismatch)?;
+                                #[cfg(debug_assertions)]
+                                if norito::debug_trace_enabled() {
+                                    eprintln!(
+                                        "decode struct {} offsets {:?} used={} count={} data_len={} tail_len={}",
+                                        stringify!(#ident),
+                                        __offs,
+                                        __used_offs,
+                                        __count,
+                                        __packed_data_len,
+                                        __packed_tail_len
+                                    );
                                 }
                                 let data_base = unsafe { ptr.add(__o) };
                                 let __packed_data_len_local = __packed_data_len;

@@ -22,6 +22,9 @@ NO_BARE_BLOCKING = (
     "crates/iroha_torii/src/privacy_issuance_api.rs",
     "crates/iroha_torii/src/da/ingest.rs",
     "crates/iroha_torii/src/da/spool.rs",
+    "crates/iroha_torii/src/da/taikai.rs",
+    "crates/iroha_torii/src/private_settlement.rs",
+    "crates/iroha_torii/src/sorafs/api.rs",
     "crates/iroha_torii/src/zk_attachments.rs",
     "crates/iroha_torii/src/zk_prover.rs",
     "crates/iroha_torii/src/sns.rs",
@@ -39,6 +42,18 @@ REQUIRED_SNIPPETS = {
         "pub(crate) fn spawn_joined_recoverable",
         "pub(crate) async fn join_recoverable",
         "ordinary_invariant_panics_remain_unsuppressed",
+    ),
+    "crates/iroha_torii/src/da/taikai.rs": (
+        "read_optional_regular_file",
+        "crate::panic_recovery::spawn_blocking_recoverable",
+    ),
+    "crates/iroha_torii/src/private_settlement.rs": (
+        "crate::panic_recovery::spawn_blocking_recoverable",
+        "crate::panic_recovery::spawn_joined_recoverable",
+    ),
+    "crates/iroha_torii/src/sorafs/api.rs": (
+        "governance_dag_blocking_response",
+        "crate::panic_recovery::spawn_blocking_recoverable",
     ),
     "crates/iroha_core/src/executor.rs": (
         "crate::panic_hook::catch_unwind_suppressed",

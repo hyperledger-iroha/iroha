@@ -15,12 +15,13 @@ MINIMUM_NET_REDUCTION = 2_000
 # The compaction merge's two parents each contained 12,327 Rust lines in the
 # guarded files, and its postimage contained 10,313. The current test/schema
 # surface first added 1,206 lines to both sides of that honest comparison.
-# Current OpenAPI/Parliament/SCCP hardening adds another 1,456 lines without
+# Current OpenAPI/Parliament/SCCP and security-audit hardening adds another
+# 1,694 lines without
 # changing the three migrated contract assets or their reduction delta.
 ORIGINAL_PREIMAGE_RUST_LINES = 12_327
 ORIGINAL_POSTIMAGE_RUST_LINES = 10_313
 PREVIOUS_TEST_SURFACE_GROWTH_RUST_LINES = 1_206
-CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES = 1_456
+CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES = 1_694
 CURRENT_TEST_SURFACE_GROWTH_RUST_LINES = (
     PREVIOUS_TEST_SURFACE_GROWTH_RUST_LINES
     + CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES
@@ -38,8 +39,8 @@ SOURCE_LINE_LEDGER = {
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 2_262,
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': 841,
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 1_544,
-    'crates/iroha_torii/src/openapi.rs': 5_626,
-    'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2_702,
+    'crates/iroha_torii/src/openapi.rs': 5_816,
+    'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2_749,
 }
 ASSETS = {
     'cleanup': ('crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt', 'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs', 'sha3_256', 'CLEANUP_CONTRACT_ASSET_LEN', 'CLEANUP_CONTRACT_ASSET_SHA3_256'),
@@ -327,6 +328,7 @@ TEST_INVENTORY = {
         'validation_fee_plaintext_contracts_stay_retired_and_parliament_capabilities_are_exact',
         'pipeline_fastpq_recovery_documents_operator_auth_and_bounds',
         'signed_transaction_submission_documents_exact_preadmission_contract',
+        'transaction_submission_503s_document_exact_outcome_unknown_identity',
         'signed_transaction_reject_code_inventory_matches_runtime_metadata',
 ),
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': (
@@ -350,7 +352,7 @@ ATTRIBUTE_SIGNATURE = {
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 'a91e1c3bbf4e2512564f795b197544667aae798efb4c609a30f94853ddf9085d',
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': '8a61371f2409f09729a5ccfe5ea016c79d7f2168100feab501bd9b2c218263d0',
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
-    'crates/iroha_torii/src/openapi.rs': '2c8f7505075cd7d5bb478b5dd6dbb267f9f7c816d102831f22ba907b0eb8ee1b',
+    'crates/iroha_torii/src/openapi.rs': '28c7c0725d41ef027b4830971334c062f170f08f937d2eb5f19490134bda8b19',
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': '6117af48b2adb690add8256579bfdddda01db37bc04025e1b345aaa65acec8c0',
 }
 

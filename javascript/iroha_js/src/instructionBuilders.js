@@ -5466,29 +5466,6 @@ export function buildCancelTwitterEscrowInstruction(options) {
 }
 
 /**
- * Build a `PersistCouncilForEpoch` instruction payload.
- * @param {object} options
- * @returns {{PersistCouncilForEpoch: object}}
- */
-export function buildPersistCouncilForEpochInstruction(options) {
-  const source = assertPlainObject(options, "persistCouncilForEpoch");
-  return {
-    PersistCouncilForEpoch: {
-      epoch: asNonNegativeInteger(source.epoch, "epoch"),
-      members: normalizeAccountIds(
-        source.members ?? source.council,
-        "members",
-      ),
-      alternates: normalizeAccountIds(
-        source.alternates ?? [],
-        "alternates",
-        { allowEmpty: true },
-      ),
-    },
-  };
-}
-
-/**
  * Build a `SubmitAgendaProposal` instruction payload.
  * @param {{ proposal: object }} options
  * @returns {{SubmitAgendaProposal: { proposal: object }}}

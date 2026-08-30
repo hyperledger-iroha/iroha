@@ -248,6 +248,17 @@ const RESPONSE_FIELDS = Object.freeze([
   ["/availability-shares", ["bundle_id", "payload_digest", "leg_ordinal", "disposition", "share"]],
   ["/prepare-votes", ["bundle_id", "payload_digest", "leg_ordinal", "vote"]],
   ["/commit-votes", ["bundle_id", "payload_digest", "leg_ordinal", "vote"]],
+  [
+    "/phase-certificates",
+    [
+      "bundle_id",
+      "payload_digest",
+      "leg_ordinal",
+      "lifecycle",
+      "prepare_certificate",
+      "commit_certificate",
+    ],
+  ],
   ["/certificates", ["bundle_id", "payload_digest", "leg_ordinal", "phase", "lifecycle"]],
   [
     "/audit-approvals",
@@ -583,6 +594,17 @@ export class AtomicPrivateSettlementToriiClientV1 {
       if (identity?.field !== undefined && parsedBody[identity.field] !== identity.value.jsonLiteral) {
         throw new TypeError("settlement response identifier is substituted");
       }
+      if (route.endsWith("/phase-certificates")) {
+        for (const field of ["prepare_certificate", "commit_certificate"]) {
+          const certificate = parsedBody[field];
+          if (
+            certificate !== null
+            && (typeof certificate !== "object" || Array.isArray(certificate))
+          ) {
+            throw new TypeError("settlement phase certificate must be null or an opaque object");
+          }
+        }
+      }
       if (route.endsWith("/receipt")) {
         if (!["pending", "finalized", "aborted"].includes(parsedBody.status)) {
           throw new TypeError("settlement receipt has an unknown tag");
@@ -729,6 +751,29 @@ export class AtomicPrivateSettlementToriiClientV1 {
       requireProvider(
         normalized.sponsorHeaderProvider ?? this.#sponsorHeaderProvider,
         "settlement leg status",
+      ),
+      SPONSOR_HEADER_NAMES,
+      RESPONSE_SMALL_MAX_BYTES,
+      { field: "payload_digest", value: digest, signal: normalized.signal },
+    );
+  }
+
+  async getPhaseCertificates(payloadDigest, options) {
+    const normalized = requestOptions(
+      options,
+      new Set(["sponsorHeaderProvider", "signal"]),
+      "settlement phase-certificate recovery",
+    );
+    const digest = identifier(payloadDigest);
+    const route =
+      `/v1/nexus/private-settlements/legs/${digest.pathComponent}/phase-certificates`;
+    return this.#request(
+      "GET",
+      route,
+      new Uint8Array(),
+      requireProvider(
+        normalized.sponsorHeaderProvider ?? this.#sponsorHeaderProvider,
+        "settlement phase-certificate recovery",
       ),
       SPONSOR_HEADER_NAMES,
       RESPONSE_SMALL_MAX_BYTES,

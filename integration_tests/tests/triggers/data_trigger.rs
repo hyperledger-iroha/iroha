@@ -7,6 +7,7 @@ use iroha_data_model::nexus::DataSpaceId;
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
+use iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::time::{Duration, Instant};
@@ -14,12 +15,18 @@ use tokio::task::spawn_blocking;
 const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
-    sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
+    start_custom_network(NetworkBuilder::new(), context).await
 }
 async fn start_custom_network(
     builder: NetworkBuilder,
     context: &'static str,
 ) -> Result<Option<sandbox::SerializedNetwork>> {
+    let builder = builder.with_genesis_instruction(Grant::account_permission(
+        Permission::from(CanRegisterGlobalDataTrigger {
+            authority: ALICE_ID.clone(),
+        }),
+        ALICE_ID.clone(),
+    ));
     sandbox::start_network_async_or_skip(builder, context).await
 }
 async fn run_or_skip<F, Fut>(context: &'static str, test: F) -> Result<()>

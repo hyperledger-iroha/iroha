@@ -205,7 +205,7 @@ Metrics:
 
 ## Background Prover Reports
 
-The background prover worker (disabled by default) scans attachments and produces a JSON report per attachment. It verifies `ProofAttachment` payloads (single or list) using the core ZK backend verifiers:
+The background prover worker is enabled by default and remains idle until attachments are present. It scans attachments and produces a JSON report per attachment. It verifies `ProofAttachment` payloads (single or list) using the core ZK backend verifiers:
 
 - Norito (`application/x-norito`): the body must decode as `ProofAttachment` or `ProofAttachmentList`.
 - JSON (`application/json`): the body must decode as a `ProofAttachment` object, a `ProofAttachmentList` (base64 string), or a JSON array of `ProofAttachment`.
@@ -276,7 +276,7 @@ attachments_sanitize_timeout_ms = 1000         # sanitizer timeout (ms)
 attachments_sanitizer_mode = "subprocess"      # production default; in_process has no OS isolation
 
 # Background prover (non-consensus)
-zk_prover_enabled = false             # disabled by default
+zk_prover_enabled = true              # enabled; idle until attachments exist
 zk_prover_scan_period_secs = 30       # scan every 30 seconds when enabled
 zk_prover_reports_ttl_secs = 604800   # delete reports older than 7 days
 zk_prover_max_inflight = 2            # process up to 2 attachments concurrently

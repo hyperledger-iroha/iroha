@@ -170,9 +170,9 @@ generic transaction builders.
 - **Governance drafts (`governance.rs`).** ✅ Android now ships typed builders for
   certificate-only proposal instructions, `CreateParliamentGovernanceAttemptV1`,
   `SubmitParliamentLifecycleTransitionV1`, standalone `CastZkBallot` and
-  `CastPlainBallot`, and `PersistCouncilForEpoch`. There is no finalization,
+  `CastPlainBallot`. There is no caller-selected council roster, finalization,
   enactment, or equal public Parliament-ballot builder. The generated reference
-  documents their schema hashes, while
+  documents the permitted schema hashes, while
   `java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java`
   exercises round-trip coverage so SDK integrations stay aligned with the Rust data model.
 

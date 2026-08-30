@@ -46,7 +46,7 @@ pub(crate) enum PrivateSettlementBundleLifecycleV1 {
 pub(crate) enum PrivateSettlementCoordinatorOutcomeV1 {
     /// New evidence was stored without completing the current global barrier.
     Stored,
-    /// The supplied evidence was byte-for-byte identical to existing evidence.
+    /// The supplied evidence was identical or quorum-equivalent to existing evidence.
     Idempotent,
     /// This insertion completed the current global barrier.
     BarrierCompleted,
@@ -262,7 +262,8 @@ impl PrivateSettlementBundleCoordinatorV1 {
         verify_private_settlement_phase_certificate_v1(&certificate, ordinal, authority)
             .map_err(PrivateSettlementCoordinatorErrorV1::from_protocol)?;
         if let Some(existing) = self.prepare_certificates[usize::from(ordinal)].as_ref() {
-            return if existing == &certificate
+            return if existing.body == certificate.body
+                && existing.authority_catalog_index == certificate.authority_catalog_index
                 && self.deltas[usize::from(ordinal)].as_ref() == Some(&delta)
             {
                 Ok(PrivateSettlementCoordinatorOutcomeV1::Idempotent)
@@ -334,7 +335,9 @@ impl PrivateSettlementBundleCoordinatorV1 {
         verify_private_settlement_phase_certificate_v1(&certificate, ordinal, authority)
             .map_err(PrivateSettlementCoordinatorErrorV1::from_protocol)?;
         if let Some(existing) = self.commit_certificates[index].as_ref() {
-            return if existing == &certificate {
+            return if existing.body == certificate.body
+                && existing.authority_catalog_index == certificate.authority_catalog_index
+            {
                 Ok(PrivateSettlementCoordinatorOutcomeV1::Idempotent)
             } else {
                 Err(PrivateSettlementCoordinatorErrorV1::Substitution)
@@ -499,7 +502,7 @@ pub(crate) enum PrivateSettlementCoordinatorErrorV1 {
     /// A route, ordinal, digest, phase, or receipt binding differs.
     #[error("private-settlement evidence binding is invalid")]
     Binding,
-    /// Existing evidence was replaced rather than replayed identically.
+    /// Existing evidence was replaced by non-equivalent material.
     #[error("private-settlement evidence substitution was rejected")]
     Substitution,
     /// A participant certificate or authority proof is invalid.
@@ -713,6 +716,18 @@ pub(crate) mod tests {
                     PrivateSettlementCoordinatorOutcomeV1::Stored
                 }
             );
+            let equivalent_prepare = certificate(
+                &manifest,
+                &deltas[index],
+                &authorities[index],
+                &fixture.validator_keys[1..],
+                PrivateSettlementPhaseV1::Prepare,
+                private_settlement_reserved_prepared_bundle_digest_v1(),
+            );
+            assert_eq!(
+                coordinator.record_prepare(deltas[index].clone(), equivalent_prepare, 12,),
+                Ok(PrivateSettlementCoordinatorOutcomeV1::Idempotent)
+            );
         }
         assert_eq!(
             coordinator.lifecycle(),
@@ -743,6 +758,18 @@ pub(crate) mod tests {
                 prepared_bundle_digest,
             );
             coordinator.record_commit(commit, 13).expect("commit");
+            let equivalent_commit = certificate(
+                &manifest,
+                &deltas[index],
+                &authorities[index],
+                &fixture.validator_keys[1..],
+                PrivateSettlementPhaseV1::Commit,
+                prepared_bundle_digest,
+            );
+            assert_eq!(
+                coordinator.record_commit(equivalent_commit, 13),
+                Ok(PrivateSettlementCoordinatorOutcomeV1::Idempotent)
+            );
         }
         let receipt = coordinator
             .carrier_bundle(14, 4 * 1024 * 1024)

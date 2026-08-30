@@ -9078,6 +9078,15 @@ impl NetworkPeer {
     pub fn is_running(&self) -> bool {
         self.is_running.load(Ordering::Relaxed)
     }
+    /// Return the operating-system process identifier for the current peer run.
+    ///
+    /// The identifier is present only after the child has been spawned and is
+    /// cleared when the run terminates. Release evidence callers must combine
+    /// this value with a fresh health check instead of treating PID presence as
+    /// proof that the process remains alive.
+    pub async fn process_id(&self) -> Option<u32> {
+        self.run.lock().await.as_ref().and_then(|run| run.pid)
+    }
     /// Create a client to interact with this peer
     pub fn client_for(&self, account_id: &AccountId, account_private_key: PrivateKey) -> Client {
         tracing::debug!(
@@ -10867,6 +10876,30 @@ mod tests {
             .await
             .expect("shutdown should notify fatal listeners")
             .expect("fatal signal should be delivered");
+    }
+    #[tokio::test]
+    async fn process_id_reports_only_the_current_live_run_slot() {
+        if skip_network_tests("process_id_reports_only_the_current_live_run_slot") {
+            return;
+        }
+        let env = Environment::new();
+        let peer = NetworkPeer::builder().build(&env);
+        assert_eq!(peer.process_id().await, None);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
+        let tasks = tokio::task::JoinSet::new();
+        let (fatal_tx, _fatal_rx) = watch::channel(false);
+        {
+            let mut guard = peer.run.lock().await;
+            *guard = Some(PeerRun {
+                tasks,
+                shutdown: shutdown_tx,
+                fatal_tx,
+                pid: Some(42_424),
+            });
+        }
+        assert_eq!(peer.process_id().await, Some(42_424));
+        peer.run.lock().await.take();
+        assert_eq!(peer.process_id().await, None);
     }
     #[tokio::test]
     async fn shutdown_if_started_returns_false_when_peer_is_not_running() {

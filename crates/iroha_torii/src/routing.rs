@@ -67,6 +67,7 @@ use std::{
 // Temporary in-memory code registry is not used by on-chain manifest endpoints.
 use iroha_core::kura::Kura;
 // Network Time Service endpoints are backed by `iroha_core::time`.
+use super::*;
 use ::time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use base64::Engine;
 use blake3::hash as blake3_hash;
@@ -176,7 +177,6 @@ use std::{
     panic::AssertUnwindSafe,
     sync::OnceLock,
 };
-use super::*;
 pub mod debug_match_flag {
     use std::sync::OnceLock;
     static DEBUG_MATCH_FROM_CONFIG: OnceLock<bool> = OnceLock::new();
@@ -241,8 +241,107 @@ impl DataspaceReadVisibility {
         self.can_read_all
     }
 
+    /// Return whether this current visibility still contains the scope that
+    /// authorized a long-lived read when it was established.
+    ///
+    /// A global-reader connection remains authorized only while the global
+    /// capability itself is present. Ordinary scoped readers may gain routes
+    /// during a connection, but losing any route from their admitted baseline
+    /// is a revocation and must terminate the stream.
+    pub(crate) fn retains_authorized_scope(&self, admitted: &Self) -> bool {
+        if self.can_read_all {
+            return true;
+        }
+        if admitted.can_read_all {
+            return false;
+        }
+        admitted
+            .visible_dataspaces
+            .is_subset(&self.visible_dataspaces)
+    }
+
     pub(crate) fn allows_dataspace(&self, dataspace_id: DataSpaceId) -> bool {
         self.can_read_all || self.visible_dataspaces.contains(&dataspace_id)
+    }
+
+    fn domain_dataspace(world: &impl WorldReadOnly, domain_id: &DomainId) -> Option<DataSpaceId> {
+        world
+            .dataspace_catalog()
+            .by_alias(domain_id.dataspace().as_ref())
+            .map(|entry| entry.id)
+    }
+
+    /// Return whether an account is materialized in at least one visible dataspace.
+    ///
+    /// Account-scope derivation defaults unknown identities to the universal
+    /// dataspace, so existence is checked first to keep absent and restricted
+    /// selectors indistinguishable.
+    pub(crate) fn allows_account(
+        &self,
+        world: &impl WorldReadOnly,
+        account_id: &AccountId,
+    ) -> bool {
+        if self.can_read_all {
+            return true;
+        }
+        if world.accounts().get(account_id).is_none() {
+            return false;
+        }
+        world
+            .account_dataspaces(account_id)
+            .is_ok_and(|dataspaces| {
+                dataspaces
+                    .into_iter()
+                    .any(|dataspace| self.allows_dataspace(dataspace))
+            })
+    }
+
+    /// Return whether a domain's authoritative dataspace is visible.
+    pub(crate) fn allows_domain(&self, world: &impl WorldReadOnly, domain_id: &DomainId) -> bool {
+        self.can_read_all
+            || Self::domain_dataspace(world, domain_id)
+                .is_some_and(|dataspace| self.allows_dataspace(dataspace))
+    }
+
+    /// Return whether an asset definition's immutable owning dataspace is visible.
+    pub(crate) fn allows_asset_definition(
+        &self,
+        world: &impl WorldReadOnly,
+        definition_id: &AssetDefinitionId,
+    ) -> bool {
+        self.can_read_all
+            || world
+                .asset_definition_domains()
+                .get(definition_id)
+                .is_some_and(|domain| self.allows_domain(world, domain))
+    }
+
+    /// Return whether an asset bucket belongs to a visible route.
+    pub(crate) fn allows_asset(&self, world: &impl WorldReadOnly, asset_id: &AssetId) -> bool {
+        if self.can_read_all {
+            return true;
+        }
+        if world.assets().get(asset_id).is_none()
+            || !self.allows_asset_definition(world, asset_id.definition())
+        {
+            return false;
+        }
+        match asset_id.scope() {
+            iroha_data_model::asset::AssetBalanceScope::Global => true,
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
+                self.allows_dataspace(*dataspace)
+            }
+        }
+    }
+
+    /// Return whether an NFT's authoritative domain route is visible.
+    pub(crate) fn allows_nft(&self, world: &impl WorldReadOnly, nft_id: &NftId) -> bool {
+        self.allows_domain(world, nft_id.domain())
+    }
+
+    /// Return whether an RWA's authoritative domain route is visible.
+    pub(crate) fn allows_rwa(&self, world: &impl WorldReadOnly, rwa_id: &dm::rwa::RwaId) -> bool {
+        self.allows_domain(world, rwa_id.domain())
     }
 
     /// Digest the exact visibility scope bound into Explorer continuation cursors.
@@ -262,33 +361,35 @@ impl DataspaceReadVisibility {
         hasher.finalize().into()
     }
 
-    /// Return whether every committed route leg for an external entrypoint is visible.
+    /// Return the complete, validated dataspace scope of one committed
+    /// external entrypoint.
     ///
-    /// Missing, stale, or malformed context is intentionally private to a
-    /// global reader; route ownership is never guessed from transaction data.
-    pub(crate) fn allows_external_entrypoint(&self, block: &SignedBlock, index: usize) -> bool {
-        if self.can_read_all {
-            return true;
-        }
+    /// Missing, stale, or malformed context returns `None`; callers must keep
+    /// that event private to a global reader rather than guessing a route from
+    /// transaction fields.
+    pub(crate) fn external_entrypoint_dataspaces(
+        block: &SignedBlock,
+        index: usize,
+    ) -> Option<BTreeSet<DataSpaceId>> {
         let Some(bundle) = block.execution_context() else {
-            return false;
+            return None;
         };
         if !bundle.has_current_version()
             || bundle.external.len() != block.external_entrypoint_count()
         {
-            return false;
+            return None;
         }
         let Some(context) = bundle.external.get(index) else {
-            return false;
+            return None;
         };
         let Some((entrypoint_hash, _)) = block.external_signed_transaction_at(index) else {
-            return false;
+            return None;
         };
         if context.entrypoint_hash != entrypoint_hash {
-            return false;
+            return None;
         }
         let Some(coordinator) = context.routing_plan_legs.first() else {
-            return false;
+            return None;
         };
         if coordinator.role
             != iroha_data_model::block::execution_context::ExternalExecutionRouteRole::Coordinator
@@ -299,12 +400,25 @@ impl DataspaceReadVisibility {
                     != iroha_data_model::block::execution_context::ExternalExecutionRouteRole::Participant
             })
         {
-            return false;
+            return None;
         }
-        context
-            .routing_plan_legs
-            .iter()
-            .all(|leg| self.allows_dataspace(leg.dataspace_id))
+        Some(
+            context
+                .routing_plan_legs
+                .iter()
+                .map(|leg| leg.dataspace_id)
+                .collect(),
+        )
+    }
+
+    /// Return whether every committed route leg for an external entrypoint is visible.
+    pub(crate) fn allows_external_entrypoint(&self, block: &SignedBlock, index: usize) -> bool {
+        self.can_read_all
+            || Self::external_entrypoint_dataspaces(block, index).is_some_and(|dataspaces| {
+                dataspaces
+                    .into_iter()
+                    .all(|dataspace| self.allows_dataspace(dataspace))
+            })
     }
 
     pub(crate) fn allows_external_entrypoint_hash(
@@ -312,13 +426,20 @@ impl DataspaceReadVisibility {
         block: &SignedBlock,
         target: HashOf<TransactionEntrypoint>,
     ) -> bool {
-        (0..block.external_entrypoint_count()).any(|index| {
-            block
-                .external_signed_transaction_at(index)
-                .is_some_and(|(hash, _)| {
-                    hash == target && self.allows_external_entrypoint(block, index)
-                })
-        })
+        let mut matched = false;
+        for index in 0..block.external_entrypoint_count() {
+            let Some((hash, _)) = block.external_signed_transaction_at(index) else {
+                return false;
+            };
+            if hash != target {
+                continue;
+            }
+            matched = true;
+            if !self.allows_external_entrypoint(block, index) {
+                return false;
+            }
+        }
+        matched
     }
 }
 use iroha_data_model as dm;
@@ -4007,7 +4128,7 @@ mod app_api_transaction_signing_tests {
         assert!(message.contains("propose/approve"));
     }
 }
-fn explorer_not_found() -> Error {
+pub(crate) fn explorer_not_found() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
     ))
@@ -5823,9 +5944,7 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
-        work,
-    ))
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(work))
         .await
         .map_err(|_| sccp_internal_error(worker_failure))?
 }
@@ -9372,8 +9491,8 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
     crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
         move || handle_v1_zk_verify_batch_sync(format, body, limits),
     ))
-        .await
-        .map_err(|_| query_internal_error("ZK batch verification worker failed"))?
+    .await
+    .map_err(|_| query_internal_error("ZK batch verification worker failed"))?
 }
 #[cfg(feature = "zk-verify-batch")]
 pub(crate) async fn handle_v1_zk_verify_batch_admitted(
@@ -9681,8 +9800,8 @@ pub async fn handle_v1_zk_roots(
     crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
         move || handle_v1_zk_roots_sync(state, accept, req),
     ))
-        .await
-        .map_err(|_| query_internal_error("ZK roots integrity worker failed"))?
+    .await
+    .map_err(|_| query_internal_error("ZK roots integrity worker failed"))?
 }
 pub(crate) async fn handle_v1_zk_roots_admitted(
     state: Arc<CoreState>,
@@ -9836,8 +9955,8 @@ pub async fn handle_v1_zk_merkle_path(
     crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
         move || handle_v1_zk_merkle_path_sync(state, accept, req),
     ))
-        .await
-        .map_err(|_| query_internal_error("ZK Merkle-path worker failed"))?
+    .await
+    .map_err(|_| query_internal_error("ZK Merkle-path worker failed"))?
 }
 pub(crate) async fn handle_v1_zk_merkle_path_admitted(
     state: Arc<CoreState>,
@@ -12711,14 +12830,14 @@ pub async fn handle_time_status() -> impl IntoResponse {
     let diagnostics = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(iroha_core::time::diagnostics_snapshot),
     )
-        .await
-        .unwrap_or_else(|join_err| {
-            iroha_logger::warn!(
-                ?join_err,
-                "Failed to fetch atomic network time diagnostics; retrying inline"
-            );
-            iroha_core::time::diagnostics_snapshot()
-        });
+    .await
+    .unwrap_or_else(|join_err| {
+        iroha_logger::warn!(
+            ?join_err,
+            "Failed to fetch atomic network time diagnostics; retrying inline"
+        );
+        iroha_core::time::diagnostics_snapshot()
+    });
     let iroha_core::time::NetworkTimeDiagnostics {
         status,
         samples: snapshot,
@@ -42085,6 +42204,37 @@ mod explorer_lookup_tests {
         }
     }
 
+    routing_test! { sync long_lived_visibility_retention_detects_every_revocation_shape
+        let admitted = DataspaceReadVisibility::new(
+            BTreeSet::from([DataSpaceId::new(7), DataSpaceId::new(8)]),
+            false,
+        );
+        let expanded = DataspaceReadVisibility::new(
+            BTreeSet::from([
+                DataSpaceId::new(7),
+                DataSpaceId::new(8),
+                DataSpaceId::new(9),
+            ]),
+            false,
+        );
+        let revoked = DataspaceReadVisibility::new(
+            BTreeSet::from([DataSpaceId::new(7)]),
+            false,
+        );
+        assert!(expanded.retains_authorized_scope(&admitted));
+        assert!(!revoked.retains_authorized_scope(&admitted));
+        assert!(
+            DataspaceReadVisibility::all_for_tests().retains_authorized_scope(&admitted)
+        );
+
+        let admitted_global = DataspaceReadVisibility::all_for_tests();
+        assert!(!expanded.retains_authorized_scope(&admitted_global));
+        assert!(
+            DataspaceReadVisibility::all_for_tests()
+                .retains_authorized_scope(&admitted_global)
+        );
+    }
+
     routing_test! { sync dataspace_visibility_requires_every_committed_route_leg
         use iroha_data_model::block::{
             BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
@@ -43195,6 +43345,7 @@ struct ContractEventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     state: Arc<CoreState>,
     pending: VecDeque<ContractEventProjection>,
+    authorization_interval: tokio::time::Interval,
     last_block_height: Option<u64>,
     terminal: bool,
 }
@@ -43203,6 +43354,10 @@ struct ContractEventsSseState {
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 #[cfg(test)]
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(not(test))]
+const STREAM_AUTHORIZATION_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const STREAM_AUTHORIZATION_CHECK_INTERVAL: Duration = Duration::from_millis(10);
 app_api_items! {
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 struct StreamErrorEvent {
@@ -43227,6 +43382,13 @@ fn stream_error_event(
         "{\"code\":\"stream_internal_error\",\"message\":\"failed to encode stream error\",\"dropped_messages\":null,\"replay_available\":false}".to_owned()
     });
     SseEvent::default().event("stream_error").data(data)
+}
+fn stream_authorization_revoked_event() -> SseEvent {
+    stream_error_event(
+        "stream_authorization_revoked",
+        "The stream authorization is no longer valid.",
+        None,
+    )
 }
 /// Reject an SSE resume attempt before stream establishment.
 ///
@@ -43263,11 +43425,15 @@ pub fn handle_v1_contracts_events_sse(
     crate::NoritoQuery(params): crate::NoritoQuery<ContractEventsSseParams>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error> {
     let query = contract_event_query_from_sse_params(&params);
+    let mut authorization_interval =
+        tokio::time::interval(STREAM_AUTHORIZATION_CHECK_INTERVAL);
+    authorization_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let stream = stream::unfold(
         ContractEventsSseState {
             rx: events.subscribe(),
             state,
             pending: VecDeque::new(),
+            authorization_interval,
             last_block_height: None,
             terminal: false,
         },
@@ -43280,6 +43446,11 @@ pub fn handle_v1_contracts_events_sse(
                     return None;
                 }
                 loop {
+                    if !visibility.authorization_is_current() {
+                        state.pending.clear();
+                        state.terminal = true;
+                        return Some((Ok(stream_authorization_revoked_event()), state));
+                    }
                     if let Some(event) = state.pending.pop_front() {
                         let json_value = contract_event_projection_to_json_value(&event);
                         let ev = match norito::json::to_json(&json_value) {
@@ -43297,58 +43468,69 @@ pub fn handle_v1_contracts_events_sse(
                         };
                         return Some((Ok(ev), state));
                     }
-                    match state.rx.recv().await {
-                        Ok(event_box) => {
-                            let Some(height) = committed_block_height(&event_box) else {
-                                continue;
-                            };
-                            if state
-                                .last_block_height
-                                .is_some_and(|last_height| height <= last_height)
-                            {
-                                continue;
-                            }
-                            state.last_block_height = Some(height);
-                            let Ok(height_usize) = usize::try_from(height) else {
-                                iroha_logger::warn!(
-                                    height,
-                                    "failed to emit contract event SSE payload: block height exceeds host pointer width"
-                                );
-                                continue;
-                            };
-                            for projection in contract_event_projections_for_height_range(
-                                state.state.as_ref(),
-                                height_usize,
-                                height_usize,
-                            ) {
-                                if contract_event_projection_is_visible(
-                                    state.state.as_ref(),
-                                    &visibility.current_visibility(),
-                                    &projection,
-                                ) && contract_event_matches(&projection, &query)
-                                {
-                                    state.pending.push_back(projection);
+                    tokio::select! {
+                        recv = state.rx.recv() => {
+                            match recv {
+                                Ok(event_box) => {
+                                    let Some(height) = committed_block_height(&event_box) else {
+                                        continue;
+                                    };
+                                    if state
+                                        .last_block_height
+                                        .is_some_and(|last_height| height <= last_height)
+                                    {
+                                        continue;
+                                    }
+                                    state.last_block_height = Some(height);
+                                    let Ok(height_usize) = usize::try_from(height) else {
+                                        iroha_logger::warn!(
+                                            height,
+                                            "failed to emit contract event SSE payload: block height exceeds host pointer width"
+                                        );
+                                        continue;
+                                    };
+                                    for projection in contract_event_projections_for_height_range(
+                                        state.state.as_ref(),
+                                        height_usize,
+                                        height_usize,
+                                    ) {
+                                        if contract_event_projection_is_visible(
+                                            state.state.as_ref(),
+                                            &visibility.current_visibility(),
+                                            &projection,
+                                        ) && contract_event_matches(&projection, &query)
+                                        {
+                                            state.pending.push_back(projection);
+                                        }
+                                    }
+                                }
+                                Err(RecvError::Lagged(dropped_messages)) => {
+                                    state.pending.clear();
+                                    state.terminal = true;
+                                    let ev = stream_error_event(
+                                        "stream_lagged",
+                                        "The contract event stream lost buffered events and cannot replay them.",
+                                        Some(dropped_messages),
+                                    );
+                                    return Some((Ok(ev), state));
+                                }
+                                Err(RecvError::Closed) => {
+                                    state.terminal = true;
+                                    let ev = stream_error_event(
+                                        "stream_source_closed",
+                                        "The contract event source closed.",
+                                        None,
+                                    );
+                                    return Some((Ok(ev), state));
                                 }
                             }
                         }
-                        Err(RecvError::Lagged(dropped_messages)) => {
-                            state.pending.clear();
-                            state.terminal = true;
-                            let ev = stream_error_event(
-                                "stream_lagged",
-                                "The contract event stream lost buffered events and cannot replay them.",
-                                Some(dropped_messages),
-                            );
-                            return Some((Ok(ev), state));
-                        }
-                        Err(RecvError::Closed) => {
-                            state.terminal = true;
-                            let ev = stream_error_event(
-                                "stream_source_closed",
-                                "The contract event source closed.",
-                                None,
-                            );
-                            return Some((Ok(ev), state));
+                        _ = state.authorization_interval.tick() => {
+                            if !visibility.authorization_is_current() {
+                                state.pending.clear();
+                                state.terminal = true;
+                                return Some((Ok(stream_authorization_revoked_event()), state));
+                            }
                         }
                     }
                 }
@@ -43398,12 +43580,43 @@ fn contract_event_projection_is_visible(
 ///
 /// curl example:
 ///   curl -N "http://127.0.0.1:8080/v1/events/sse"
-pub fn handle_v1_events_sse(
+pub(crate) fn handle_v1_events_sse(
     events: EventsSender,
     kura: Arc<Kura>,
     visibility: ToriiDataspaceReadContext,
     crate::NoritoQuery(params): crate::NoritoQuery<EventsSseParams>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error> {
+    let authorization = visibility.clone();
+    handle_v1_events_sse_with_filter(
+        events,
+        params,
+        move |event_box| visibility.filter_event(kura.as_ref(), event_box),
+        move || authorization.authorization_is_current(),
+    )
+}
+
+/// Build an admission-free event stream for integration tests.
+///
+/// Production routes must use the scoped handler so that every event is
+/// filtered against the caller's current dataspace visibility.
+#[doc(hidden)]
+pub fn handle_v1_events_sse_for_tests(
+    events: EventsSender,
+    crate::NoritoQuery(params): crate::NoritoQuery<EventsSseParams>,
+) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error> {
+    handle_v1_events_sse_with_filter(events, params, Some, || true)
+}
+
+fn handle_v1_events_sse_with_filter<F, A>(
+    events: EventsSender,
+    params: EventsSseParams,
+    filter_event: F,
+    authorization_is_current: A,
+) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, crate::Error>
+where
+    F: Fn(EventBox) -> Option<EventBox> + Clone + Send + 'static,
+    A: Fn() -> bool + Clone + Send + 'static,
+{
     let SseFilterSpec {
         filters,
         proof_backend,
@@ -43416,10 +43629,14 @@ pub fn handle_v1_events_sse(
             proof_call_hash.as_ref(),
             proof_envelope_hash.as_ref(),
         );
+    let mut authorization_interval =
+        tokio::time::interval(STREAM_AUTHORIZATION_CHECK_INTERVAL);
+    authorization_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let stream = stream::unfold(
         EventsSseState {
             rx: events.subscribe(),
             pending: VecDeque::new(),
+            authorization_interval,
             terminal: false,
         },
         move |mut state| {
@@ -43427,14 +43644,19 @@ pub fn handle_v1_events_sse(
             let proof_backend = proof_backend.clone();
             let proof_call_hash = proof_call_hash.clone();
             let proof_envelope_hash = proof_envelope_hash.clone();
-            let visibility = visibility.clone();
-            let kura = Arc::clone(&kura);
+            let filter_event = filter_event.clone();
+            let authorization_is_current = authorization_is_current.clone();
             async move {
                 use tokio::sync::broadcast::error::RecvError;
                 if state.terminal {
                     return None;
                 }
                 loop {
+                    if !authorization_is_current() {
+                        state.pending.clear();
+                        state.terminal = true;
+                        return Some((Ok(stream_authorization_revoked_event()), state));
+                    }
                     if let Some(event_box) = state.pending.pop_front() {
                         let json_val = event_to_json_value(&event_box);
                         let ev = match norito::json::to_json(&json_val) {
@@ -43452,59 +43674,75 @@ pub fn handle_v1_events_sse(
                         };
                         return Some((Ok(ev), state));
                     }
-                    match state.rx.recv().await {
-                        Ok(event_box) => {
-                            let Some(event_box) = visibility.filter_event(kura.as_ref(), event_box)
-                            else {
-                                continue;
-                            };
-                            let mut consider_event = |event_box| {
-                                if let Some(flt) = filters.as_ref() {
-                                    // Drop events that don't match any filter.
-                                    if !flt.iter().any(|f| f.matches(&event_box)) {
-                                        return;
+                    tokio::select! {
+                        recv = state.rx.recv() => {
+                            match recv {
+                                Ok(event_box) => {
+                                    if !authorization_is_current() {
+                                        state.pending.clear();
+                                        state.terminal = true;
+                                        return Some((Ok(stream_authorization_revoked_event()), state));
+                                    }
+                                    let Some(event_box) = filter_event(event_box) else {
+                                        continue;
+                                    };
+                                    let mut consider_event = |event_box| {
+                                        if let Some(flt) = filters.as_ref() {
+                                            // Authorization scope has already been applied; this
+                                            // client expression may only narrow the visible set.
+                                            if !flt.iter().any(|f| f.matches(&event_box)) {
+                                                return;
+                                            }
+                                        }
+                                        if !crate::proof_filters::event_matches_proof_filters(
+                                            &event_box,
+                                            proof_backend.as_ref(),
+                                            proof_call_hash.as_ref(),
+                                            proof_envelope_hash.as_ref(),
+                                            proof_only,
+                                        ) {
+                                            return;
+                                        }
+                                        state.pending.push_back(event_box);
+                                    };
+                                    match event_box {
+                                        EventBox::PipelineBatch(events) => {
+                                            for event in events {
+                                                consider_event(EventBox::Pipeline(event));
+                                            }
+                                        }
+                                        event_box => {
+                                            consider_event(event_box);
+                                        }
                                     }
                                 }
-                                if !crate::proof_filters::event_matches_proof_filters(
-                                    &event_box,
-                                    proof_backend.as_ref(),
-                                    proof_call_hash.as_ref(),
-                                    proof_envelope_hash.as_ref(),
-                                    proof_only,
-                                ) {
-                                    return;
+                                Err(RecvError::Lagged(dropped_messages)) => {
+                                    state.pending.clear();
+                                    state.terminal = true;
+                                    let ev = stream_error_event(
+                                        "stream_lagged",
+                                        "The event stream lost buffered events and cannot replay them.",
+                                        Some(dropped_messages),
+                                    );
+                                    return Some((Ok(ev), state));
                                 }
-                                state.pending.push_back(event_box);
-                            };
-                            match event_box {
-                                EventBox::PipelineBatch(events) => {
-                                    for event in events {
-                                        consider_event(EventBox::Pipeline(event));
-                                    }
-                                }
-                                event_box => {
-                                    consider_event(event_box);
+                                Err(RecvError::Closed) => {
+                                    state.terminal = true;
+                                    let ev = stream_error_event(
+                                        "stream_source_closed",
+                                        "The event source closed.",
+                                        None,
+                                    );
+                                    return Some((Ok(ev), state));
                                 }
                             }
                         }
-                        Err(RecvError::Lagged(dropped_messages)) => {
-                            state.pending.clear();
-                            state.terminal = true;
-                            let ev = stream_error_event(
-                                "stream_lagged",
-                                "The event stream lost buffered events and cannot replay them.",
-                                Some(dropped_messages),
-                            );
-                            return Some((Ok(ev), state));
-                        }
-                        Err(RecvError::Closed) => {
-                            state.terminal = true;
-                            let ev = stream_error_event(
-                                "stream_source_closed",
-                                "The event source closed.",
-                                None,
-                            );
-                            return Some((Ok(ev), state));
+                        _ = state.authorization_interval.tick() => {
+                            if !authorization_is_current() {
+                                state.pending.clear();
+                                state.terminal = true;
+                                return Some((Ok(stream_authorization_revoked_event()), state));
+                            }
                         }
                     }
                 }
@@ -43520,6 +43758,7 @@ pub fn handle_v1_events_sse(
 struct EventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     pending: VecDeque<EventBox>,
+    authorization_interval: tokio::time::Interval,
     terminal: bool,
 }
 }
@@ -43559,6 +43798,9 @@ fn explorer_stream(
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let mut keepalive_interval = tokio::time::interval(Duration::from_secs(15));
     keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut authorization_interval =
+        tokio::time::interval(STREAM_AUTHORIZATION_CHECK_INTERVAL);
+    authorization_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let stream = stream::unfold(
         ExplorerStreamState {
             rx: events.subscribe(),
@@ -43566,6 +43808,7 @@ fn explorer_stream(
             pending: None,
             kind,
             keepalive_interval,
+            authorization_interval,
             last_block_height: None,
             terminal: false,
             visibility,
@@ -43576,6 +43819,11 @@ fn explorer_stream(
                 return None;
             }
             loop {
+                if !state.visibility.authorization_is_current() {
+                    state.pending = None;
+                    state.terminal = true;
+                    return Some((Ok(stream_authorization_revoked_event()), state));
+                }
                 if let Some(pending) = state.pending.as_mut() {
                     let visibility = state.visibility.current_visibility();
                     if let Some(payload) = pending.next_payload(state.kind, &visibility) {
@@ -43615,6 +43863,13 @@ fn explorer_stream(
                         let ev = SseEvent::default().comment("keepalive");
                         return Some((Ok(ev), state));
                     }
+                    _ = state.authorization_interval.tick() => {
+                        if !state.visibility.authorization_is_current() {
+                            state.pending = None;
+                            state.terminal = true;
+                            return Some((Ok(stream_authorization_revoked_event()), state));
+                        }
+                    }
                 }
             }
         },
@@ -43627,6 +43882,7 @@ struct ExplorerStreamState {
     pending: Option<ExplorerPendingBlock>,
     kind: ExplorerStreamKind,
     keepalive_interval: tokio::time::Interval,
+    authorization_interval: tokio::time::Interval,
     last_block_height: Option<u64>,
     terminal: bool,
     visibility: ToriiDataspaceReadContext,
@@ -44132,7 +44388,6 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
         return Vec::new();
     };
     let mut updates = Vec::new();
-    let mut council_updated = false;
     let mut unlocks_updated = false;
     let mut proposal_id: Option<String> = None;
     let mut referendum_id: Option<String> = None;
@@ -44179,19 +44434,22 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
         GovernanceEvent::ParliamentCertificateIssued(payload) => {
             proposal_id = Some(payload.proposal_content_id.to_hex());
         }
-        GovernanceEvent::ParliamentBodyTransitioned(_)
+        GovernanceEvent::CouncilPersisted(_)
+        | GovernanceEvent::ParliamentSelected(_)
+        | GovernanceEvent::ParliamentBodyTransitioned(_)
         | GovernanceEvent::ParliamentBallotTransitioned(_)
         | GovernanceEvent::ParliamentConcentrationWarning(_)
         | GovernanceEvent::ThresholdKeyLifecycleApplied(_) => {}
-        GovernanceEvent::CouncilPersisted(_) | GovernanceEvent::ParliamentSelected(_) => {
-            council_updated = true;
-        }
         GovernanceEvent::ReferendumOpened(payload) => {
             referendum_id = Some(payload.id.clone());
             unlocks_updated = true;
         }
         GovernanceEvent::ReferendumClosed(payload) => {
             referendum_id = Some(payload.id.clone());
+            unlocks_updated = true;
+        }
+        GovernanceEvent::ReferendumDecided(payload) => {
+            referendum_id = Some(payload.referendum_id.clone());
             unlocks_updated = true;
         }
         GovernanceEvent::BallotAccepted(payload) => {
@@ -44226,9 +44484,6 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
         | GovernanceEvent::CitizenRevoked(_)
         | GovernanceEvent::CitizenServiceRecorded(_) => {}
     }
-    if council_updated {
-        updates.push(governance_stream_payload("CouncilUpdated", None));
-    }
     if unlocks_updated {
         updates.push(governance_stream_payload("UnlockStatsUpdated", None));
     }
@@ -44258,10 +44513,9 @@ mod governance_stream_tests {
     use iroha_data_model::{
         account::AccountId,
         events::data::governance::{
-            GovernanceCouncilPersisted, GovernanceEvent, GovernanceLockCreated,
-            GovernanceProposalSubmitted,
+            GovernanceEvent, GovernanceLockCreated, GovernanceProposalSubmitted,
+            GovernanceReferendumDecided,
         },
-        isi::governance::CouncilDerivationKind,
     };
     fn sample_account() -> AccountId {
         let keypair = checked_routing_fixture_keypair(
@@ -44330,18 +44584,28 @@ mod governance_stream_tests {
             Some(referendum_id.as_str())
         );
     }
-    routing_test! { sync council_persisted_emits_council_update
-        let event = GovernanceEvent::CouncilPersisted(GovernanceCouncilPersisted {
-            epoch: 7,
-            members_count: 5,
-            alternates_count: 2,
-            candidates_count: 9,
-            derived_by: CouncilDerivationKind::Manual,
+    routing_test! { sync standalone_referendum_decision_emits_only_referendum_identity
+        let referendum_id = "0XAbCd-standalone".to_owned();
+        let event = GovernanceEvent::ReferendumDecided(GovernanceReferendumDecided {
+            referendum_id: referendum_id.clone(),
+            approve: 21,
+            reject: 8,
+            abstain: 3,
+            approved: true,
         });
         let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
             iroha_data_model::events::data::DataEvent::Governance(event),
         )));
-        assert!(find_kind(&payloads, "CouncilUpdated").is_some());
+        assert!(find_kind(&payloads, "ProposalUpdated").is_none());
+        for kind in ["ReferendumUpdated", "LocksUpdated", "TallyUpdated"] {
+            assert_eq!(
+                find_kind(&payloads, kind)
+                    .and_then(|value| value.get("id"))
+                    .and_then(Value::as_str),
+                Some(referendum_id.as_str()),
+                "{kind} must retain the original standalone referendum selector"
+            );
+        }
     }
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -46291,6 +46555,10 @@ mod sse_filter_validation_tests {
 #[cfg(all(test, feature = "app_api"))]
 mod sse_stream_tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     use axum::body::Body;
     use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
@@ -46451,6 +46719,30 @@ mod sse_stream_tests {
         let terminal = timeout(Duration::from_secs(1), body.frame())
             .await
             .expect("terminal stream should not hang");
+        assert!(terminal.is_none());
+    }
+    routing_test! { async sse_authorization_revocation_is_generic_and_terminal
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let authorized = Arc::new(AtomicBool::new(true));
+        let authorization_gate = Arc::clone(&authorized);
+        let sse = handle_v1_events_sse_with_filter(
+            events,
+            EventsSseParams { filter: None },
+            Some,
+            move || authorization_gate.load(Ordering::SeqCst),
+        )
+        .expect("create revocable SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        authorized.store(false, Ordering::SeqCst);
+        let error_frame = next_sse_chunk(&mut body).await;
+        assert!(error_frame.contains("event: stream_error"));
+        assert!(error_frame.contains("\"code\":\"stream_authorization_revoked\""));
+        assert!(!error_frame.contains("dataspace"));
+        assert!(!error_frame.contains("account"));
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("revoked SSE stream should terminate");
         assert!(terminal.is_none());
     }
     routing_test! { async explorer_sse_lag_is_machine_readable_and_terminal
@@ -47197,7 +47489,7 @@ mod validation_fee_torii_ingress_tests {
     ) -> iroha_config::parameters::actual::Governance {
         use iroha_data_model::governance::types::ParliamentBody;
         let mut governance = iroha_config::parameters::actual::Governance {
-            parliament_alternate_size: Some(0),
+            parliament_alternate_size: 0,
             ..iroha_config::parameters::actual::Governance::default()
         };
         for requirement in requirements {
@@ -47644,11 +47936,14 @@ mod validation_fee_torii_ingress_tests {
             &mut stx,
         )
         .expect("register signed pool-contract manifest");
-        stx.world
-            .bind_inactive_contract_subject_for_testing(pool_contract_address(), authority.clone());
+        let pool_contract_address_for_activation = pool_contract_address();
+        stx.world.bind_inactive_contract_subject_for_testing(
+            pool_contract_address_for_activation.clone(),
+            authority.clone(),
+        );
         iroha_core::smartcontracts::code::activate_instance(
             authority,
-            pool_contract_address(),
+            pool_contract_address_for_activation,
             1,
             pool_code_hash,
             &mut stx,
@@ -61084,6 +61379,7 @@ mod asset_definitions_query_tests {
 }
 pub async fn handle_v1_explorer_accounts(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     domain: Option<DomainId>,
     definition: Option<AssetDefinitionId>,
@@ -61093,6 +61389,7 @@ pub async fn handle_v1_explorer_accounts(
         &world,
         domain.as_ref(),
         definition.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61100,12 +61397,18 @@ pub async fn handle_v1_explorer_accounts(
 }
 pub async fn handle_v1_explorer_domains(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
-    let page = crate::explorer::domains_page_for_filters(&world, owned_by.as_ref(), &pagination)
-        .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
+    let page = crate::explorer::domains_page_for_filters(
+        &world,
+        owned_by.as_ref(),
+        &visibility,
+        &pagination,
+    )
+    .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
     Ok(JsonBody(page).into_response())
 }
 fn explorer_circulating_quantity(
@@ -61120,6 +61423,7 @@ fn explorer_circulating_quantity(
 }
 pub async fn handle_v1_explorer_asset_definitions(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     domain: Option<DomainId>,
     owned_by: Option<AccountId>,
@@ -61130,6 +61434,7 @@ pub async fn handle_v1_explorer_asset_definitions(
         &world,
         domain.as_ref(),
         owned_by.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61164,6 +61469,7 @@ pub async fn handle_v1_explorer_asset_definitions(
 }
 pub async fn handle_v1_explorer_assets(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     definition: Option<AssetDefinitionId>,
@@ -61175,6 +61481,7 @@ pub async fn handle_v1_explorer_assets(
         owned_by.as_ref(),
         definition.as_ref(),
         asset_id.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61182,6 +61489,7 @@ pub async fn handle_v1_explorer_assets(
 }
 pub async fn handle_v1_explorer_nfts(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     domain: Option<DomainId>,
@@ -61191,6 +61499,7 @@ pub async fn handle_v1_explorer_nfts(
         &world,
         owned_by.as_ref(),
         domain.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61198,6 +61507,7 @@ pub async fn handle_v1_explorer_nfts(
 }
 pub async fn handle_v1_explorer_rwas(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
     owned_by: Option<AccountId>,
     domain: Option<DomainId>,
@@ -61207,6 +61517,7 @@ pub async fn handle_v1_explorer_rwas(
         &world,
         owned_by.as_ref(),
         domain.as_ref(),
+        &visibility,
         &pagination,
     )
     .map_err(|error| conversion_error(format!("invalid Explorer cursor request: {error}")))?;
@@ -61517,7 +61828,15 @@ pub async fn handle_v1_explorer_metrics(
     state: Arc<CoreState>,
     kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
 ) -> Result<AxResponse, Error> {
+    if !visibility.can_read_all() {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "CanReadAllLedgerData permission is required for Explorer metrics".to_owned(),
+            ),
+        ));
+    }
     if !telemetry.allows_metrics() {
         return Err(Error::telemetry_profile_forbidden(
             "v1/explorer/metrics",
@@ -61616,11 +61935,9 @@ fn nonzero_height(height: u64) -> Option<NonZeroUsize> {
 }
 
 /// Maximum historical blocks decoded by one Explorer cursor request.
-const EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1: usize =
-    crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
+const EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1: usize = crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
 /// Maximum transaction or instruction candidates inspected by one cursor request.
-const EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1: usize =
-    crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
+const EXPLORER_HISTORY_MAX_SCANNED_CANDIDATES_V1: usize = crate::explorer::EXPLORER_CURSOR_MAX_SCAN;
 
 #[derive(Clone, Copy, Debug)]
 struct ExplorerHistoryRequestScope {
@@ -62618,15 +62935,23 @@ fn instruction_detail_at_height(
 }
 pub async fn handle_v1_explorer_account_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     account_id: AccountId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_account(&world, &account_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .account(&account_id)
         .map(|entry| {
             crate::explorer::ExplorerAccountDto::from_entry(
                 entry,
-                crate::explorer::account_counters_from_world(&world, &account_id),
+                crate::explorer::account_counters_from_world(
+                    &world,
+                    &account_id,
+                    &visibility,
+                ),
             )
         })
         .map_err(|_| explorer_not_found())?;
@@ -62634,10 +62959,14 @@ pub async fn handle_v1_explorer_account_detail(
 }
 pub async fn handle_v1_explorer_account_qr(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     account_id: AccountId,
     telemetry: MaybeTelemetry,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_account(&world, &account_id) {
+        return Err(explorer_not_found());
+    }
     world
         .account(&account_id)
         .map_err(|_| explorer_not_found())?;
@@ -62648,15 +62977,19 @@ pub async fn handle_v1_explorer_account_qr(
 }
 pub async fn handle_v1_explorer_domain_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     domain_id: DomainId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_domain(&world, &domain_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .domain(&domain_id)
         .map(|domain| {
             crate::explorer::ExplorerDomainDto::from_domain(
                 domain,
-                crate::explorer::domain_counters_from_world(&world, &domain_id),
+                crate::explorer::domain_counters_from_world(&world, &domain_id, &visibility),
             )
         })
         .map_err(|_| explorer_not_found())?;
@@ -62664,16 +62997,24 @@ pub async fn handle_v1_explorer_domain_detail(
 }
 pub async fn handle_v1_explorer_asset_definition_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_asset_definition(&world, &definition_id) {
+        return Err(explorer_not_found());
+    }
     let governance = state.governance_snapshot();
     let definition = world
         .asset_definition(&definition_id)
         .map_err(|_| explorer_not_found())?;
     let mut dto = crate::explorer::ExplorerAssetDefinitionDto::from_definition_with_asset_count(
         &definition,
-        crate::explorer::definition_instance_count_from_world(&world, &definition_id),
+        crate::explorer::definition_instance_count_from_world(
+            &world,
+            &definition_id,
+            &visibility,
+        ),
     );
     if definition_id == governance.voting_asset_id {
         use iroha_primitives::numeric::Quantity;
@@ -62746,6 +63087,7 @@ fn mark_explorer_econometrics_participant(
 }
 pub async fn handle_v1_explorer_asset_definition_snapshot(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
     use iroha_primitives::numeric::{Numeric, Quantity};
@@ -62753,6 +63095,9 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
     const LORENZ_POINTS: usize = 32;
     let view = state.view();
     // Ensure the definition exists.
+    if !visibility.allows_asset_definition(view.world(), &definition_id) {
+        return Err(explorer_not_found());
+    }
     view.world()
         .asset_definition(&definition_id)
         .map_err(|_| explorer_not_found())?;
@@ -62765,7 +63110,9 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
     let mut holders: Vec<(AccountId, Quantity)> = Vec::new();
     let mut total_supply = Quantity::zero();
     for asset in view.world().assets_iter() {
-        if asset.id().definition() != &definition_id {
+        if asset.id().definition() != &definition_id
+            || !visibility.allows_asset(view.world(), asset.id())
+        {
             continue;
         }
         let balance = asset.value().as_ref();
@@ -63018,6 +63365,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
 }
 pub async fn handle_v1_explorer_asset_definition_econometrics(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
     reject_emergency_fast_unbounded_history(
@@ -63035,6 +63383,9 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     const ISSUANCE_SERIES_DAYS: usize = 30;
     let view = state.view();
     // Ensure the definition exists.
+    if !visibility.allows_asset_definition(view.world(), &definition_id) {
+        return Err(explorer_not_found());
+    }
     view.world()
         .asset_definition(&definition_id)
         .map_err(|_| explorer_not_found())?;
@@ -63128,7 +63479,12 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
             if block_ms < cutoff_ms {
                 break;
             }
-            for (_, _, tx, result) in external_signed_transaction_results(block_ref) {
+            for (entrypoint_index, _, tx, result) in
+                external_signed_transaction_results(block_ref)
+            {
+                if !visibility.allows_external_entrypoint(block_ref, entrypoint_index) {
+                    continue;
+                }
                 // Ignore rejected transactions.
                 if result.as_ref().is_err() {
                     continue;
@@ -63615,7 +63971,11 @@ mod explorer_asset_definition_econometrics_tests {
             .unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
-        let resp = handle_v1_explorer_asset_definition_econometrics(state, def_id)
+        let resp = handle_v1_explorer_asset_definition_econometrics(
+            state,
+            DataspaceReadVisibility::all_for_tests(),
+            def_id,
+        )
             .await
             .expect("handler ok")
             .into_response();
@@ -63864,7 +64224,11 @@ mod explorer_asset_definition_snapshot_tests {
             .unpack(|_| {});
         let committed0 = valid0.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-        let resp = handle_v1_explorer_asset_definition_snapshot(state, def_id)
+        let resp = handle_v1_explorer_asset_definition_snapshot(
+            state,
+            DataspaceReadVisibility::all_for_tests(),
+            def_id,
+        )
             .await
             .expect("handler ok")
             .into_response();
@@ -64037,7 +64401,11 @@ mod explorer_asset_definition_snapshot_tests {
             .unpack(|_| {});
         let committed0 = valid0.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-        let resp = handle_v1_explorer_asset_definition_snapshot(state, def_id)
+        let resp = handle_v1_explorer_asset_definition_snapshot(
+            state,
+            DataspaceReadVisibility::all_for_tests(),
+            def_id,
+        )
             .await
             .expect("handler ok")
             .into_response();
@@ -64083,9 +64451,13 @@ mod explorer_asset_definition_snapshot_tests {
 }
 pub async fn handle_v1_explorer_asset_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     asset_id: AssetId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_asset(&world, &asset_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .asset(&asset_id)
         .map(crate::explorer::ExplorerAssetDto::from_entry)
@@ -64094,9 +64466,13 @@ pub async fn handle_v1_explorer_asset_detail(
 }
 pub async fn handle_v1_explorer_nft_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     nft_id: NftId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_nft(&world, &nft_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .nft(&nft_id)
         .map(crate::explorer::ExplorerNftDto::from_entry)
@@ -64105,9 +64481,13 @@ pub async fn handle_v1_explorer_nft_detail(
 }
 pub async fn handle_v1_explorer_rwa_detail(
     state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
     rwa_id: dm::rwa::RwaId,
 ) -> Result<AxResponse, Error> {
     let world = state.world_view();
+    if !visibility.allows_rwa(&world, &rwa_id) {
+        return Err(explorer_not_found());
+    }
     let dto = world
         .rwa(&rwa_id)
         .map(crate::explorer::ExplorerRwaDto::from_entry)
@@ -69952,6 +70332,8 @@ pub mod event {
         Consumer(#[source] event::Error),
         /// Event reception error
         Event(#[from] tokio::sync::broadcast::error::RecvError),
+        /// Event stream authorization was revoked
+        AuthorizationRevoked,
         /// Connection is closed
         Close,
     }
@@ -69996,6 +70378,10 @@ pub mod event {
             Error::Consumer(event::Error::Stream(StreamError::SendTimeout)) => {
                 (CLOSE_TRY_AGAIN_LATER, "stream_backpressure".to_owned())
             }
+            Error::AuthorizationRevoked => (
+                CLOSE_POLICY_VIOLATION,
+                "stream_authorization_revoked".to_owned(),
+            ),
             Error::Consumer(event::Error::Stream(
                 StreamError::Encode(_) | StreamError::WebSocket(_),
             )) => (CLOSE_INTERNAL_ERROR, "stream_internal_error".to_owned()),
@@ -70081,7 +70467,9 @@ pub mod event {
         visibility: Option<&ToriiDataspaceReadContext>,
     ) -> Result<()> {
         let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+        let mut authorization_check = tokio::time::interval(STREAM_AUTHORIZATION_CHECK_INTERVAL);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        authorization_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         heartbeat.tick().await;
         loop {
             tokio::select! {
@@ -70096,6 +70484,11 @@ pub mod event {
                 event = events.recv() => {
                     match event {
                         Ok(event) => {
+                            if visibility
+                                .is_some_and(|visibility| !visibility.authorization_is_current())
+                            {
+                                return Err(Error::AuthorizationRevoked);
+                            }
                             let event = match visibility {
                                 Some(visibility) => {
                                     let Some(event) = visibility.filter_current_event(event) else {
@@ -70114,7 +70507,26 @@ pub mod event {
                 _ = heartbeat.tick() => {
                     consumer.stream.ping().await.map_err(event::Error::from)?;
                 }
+                _ = authorization_check.tick() => {
+                    if visibility
+                        .is_some_and(|visibility| !visibility.authorization_is_current())
+                    {
+                        return Err(Error::AuthorizationRevoked);
+                    }
+                }
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn revoked_event_stream_uses_policy_violation_close() {
+            let (code, reason) = close_frame_for_error(&Error::AuthorizationRevoked);
+            assert_eq!(code, crate::stream::CLOSE_POLICY_VIOLATION);
+            assert_eq!(reason, "stream_authorization_revoked");
         }
     }
 }

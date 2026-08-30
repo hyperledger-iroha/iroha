@@ -2017,33 +2017,6 @@ int32_t connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-int32_t connect_norito_encode_governance_persist_council_signed_transaction(
-    const char* network_id, unsigned long network_id_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    uint64_t epoch,
-    const uint8_t* members_json, unsigned long members_json_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_governance_persist_council_signed_transaction_alg(
-    const char* network_id, unsigned long network_id_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    uint64_t epoch,
-    const uint8_t* members_json, unsigned long members_json_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t algorithm,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
 int32_t connect_norito_encode_mint_signed_transaction(
     const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,

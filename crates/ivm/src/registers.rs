@@ -49,13 +49,13 @@ impl Clone for Registers {
 impl Registers {
     #[inline]
     fn record_usage(&self, idx: usize) {
-        #[cfg(any(feature = "iroha_telemetry", test))]
+        #[cfg(any(feature = "telemetry", test))]
         {
             debug_assert!(idx < 256);
             let mut usage = self.usage.lock();
             usage.mark(idx);
         }
-        #[cfg(not(any(feature = "iroha_telemetry", test)))]
+        #[cfg(not(any(feature = "telemetry", test)))]
         {
             let _ = idx;
         }
@@ -81,11 +81,11 @@ impl Registers {
     /// Snapshot of unique register usage since the last reset.
     #[inline]
     pub fn usage_summary(&self) -> RegisterUsageSummary {
-        #[cfg(any(feature = "iroha_telemetry", test))]
+        #[cfg(any(feature = "telemetry", test))]
         {
             (*self.usage.lock()).summary()
         }
-        #[cfg(not(any(feature = "iroha_telemetry", test)))]
+        #[cfg(not(any(feature = "telemetry", test)))]
         {
             RegisterUsageSummary::default()
         }
@@ -332,16 +332,16 @@ impl Default for Registers {
         Self::new()
     }
 }
-#[cfg(any(feature = "iroha_telemetry", test))]
+#[cfg(any(feature = "telemetry", test))]
 #[derive(Clone, Copy)]
 struct RegisterUsage {
     bitmap: [u64; 4],
     max_index: u16,
 }
-#[cfg(not(any(feature = "iroha_telemetry", test)))]
+#[cfg(not(any(feature = "telemetry", test)))]
 #[derive(Clone, Copy, Default)]
 struct RegisterUsage;
-#[cfg(any(feature = "iroha_telemetry", test))]
+#[cfg(any(feature = "telemetry", test))]
 impl RegisterUsage {
     const fn new() -> Self {
         Self {
@@ -377,7 +377,7 @@ impl RegisterUsage {
             .sum()
     }
 }
-#[cfg(not(any(feature = "iroha_telemetry", test)))]
+#[cfg(not(any(feature = "telemetry", test)))]
 impl RegisterUsage {
     const fn new() -> Self {
         Self

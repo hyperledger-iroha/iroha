@@ -8,12 +8,14 @@ pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
 pub use crate::governance::types::AtWindow;
 #[cfg(test)]
+use crate::governance::types::GlobalDataTriggerPermissionGovernanceActionV1;
+#[cfg(test)]
 use crate::isi::bridge::SccpRouteGovernanceActionV1;
 pub use crate::parliament_types::{CouncilDerivationKind, VotingMode};
 use crate::{
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, ContractEmergencyHoldProposalV1,
-        ContractLifecycleGovernanceProposalV1,
+        ContractLifecycleGovernanceProposalV1, GlobalDataTriggerPermissionGovernanceProposalV1,
     },
     isi::sorafs::SorafsProviderGovernanceActionV1,
     prelude::*,
@@ -80,6 +82,15 @@ pub struct ProposeContractEmergencyHold {
     pub proposal: ContractEmergencyHoldProposalV1,
 }
 impl crate::seal::Instruction for ProposeContractEmergencyHold {}
+/// Propose granting or revoking one exact account's global data-trigger capability.
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
+)]
+pub struct ProposeGlobalDataTriggerPermissionGovernance {
+    /// Complete exact-account permission proposal.
+    pub proposal: GlobalDataTriggerPermissionGovernanceProposalV1,
+}
+impl crate::seal::Instruction for ProposeGlobalDataTriggerPermissionGovernance {}
 /// Propose a runtime upgrade manifest through governance.
 ///
 /// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
@@ -190,21 +201,6 @@ pub struct CastPlainBallot {
     pub direction: u8,
 }
 impl crate::seal::Instruction for CastPlainBallot {}
-/// Persist a council membership for an epoch.
-///
-/// This instruction records an explicitly administered `members` roster for `epoch` in the WSV.
-/// Selection metadata is derived by the ledger and is not accepted from the caller.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
-pub struct PersistCouncilForEpoch {
-    /// Epoch index
-    pub epoch: u64,
-    /// Council members in deterministic order
-    pub members: Vec<crate::account::AccountId>,
-    /// Alternates that can replace members who decline or are ineligible.
-    #[norito(default)]
-    pub alternates: Vec<crate::account::AccountId>,
-}
-impl crate::seal::Instruction for PersistCouncilForEpoch {}
 /// Discipline event recorded for a citizen assigned to a governance role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
@@ -333,6 +329,9 @@ impl_governance_decode_from_slice!(ProposeContractLifecycleGovernance {
 impl_governance_decode_from_slice!(ProposeContractEmergencyHold {
     proposal: ContractEmergencyHoldProposalV1,
 });
+impl_governance_decode_from_slice!(ProposeGlobalDataTriggerPermissionGovernance {
+    proposal: GlobalDataTriggerPermissionGovernanceProposalV1,
+});
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     manifest: RuntimeUpgradeManifest,
 });
@@ -372,11 +371,6 @@ impl_governance_decode_from_slice!(RestituteGovernanceLock {
     owner: AccountId,
     amount: Quantity,
     reason: String,
-});
-impl_governance_decode_from_slice!(PersistCouncilForEpoch {
-    epoch: u64,
-    members: Vec<crate::account::AccountId>,
-    alternates: Vec<crate::account::AccountId>,
 });
 impl_governance_decode_from_slice!(RecordCitizenServiceOutcome {
     owner: AccountId,
@@ -684,6 +678,12 @@ mod tests {
         assert_slice_roundtrip(ProposeSorafsProviderGovernance {
             action: sorafs_provider_action(),
         });
+        assert_slice_roundtrip(ProposeGlobalDataTriggerPermissionGovernance {
+            proposal: GlobalDataTriggerPermissionGovernanceProposalV1 {
+                authority: account(2),
+                action: GlobalDataTriggerPermissionGovernanceActionV1::Grant,
+            },
+        });
         assert_slice_roundtrip(CastZkBallot {
             election_id: "referendum-1".to_owned(),
             proof_b64: "AQID".to_owned(),
@@ -707,11 +707,6 @@ mod tests {
             owner: account(1),
             amount: 50_u64.into(),
             reason: "appeal accepted".to_owned(),
-        });
-        assert_slice_roundtrip(PersistCouncilForEpoch {
-            epoch: 7,
-            members: vec![account(1), account(2)],
-            alternates: vec![account(3)],
         });
         assert_slice_roundtrip(RecordCitizenServiceOutcome {
             owner: account(1),
@@ -752,20 +747,21 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
+            ProposeGlobalDataTriggerPermissionGovernance {
+                proposal: GlobalDataTriggerPermissionGovernanceProposalV1 {
+                    authority: account(2),
+                    action: GlobalDataTriggerPermissionGovernanceActionV1::Revoke,
+                },
+            },
+        );
+        assert_registry_decodes(
+            &registry,
             CastPlainBallot {
                 referendum_id: "referendum-1".to_owned(),
                 owner: account(1),
                 amount: 1_000_u64.into(),
                 duration_blocks: 100,
                 direction: 0,
-            },
-        );
-        assert_registry_decodes(
-            &registry,
-            PersistCouncilForEpoch {
-                epoch: 7,
-                members: vec![account(1), account(2)],
-                alternates: Vec::new(),
             },
         );
         assert_registry_decodes(

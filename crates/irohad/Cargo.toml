@@ -25,6 +25,10 @@ default = ["daemon"]
 daemon = [
     "telemetry",
     "schema-endpoint",
+    "gost",
+    "sm",
+    "dag-recovery-verify",
+    "expensive-telemetry",
     "iroha_core/node",
     "iroha_torii/node-api",
     "iroha_crypto/consensus",
@@ -53,11 +57,28 @@ sm = [
     "iroha_crypto/sm",
     "iroha_data_model/sm",
     "iroha_config/sm",
+    "iroha_genesis/sm",
+    "iroha_telemetry/sm",
+    "iroha_torii/sm",
+]
+gost = [
+    "iroha_core/gost",
+    "iroha_crypto/gost",
+    "iroha_data_model/gost",
+    "iroha_config/gost",
+    "iroha_torii/gost",
+]
+sm-ffi-openssl = [
+    "sm",
+    "iroha_config/sm-ffi-openssl",
+    "iroha_core/sm-ffi-openssl",
+    "iroha_crypto/sm-ffi-openssl",
+    "iroha_genesis/sm-ffi-openssl",
 ]
 beep = ["ivm/beep"]
 ## Enable deep DAG recovery diagnostics at startup.
 ## Recomputes per-block DAG fingerprints and compares with persisted sidecars.
-## Adds optional deps and is disabled by default to keep the daemon lean.
+## Adds optional deps and is included in the portable shipping daemon.
 dag-recovery-verify = ["dep:nonzero_ext"]
 # Support lightweight telemetry, including diagnostics
 telemetry = [

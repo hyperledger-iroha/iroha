@@ -479,9 +479,10 @@ fi
 echo "Building Iroha tools ($PROFILE)..."
 cd "$IROHA_DIR"
 build_tool_bins() {
-  "${cargo_runner[@]}" build "$@" -p iroha_kagami --bin kagami
-  "${cargo_runner[@]}" build "$@" -p irohad --bin iroha3d
-  "${cargo_runner[@]}" build "$@" -p iroha_cli --bin iroha
+  "${cargo_runner[@]}" build "$@" \
+    -p iroha_kagami --bin kagami \
+    -p irohad --bin iroha3d \
+    -p iroha_cli --bin iroha
 }
 if [[ "$SKIP_TOOL_BUILD" == "true" ]]; then
   echo "Skipping Iroha tool build; using existing binaries."

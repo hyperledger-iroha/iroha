@@ -2133,6 +2133,7 @@ impl StateTelemetry {
             GovernanceEvent::ProposalRejected(payload) => {
                 self.update_governance_status(payload.id, GPS::Rejected);
             }
+            GovernanceEvent::ReferendumDecided(_) => {}
             GovernanceEvent::ProposalEnacted(payload) => {
                 self.update_governance_status(payload.id, GPS::Enacted);
             }

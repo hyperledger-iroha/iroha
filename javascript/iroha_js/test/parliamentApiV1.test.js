@@ -23,6 +23,7 @@ import {
   PARLIAMENT_BODY_STATE_FIELDS_V1,
   PARLIAMENT_CERTIFICATE_BODY_BINDING_FIELDS_V1,
   PARLIAMENT_NO_RESULT_KINDS_V1,
+  PARLIAMENT_PROPOSAL_KINDS_V1,
   PARLIAMENT_PUBLIC_FINDING_CERTIFICATE_FIELDS_V1,
   PARLIAMENT_PUBLIC_TRANSITIONS_V1,
   PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ_PATH_V1,
@@ -115,6 +116,7 @@ test("shared Parliament fixture pins routes, all transition inventories, and cer
     attempt_create: PARLIAMENT_ATTEMPT_CREATE_WIRE_ID_V1,
     transition_submit: PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
   });
+  assert.deepEqual(fixture.proposal_kinds, PARLIAMENT_PROPOSAL_KINDS_V1);
   assert.equal(fixture.limits.attempt_state_bytes, PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1);
   assert.equal(
     fixture.limits.governance_attempt_sequence_max,
@@ -343,7 +345,7 @@ test("timed-OVN corpus transitions preflight one through 32 records per chunk", 
   }
 });
 
-test("attempt drafts admit all nine exact proposal wire variants", () => {
+test("attempt drafts admit all ten exact proposal wire variants", () => {
   const proposals = parliamentProposalFixtures();
   assert.deepEqual(
     proposals.map((proposal) => (
@@ -359,6 +361,7 @@ test("attempt drafts admit all nine exact proposal wire variants", () => {
       "SorafsProviderGovernance",
       "ContractLifecycleGovernance",
       "ContractEmergencyHold",
+      "GlobalDataTriggerPermissionGovernance",
     ],
   );
   const musubi = buildParliamentAttemptDraftRequestV1(proposals[5], 1).proposal;
@@ -387,6 +390,10 @@ test("Parliament declarations expose the closed wire union and tuple newtypes", 
   );
   assert.match(proposalDeclarations, /kind: "ContractLifecycleGovernance";/u);
   assert.match(proposalDeclarations, /kind: "ContractEmergencyHold";/u);
+  assert.match(
+    proposalDeclarations,
+    /kind: "GlobalDataTriggerPermissionGovernance";/u,
+  );
   assert.doesNotMatch(proposalDeclarations, /payload: Record<string, unknown>/u);
 });
 
@@ -417,6 +424,7 @@ test("attempt drafts reject malformed nested fields and open proposal shapes", (
     (proposal) => { proposal.payload.action.value.provider_id = Array(32).fill(0x31); },
     (proposal) => { proposal.payload.action.payload.future = null; },
     (proposal) => { proposal.payload.future = null; },
+    (proposal) => { proposal.payload.action.future = null; },
   ];
   for (const [index, canonical] of parliamentProposalFixtures().entries()) {
     const malformed = structuredClone(canonical);
@@ -983,6 +991,7 @@ test("ToriiClient typed proposal reads use the strict local V1 parser", async ()
     "SorafsProviderGovernance",
     "ContractLifecycleGovernance",
     "ContractEmergencyHold",
+    "GlobalDataTriggerPermissionGovernance",
   ]);
 
   const malformed = structuredClone(parliamentProposalFixtures()[0]);
@@ -1166,6 +1175,13 @@ function parliamentProposalFixtures() {
         incident_digest: Array(32).fill(0x46),
         reason: "contain active exploit",
         duration_blocks: 3600,
+      },
+    },
+    {
+      kind: "GlobalDataTriggerPermissionGovernance",
+      payload: {
+        authority: treasury,
+        action: { action: "grant", value: null },
       },
     },
   ];

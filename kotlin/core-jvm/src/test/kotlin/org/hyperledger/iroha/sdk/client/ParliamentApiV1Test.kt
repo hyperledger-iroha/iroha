@@ -215,7 +215,7 @@ class ParliamentApiV1Test {
     }
 
     @Test
-    fun attemptBuilderAdmitsExactlyTheNineFirstReleaseProposalKinds() {
+    fun attemptBuilderAdmitsExactlyTheTenFirstReleaseProposalKinds() {
         ParliamentApiV1.PROPOSAL_KINDS.forEach { kind ->
             val request = objectValue(
                 ParliamentApiV1.attemptDraftRequestJson(
@@ -225,7 +225,7 @@ class ParliamentApiV1Test {
             )
             assertEquals(kind, (request["proposal"] as Map<*, *>)["kind"])
         }
-        assertEquals(9, ParliamentApiV1.PROPOSAL_KINDS.size)
+        assertEquals(10, ParliamentApiV1.PROPOSAL_KINDS.size)
 
         val fullU64Policy = validProposal("ValidationFeePolicy")
         @Suppress("UNCHECKED_CAST")
@@ -271,6 +271,31 @@ class ParliamentApiV1Test {
             assertFailsWith<IllegalArgumentException> {
                 ParliamentApiV1.Proposal.fromJson(encode(proposal))
             }
+        }
+    }
+
+    @Test
+    fun globalDataTriggerPermissionRequiresExactAccountAndClosedUnitAction() {
+        listOf("grant", "revoke").forEach { action ->
+            val proposal = validProposal("GlobalDataTriggerPermissionGovernance")
+            @Suppress("UNCHECKED_CAST")
+            val payload = proposal["payload"] as MutableMap<String, Any?>
+            payload["action"] = linkedMapOf("action" to action, "value" to null)
+            ParliamentApiV1.Proposal.fromJson(encode(proposal))
+        }
+
+        val malformed = validProposal("GlobalDataTriggerPermissionGovernance")
+        @Suppress("UNCHECKED_CAST")
+        val action =
+            ((malformed["payload"] as MutableMap<String, Any?>)["action"] as MutableMap<String, Any?>)
+        action["value"] = emptyMap<String, Any?>()
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(malformed))
+        }
+        action["value"] = null
+        action["action"] = "delegate"
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(malformed))
         }
     }
 
@@ -1311,6 +1336,10 @@ class ParliamentApiV1Test {
                 "incident_digest" to List(32) { 0x55 },
                 "reason" to "contain active exploit",
                 "duration_blocks" to 3_600,
+            )
+            "GlobalDataTriggerPermissionGovernance" -> linkedMapOf(
+                "authority" to account(4),
+                "action" to linkedMapOf("action" to "grant", "value" to null),
             )
             else -> error("unsupported fixture kind $kind")
         }

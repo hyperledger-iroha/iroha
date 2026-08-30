@@ -573,8 +573,18 @@ impl<T: Write> RunArgs<T> for Args {
             .wrap_err("parse exact bound genesis manifest")?;
         let pre_sign_bytes = read_genesis_manifest_bytes(&self.pre_sign_manifest)
             .wrap_err("read pre-sign genesis manifest under fixed resource bounds")?;
-        let pre_sign = RawGenesisTransaction::from_json_slice(&pre_sign_bytes)
-            .wrap_err("parse exact pre-sign genesis manifest")?;
+        let bundle_root = self
+            .pre_sign_manifest
+            .parent()
+            .ok_or_else(|| color_eyre::eyre::eyre!("pre-sign manifest lacks a bundle parent"))?;
+        ensure!(
+            self.bound_manifest.parent() == Some(bundle_root),
+            "pre-sign and bound manifests must share one exact bundle root"
+        );
+        let signer_input_path = bundle_root.join("rendered/genesis.json");
+        let pre_sign =
+            RawGenesisTransaction::from_json_slice_at_path(&pre_sign_bytes, &signer_input_path)
+                .wrap_err("parse exact pre-sign genesis manifest with signer path semantics")?;
         let (peer_config_bytes, configs, config_bindings) = load_validator_configs(
             &self.peer_configs,
             &manifest,
@@ -593,7 +603,16 @@ impl<T: Write> RunArgs<T> for Args {
             expected_pre_sign == observed_pre_sign,
             "pre-sign genesis differs from the reviewed manifest outside the exact four-validator renderer transform"
         );
-        let expected_bound = pre_sign
+        let pre_sign_consensus_mode = pre_sign.consensus_mode();
+        let signer_prepared = super::sign::prepare_genesis_for_signing(
+            pre_sign,
+            Some(&configs[0]),
+            pre_sign_consensus_mode,
+            None,
+            &[],
+        )
+        .wrap_err("reproduce the external signer's deterministic manifest preparation")?;
+        let expected_bound = signer_prepared
             .with_sumeragi_v2_context_parameters(manifest.sumeragi_v2_context_parameters())
             .with_consensus_meta();
         ensure!(
@@ -682,6 +701,13 @@ impl<T: Write> RunArgs<T> for Args {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        isi::{ActivatePublicLaneValidator, MintBox, RegisterPublicLaneValidator},
+        parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters},
+        },
+    };
     use iroha_genesis::GenesisBuilder;
 
     #[test]
@@ -847,8 +873,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let reviewed = GenesisBuilder::new_without_executor(configs[0].common.chain.clone(), ".")
+            .append_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ))
             .build_raw()
             .with_chain_discriminant(*configs[0].common.chain_discriminant.value())
+            .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_consensus_meta();
         let reviewed_bytes =
             norito::json::to_vec_pretty(&reviewed).expect("encode reviewed fixture manifest");
@@ -856,15 +886,58 @@ mod tests {
             .expect("render fixture validator transform");
         let pre_sign_bytes =
             norito::json::to_vec_pretty(&pre_sign_value).expect("encode pre-sign fixture manifest");
-        let pre_sign = RawGenesisTransaction::from_json_slice(&pre_sign_bytes)
-            .expect("parse pre-sign fixture manifest");
+        let rendered_dir = directory.path().join("rendered");
+        std::fs::create_dir(&rendered_dir).expect("create signer input directory");
+        let signer_input_path = rendered_dir.join("genesis.json");
+        let pre_sign =
+            RawGenesisTransaction::from_json_slice_at_path(&pre_sign_bytes, &signer_input_path)
+                .expect("parse pre-sign fixture with signer path semantics");
+        let signer_prepared = super::super::sign::prepare_genesis_for_signing(
+            pre_sign,
+            Some(&configs[0]),
+            SumeragiConsensusMode::Npos,
+            None,
+            &[],
+        )
+        .expect("prepare deterministic NPoS signer transform");
+        let npos_counts = signer_prepared.instructions().fold(
+            (0_usize, 0_usize, 0_usize),
+            |(mints, registrations, activations), instruction| {
+                (
+                    mints + usize::from(instruction.as_any().downcast_ref::<MintBox>().is_some()),
+                    registrations
+                        + usize::from(
+                            instruction
+                                .as_any()
+                                .downcast_ref::<RegisterPublicLaneValidator>()
+                                .is_some(),
+                        ),
+                    activations
+                        + usize::from(
+                            instruction
+                                .as_any()
+                                .downcast_ref::<ActivatePublicLaneValidator>()
+                                .is_some(),
+                        ),
+                )
+            },
+        );
+        assert_eq!(
+            npos_counts,
+            (
+                TAIRA_VALIDATOR_COUNT,
+                TAIRA_VALIDATOR_COUNT,
+                TAIRA_VALIDATOR_COUNT
+            ),
+            "fixture must exercise the exact four-validator NPoS bootstrap tail"
+        );
         let da_proof_policies = Some(iroha_core::da::proof_policy_bundle(
             &configs[0].nexus.lane_config,
         ));
         let confidential_policy_hash =
             iroha_core::state::compute_genesis_confidential_policy_hash(&configs[0].zk);
         let (manifest, sealed_genesis) = super::super::bind_and_sign_staged_sumeragi_v2_context(
-            pre_sign.clone(),
+            signer_prepared,
             &signer,
             Some(&configs[0]),
             da_proof_policies,
@@ -872,6 +945,17 @@ mod tests {
             Some(1_700_000_000_000),
         )
         .expect("bind and sign prepared Kagami fixture");
+        let manifest_value = norito::json::value::to_value(&manifest)
+            .expect("encode normalized bound fixture manifest");
+        let expected_ivm_dir = rendered_dir.join(".").to_string_lossy().into_owned();
+        assert_eq!(
+            manifest_value
+                .as_object()
+                .and_then(|object| object.get("ivm_dir"))
+                .and_then(norito::json::Value::as_str),
+            Some(expected_ivm_dir.as_str()),
+            "fixture must exercise the signer's manifest-origin normalization"
+        );
         let sealed_genesis = sealed_genesis.0;
         let expected_hash = sealed_genesis.hash();
         for (table, path) in config_tables.iter_mut().zip(&config_paths) {
@@ -1035,21 +1119,57 @@ mod tests {
         let original_manifest = std::fs::read(&fixture.manifest).expect("read bound fixture");
         let mut spliced_manifest: norito::json::Value =
             norito::json::from_slice(&original_manifest).expect("parse bound fixture");
-        spliced_manifest
+        let bootstrap_instructions = spliced_manifest
             .as_object_mut()
             .expect("bound fixture object")
             .get_mut("transactions")
             .and_then(norito::json::Value::as_array_mut)
-            .expect("bound fixture transactions")
-            .push(norito::json::Value::Object(norito::json::native::Map::new()));
+            .and_then(|transactions| transactions.last_mut())
+            .and_then(norito::json::Value::as_object_mut)
+            .and_then(|transaction| transaction.get_mut("instructions"))
+            .and_then(norito::json::Value::as_array_mut)
+            .expect("bound fixture NPoS bootstrap instructions");
+        let registration_index = bootstrap_instructions
+            .iter()
+            .position(|instruction| {
+                instruction
+                    .as_object()
+                    .is_some_and(|object| object.contains_key("RegisterPublicLaneValidator"))
+            })
+            .expect("bound fixture validator registration");
+        bootstrap_instructions.remove(registration_index);
         std::fs::write(
             &fixture.manifest,
             norito::json::to_vec_pretty(&spliced_manifest).expect("encode spliced bound fixture"),
         )
         .expect("write spliced bound fixture");
-        let bound_error =
-            run_fixture(&fixture).expect_err("reject signer-spliced pre-sign/bound transform");
+        let bound_error = run_fixture(&fixture)
+            .expect_err("reject a missing deterministic NPoS bootstrap instruction");
         assert!(bound_error.to_string().contains("staged-context transform"));
+        std::fs::write(&fixture.manifest, original_manifest).expect("restore bound fixture");
+
+        let original_manifest = std::fs::read(&fixture.manifest).expect("reread bound fixture");
+        let mut wrong_origin: norito::json::Value =
+            norito::json::from_slice(&original_manifest).expect("parse restored bound fixture");
+        wrong_origin
+            .as_object_mut()
+            .expect("bound fixture object")
+            .insert(
+                "ivm_dir".to_owned(),
+                norito::json::Value::String(".".to_owned()),
+            );
+        std::fs::write(
+            &fixture.manifest,
+            norito::json::to_vec_pretty(&wrong_origin).expect("encode wrong-origin bound fixture"),
+        )
+        .expect("write wrong-origin bound fixture");
+        let origin_error = run_fixture(&fixture)
+            .expect_err("reject a bound manifest with signer path normalization removed");
+        assert!(
+            origin_error
+                .to_string()
+                .contains("staged-context transform")
+        );
         std::fs::write(&fixture.manifest, original_manifest).expect("restore bound fixture");
 
         for config_index in 1..TAIRA_VALIDATOR_COUNT {

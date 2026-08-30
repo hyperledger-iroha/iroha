@@ -779,6 +779,107 @@ test("noritoDecodeInstruction round-trips instruction JSON", () => {
   assert.deepEqual(decoded, REGISTER_DOMAIN);
 });
 
+baseTest("contract activation lifecycle instructions retain mandatory CAS revisions", () => {
+  const contractAddress =
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  for (const instruction of [
+    {
+      ActivateContractInstance: {
+        contract_address: contractAddress,
+        expected_revision: "7",
+        code_hash: `hash:${"AB".repeat(32)}#B99E`,
+      },
+    },
+    {
+      DeactivateContractInstance: {
+        contract_address: contractAddress,
+        expected_revision: "8",
+        reason: "incident containment",
+      },
+    },
+    {
+      SetContractParliamentDelegation: {
+        contract_address: contractAddress,
+        expected_revision: "9",
+        delegated: true,
+      },
+    },
+    {
+      OfferContractOwnership: {
+        contract_address: contractAddress,
+        expected_revision: "10",
+        new_owner: { owner: "Account", value: ACCOUNT_ID },
+      },
+    },
+    {
+      OfferContractOwnership: {
+        contract_address: contractAddress,
+        expected_revision: "11",
+        new_owner: { owner: "Parliament", value: null },
+      },
+    },
+    {
+      AcceptContractOwnership: {
+        contract_address: contractAddress,
+        expected_revision: "12",
+      },
+    },
+    {
+      CancelContractOwnershipOffer: {
+        contract_address: contractAddress,
+        expected_revision: "13",
+      },
+    },
+  ]) {
+    const decoded = withMissingNativeBinding(() =>
+      noritoDecodeInstruction(noritoEncodeInstruction(instruction)),
+    );
+    assert.deepEqual(decoded, instruction);
+  }
+});
+
+baseTest("contract activation lifecycle instructions reject omitted CAS revisions", () => {
+  const contractAddress =
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  for (const instruction of [
+    {
+      ActivateContractInstance: {
+        contract_address: contractAddress,
+        code_hash: "ab".repeat(32),
+      },
+    },
+    {
+      DeactivateContractInstance: {
+        contract_address: contractAddress,
+        reason: null,
+      },
+    },
+    {
+      SetContractParliamentDelegation: {
+        contract_address: contractAddress,
+        delegated: true,
+      },
+    },
+    {
+      OfferContractOwnership: {
+        contract_address: contractAddress,
+        new_owner: { owner: "Parliament", value: null },
+      },
+    },
+    {
+      AcceptContractOwnership: { contract_address: contractAddress },
+    },
+    {
+      CancelContractOwnershipOffer: { contract_address: contractAddress },
+    },
+  ]) {
+    assert.throws(
+      () => withMissingNativeBinding(() => noritoEncodeInstruction(instruction)),
+      /expected_revision/u,
+    );
+  }
+});
+
 test("norito encode/decode supports account registration", () => {
   const encoded = noritoEncodeInstruction(REGISTER_ACCOUNT);
   const decoded = noritoDecodeInstruction(encoded);

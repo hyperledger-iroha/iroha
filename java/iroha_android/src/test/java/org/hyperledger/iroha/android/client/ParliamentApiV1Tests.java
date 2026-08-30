@@ -226,7 +226,7 @@ public final class ParliamentApiV1Tests {
   }
 
   @Test
-  public void attemptBuilderAdmitsExactlyTheNineFirstReleaseProposalKinds() {
+  public void attemptBuilderAdmitsExactlyTheTenFirstReleaseProposalKinds() {
     for (final String kind : ParliamentApiV1.PROPOSAL_KINDS) {
       final Map<String, Object> request =
           objectValue(
@@ -234,7 +234,7 @@ public final class ParliamentApiV1Tests {
                   proposal(kind), 0));
       assertEquals(kind, objectValue(request.get("proposal")).get("kind"));
     }
-    assertEquals(9, ParliamentApiV1.PROPOSAL_KINDS.size());
+    assertEquals(10, ParliamentApiV1.PROPOSAL_KINDS.size());
 
     final Map<String, Object> fullU64Policy = validProposal("ValidationFeePolicy");
     final Map<String, Object> fullU64PolicyValue =
@@ -281,6 +281,31 @@ public final class ParliamentApiV1Tests {
           IllegalArgumentException.class,
           () -> ParliamentApiV1.Proposal.fromJson(encode(proposal)));
     }
+  }
+
+  @Test
+  public void globalDataTriggerPermissionRequiresExactAccountAndClosedUnitAction() {
+    for (final String action : Arrays.asList("grant", "revoke")) {
+      final Map<String, Object> proposal =
+          validProposal("GlobalDataTriggerPermissionGovernance");
+      objectValue(proposal.get("payload"))
+          .put("action", map("action", action, "value", null));
+      ParliamentApiV1.Proposal.fromJson(encode(proposal));
+    }
+
+    final Map<String, Object> malformed =
+        validProposal("GlobalDataTriggerPermissionGovernance");
+    final Map<String, Object> action =
+        objectValue(objectValue(malformed.get("payload")).get("action"));
+    action.put("value", new java.util.LinkedHashMap<String, Object>());
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.Proposal.fromJson(encode(malformed)));
+    action.put("value", null);
+    action.put("action", "delegate");
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ParliamentApiV1.Proposal.fromJson(encode(malformed)));
   }
 
   @Test
@@ -1432,6 +1457,11 @@ public final class ParliamentApiV1Tests {
                   "incident_digest", repeatedNumbers(32, 0x55),
                   "reason", "contain active exploit",
                   "duration_blocks", 3_600);
+      case "GlobalDataTriggerPermissionGovernance" ->
+          payload =
+              map(
+                  "authority", account(4),
+                  "action", map("action", "grant", "value", null));
       default -> throw new AssertionError("unsupported fixture kind " + kind);
     }
     return map("kind", kind, "payload", payload);

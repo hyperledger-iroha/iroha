@@ -10,12 +10,12 @@ use iroha::data_model::{
         ParliamentBallotFailureKindV1, RuntimeUpgradeProposal,
         parliament_execution_failure_root_v1,
     },
-    isi::{
-        governance::{ProposeRuntimeUpgradeProposal, UnregisterCitizen},
-        smart_contract_code::ActivateContractInstance,
-    },
+    isi::governance::{ProposeRuntimeUpgradeProposal, UnregisterCitizen},
     prelude::{AssetDefinitionId, AssetId, FindAssetById, Mint, Quantity},
     runtime::RuntimeUpgradeManifest,
+};
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use iroha_executor_data_model::permission::governance::CanProposeRuntimeUpgrade;
 use iroha_test_samples::BOB_ID;
@@ -59,7 +59,7 @@ async fn install_threshold_sessions(
     network: &sandbox::SerializedNetwork,
     client: &Client,
 ) -> Result<ThresholdSessionsV1> {
-    let ordered_roster = ordered_validator_roster(network)?;
+    let ordered_roster = ordered_validator_roster(network, client)?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive failure-corridor beacon fixture")?;
@@ -461,6 +461,14 @@ fn certified_terminal_builder(
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanProposeContractDeployment {
                 contract_address: contract_address.clone(),
+            }),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(
+                    iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
+                ),
             }),
             ALICE_ID.clone(),
         ))
@@ -1119,6 +1127,45 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         competing_abi_hash, abi_hash,
         "the competing artifact must preserve the proposal's exact ABI surface",
     );
+    let competing_deploy_proposal = ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash: competing_contract_code_hash,
+        abi_hash: competing_abi_hash,
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    let competing_deploy_create = CreateParliamentGovernanceAttemptV1 {
+        proposal: competing_deploy_proposal,
+        attempt_sequence: 0,
+    };
+    let competing_deploy_attempt_id = competing_deploy_create.governance_attempt_id();
+    client.submit_all_blocking(
+        [
+            InstructionBox::from(ProposeDeployContract {
+                contract_address: contract_address.clone(),
+                code_hash: competing_contract_code_hash,
+                abi_hash: competing_abi_hash,
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            InstructionBox::from(competing_deploy_create),
+        ],
+        fee(),
+    )?;
+    let competing_deploy_certificate = certify_failure_path_attempt(
+        &network,
+        &client,
+        &citizens,
+        &citizen_keys,
+        competing_deploy_attempt_id,
+        &sessions,
+    )
+    .await?;
+
+    // Register the proposal under test while the competing certificate is
+    // certified but not yet due. Its immutable expected head is therefore the
+    // same absent head; ordinary block progression enacts the competitor before
+    // this attempt finishes certification.
     let deploy_proposal = ProposalKind::DeployContract(DeployContractProposal {
         contract_address: contract_address.clone(),
         code_hash,
@@ -1145,6 +1192,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         ],
         fee(),
     )?;
+    assert!(current_height(&client)? < competing_deploy_certificate.enact_at_height);
     let deploy_certificate = certify_failure_path_attempt(
         &network,
         &client,
@@ -1154,23 +1202,27 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         &sessions,
     )
     .await?;
-
-    let competing_code_hash = Hash::prehashed(competing_contract_code_hash.into_bytes());
-    client.submit_blocking(
-        ActivateContractInstance {
-            contract_address: contract_address.clone(),
-            expected_revision: 1,
-            code_hash: competing_code_hash,
-        },
-        fee(),
-    )?;
+    assert_eq!(
+        deploy_certificate.expected_head, competing_deploy_certificate.expected_head,
+        "both certified deployments must compare against the same pre-enactment head",
+    );
+    assert!(current_height(&client)? >= competing_deploy_certificate.enact_at_height);
+    let competing_enacted = read_attempt(&client, competing_deploy_attempt_id)?;
+    assert_eq!(
+        competing_enacted.attempt().status,
+        GovernanceAttemptStatusV1::Enacted,
+    );
+    assert_eq!(
+        competing_enacted.certificate(),
+        Some(&competing_deploy_certificate),
+    );
     assert!(current_height(&client)? < deploy_certificate.enact_at_height);
     assert_governed_contract_binding(
         &client,
         &contract_address,
         competing_contract_code_hash,
         competing_abi_hash,
-        "the competing direct binding must be authoritative before enactment",
+        "the certified competing binding must be authoritative before enactment",
     )?;
     advance_to_autonomous_predecessor(
         &network,
@@ -1197,7 +1249,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
             GovernanceExpectedHeadPresentV1 {
                 subject_id: deploy_subject_id,
                 version: 1,
-                head_root: competing_code_hash.into(),
+                head_root: competing_contract_code_hash.into(),
             },
         )),
         "supersession must bind the exact authoritative contract head",

@@ -28,6 +28,8 @@ maintenance = { status = "actively-developed" }
 [features]
 default = ["cli"]
 cli = [
+    "bridge",
+    "offline-visual-codecs",
     "iroha_core/node",
     "iroha_crypto/consensus",
     "iroha_data_model/json",

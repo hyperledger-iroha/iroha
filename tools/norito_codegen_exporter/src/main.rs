@@ -131,7 +131,6 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::governance::ProposeDeployContract);
         $macro!(iroha_data_model::isi::governance::CastZkBallot);
         $macro!(iroha_data_model::isi::governance::CastPlainBallot);
-        $macro!(iroha_data_model::isi::governance::PersistCouncilForEpoch);
         $macro!(
             iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1
         );

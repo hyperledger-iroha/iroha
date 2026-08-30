@@ -1,5 +1,32 @@
 {
   "components": {
+    "headers": {
+      "IsoOutboundSignatureDomainV2": {
+        "description": "Domain separator used for the detached signature over the exact ISO XML response body.",
+        "required": true,
+        "schema": {
+          "const": "iroha.iso20022.outbound.v2",
+          "type": "string"
+        }
+      },
+      "IsoOutboundSignatureV2": {
+        "description": "Canonical padded-base64 detached signature over `iroha.iso20022.outbound.v2\\0` followed by the exact XML response bytes.",
+        "required": true,
+        "schema": {
+          "minLength": 4,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+          "type": "string"
+        }
+      },
+      "IsoOutboundSignerV2": {
+        "description": "Canonical Iroha multihash public key that verifies the detached ISO XML response signature.",
+        "required": true,
+        "schema": {
+          "minLength": 1,
+          "type": "string"
+        }
+      }
+    },
     "schemas": {
       "AcceptMusubiPackageMaintainerV1": {
         "additionalProperties": false,
@@ -8585,6 +8612,26 @@
         ],
         "type": "object"
       },
+      "ExplorerBlocksHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/ExplorerHistoryCursorMeta"
+          }
+        },
+        "required": [
+          "pagination",
+          "items"
+        ],
+        "type": "object"
+      },
       "ExplorerCursorMeta": {
         "additionalProperties": false,
         "properties": {
@@ -8635,6 +8682,59 @@
         "required": [
           "pagination",
           "items"
+        ],
+        "type": "object"
+      },
+      "ExplorerHistoryCursorMeta": {
+        "additionalProperties": false,
+        "description": "Snapshot-bound seek metadata for one bounded Explorer history page. The opaque cursor is bound to the collection, committed snapshot, normalized filters, and the caller's visible-route-set digest.",
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "limit": {
+            "format": "uint32",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "maxLength": 1424,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshot_hash": {
+            "description": "Hash of the committed block at snapshot_height, or null when the chain is empty.",
+            "oneOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshot_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "snapshot_height",
+          "snapshot_hash",
+          "next_cursor",
+          "has_more"
         ],
         "type": "object"
       },
@@ -8747,6 +8847,26 @@
         ],
         "description": "Typed public explorer payload when a dedicated schema is available; otherwise the canonical public instruction projection."
       },
+      "ExplorerInstructionsHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExplorerInstructionDetail"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/ExplorerHistoryCursorMeta"
+          }
+        },
+        "required": [
+          "pagination",
+          "items"
+        ],
+        "type": "object"
+      },
       "ExplorerNftsCursorPage": {
         "additionalProperties": false,
         "properties": {
@@ -8827,6 +8947,26 @@
         },
         "required": [
           "anchor"
+        ],
+        "type": "object"
+      },
+      "ExplorerTransactionsHistoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/ExplorerHistoryCursorMeta"
+          }
+        },
+        "required": [
+          "pagination",
+          "items"
         ],
         "type": "object"
       },
@@ -12027,6 +12167,57 @@
               "payload"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "ContractLifecycleGovernance",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "ContractEmergencyHold",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "GlobalDataTriggerPermissionGovernance",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -13835,31 +14026,155 @@
       "GovernedContractEmergencyHoldV1": {
         "additionalProperties": false,
         "properties": {
-          "expires_at_height": { "format": "uint64", "minimum": 1, "type": "integer" },
-          "governance_attempt_id_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-          "imposed_at_height": { "format": "uint64", "minimum": 1, "type": "integer" },
-          "incident_digest_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-          "proposal_content_id_hex": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
-          "reason": { "minLength": 1, "type": "string" }
+          "expires_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "governance_attempt_id_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "imposed_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "incident_digest_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "proposal_content_id_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "type": "string"
+          }
         },
-        "required": ["incident_digest_hex", "proposal_content_id_hex", "governance_attempt_id_hex", "reason", "imposed_at_height", "expires_at_height"],
+        "required": [
+          "incident_digest_hex",
+          "proposal_content_id_hex",
+          "governance_attempt_id_hex",
+          "reason",
+          "imposed_at_height",
+          "expires_at_height"
+        ],
         "type": "object"
       },
       "GovernedContractLifecycleV1": {
         "additionalProperties": false,
         "properties": {
-          "active_code_hash_hex": { "anyOf": [{ "pattern": "^[0-9a-f]{64}$", "type": "string" }, { "type": "null" }] },
-          "emergency_hold": { "anyOf": [{ "$ref": "#/components/schemas/GovernedContractEmergencyHoldV1" }, { "type": "null" }] },
-          "origin": { "enum": ["direct", "parliament"], "type": "string" },
-          "origin_account": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
-          "origin_governance_attempt_id_hex": { "anyOf": [{ "pattern": "^[0-9a-f]{64}$", "type": "string" }, { "type": "null" }] },
-          "origin_proposal_content_id_hex": { "anyOf": [{ "pattern": "^[0-9a-f]{64}$", "type": "string" }, { "type": "null" }] },
-          "owner": { "oneOf": [{ "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" }, { "enum": ["parliament"], "type": "string" }] },
-          "parliament_delegated": { "type": "boolean" },
-          "pending_owner": { "anyOf": [{ "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" }, { "enum": ["parliament"], "type": "string" }, { "type": "null" }] },
-          "revision": { "format": "uint64", "minimum": 1, "type": "integer" }
+          "active_code_hash_hex": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "emergency_hold": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GovernedContractEmergencyHoldV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origin": {
+            "enum": [
+              "direct",
+              "parliament"
+            ],
+            "type": "string"
+          },
+          "origin_account": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "origin_governance_attempt_id_hex": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origin_proposal_content_id_hex": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+              },
+              {
+                "enum": [
+                  "parliament"
+                ],
+                "type": "string"
+              }
+            ]
+          },
+          "parliament_delegated": {
+            "type": "boolean"
+          },
+          "pending_owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+              },
+              {
+                "enum": [
+                  "parliament"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "format": "uint16",
+            "minimum": 1,
+            "type": "integer"
+          }
         },
-        "required": ["origin", "origin_account", "origin_proposal_content_id_hex", "origin_governance_attempt_id_hex", "owner", "pending_owner", "parliament_delegated", "active_code_hash_hex", "revision", "emergency_hold"],
+        "required": [
+          "version",
+          "origin",
+          "origin_account",
+          "origin_proposal_content_id_hex",
+          "origin_governance_attempt_id_hex",
+          "owner",
+          "pending_owner",
+          "parliament_delegated",
+          "active_code_hash_hex",
+          "revision",
+          "emergency_hold"
+        ],
         "type": "object"
       },
       "GovernedContractResponse": {
@@ -13872,7 +14187,9 @@
                 "type": "string"
               },
               "active": {
-                "enum": [true],
+                "enum": [
+                  true
+                ],
                 "type": "boolean"
               },
               "code_hash_hex": {
@@ -13929,7 +14246,9 @@
             "additionalProperties": false,
             "properties": {
               "active": {
-                "enum": [false],
+                "enum": [
+                  false
+                ],
                 "type": "boolean"
               },
               "contract_address": {
@@ -13968,11 +14287,24 @@
           {
             "additionalProperties": false,
             "properties": {
-              "contract_address": { "type": "string" },
-              "dataspace": { "type": "string" },
-              "found": { "enum": [false], "type": "boolean" }
+              "contract_address": {
+                "type": "string"
+              },
+              "dataspace": {
+                "type": "string"
+              },
+              "found": {
+                "enum": [
+                  false
+                ],
+                "type": "boolean"
+              }
             },
-            "required": ["found", "contract_address", "dataspace"],
+            "required": [
+              "found",
+              "contract_address",
+              "dataspace"
+            ],
             "type": "object"
           }
         ]
@@ -27432,6 +27764,979 @@
           "value"
         ],
         "type": "object"
+      },
+      "PrivateSettlementAuditApprovalRequestV1": {
+        "additionalProperties": false,
+        "description": "Strict identity-bound auditor approval request.",
+        "properties": {
+          "approval": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Purpose-separated approval matching the authenticated auditor key."
+          }
+        },
+        "required": [
+          "approval"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden"
+        }
+      },
+      "PrivateSettlementAuditApprovalResponseV1": {
+        "additionalProperties": false,
+        "description": "Redacted durable approval result.",
+        "properties": {
+          "bundle_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "collected": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "leg_ordinal": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+          },
+          "newly_recorded": {
+            "type": "boolean"
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "required": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "payload_digest",
+          "leg_ordinal",
+          "collected",
+          "required",
+          "newly_recorded",
+          "lifecycle"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementAuditorCapsuleResponseV1": {
+        "additionalProperties": false,
+        "description": "Auditor-only encrypted capsule; plaintext and spending secrets are forbidden.",
+        "properties": {
+          "audit_capsule": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Padded hybrid-encrypted capsule."
+          },
+          "audit_policy": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Governed audit policy."
+          },
+          "availability": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Durable restricted-DA certificate."
+          },
+          "committee_authority": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact four-validator authority."
+          },
+          "delta": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Opaque fixed-shape delta."
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact public AtomicPrivateSettlementV1 manifest."
+          },
+          "statement": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Restricted proof statement; proof bytes omitted."
+          }
+        },
+        "required": [
+          "manifest",
+          "audit_policy",
+          "committee_authority",
+          "statement",
+          "delta",
+          "audit_capsule",
+          "availability",
+          "lifecycle"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "decrypted_capsule_plaintext": "forbidden",
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "proof_bytes": "omitted"
+        }
+      },
+      "PrivateSettlementAvailabilityShareRequestV1": {
+        "additionalProperties": false,
+        "description": "Strict sponsor-authenticated availability request.",
+        "properties": {
+          "material": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact provisional encrypted leg material."
+          }
+        },
+        "required": [
+          "material"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden"
+        }
+      },
+      "PrivateSettlementAvailabilityShareResponseV1": {
+        "additionalProperties": false,
+        "description": "Redacted availability acknowledgement.",
+        "properties": {
+          "bundle_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/PrivateSettlementLegUploadDispositionV1"
+          },
+          "leg_ordinal": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "share": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Node-authenticated availability share."
+          }
+        },
+        "required": [
+          "bundle_id",
+          "payload_digest",
+          "leg_ordinal",
+          "disposition",
+          "share"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementBundleReceiptResponseV1": {
+        "description": "Public compact receipt, opaque abort, or pending lifecycle; no plaintext contents.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "pending",
+                "type": "string"
+              },
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "bundle_id": {
+                    "$ref": "#/components/schemas/Hash"
+                  },
+                  "lifecycle": {
+                    "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+                  }
+                },
+                "required": [
+                  "bundle_id",
+                  "lifecycle"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "finalized",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/JsonValue",
+                "description": "Public compact receipt."
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "aborted",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/JsonValue",
+                "description": "Public opaque abort marker."
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          }
+        ],
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementBundleStatusResponseV1": {
+        "additionalProperties": false,
+        "description": "Public allowlisted bundle lifecycle with explicit nulls.",
+        "properties": {
+          "finalized_height": {
+            "oneOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+          },
+          "manifest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue",
+                "description": "Exact public AtomicPrivateSettlementV1 manifest."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "manifest",
+          "lifecycle",
+          "finalized_height"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementBundleSubmitRequestV1": {
+        "additionalProperties": false,
+        "description": "Strict sponsor-authenticated carrier submission.",
+        "properties": {
+          "transaction": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact sponsor-signed finalization transaction."
+          }
+        },
+        "required": [
+          "transaction"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden"
+        }
+      },
+      "PrivateSettlementBundleSubmitResponseV1": {
+        "additionalProperties": false,
+        "description": "Redacted carrier admission acknowledgement.",
+        "properties": {
+          "accepted_at_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bundle_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "carrier_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "accepted_at_height",
+          "carrier_id",
+          "lifecycle"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementCommitVoteRequestV1": {
+        "additionalProperties": false,
+        "description": "Strict sponsor-authenticated Commit request.",
+        "properties": {
+          "barrier": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact complete all-Prepare barrier."
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "payload_digest",
+          "barrier"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden"
+        }
+      },
+      "PrivateSettlementCommitteeProofResponseV1": {
+        "additionalProperties": false,
+        "description": "Validator-only proof view; capsule bytes and plaintext openings are omitted.",
+        "properties": {
+          "audit_approvals": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue",
+              "description": "Governed auditor approval."
+            },
+            "type": "array"
+          },
+          "audit_capsule_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "audit_policy": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Governed audit policy."
+          },
+          "availability": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Durable restricted-DA certificate."
+          },
+          "committee_authority": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact four-validator authority."
+          },
+          "delta": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Opaque fixed-shape delta."
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact public AtomicPrivateSettlementV1 manifest."
+          },
+          "proof": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Native fixed-profile proof bytes."
+          },
+          "statement": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Restricted proof statement."
+          }
+        },
+        "required": [
+          "manifest",
+          "audit_policy",
+          "committee_authority",
+          "statement",
+          "proof",
+          "delta",
+          "audit_approvals",
+          "audit_capsule_digest",
+          "availability",
+          "lifecycle"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "encrypted_audit_capsule": "omitted",
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_audit_openings": "omitted",
+          "plaintext_transaction_contents": "forbidden"
+        }
+      },
+      "PrivateSettlementLegStatusResponseV1": {
+        "additionalProperties": false,
+        "description": "Account-authenticated allowlisted leg lifecycle.",
+        "properties": {
+          "bundle_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "expiry_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "leg_ordinal": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+          },
+          "lifecycle_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "route": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Public dataspace route."
+          },
+          "stored_at_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "payload_digest",
+          "leg_ordinal",
+          "route",
+          "stored_at_height",
+          "lifecycle_height",
+          "expiry_height",
+          "lifecycle"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementLegUploadDispositionV1": {
+        "description": "Exact externally tagged idempotent storage disposition.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "result": {
+                "const": "stored",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "result",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "result": {
+                "const": "already_stored",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "result",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PrivateSettlementLegUploadRequestV1": {
+        "additionalProperties": false,
+        "description": "Strict account-authenticated encrypted-leg upload; unknown top-level fields reject.",
+        "properties": {
+          "audit_policy": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Governed audit policy."
+          },
+          "committee_authority": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact four-validator authority."
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact public AtomicPrivateSettlementV1 manifest."
+          },
+          "payload": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Restricted encrypted leg payload."
+          }
+        },
+        "required": [
+          "manifest",
+          "audit_policy",
+          "committee_authority",
+          "payload"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden"
+        }
+      },
+      "PrivateSettlementLegUploadResponseV1": {
+        "additionalProperties": false,
+        "description": "Redacted encrypted-leg upload result.",
+        "properties": {
+          "bundle_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/PrivateSettlementLegUploadDispositionV1"
+          },
+          "leg_ordinal": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "payload_digest",
+          "leg_ordinal",
+          "disposition",
+          "lifecycle"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementLifecycleDtoV1": {
+        "description": "Exact externally tagged first-release lifecycle; unit variants carry explicit null.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "collecting",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "audited",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "prepared",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "commit_certified",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "finalized",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "aborted",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "expired",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PrivateSettlementPhaseCertificateRequestV1": {
+        "additionalProperties": false,
+        "description": "Strict phase-certificate request.",
+        "properties": {
+          "certificate": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact aggregate phase certificate."
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact public AtomicPrivateSettlementV1 manifest."
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "manifest",
+          "payload_digest",
+          "certificate"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden"
+        }
+      },
+      "PrivateSettlementPhaseCertificateResponseV1": {
+        "additionalProperties": false,
+        "description": "Redacted durable certificate acknowledgement.",
+        "properties": {
+          "bundle_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "leg_ordinal": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Prepare or Commit phase."
+          }
+        },
+        "required": [
+          "bundle_id",
+          "payload_digest",
+          "leg_ordinal",
+          "phase",
+          "lifecycle"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementPhaseCertificatesResponseV1": {
+        "additionalProperties": false,
+        "description": "Sponsor-only recovery; absent certificates are explicit null.",
+        "properties": {
+          "bundle_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "commit_certificate": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue",
+                "description": "Exact durable phase certificate."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "leg_ordinal": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "prepare_certificate": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue",
+                "description": "Exact durable phase certificate."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "bundle_id",
+          "payload_digest",
+          "leg_ordinal",
+          "lifecycle",
+          "prepare_certificate",
+          "commit_certificate"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementPhaseVoteResponseV1": {
+        "additionalProperties": false,
+        "description": "Redacted phase-vote response.",
+        "properties": {
+          "bundle_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "leg_ordinal": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "vote": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Node-authenticated phase vote."
+          }
+        },
+        "required": [
+          "bundle_id",
+          "payload_digest",
+          "leg_ordinal",
+          "vote"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "asset_id",
+            "amount",
+            "memo",
+            "audit_capsule",
+            "proof",
+            "business_result"
+          ]
+        }
+      },
+      "PrivateSettlementPrepareVoteRequestV1": {
+        "additionalProperties": false,
+        "description": "Strict sponsor-authenticated Prepare request.",
+        "properties": {
+          "manifest": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Exact public AtomicPrivateSettlementV1 manifest."
+          },
+          "payload_digest": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "manifest",
+          "payload_digest"
+        ],
+        "type": "object",
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden"
+        }
       },
       "ProofAttachment": {
         "additionalProperties": false,
@@ -45983,7 +47288,7 @@
         "additionalProperties": false,
         "properties": {
           "confidence_ms": {
-            "description": "Confidence interval (±ms) reported by the network time service.",
+            "description": "Confidence interval (\u00b1ms) reported by the network time service.",
             "format": "uint64",
             "type": "integer"
           },
@@ -46058,7 +47363,7 @@
         "additionalProperties": false,
         "properties": {
           "confidence_ms": {
-            "description": "Confidence interval (±ms) reported by the network time service.",
+            "description": "Confidence interval (\u00b1ms) reported by the network time service.",
             "format": "uint64",
             "type": "integer"
           },
@@ -59002,6 +60307,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List accounts (explorer).",
         "tags": [
           "Explorer"
@@ -59035,6 +60352,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch account detail (explorer).",
         "tags": [
           "Explorer"
@@ -59069,6 +60398,18 @@
             "description": "QR code payload."
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch account QR code.",
         "tags": [
           "Explorer"
@@ -59136,6 +60477,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List asset definitions (explorer).",
         "tags": [
           "Explorer"
@@ -59169,6 +60522,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch asset definition detail (explorer).",
         "tags": [
           "Explorer"
@@ -59202,6 +60567,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch asset definition econometrics (explorer).",
         "tags": [
           "Explorer"
@@ -59235,6 +60612,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch asset definition snapshot (explorer).",
         "tags": [
           "Explorer"
@@ -59311,6 +60700,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List assets (explorer).",
         "tags": [
           "Explorer"
@@ -59344,6 +60745,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch asset detail (explorer).",
         "tags": [
           "Explorer"
@@ -59353,25 +60766,30 @@
     },
     "/v1/explorer/blocks": {
       "get": {
-        "description": "List blocks for explorer usage.",
+        "description": "List visible block summaries newest-first through a committed snapshot. Anonymous requests see active public dataspaces; a complete canonical account signature or witness adds the caller's authorized routes. Any partial or invalid authentication attempt returns 401. The opaque cursor is bound to this route, the committed snapshot, and the caller's visible-route-set digest.",
         "parameters": [
           {
-            "description": "Optional page number (default 1).",
+            "description": "Opaque canonical base64url cursor returned by the preceding request for the same visible-route set.",
             "in": "query",
-            "name": "page",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "type": "integer"
+              "maxLength": 1424,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           },
           {
-            "description": "Optional items per page (default 10).",
+            "description": "Maximum visible summaries to return (default 25, hard maximum 100). The history scan remains subject to Torii's hard candidate ceiling.",
             "in": "query",
-            "name": "per_page",
+            "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "default": 25,
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
               "type": "integer"
             }
           }
@@ -59381,13 +60799,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ExplorerBlocksHistoryPage"
                 }
               }
             },
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List blocks (explorer).",
         "tags": [
           "Explorer"
@@ -59443,6 +60873,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch block detail (explorer).",
         "tags": [
           "Explorer"
@@ -59501,6 +60943,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List domains (explorer).",
         "tags": [
           "Explorer"
@@ -59534,6 +60988,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch domain detail (explorer).",
         "tags": [
           "Explorer"
@@ -59543,25 +61009,30 @@
     },
     "/v1/explorer/instructions": {
       "get": {
-        "description": "List instructions for explorer usage (supports pagination and optional account/authority/transaction/block/kind/asset_id filtering).",
+        "description": "List visible instructions newest-first through a committed snapshot with optional account/authority/transaction/block/kind/asset_id filters. Anonymous requests see active public dataspaces; a complete canonical account signature or witness adds the caller's authorized routes. Any partial or invalid authentication attempt returns 401. The opaque cursor is bound to this route, snapshot, normalized filters, and visible-route-set digest.",
         "parameters": [
           {
-            "description": "Optional page number (default 1).",
+            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same filters and visible-route set.",
             "in": "query",
-            "name": "page",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "type": "integer"
+              "maxLength": 1424,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           },
           {
-            "description": "Optional items per page (default 10).",
+            "description": "Maximum visible instructions to return (default 25, hard maximum 100). The history scan remains subject to Torii's hard candidate ceiling.",
             "in": "query",
-            "name": "per_page",
+            "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "default": 25,
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -59635,13 +61106,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ExplorerInstructionsHistoryPage"
                 }
               }
             },
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List instructions (explorer).",
         "tags": [
           "Explorer"
@@ -59707,6 +61190,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch instruction detail (explorer).",
         "tags": [
           "Explorer"
@@ -59796,6 +61291,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List NFTs (explorer).",
         "tags": [
           "Explorer"
@@ -59829,6 +61336,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch NFT detail (explorer).",
         "tags": [
           "Explorer"
@@ -59896,6 +61415,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List RWAs (explorer).",
         "tags": [
           "Explorer"
@@ -59929,6 +61460,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch RWA detail (explorer).",
         "tags": [
           "Explorer"
@@ -59938,25 +61481,30 @@
     },
     "/v1/explorer/transactions": {
       "get": {
-        "description": "List transactions for explorer usage (supports pagination and optional authority/block/status/asset_id filtering).",
+        "description": "List visible transactions newest-first through a committed snapshot with optional authority/block/status/asset_id filters. Anonymous requests see active public dataspaces; a complete canonical account signature or witness adds the caller's authorized routes. Any partial or invalid authentication attempt returns 401. The opaque cursor is bound to this route, snapshot, normalized filters, and visible-route-set digest.",
         "parameters": [
           {
-            "description": "Optional page number (default 1).",
+            "description": "Opaque canonical base64url cursor returned by the preceding request with the exact same filters and visible-route set.",
             "in": "query",
-            "name": "page",
+            "name": "cursor",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "type": "integer"
+              "maxLength": 1424,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           },
           {
-            "description": "Optional items per page (default 10).",
+            "description": "Maximum visible transactions to return (default 25, hard maximum 100). The history scan remains subject to Torii's hard candidate ceiling.",
             "in": "query",
-            "name": "per_page",
+            "name": "limit",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "default": 25,
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -60003,13 +61551,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ExplorerTransactionsHistoryPage"
                 }
               }
             },
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "List transactions (explorer).",
         "tags": [
           "Explorer"
@@ -60065,6 +61625,18 @@
             "description": "Successful response"
           }
         },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
         "summary": "Fetch transaction detail (explorer).",
         "tags": [
           "Explorer"
@@ -61620,136 +63192,6 @@
           }
         ],
         "summary": "Fetch an independently verified governed contract binding.",
-        "tags": [
-          "Governance"
-        ],
-        "x-iroha-canonical-auth-v1": {
-          "body_hash_bound": true,
-          "exact_request_target": true,
-          "modes": [
-            {
-              "forbidden_headers": [
-                "X-Iroha-Witness"
-              ],
-              "kind": "single_signature",
-              "required_headers": [
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ]
-            },
-            {
-              "forbidden_headers": [
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ],
-              "kind": "multisig_witness",
-              "optional_headers": [
-                "X-Iroha-Account"
-              ],
-              "required_headers": [
-                "X-Iroha-Witness"
-              ]
-            }
-          ]
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/gov/council/current": {
-      "get": {
-        "description": "Return the current governance council roster.",
-        "parameters": [
-          {
-            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
-            "in": "header",
-            "name": "X-Iroha-Witness",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical authentication headers selecting the private response.",
-                "required": true,
-                "schema": {
-                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "Fetch current council.",
         "tags": [
           "Governance"
         ],
@@ -64119,7 +65561,7 @@
     },
     "/v1/iso20022/audit/messages": {
       "get": {
-        "description": "Return the deterministic tamper-evident audit manifest for durable ISO 20022 bridge records.",
+        "description": "Return a deterministic tamper-evident audit manifest scoped to records where the signed participant is originator or counterparty. Separately configured audit-admin keys receive global read-only access.",
         "parameters": [
           {
             "description": "Iroha multihash public key of the canonical request signer.",
@@ -64189,7 +65631,7 @@
     },
     "/v1/iso20022/camt056": {
       "post": {
-        "description": "Submit a camt.056 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a camt.056 lifecycle message as the original originator under the pinned profile/signature policy.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -64248,7 +65690,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -64256,7 +65698,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -64267,6 +65709,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 camt.056 lifecycle payload.",
@@ -64278,7 +65723,7 @@
     },
     "/v1/iso20022/colr012": {
       "post": {
-        "description": "Submit a colr.012 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit an initial colr.012 message whose signed participant owns AppHdr/Fr and allows the selected profile.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -64337,7 +65782,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -64345,7 +65790,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -64356,6 +65801,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 colr.012 collateral substitution confirmation payload.",
@@ -64367,7 +65815,7 @@
     },
     "/v1/iso20022/messages/{msg_id}": {
       "get": {
-        "description": "Return the rich ISO 20022 message record by message id, including profile metadata and status history.",
+        "description": "Return the V2 ISO 20022 message record, including immutable participant provenance, pinned profile/signature policy, and status history. Access is limited to either original participant or a separately configured audit-admin key.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64446,7 +65894,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/camt029": {
       "get": {
-        "description": "Return a cancellation resolution message from the durable ISO bridge record. The response body is camt.029 XML.",
+        "description": "Return party-scoped camt.029 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64497,7 +65945,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64512,6 +65960,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64525,7 +65982,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/pacs002": {
       "get": {
-        "description": "Return the current ISO 20022 payment status report for a bridged message.",
+        "description": "Return party-scoped pacs.002 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64576,7 +66033,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64591,6 +66048,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64604,7 +66070,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/pacs004": {
       "get": {
-        "description": "Return a payment return message from the durable ISO bridge record. The response body is pacs.004 XML.",
+        "description": "Return party-scoped pacs.004 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64655,7 +66121,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64670,6 +66136,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64683,7 +66158,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/sese024": {
       "get": {
-        "description": "Return a securities settlement status advice from the durable ISO bridge record. The response body is sese.024 XML.",
+        "description": "Return party-scoped sese.024 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64734,7 +66209,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64749,6 +66224,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64762,7 +66246,7 @@
     },
     "/v1/iso20022/messages/{msg_id}/sese025": {
       "get": {
-        "description": "Return a securities settlement confirmation from the durable ISO bridge record. The response body is sese.025 XML.",
+        "description": "Return party-scoped sese.025 XML from the durable V2 record, signed over the exact response bytes with the documented detached-signature headers.",
         "parameters": [
           {
             "description": "ISO 20022 message id.",
@@ -64813,7 +66297,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
+              "application/xml": {
                 "schema": {
                   "$ref": "#/components/schemas/XmlText"
                 }
@@ -64828,6 +66312,15 @@
                   "const": "private, no-store",
                   "type": "string"
                 }
+              },
+              "X-Iroha-Iso-Signature": {
+                "$ref": "#/components/headers/IsoOutboundSignatureV2"
+              },
+              "X-Iroha-Iso-Signature-Domain": {
+                "$ref": "#/components/headers/IsoOutboundSignatureDomainV2"
+              },
+              "X-Iroha-Iso-Signer": {
+                "$ref": "#/components/headers/IsoOutboundSignerV2"
               }
             }
           }
@@ -64841,7 +66334,7 @@
     },
     "/v1/iso20022/pacs002": {
       "post": {
-        "description": "Submit a pacs.002 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a pacs.002 lifecycle message as the original counterparty under the pinned profile/signature policy. A settlement transition additionally requires committed-transaction evidence.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -64900,7 +66393,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -64908,7 +66401,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -64919,6 +66412,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 pacs.002 lifecycle payload.",
@@ -64930,7 +66426,7 @@
     },
     "/v1/iso20022/pacs004": {
       "post": {
-        "description": "Submit a pacs.004 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a pacs.004 lifecycle message as the original counterparty under the pinned profile/signature policy.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -64989,7 +66485,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -64997,7 +66493,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65008,6 +66504,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 pacs.004 lifecycle payload.",
@@ -65019,7 +66518,7 @@
     },
     "/v1/iso20022/pacs008": {
       "post": {
-        "description": "Submit a pacs.008 message for ISO 20022 bridging.",
+        "description": "Submit a pacs.008 message. The signed participant must own AppHdr/Fr, allow the selected profile, and durably reserve all replay identities before ledger signing.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65078,7 +66577,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65086,7 +66585,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65097,6 +66596,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 pacs.008 payload.",
@@ -65108,7 +66610,7 @@
     },
     "/v1/iso20022/pacs009": {
       "post": {
-        "description": "Submit a pacs.009 message for ISO 20022 bridging.",
+        "description": "Submit a pacs.009 message. The signed participant must own AppHdr/Fr, allow the selected profile, and durably reserve all replay identities before ledger signing.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65167,7 +66669,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65175,7 +66677,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65186,6 +66688,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 pacs.009 payload.",
@@ -65197,7 +66702,7 @@
     },
     "/v1/iso20022/sese023": {
       "post": {
-        "description": "Submit a sese.023 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit an initial sese.023 message whose signed participant owns AppHdr/Fr and allows the selected profile.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65256,7 +66761,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65264,7 +66769,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65275,6 +66780,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 sese.023 settlement instruction payload.",
@@ -65286,7 +66794,7 @@
     },
     "/v1/iso20022/sese024": {
       "post": {
-        "description": "Submit a sese.024 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a sese.024 lifecycle message as the original counterparty under the pinned profile/signature policy.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65345,7 +66853,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65353,7 +66861,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65364,6 +66872,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 sese.024 settlement status payload.",
@@ -65375,7 +66886,7 @@
     },
     "/v1/iso20022/sese025": {
       "post": {
-        "description": "Submit a sese.025 message for ISO 20022 lifecycle bridging.",
+        "description": "Submit a sese.025 lifecycle message as the original counterparty under the pinned profile/signature policy.",
         "parameters": [
           {
             "description": "Optional ISO bridge rail profile bound into the canonical operator signature.",
@@ -65434,7 +66945,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -65442,7 +66953,7 @@
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Accepted after durable V2 replay admission",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -65453,6 +66964,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Replay capacity contains only unexpired protected identities, or durable admission is unavailable; retry later."
           }
         },
         "summary": "Submit ISO 20022 sese.025 settlement confirmation payload.",
@@ -68704,6 +70218,1524 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/nexus/private-settlements/bundles": {
+      "post": {
+        "description": "Sponsor-authenticated admission of the exact signed single-instruction carrier without rebuilding or re-signing.",
+        "operationId": "privateSettlementBundleSubmit",
+        "parameters": [
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateSettlementBundleSubmitRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementBundleSubmitResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Submit one certified carrier.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "request_body_must_not_be_logged": true,
+          "response_allowlisted_public_fields_only": true,
+          "scope": "authenticated_restricted_request_redacted_response"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/nexus/private-settlements/bundles/{bundle_id}": {
+      "get": {
+        "description": "Public allowlisted manifest, lifecycle, and height only; plaintext contents and business results absent.",
+        "operationId": "privateSettlementBundleStatus",
+        "parameters": [
+          {
+            "description": "Canonical bundle id hash.",
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementBundleStatusResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response."
+          }
+        },
+        "summary": "Read public bundle lifecycle.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "literal_asset_id",
+            "amount",
+            "memo",
+            "audit_capsule_plaintext",
+            "business_result"
+          ],
+          "plaintext_transaction_contents": "forbidden",
+          "scope": "public_response"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/nexus/private-settlements/bundles/{bundle_id}/receipt": {
+      "get": {
+        "description": "Public compact receipt, opaque abort, or pending lifecycle with allowlisted fields only.",
+        "operationId": "privateSettlementBundleReceipt",
+        "parameters": [
+          {
+            "description": "Canonical bundle id hash.",
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementBundleReceiptResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response."
+          }
+        },
+        "summary": "Read public receipt or abort.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "forbidden_plaintext_fields": [
+            "account_id",
+            "literal_asset_id",
+            "amount",
+            "memo",
+            "audit_capsule_plaintext",
+            "business_result"
+          ],
+          "plaintext_transaction_contents": "forbidden",
+          "scope": "public_response"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/nexus/private-settlements/legs": {
+      "post": {
+        "description": "Sponsor-authenticated restricted confidential-DA upload; unknown top-level fields reject.",
+        "operationId": "privateSettlementLegUpload",
+        "parameters": [
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateSettlementLegUploadRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementLegUploadResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Upload one encrypted leg.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "request_body_must_not_be_logged": true,
+          "response_allowlisted_public_fields_only": true,
+          "scope": "authenticated_restricted_request_redacted_response"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/nexus/private-settlements/legs/availability-shares": {
+      "post": {
+        "description": "Sponsor-authenticated durable persistence before one four-validator share; private, no-store, and redacted.",
+        "operationId": "privateSettlementAvailabilityShare",
+        "parameters": [
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateSettlementAvailabilityShareRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementAvailabilityShareResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Issue one availability share.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "request_body_must_not_be_logged": true,
+          "response_allowlisted_public_fields_only": true,
+          "scope": "authenticated_restricted_request_redacted_response"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals": {
+      "post": {
+        "description": "Identity-bound operator-header mutation; approval identity must match the verified active auditor key.",
+        "operationId": "privateSettlementAuditApproval",
+        "parameters": [
+          {
+            "description": "Canonical payload digest hash.",
+            "in": "path",
+            "name": "payload_digest",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          {
+            "description": "Multihash public key checked against the exact validator roster or audit policy.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp in milliseconds.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh nonce in the isolated identity-bound replay domain.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signature over method, path, query, body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateSettlementAuditApprovalRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementAuditApprovalResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Submit one auditor approval.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-identity-bound-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "principal": "governed_local_auditor",
+          "replay_domain": "private_settlement_identity_bound_v1",
+          "required_headers": [
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature"
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "request_body_must_not_be_logged": true,
+          "response_allowlisted_public_fields_only": true,
+          "scope": "auditor_restricted_request_redacted_response"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule": {
+      "get": {
+        "description": "Identity-bound operator-header read; verified key must be active in the exact audit policy; plaintext and proof bytes absent.",
+        "operationId": "privateSettlementAuditorCapsule",
+        "parameters": [
+          {
+            "description": "Canonical payload digest hash.",
+            "in": "path",
+            "name": "payload_digest",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          {
+            "description": "Multihash public key checked against the exact validator roster or audit policy.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp in milliseconds.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh nonce in the isolated identity-bound replay domain.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signature over method, path, query, body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementAuditorCapsuleResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch one encrypted audit capsule.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-identity-bound-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "principal": "governed_local_auditor",
+          "replay_domain": "private_settlement_identity_bound_v1",
+          "required_headers": [
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature"
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "decrypted_capsule_plaintext": "forbidden",
+          "encrypted_audit_capsule": "permitted_only_in_authenticated_response",
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "proof_bytes": "omitted",
+          "scope": "auditor_restricted_response"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/nexus/private-settlements/legs/{payload_digest}/committee-proof": {
+      "get": {
+        "description": "Identity-bound operator-header read; verified key must be in the exact four-validator authority; capsule and plaintext openings omitted.",
+        "operationId": "privateSettlementCommitteeProof",
+        "parameters": [
+          {
+            "description": "Canonical payload digest hash.",
+            "in": "path",
+            "name": "payload_digest",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          {
+            "description": "Multihash public key checked against the exact validator roster or audit policy.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp in milliseconds.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh nonce in the isolated identity-bound replay domain.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signature over method, path, query, body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementCommitteeProofResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch validator-only proof material.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-identity-bound-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "principal": "participant_validator_roster_member",
+          "replay_domain": "private_settlement_identity_bound_v1",
+          "required_headers": [
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature"
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "encrypted_audit_capsule": "omitted",
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "proof_bytes": "permitted_only_in_authenticated_response",
+          "scope": "validator_restricted_response"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/nexus/private-settlements/legs/{payload_digest}/phase-certificates": {
+      "get": {
+        "description": "Sponsor-only recovery with explicit nulls and no proof, capsule, account, asset, amount, or memo plaintext.",
+        "operationId": "privateSettlementPhaseCertificatesGet",
+        "parameters": [
+          {
+            "description": "Canonical payload digest hash.",
+            "in": "path",
+            "name": "payload_digest",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementPhaseCertificatesResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Recover durable phase certificates.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "scope": "authenticated_redacted_response"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/nexus/private-settlements/legs/{payload_digest}/status": {
+      "get": {
+        "description": "Account-authenticated allowlisted identifiers, route, heights, and lifecycle only.",
+        "operationId": "privateSettlementLegStatus",
+        "parameters": [
+          {
+            "description": "Canonical payload digest hash.",
+            "in": "path",
+            "name": "payload_digest",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementLegStatusResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read redacted leg lifecycle.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "allowlisted_public_fields_only": true,
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "scope": "authenticated_redacted_response"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/nexus/private-settlements/phases/certificates": {
+      "post": {
+        "description": "Sponsor-authenticated verification and fsync of one exact three-of-four certificate.",
+        "operationId": "privateSettlementPhaseCertificatePersist",
+        "parameters": [
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateSettlementPhaseCertificateRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementPhaseCertificateResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Persist one phase certificate.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "request_body_must_not_be_logged": true,
+          "response_allowlisted_public_fields_only": true,
+          "scope": "authenticated_restricted_request_redacted_response"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/nexus/private-settlements/phases/commit-votes": {
+      "post": {
+        "description": "Sponsor-authenticated complete Prepare-barrier verification; voting does not apply state.",
+        "operationId": "privateSettlementCommitVote",
+        "parameters": [
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateSettlementCommitVoteRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementPhaseVoteResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Issue one Commit vote.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "request_body_must_not_be_logged": true,
+          "response_allowlisted_public_fields_only": true,
+          "scope": "authenticated_restricted_request_redacted_response"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/nexus/private-settlements/phases/prepare-votes": {
+      "post": {
+        "description": "Sponsor-authenticated independent verification and durable staging before voting.",
+        "operationId": "privateSettlementPrepareVote",
+        "parameters": [
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateSettlementPrepareVoteRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateSettlementPhaseVoteResponseV1"
+                }
+              }
+            },
+            "description": "Successful redacted V1 response.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated settlement responses must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Issue one Prepare vote.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "request_body_must_not_be_logged": true,
+          "response_allowlisted_public_fields_only": true,
+          "scope": "authenticated_restricted_request_redacted_response"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/nexus/public-lanes/{lane_id}/rewards/pending": {
       "get": {
         "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`) and accepts optional `asset_id` and `upto_epoch` filters.",
@@ -70064,12 +73096,26 @@
                 }
               }
             },
-            "description": "Authenticated peer transport, routing, ingress compute, queue durability, or the signed public receipt is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred; reconcile the exact entrypoint hash and do not create a replacement transaction until resolved.",
+            "description": "Authenticated peer transport, routing, ingress compute, queue durability, or the signed public receipt is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the transaction. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that outcome-unknown response carries singleton x-iroha-entrypoint-hash and x-iroha-signed-transaction-hash headers plus the same exact values in ErrorEnvelope.details.entrypoint_hash and ErrorEnvelope.details.tx_hash; it does not fabricate queue-pressure details or headers.",
             "headers": {
+              "x-iroha-entrypoint-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact external transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
               "x-iroha-reject-code": {
                 "description": "Exact availability or durability result when known, including route_unavailable, kagemusha_lifecycle_transport_unavailable, transaction_ingress_compute_saturated, PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE, or PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN. Infrastructure failures sharing HTTP 503 may omit it.",
                 "schema": {
                   "example": "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                  "type": "string"
+                }
+              },
+              "x-iroha-signed-transaction-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact unchanged lifecycle SignedTransaction hash also carried in ErrorEnvelope.details.tx_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
                   "type": "string"
                 }
               }
@@ -72415,6 +75461,44 @@
               }
             },
             "description": "Unsupported request content type."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The admission worker, authoritative Torii route, or durable queue-plan journal is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the entrypoint. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that outcome-unknown response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. For External and SealedReveal entrypoints it also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash; for entrypoints without an inner SignedTransaction, both signed-transaction identity fields are absent. It does not fabricate queue-pressure details or headers.",
+            "headers": {
+              "x-iroha-entrypoint-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Exact queue or Torii availability code when the failure originated in canonical entrypoint admission; intermediary failures may omit the header.",
+                "schema": {
+                  "example": "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+                  "type": "string"
+                }
+              },
+              "x-iroha-signed-transaction-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN when the submitted External or SealedReveal entrypoint carries an inner SignedTransaction; the exact unchanged inner hash is also carried in ErrorEnvelope.details.tx_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Submit a versioned transaction entrypoint.",
@@ -72680,13 +75764,20 @@
                 }
               }
             },
-            "description": "The admission worker or authoritative Torii route is temporarily unavailable. A proxy timeout can be ambiguous with remote admission.",
+            "description": "The admission worker, authoritative Torii route, or durable queue-plan journal is unavailable. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the transaction. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that outcome-unknown response carries singleton x-iroha-entrypoint-hash and x-iroha-signed-transaction-hash headers plus the same exact values in ErrorEnvelope.details.entrypoint_hash and ErrorEnvelope.details.tx_hash; it does not fabricate queue-pressure details or headers.",
             "headers": {
               "Retry-After": {
-                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "description": "Whole-second retry delay when authoritative backpressure supplies one; journal outcome-unknown responses omit it.",
                 "schema": {
                   "minimum": 0,
                   "type": "integer"
+                }
+              },
+              "x-iroha-entrypoint-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
                 }
               },
               "x-iroha-reject-code": {
@@ -72694,9 +75785,18 @@
                 "schema": {
                   "enum": [
                     "transaction_admission_worker_failed",
-                    "route_unavailable"
+                    "route_unavailable",
+                    "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
+                    "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"
                   ],
                   "example": "transaction_admission_worker_failed",
+                  "type": "string"
+                }
+              },
+              "x-iroha-signed-transaction-hash": {
+                "description": "Present exactly once only for PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN; the exact unchanged caller-signed transaction hash also carried in ErrorEnvelope.details.tx_hash.",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
                   "type": "string"
                 }
               }

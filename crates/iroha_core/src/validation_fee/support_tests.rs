@@ -561,9 +561,10 @@ pub(crate) fn activate_bound_payout_runtime(
         DataSpaceId::UNIVERSAL,
     )
     .expect("derive payout contract address");
-    state_tx
-        .world
-        .bind_inactive_contract_subject_for_testing(contract_address.clone(), deployer.clone());
+    state_tx.world.bind_inactive_contract_subject_for_testing(
+        contract_address.clone(),
+        deployer.clone(),
+    );
     crate::smartcontracts::code::activate_instance(
         deployer,
         contract_address.clone(),
@@ -649,9 +650,10 @@ fn install_active_bound_validation_fee_policy(
     let contract_address =
         ContractAddress::derive(&state_tx.network_id, deployer, 0, DataSpaceId::UNIVERSAL)
             .expect("contract address");
-    state_tx
-        .world
-        .bind_inactive_contract_subject_for_testing(contract_address.clone(), deployer.clone());
+    state_tx.world.bind_inactive_contract_subject_for_testing(
+        contract_address.clone(),
+        deployer.clone(),
+    );
     crate::smartcontracts::code::activate_instance(
         deployer,
         contract_address.clone(),

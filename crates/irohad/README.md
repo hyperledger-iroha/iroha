@@ -1,6 +1,6 @@
 # Iroha Daemon (irohad)
 
-The `irohad` crate contains the `iroha3d` Iroha server (peer) binary. The binary is used to instantiate a peer and bootstrap an Iroha-based network. The capabilities of the network are determined by the feature flags used to compile the binary.
+The `irohad` crate contains the `iroha3d` Iroha server (peer) binary. The binary is used to instantiate a peer and bootstrap an Iroha-based network. Portable, release-qualified production capabilities are compiled into the default daemon; runtime configuration controls deployment policy.
 
 Pass the `--language <code>` flag to override automatic language detection for informational and error messages.
 
@@ -20,7 +20,7 @@ cargo build --release
 
 The results of the compilation can be found in `<IROHA REPO ROOT>/target/release/`, where `<IROHA REPO ROOT>` is the path to where you cloned this repository (without the angle brackets).
 
-### Add features
+### Add specialized features
 
 To add optional features, use ``--features``. For example, to add the support for _dev telemetry_, run:
 
@@ -28,14 +28,14 @@ To add optional features, use ``--features``. For example, to add the support fo
 cargo build --release --features dev-telemetry
 ```
 
-A full list of features can be found in the [cargo manifest file](Cargo.toml) for this crate.
+A full list of features can be found in the [cargo manifest file](Cargo.toml) for this crate. Explicit features are reserved for platform accelerators, preview providers, profiling/developer tooling, release evidence, and test/fault-injection lanes that cannot form one portable production build.
 
 ### Disable default features
 
-By default, the Iroha binary is compiled with the `telemetry`, and `schema-endpoint` features. If you wish to remove those features, add `--no-default-features` to the command.
+By default, the Iroha binary selects the `daemon` aggregate. It includes the portable Core and Torii production surfaces, full Halo2/STARK proof support, GOST and SM algorithms, event and metrics telemetry, schema endpoints, DAG recovery verification, HTTPS/WSS webhooks, and the bounded app/MCP API surface. To construct a deliberately reduced specialist library, disable the aggregate explicitly.
 
 ```bash
-cargo build --release --no-default-features
+cargo build -p irohad --release --no-default-features --lib
 ```
 
 This flag can be combined with the `--features` flag in order to precisely specify the feature set that you wish.

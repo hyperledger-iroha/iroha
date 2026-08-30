@@ -3462,12 +3462,15 @@ impl PrivateSettlementPhaseCertificateV1 {
     }
 }
 
-/// Exact complete all-Prepare barrier that every Commit vote must bind.
+/// Complete all-Prepare barrier that every Commit vote must bind.
 ///
 /// The vectors are aligned by canonical leg ordinal. Core independently
 /// verifies every authority, delta, and Prepare QC before recomputing
 /// `prepared_bundle_digest`; carrying this material prevents a coordinator
-/// from substituting one leg or QC for another at Commit time.
+/// from substituting one leg or certified statement for another at Commit
+/// time. The digest normalizes quorum-equivalent certificate encodings: two
+/// exact three-of-four signer subsets over the same signed body certify the
+/// same logical barrier and therefore cannot fork coordinator recovery.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3483,24 +3486,36 @@ pub struct PrivateSettlementPrepareBarrierV1 {
     pub authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
     /// Every fixed-shape delta in canonical leg order.
     pub deltas: Vec<PrivateSettlementDeltaV1>,
-    /// Every exact Prepare QC in canonical leg order.
+    /// Every cryptographically valid Prepare QC in canonical leg order.
     pub prepare_certificates: Vec<PrivateSettlementPhaseCertificateV1>,
     /// Canonical digest of all preceding fields except `version`.
     pub prepared_bundle_digest: Hash,
 }
 
 impl PrivateSettlementPrepareBarrierV1 {
-    /// Recompute the canonical exact complete-bundle digest.
+    /// Recompute the canonical complete-bundle digest.
+    ///
+    /// Aggregate signatures and signer bitmaps are deliberately excluded from
+    /// the digest. They are independently verified against the authority
+    /// catalog, while the signed body and authority-catalog index are included.
+    /// This makes every valid exact three-of-four certificate for one statement
+    /// quorum-equivalent and preserves restart liveness with one unavailable
+    /// validator.
     ///
     /// # Errors
     ///
     /// Returns a Norito error if the complete barrier material cannot be encoded.
     pub fn computed_prepared_bundle_digest(&self) -> Result<Hash, norito::Error> {
+        let certified_statements = self
+            .prepare_certificates
+            .iter()
+            .map(|certificate| (certificate.authority_catalog_index, certificate.body))
+            .collect::<Vec<_>>();
         let material = (
             self.manifest.clone(),
             self.authority_catalog.clone(),
             self.deltas.clone(),
-            self.prepare_certificates.clone(),
+            certified_statements,
         );
         canonical_hash(PREPARED_BUNDLE_DIGEST_DOMAIN_V1, &material)
     }
@@ -5240,6 +5255,20 @@ mod tests {
             prepared_bundle_digest: hash(0xE5),
         };
         barrier.validate_shape().expect("barrier shape");
+        let digest = barrier
+            .computed_prepared_bundle_digest()
+            .expect("barrier digest");
+        let mut quorum_equivalent_encoding = barrier.clone();
+        quorum_equivalent_encoding.prepare_certificates[0].signers_bitmap = 0b1011;
+        quorum_equivalent_encoding.prepare_certificates[0].aggregate_signature =
+            vec![0x5A; PRIVATE_SETTLEMENT_BLS_BYTES_V1];
+        assert_eq!(
+            quorum_equivalent_encoding
+                .computed_prepared_bundle_digest()
+                .expect("normalized barrier digest"),
+            digest,
+            "the digest binds the certified body, not its quorum encoding"
+        );
         let json = norito::json::to_json(&barrier).expect("barrier JSON encodes");
         let decoded: PrivateSettlementPrepareBarrierV1 =
             norito::json::from_json(&json).expect("barrier JSON decodes");

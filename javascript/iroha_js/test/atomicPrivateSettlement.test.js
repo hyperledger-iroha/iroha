@@ -180,6 +180,80 @@ test("exact-route client binds sponsor requests and validates leg identity", asy
   assert.throws(() => result.bytes(), /closed/u);
 });
 
+test("sponsor phase-certificate recovery is path-bound and strictly allowlisted", async () => {
+  const calls = [];
+  const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    sponsorHeaderProvider(request) {
+      assert.equal(request.method, "GET");
+      assert.equal(request.body.byteLength, 0);
+      return sponsorHeaders();
+    },
+    async fetchImpl(target, options) {
+      calls.push({ target, options });
+      return response(fixture.responses.phase_certificates, target);
+    },
+  });
+
+  const result = await client.getPhaseCertificates(fixture.identifiers.payload_hex);
+
+  assert.deepEqual(
+    JSON.parse(new TextDecoder().decode(result.bytes())),
+    fixture.responses.phase_certificates,
+  );
+  assert.match(result.toString(), /body=\[REDACTED\]/u);
+  assert.equal(
+    calls[0].target,
+    `https://torii.example/v1/nexus/private-settlements/legs/${fixture.identifiers.payload_hex}/phase-certificates`,
+  );
+  assert.equal(calls[0].options.headers["x-iroha-signature"], "signature");
+  assert.equal("x-iroha-operator-signature" in calls[0].options.headers, false);
+
+  const missing = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    sponsorHeaderProvider: sponsorHeaders,
+    async fetchImpl(target) {
+      const body = { ...fixture.responses.phase_certificates };
+      delete body.commit_certificate;
+      return response(body, target);
+    },
+  });
+  await assert.rejects(
+    () => missing.getPhaseCertificates(fixture.identifiers.payload_hex),
+    /response is invalid/u,
+  );
+
+  const nonObject = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    sponsorHeaderProvider: sponsorHeaders,
+    async fetchImpl(target) {
+      return response({
+        ...fixture.responses.phase_certificates,
+        prepare_certificate: [],
+      }, target);
+    },
+  });
+  await assert.rejects(
+    () => nonObject.getPhaseCertificates(fixture.identifiers.payload_hex),
+    /response is invalid/u,
+  );
+
+  const leaked = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    sponsorHeaderProvider: sponsorHeaders,
+    async fetchImpl(target) {
+      return response({
+        ...fixture.responses.phase_certificates,
+        plaintext: "LEAK_CANARY",
+      }, target);
+    },
+  });
+  await assert.rejects(
+    () => leaked.getPhaseCertificates(fixture.identifiers.payload_hex),
+    (error) => {
+      assert.match(error.message, /response is invalid/u);
+      assert.doesNotMatch(error.message, /LEAK_CANARY/u);
+      return true;
+    },
+  );
+});
+
 test("native-prepared request bytes are isolated from signer mutation", async () => {
   const prepared = new AtomicPrivateSettlementPreparedRequestV1(
     AtomicPrivateSettlementOperationV1.LEG_UPLOAD,

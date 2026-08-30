@@ -1273,37 +1273,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UInt8>?,
         UInt
     ) -> Int32
-    private typealias EncodeGovernancePersistCouncilFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UInt64,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
-    private typealias EncodeGovernancePersistCouncilWithAlgFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt64,
-        UInt64,
-        UInt8,
-        UInt64,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UnsafePointer<UInt8>?, UInt,
-        UInt8,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UInt8>?,
-        UInt
-    ) -> Int32
     private typealias DecodeSignedFn = @convention(c) (
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -1957,8 +1926,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeGovernanceCastPlainBallotWithAlgFn: EncodeGovernanceCastPlainBallotWithAlgFn? = nil
     private var encodeGovernanceCastZkBallotFn: EncodeGovernanceCastZkBallotFn? = nil
     private var encodeGovernanceCastZkBallotWithAlgFn: EncodeGovernanceCastZkBallotWithAlgFn? = nil
-    private var encodeGovernancePersistCouncilFn: EncodeGovernancePersistCouncilFn? = nil
-    private var encodeGovernancePersistCouncilWithAlgFn: EncodeGovernancePersistCouncilWithAlgFn? = nil
     private var decodeSignedFn: DecodeSignedFn? = nil
     private var decodeReceiptFn: DecodeReceiptFn? = nil
     private var decodeAssetIdFn: DecodeAssetIdFn? = nil
@@ -2091,8 +2058,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeGovernanceCastPlainBallotWithAlgFn: Any? = nil
     private let encodeGovernanceCastZkBallotFn: Any? = nil
     private let encodeGovernanceCastZkBallotWithAlgFn: Any? = nil
-    private let encodeGovernancePersistCouncilFn: Any? = nil
-    private let encodeGovernancePersistCouncilWithAlgFn: Any? = nil
     private let decodeSignedFn: Any? = nil
     private let decodeAssetIdFn: Any? = nil
     private let freeFn: Any? = nil
@@ -2683,16 +2648,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.encodeGovernanceCastZkBallotWithAlgFn = nil
             }
-            if let persistSymbol = dlsym(handle, "connect_norito_encode_governance_persist_council_signed_transaction") {
-                self.encodeGovernancePersistCouncilFn = unsafeBitCast(persistSymbol, to: EncodeGovernancePersistCouncilFn.self)
-            } else {
-                self.encodeGovernancePersistCouncilFn = nil
-            }
-            if let persistAlgSymbol = dlsym(handle, "connect_norito_encode_governance_persist_council_signed_transaction_alg") {
-                self.encodeGovernancePersistCouncilWithAlgFn = unsafeBitCast(persistAlgSymbol, to: EncodeGovernancePersistCouncilWithAlgFn.self)
-            } else {
-                self.encodeGovernancePersistCouncilWithAlgFn = nil
-            }
             if let decodeSymbol = dlsym(handle, "connect_norito_decode_signed_transaction_json") {
                 self.decodeSignedFn = unsafeBitCast(decodeSymbol, to: DecodeSignedFn.self)
             } else {
@@ -3181,8 +3136,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeGovernanceCastPlainBallotWithAlgFn = nil
             self.encodeGovernanceCastZkBallotFn = nil
             self.encodeGovernanceCastZkBallotWithAlgFn = nil
-            self.encodeGovernancePersistCouncilFn = nil
-            self.encodeGovernancePersistCouncilWithAlgFn = nil
             self.decodeSignedFn = nil
             self.decodeReceiptFn = nil
             self.decodeAssetIdFn = nil
@@ -5791,109 +5744,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             return -1
                                         }
                                     }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        }
-
-        if status != 0 {
-            if let signedPtr { freeFn(signedPtr) }
-            try throwOnStatus(status)
-            return nil
-        }
-        guard let signedPtr else { return nil }
-
-        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
-        freeFn(signedPtr)
-        let hashData = Data(hashBytes)
-        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
-        #else
-        return nil
-        #endif
-    }
-
-    func encodeGovernancePersistCouncil(
-        networkId: NetworkId,
-        authority: String,
-        creationTimeMs: UInt64,
-        ttlMs: UInt64?,
-        epoch: UInt64,
-        membersJson: Data,
-        feePaymentJSON: Data,
-        privateKey: Data,
-        algorithm: SigningAlgorithm = .ed25519
-    ) throws -> NativeSignedTransaction? {
-        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
-        #if canImport(Darwin)
-        guard let freeFn else { return nil }
-        let feePaymentBytes = feePaymentJSON as NSData
-        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
-        let ttlValue = ttlMs ?? 0
-        let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
-        let useAlg = algorithm != .ed25519 && encodeGovernancePersistCouncilWithAlgFn != nil
-        guard useAlg || encodeGovernancePersistCouncilFn != nil else { return nil }
-
-        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
-        var signedLen: UInt = 0
-        var hashBytes = [UInt8](repeating: 0, count: 32)
-        let hashLength = UInt(hashBytes.count)
-        let algorithmRaw = algorithm.noritoDiscriminant
-
-        let status = try withAuthorityChainDiscriminant(authority: authority) {
-            networkId.literal.withCString { networkIdPtr in
-            authority.withCString { authorityPtr in
-                membersJson.withUnsafeBytes { membersBuffer -> Int32 in
-                    guard let membersPtr = membersBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                        return -1
-                    }
-                    return privateKey.withUnsafeBytes { keyBuffer -> Int32 in
-                        guard let keyPtr = keyBuffer.bindMemory(to: UInt8.self).baseAddress else {
-                            return -1
-                        }
-                        return hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
-                            guard let hashPtr = hashBuffer.baseAddress else {
-                                return -1
-                            }
-                            return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                if useAlg, let encodeGovernancePersistCouncilWithAlgFn {
-                                    return encodeGovernancePersistCouncilWithAlgFn(
-                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
-                                        authorityPtr, UInt(authority.utf8.count),
-                                        creationTimeMs,
-                                        ttlValue,
-                                        ttlFlag,
-                                        epoch,
-                                        membersPtr, UInt(membersJson.count),
-                                        feePaymentPtr, UInt(feePaymentJSON.count),
-                                        keyPtr, UInt(privateKey.count),
-                                        algorithmRaw,
-                                        signedPtrPtr,
-                                        signedLenPtr,
-                                        hashPtr,
-                                        hashLength
-                                    )
-                                } else if let encodeGovernancePersistCouncilFn {
-                                    return encodeGovernancePersistCouncilFn(
-                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
-                                        authorityPtr, UInt(authority.utf8.count),
-                                        creationTimeMs,
-                                        ttlValue,
-                                        ttlFlag,
-                                        epoch,
-                                        membersPtr, UInt(membersJson.count),
-                                        feePaymentPtr, UInt(feePaymentJSON.count),
-                                        keyPtr, UInt(privateKey.count),
-                                        signedPtrPtr,
-                                        signedLenPtr,
-                                        hashPtr,
-                                        hashLength
-                                    )
-                                } else {
-                                    return -1
                                 }
                             }
                         }

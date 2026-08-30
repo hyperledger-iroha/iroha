@@ -94,8 +94,8 @@ use iroha_data_model::{
         asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
-            CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
-            ProposeValidationFeePolicy, RegisterCitizen,
+            CastPlainBallot, CastZkBallot, ProposeDeployContract, ProposeValidationFeePolicy,
+            RegisterCitizen,
         },
         ministry::SubmitAgendaProposal,
         rwa::{
@@ -8931,27 +8931,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let instruction = RegisterCitizen { owner, amount };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-            if let Some(json::Value::Object(mut fields)) = map.remove("PersistCouncilForEpoch") {
-                let epoch = parse_u64_value(
-                    required_value(&mut fields, "epoch", "PersistCouncilForEpoch")?,
-                    "PersistCouncilForEpoch.epoch",
-                )?;
-                let members_value =
-                    required_value(&mut fields, "members", "PersistCouncilForEpoch")?;
-                let members: Vec<AccountId> =
-                    json::from_value(members_value).map_err(norito_to_napi)?;
-                let alternates_value = fields
-                    .remove("alternates")
-                    .unwrap_or_else(|| json::Value::Array(Vec::new()));
-                let alternates: Vec<AccountId> =
-                    json::from_value(alternates_value).map_err(norito_to_napi)?;
-                let persist = PersistCouncilForEpoch {
-                    epoch,
-                    members,
-                    alternates,
-                };
-                return Ok(Box::new(persist).into_instruction_box());
-            }
             if let Some(json::Value::Object(mut fields)) = map.remove("SubmitAgendaProposal") {
                 let proposal: AgendaProposalV1 = json::from_value(required_value(
                     &mut fields,
@@ -9012,13 +8991,17 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             ),
                         )
                     })?;
+                let expected_revision = parse_u64_value(
+                    required_value(&mut fields, "expected_revision", "ActivateContractInstance")?,
+                    "ActivateContractInstance.expected_revision",
+                )?;
                 let code_hash_value =
                     required_value(&mut fields, "code_hash", "ActivateContractInstance")?;
                 let code_hash =
                     parse_hash_value(code_hash_value, "ActivateContractInstance.code_hash")?;
                 let instruction = ActivateContractInstance {
                     contract_address,
-                    expected_revision: 1,
+                    expected_revision,
                     code_hash,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -9043,13 +9026,21 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             ),
                         )
                     })?;
+                let expected_revision = parse_u64_value(
+                    required_value(
+                        &mut fields,
+                        "expected_revision",
+                        "DeactivateContractInstance",
+                    )?,
+                    "DeactivateContractInstance.expected_revision",
+                )?;
                 let reason = parse_optional_string_value(
                     fields.remove("reason"),
                     "DeactivateContractInstance.reason",
                 )?;
                 let instruction = DeactivateContractInstance {
                     contract_address,
-                    expected_revision: 1,
+                    expected_revision,
                     reason,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -10235,30 +10226,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::to_value(finalize).map_err(norito_to_napi)?,
         ));
     }
-    if let Some(persist) = instruction_ref
-        .as_any()
-        .downcast_ref::<PersistCouncilForEpoch>()
-    {
-        let mut inner = json::Map::new();
-        inner.insert(
-            "epoch".to_owned(),
-            json::to_value(&persist.epoch).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "members".to_owned(),
-            json::to_value(&persist.members).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "alternates".to_owned(),
-            json::to_value(&persist.alternates).map_err(norito_to_napi)?,
-        );
-        let mut outer = json::Map::new();
-        outer.insert(
-            "PersistCouncilForEpoch".to_owned(),
-            json::Value::Object(inner),
-        );
-        return Ok(json::Value::Object(outer));
-    }
     if let Some(register_code) = instruction_ref
         .as_any()
         .downcast_ref::<RegisterSmartContractCode>()
@@ -10322,6 +10289,10 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::Value::String(activate.contract_address.to_string()),
         );
         inner.insert(
+            "expected_revision".to_owned(),
+            json::Value::String(activate.expected_revision.to_string()),
+        );
+        inner.insert(
             "code_hash".to_owned(),
             json::to_value(&activate.code_hash).map_err(norito_to_napi)?,
         );
@@ -10340,6 +10311,10 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         inner.insert(
             "contract_address".to_owned(),
             json::Value::String(deactivate.contract_address.to_string()),
+        );
+        inner.insert(
+            "expected_revision".to_owned(),
+            json::Value::String(deactivate.expected_revision.to_string()),
         );
         if let Some(reason) = &deactivate.reason {
             inner.insert("reason".to_owned(), json::Value::String(reason.clone()));
@@ -12880,8 +12855,8 @@ mod tests {
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             UnregisterKaigiRelay,
             governance::{
-                CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
-                ProposeValidationFeePolicy, RegisterCitizen,
+                CastPlainBallot, CastZkBallot, ProposeDeployContract, ProposeValidationFeePolicy,
+                RegisterCitizen,
             },
             smart_contract_code::{
                 ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -16486,37 +16461,6 @@ seiyaku Privacy {
         }
     }
     #[test]
-    fn governance_persist_council_instruction_json_roundtrip() {
-        let member = sample_account("wonderland");
-        let instruction: InstructionBox = Box::new(PersistCouncilForEpoch {
-            epoch: 10,
-            members: vec![member.clone()],
-            alternates: vec![member.clone()],
-        })
-        .into_instruction_box();
-        let json_value = instruction_to_json_value(&instruction)
-            .expect("serialize PersistCouncilForEpoch instruction");
-        assert!(
-            json_value
-                .as_object()
-                .and_then(|map| map.get("PersistCouncilForEpoch"))
-                .is_some()
-        );
-        let reconstructed =
-            value_to_instruction(json_value.clone()).expect("deserialize PersistCouncilForEpoch");
-        assert_eq!(reconstructed, instruction);
-        let member_json = json_value
-            .as_object()
-            .unwrap()
-            .get("PersistCouncilForEpoch")
-            .and_then(|value| value.get("members"))
-            .and_then(|value| value.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|value| value.as_str())
-            .expect("member string present");
-        assert_eq!(member_json, account_json_literal(&member));
-    }
-    #[test]
     fn governance_submit_agenda_proposal_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(SubmitAgendaProposal {
             proposal: sample_agenda_proposal(),
@@ -17282,21 +17226,53 @@ seiyaku Privacy {
         .expect("contract address");
         let instruction: InstructionBox = Box::new(ActivateContractInstance {
             contract_address,
-            expected_revision: 1,
+            expected_revision: 7,
             code_hash: Hash::prehashed(sample_hash(0x44)),
         })
         .into_instruction_box();
         let json_value = instruction_to_json_value(&instruction)
             .expect("serialize ActivateContractInstance instruction");
-        assert!(
-            json_value
-                .as_object()
-                .and_then(|map| map.get("ActivateContractInstance"))
-                .is_some()
+        let payload = json_value
+            .as_object()
+            .and_then(|map| map.get("ActivateContractInstance"))
+            .and_then(json::Value::as_object)
+            .expect("activation JSON payload");
+        assert_eq!(
+            payload.get("expected_revision"),
+            Some(&json::Value::String("7".to_owned()))
         );
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize ActivateContractInstance");
         assert_eq!(reconstructed, instruction);
+    }
+    #[test]
+    fn contract_lifecycle_instruction_json_requires_expected_revision() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &test_network_id(b"contract-lifecycle-cas"),
+            &authority,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
+        for value in [
+            norito_json!({
+                "ActivateContractInstance": norito_json!({
+                    "contract_address": contract_address.to_string(),
+                    "code_hash": hash_literal(0x45),
+                }),
+            }),
+            norito_json!({
+                "DeactivateContractInstance": norito_json!({
+                    "contract_address": contract_address.to_string(),
+                    "reason": null,
+                }),
+            }),
+        ] {
+            let error = value_to_instruction(value)
+                .expect_err("lifecycle CAS revision must not be inferred by the host");
+            assert!(error.to_string().contains("expected_revision"));
+        }
     }
     #[test]
     fn js_builder_create_kaigi_payload_matches() {

@@ -495,8 +495,12 @@ SMART_CONTRACT_NOTES: dict[str, list[str]] = {
         f"Use the hashes in `{SMART_CONTRACT_FIXTURE}` to verify `.to` parsing logic in automation.",
     ],
     "iroha_data_model::isi::smart_contract_code::ActivateContractInstance": [
-        "Requires manifests and bytecode to exist for the supplied `code_hash`; activation binds `(namespace, contract_id)` to that digest.",
-        "Protected namespaces continue to enforce governance approval, so Android SDKs should surface deterministic errors when admission fails.",
+        "Requires a retained lifecycle record, its exact non-zero `expected_revision`, and registered manifest plus bytecode for `code_hash`; raw activation cannot create an address.",
+        "Only the current account owner may submit this raw instruction; Parliament activation uses the certified governance lifecycle corridor.",
+    ],
+    "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance": [
+        "Requires an active retained lifecycle record and its exact non-zero `expected_revision`; successful deactivation advances the revision but preserves origin and ownership.",
+        "Only the current account owner may submit this raw instruction; Parliament deactivation uses the certified governance lifecycle corridor.",
     ],
     "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes": [
         "Removal succeeds only when no manifest or active instance references the target `code_hash`; provide an audit reason when automating removals.",

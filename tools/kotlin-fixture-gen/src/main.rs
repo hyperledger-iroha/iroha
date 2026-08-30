@@ -19,6 +19,10 @@ use iroha_data_model::identifier::{
 use iroha_data_model::isi::identifier::ClaimIdentifier;
 use iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation;
 use iroha_data_model::isi::register::{Register, RegisterBox};
+use iroha_data_model::isi::smart_contract_code::{
+    AcceptContractOwnership, CancelContractOwnershipOffer, OfferContractOwnership,
+    SetContractParliamentDelegation,
+};
 use iroha_data_model::isi::transfer::{Transfer, TransferBox};
 use iroha_data_model::name::Name;
 use iroha_data_model::nexus::{DataSpaceId, UniversalAccountId};
@@ -33,6 +37,7 @@ use iroha_data_model::ram_lfe::{
     RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
     RamLfeProgramId, RamLfeReceiptAttestation,
 };
+use iroha_data_model::smart_contract::{ContractAddress, ContractLifecycleOwnerV1};
 use std::env;
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
@@ -46,7 +51,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!(
-            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|hidden-ram-fhe-program|offline-device-attestation>",
+            "Usage: {} <register-account|transfer-asset|transfer-asset-scoped|claim-identifier|contract-lifecycle|hidden-ram-fhe-program|offline-device-attestation>",
             args[0]
         );
         std::process::exit(1);
@@ -56,6 +61,7 @@ fn main() {
         "transfer-asset" => emit_transfer_asset(),
         "transfer-asset-scoped" => emit_transfer_asset_scoped(),
         "claim-identifier" => emit_claim_identifier(),
+        "contract-lifecycle" => emit_contract_lifecycle(),
         "hidden-ram-fhe-program" => emit_hidden_ram_fhe_program(),
         "offline-device-attestation" => emit_offline_device_attestation(),
         other => {
@@ -63,6 +69,61 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+fn emit_contract_lifecycle() {
+    let _chain_discriminant = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
+    let contract_address: ContractAddress =
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+            .parse()
+            .expect("canonical contract address");
+    let account_id = parity_account_id();
+    let set_delegation = SetContractParliamentDelegation {
+        contract_address: contract_address.clone(),
+        expected_revision: 7,
+        delegated: true,
+    };
+    let offer_account = OfferContractOwnership {
+        contract_address: contract_address.clone(),
+        expected_revision: 8,
+        new_owner: ContractLifecycleOwnerV1::Account(account_id.clone()),
+    };
+    let offer_parliament = OfferContractOwnership {
+        contract_address: contract_address.clone(),
+        expected_revision: 9,
+        new_owner: ContractLifecycleOwnerV1::Parliament,
+    };
+    let accept = AcceptContractOwnership {
+        contract_address: contract_address.clone(),
+        expected_revision: 10,
+    };
+    let cancel = CancelContractOwnershipOffer {
+        contract_address: contract_address.clone(),
+        expected_revision: 11,
+    };
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&set_delegation).expect("encode delegation"))
+    );
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&offer_account).expect("encode account ownership offer"))
+    );
+    println!(
+        "{}",
+        hex::encode(
+            norito::to_bytes(&offer_parliament).expect("encode Parliament ownership offer")
+        )
+    );
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&accept).expect("encode ownership acceptance"))
+    );
+    println!(
+        "{}",
+        hex::encode(norito::to_bytes(&cancel).expect("encode ownership-offer cancellation"))
+    );
+    println!("{contract_address}");
+    println!("{account_id}");
 }
 fn emit_offline_device_attestation() {
     // Synthetic unit-test bytes only. This fixture proves canonical wire parity and is not

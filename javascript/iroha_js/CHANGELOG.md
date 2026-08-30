@@ -531,11 +531,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [0.0.2] - 2026-01-27
 
-- Added governance instruction support to native Norito helpers so
-  `buildCastZkBallotInstruction`, `buildCastPlainBallotInstruction`, and
-  `buildPersistCouncilForEpochInstruction` round-trip through
-  `noritoEncodeInstruction`. Proposal-backed certification and execution are
-  consensus-owned and have no client-side finalize or enact builders.
+- Added governance instruction support to native Norito helpers so standalone
+  ZK and plain ballot instructions round-trip through `noritoEncodeInstruction`.
+  Proposal-backed certification and execution are consensus-owned and have no
+  client-side roster, finalize, or enact builders.
 - Updated the native build script to try an offline cargo build first and
   automatically retry online when dependencies are missing.
 - Added release documentation automation script covering changelog/status/roadmap updates.

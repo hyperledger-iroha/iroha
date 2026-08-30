@@ -50,9 +50,15 @@ libc = "0.2.177"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [features]
+default = ["gost", "sm"]
 dev-tools = []
-gost = ["iroha_crypto/gost"]
-sm = ["iroha_crypto/sm"]
+gost = ["iroha_config/gost", "iroha_crypto/gost", "iroha_data_model/gost"]
+sm = [
+    "iroha_config/sm",
+    "iroha_crypto/sm",
+    "iroha_data_model/sm",
+    "iroha_genesis/sm",
+]
 
 [[bin]]
 name = "kagami"

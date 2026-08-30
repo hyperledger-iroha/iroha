@@ -589,6 +589,24 @@ pub fn threshold_key_lifecycle_certificate_preimage_v1(
     Ok(preimage)
 }
 
+fn threshold_key_lifecycle_successor_roster_v1(
+    current_height: u64,
+    parent_context: &iroha_data_model::block::consensus_v2::HeightContext,
+) -> Option<Vec<PeerId>> {
+    if parent_context.height.checked_add(1) != Some(current_height) {
+        return None;
+    }
+    let roster = match (
+        parent_context.height == parent_context.epoch_end_height,
+        parent_context.next_epoch_snapshot.as_ref(),
+    ) {
+        (true, Some(snapshot)) => &snapshot.roster,
+        (false, None) => &parent_context.roster,
+        (true, None) | (false, Some(_)) => return None,
+    };
+    (!roster.is_empty()).then(|| roster.iter().map(|entry| entry.validator.clone()).collect())
+}
+
 /// Verify an exact current-roster `2f + 1` lifecycle certificate.
 ///
 /// # Errors
@@ -684,11 +702,14 @@ mod threshold_key_lifecycle_certificate_tests {
         Vec<KeyPair>,
         Vec<PeerId>,
     ) {
-        let keys = (0..4).map(|_| KeyPair::random()).collect::<Vec<_>>();
-        let roster = keys
-            .iter()
-            .map(|key| PeerId::new(key.public_key().clone()))
+        let mut validators = (0..4)
+            .map(|_| {
+                let key = KeyPair::random();
+                (PeerId::new(key.public_key().clone()), key)
+            })
             .collect::<Vec<_>>();
+        validators.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let (roster, keys): (Vec<_>, Vec<_>) = validators.into_iter().unzip();
         let mut certificate = ThresholdKeyLifecycleCertificateV1 {
             version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
             action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
@@ -806,6 +827,167 @@ mod threshold_key_lifecycle_certificate_tests {
                 &roster,
             ),
             Err(ThresholdKeyLifecycleCertificateErrorV1::InvalidShape)
+        );
+    }
+
+    #[test]
+    fn frozen_height_context_order_survives_commit_topology_rotation() {
+        use iroha_data_model::block::consensus_v2::{
+            ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower,
+        };
+
+        let (mut certificate, keys, roster) = certified_fixture();
+        certificate.effective_height = 2;
+        certificate.signatures.clear();
+        let preimage = threshold_key_lifecycle_certificate_preimage_v1(&certificate)
+            .expect("encode height-two certificate preimage");
+        certificate.signatures = keys
+            .iter()
+            .take(3)
+            .enumerate()
+            .map(|(index, key)| ThresholdKeyLifecycleSignatureV1 {
+                signer_index: u16::try_from(index).expect("small signer index"),
+                signature: Signature::try_new(key.private_key(), &preimage)
+                    .expect("sign height-two lifecycle certificate"),
+            })
+            .collect();
+        let parent_context = crate::sumeragi::v2_context::build_genesis_height_context(
+            crate::sumeragi::v2_context::GenesisContextInputs {
+                network_id: certificate.network_id,
+                election: crate::sumeragi::v2_context::FrozenElectionInputs {
+                    epoch: 0,
+                    epoch_end_height: 8,
+                    mode: ConsensusMode::Npos,
+                    roster: roster
+                        .iter()
+                        .cloned()
+                        .map(|validator| ValidatorPower {
+                            validator,
+                            power: 1,
+                        })
+                        .collect(),
+                    leader_seed: [0x51; 32],
+                },
+                next_epoch_snapshot: None,
+                nexus_amx_context_hash: Hash::prehashed([0x52; Hash::LENGTH]),
+                execution_policy_hash: Hash::prehashed([0x53; Hash::LENGTH]),
+                da_layout: SumeragiV2GenesisContextParameters::recommended().da_layout,
+            },
+        )
+        .expect("build exact parent height context");
+        let frozen_roster = threshold_key_lifecycle_successor_roster_v1(2, &parent_context)
+            .expect("derive the successor's frozen roster");
+        let mut rotated_commit_topology = roster.clone();
+        rotated_commit_topology[..3].rotate_left(1);
+        assert_ne!(frozen_roster, rotated_commit_topology);
+        assert_eq!(
+            verify_threshold_key_lifecycle_certificate_v1(
+                &certificate,
+                &certificate.network_id,
+                2,
+                &frozen_roster,
+            ),
+            Ok(()),
+            "leader-role rotation must not change lifecycle signer indices",
+        );
+        assert_eq!(
+            verify_threshold_key_lifecycle_certificate_v1(
+                &certificate,
+                &certificate.network_id,
+                2,
+                &rotated_commit_topology,
+            ),
+            Err(ThresholdKeyLifecycleCertificateErrorV1::ContextMismatch),
+            "the mutable role topology is not lifecycle certificate authority",
+        );
+    }
+
+    #[test]
+    fn frozen_successor_roster_obeys_epoch_boundary_snapshot_presence() {
+        use iroha_data_model::block::consensus_v2::{
+            ConsensusMode, DualQuorum, SumeragiV2GenesisContextParameters, ValidatorPower,
+            finality::FinalizedNextEpochSnapshot,
+        };
+
+        let sorted_roster = || {
+            let mut roster = (0..4)
+                .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+                .map(|validator| ValidatorPower {
+                    validator,
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            roster.sort();
+            roster
+        };
+        let parent_roster = sorted_roster();
+        let successor_roster = sorted_roster();
+        let successor_snapshot = FinalizedNextEpochSnapshot {
+            epoch: 1,
+            epoch_end_height: 9,
+            mode: ConsensusMode::Npos,
+            validator_set_pops: vec![vec![0x61]; successor_roster.len()],
+            quorum: DualQuorum::from_roster(&successor_roster)
+                .expect("derive exact successor quorum"),
+            roster: successor_roster.clone(),
+            leader_seed: [0x62; 32],
+        };
+        let boundary_parent = crate::sumeragi::v2_context::build_genesis_height_context(
+            crate::sumeragi::v2_context::GenesisContextInputs {
+                network_id: network_id(0x63),
+                election: crate::sumeragi::v2_context::FrozenElectionInputs {
+                    epoch: 0,
+                    epoch_end_height: 1,
+                    mode: ConsensusMode::Npos,
+                    roster: parent_roster.clone(),
+                    leader_seed: [0x64; 32],
+                },
+                next_epoch_snapshot: Some(successor_snapshot),
+                nexus_amx_context_hash: Hash::prehashed([0x65; Hash::LENGTH]),
+                execution_policy_hash: Hash::prehashed([0x66; Hash::LENGTH]),
+                da_layout: SumeragiV2GenesisContextParameters::recommended().da_layout,
+            },
+        )
+        .expect("build epoch-boundary parent context");
+        let selected = threshold_key_lifecycle_successor_roster_v1(2, &boundary_parent)
+            .expect("select authenticated next-epoch roster");
+        assert_eq!(
+            selected,
+            successor_roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>()
+        );
+
+        let mut non_boundary_parent = boundary_parent.clone();
+        non_boundary_parent.epoch_end_height = 8;
+        non_boundary_parent.next_epoch_snapshot = None;
+        assert_eq!(
+            threshold_key_lifecycle_successor_roster_v1(2, &non_boundary_parent),
+            Some(
+                parent_roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect()
+            ),
+            "non-boundary heights retain the parent frozen roster",
+        );
+
+        let mut unexpected_snapshot = non_boundary_parent.clone();
+        unexpected_snapshot.next_epoch_snapshot = boundary_parent.next_epoch_snapshot.clone();
+        assert!(
+            threshold_key_lifecycle_successor_roster_v1(2, &unexpected_snapshot).is_none(),
+            "a non-boundary parent cannot inject a next-epoch snapshot",
+        );
+        let mut missing_snapshot = boundary_parent.clone();
+        missing_snapshot.next_epoch_snapshot = None;
+        assert!(
+            threshold_key_lifecycle_successor_roster_v1(2, &missing_snapshot).is_none(),
+            "an epoch-boundary parent must authenticate the complete successor snapshot",
+        );
+        assert!(
+            threshold_key_lifecycle_successor_roster_v1(3, &boundary_parent).is_none(),
+            "a parent context cannot authorize a non-successor height",
         );
     }
 }
@@ -4371,9 +4553,13 @@ pub struct World {
     pub(crate) governance_last_unlock_sweep_height: Cell<u64>,
     /// O(1) statistics snapshot produced by the latest unlock sweep.
     pub(crate) governance_unlock_stats: Cell<GovernanceUnlockStatsSnapshot>,
-    /// Sortition parliament membership by epoch.
+    /// Compatibility-only independent epoch councils retained for snapshot decoding.
+    ///
+    /// Canonical attempt-based Parliament never consults or writes this storage.
     pub(crate) council: Storage<u64, CouncilState>,
-    /// Multi-body parliament rosters by epoch.
+    /// Compatibility-only epoch body rosters retained for snapshot decoding.
+    ///
+    /// Canonical attempt-based Parliament retains its bodies inside `parliament_attempts`.
     pub(crate) parliament_bodies:
         Storage<u64, iroha_data_model::governance::types::ParliamentBodies>,
     /// Canonical attempt-local Parliament reducer state keyed by governance attempt id.
@@ -8879,7 +9065,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the runtime-upgrade payload when the proposal represents a runtime upgrade.
@@ -8897,7 +9086,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the SCCP registry action when the proposal represents SCCP governance.
@@ -8915,7 +9107,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the SoraFS provider-owner action when the proposal represents SoraFS governance.
@@ -8933,7 +9128,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the validation-fee policy payload when present.
@@ -8951,7 +9149,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the validation-fee payout lifecycle payload when present.
@@ -8969,7 +9170,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
     /// Access the exact Musubi Parliament action retained by this proposal.
@@ -8987,7 +9191,10 @@ impl GovernanceProposalRecord {
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::ContractLifecycleGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ContractEmergencyHold(_)
+            | iroha_data_model::governance::types::ProposalKind::GlobalDataTriggerPermissionGovernance(
+                _,
+            ) => None,
         }
     }
 }
@@ -9235,23 +9442,6 @@ pub enum GovernanceReferendumMode {
     Zk,
     /// Plain (non-ZK) voting mode
     Plain,
-}
-/// Compute the approval count required to reach quorum (ceil-divided).
-#[must_use]
-pub fn council_quorum_threshold(members: usize, quorum_bps: u16) -> u32 {
-    if members == 0 {
-        return 0;
-    }
-    let bps = u128::from(quorum_bps.max(1));
-    let members_u = u128::try_from(members).unwrap_or_else(|_| u128::from(u32::MAX));
-    let required = members_u
-        .saturating_mul(bps)
-        .saturating_add(9_999)
-        .saturating_div(10_000);
-    required
-        .clamp(1, u128::from(u32::MAX))
-        .try_into()
-        .unwrap_or(u32::MAX)
 }
 impl json::FastJsonWrite for GovernanceReferendumMode {
     fn write_json(&self, out: &mut String) {
@@ -9663,10 +9853,7 @@ mod governance_slash_map_json {
         Ok(out)
     }
 }
-/// Deterministic council membership for an epoch.
-///
-/// Alias for [`governance::state::ParliamentTerm`] to keep historical naming used by
-/// Torii/CLI helpers.
+/// Compatibility alias for retired independent epoch-council snapshot state.
 pub type CouncilState = crate::governance::state::ParliamentTerm;
 #[derive(Debug, Clone)]
 pub(crate) struct PipelineParallelism {
@@ -13344,7 +13531,7 @@ fn bounded_global_committee_size(
     iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
         .then_some(committee_size)
 }
-fn npos_peer_prf_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
+fn threshold_beacon_seat_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
     let epoch_bytes = epoch.to_le_bytes();
     let peer_bytes = peer.encode();
     Hash::new_from_chunks(&[
@@ -13354,7 +13541,7 @@ fn npos_peer_prf_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
         peer_bytes.as_slice(),
     ])
 }
-fn select_prf_committee(
+fn select_threshold_beacon_committee(
     world: &impl WorldReadOnly,
     epoch: u64,
     seed: [u8; 32],
@@ -13365,7 +13552,7 @@ fn select_prf_committee(
     let committee_size = bounded_global_committee_size(world, candidates.len())?;
     let mut scored = candidates
         .into_iter()
-        .map(|peer| (npos_peer_prf_score(seed, epoch, &peer), peer))
+        .map(|peer| (threshold_beacon_seat_score(seed, epoch, &peer), peer))
         .collect::<Vec<_>>();
     scored.sort_by(|(left_score, left_peer), (right_score, right_peer)| {
         left_score
@@ -13467,59 +13654,6 @@ where
             }
         }
     }
-    // Build the account lookup only after widening the topology. Otherwise an
-    // eligible explicit account-to-peer binding that triggered widening is
-    // absent here, and the council path silently truncates that member.
-    let validator_peer_ids_by_account: BTreeMap<AccountId, PeerId> = world
-        .public_lane_validators()
-        .iter()
-        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| active_lane_ids.contains(&record.lane_id))
-        .filter(|(_, record)| {
-            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
-        })
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
-        .filter(|(_, record)| {
-            matches!(
-                nexus
-                    .staking
-                    .validator_mode(record.lane_id, &nexus.lane_catalog),
-                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-            )
-        })
-        .filter_map(|(_, record)| {
-            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                &record.self_stake,
-                &nexus.staking.min_validator_stake,
-            ) else {
-                return None;
-            };
-            if !meets_min {
-                return None;
-            }
-            if !present_peers.contains(&record.peer_id) {
-                return None;
-            }
-            if enforce_topology_membership && !topology_peers.contains(&record.peer_id) {
-                return None;
-            }
-            if !peer_has_live_consensus_key(world, &record.peer_id, block_height) {
-                return None;
-            }
-            Some((record.validator.clone(), record.peer_id.clone()))
-        })
-        .collect();
-    // Preferred path: council-derived roster for the epoch.
-    if let Some(c) = world.council().get(&epoch).cloned() {
-        let ids: Vec<PeerId> = c
-            .members
-            .into_iter()
-            .filter_map(|account| validator_peer_ids_by_account.get(&account).cloned())
-            .collect();
-        if let Some(committee) = select_prf_committee(world, epoch, selection_seed, ids) {
-            return Some(committee);
-        }
-    }
     let mut candidates: Vec<PeerId> = world
         .public_lane_validators()
         .iter()
@@ -13560,7 +13694,7 @@ where
     candidates.retain(|peer| peer_has_live_consensus_key(world, peer, block_height));
     candidates.sort();
     candidates.dedup();
-    select_prf_committee(world, epoch, selection_seed, candidates)
+    select_threshold_beacon_committee(world, epoch, selection_seed, candidates)
 }
 #[cfg(test)]
 impl StateView<'_> {
@@ -14396,18 +14530,18 @@ mod stake_snapshot_tests {
         );
     }
     #[test]
-    fn npos_committee_prf_score_binds_seed_epoch_and_peer() {
+    fn threshold_beacon_seat_score_binds_seed_epoch_and_peer() {
         let first = PeerId::from(crate::state::checked_keypair().public_key().clone());
         let second = PeerId::from(crate::state::checked_keypair().public_key().clone());
         let seed = [0x5A; 32];
-        let score = npos_peer_prf_score(seed, 7, &first);
-        assert_eq!(score, npos_peer_prf_score(seed, 7, &first));
-        assert_ne!(score, npos_peer_prf_score([0xA5; 32], 7, &first));
-        assert_ne!(score, npos_peer_prf_score(seed, 8, &first));
-        assert_ne!(score, npos_peer_prf_score(seed, 7, &second));
+        let score = threshold_beacon_seat_score(seed, 7, &first);
+        assert_eq!(score, threshold_beacon_seat_score(seed, 7, &first));
+        assert_ne!(score, threshold_beacon_seat_score([0xA5; 32], 7, &first));
+        assert_ne!(score, threshold_beacon_seat_score(seed, 8, &first));
+        assert_ne!(score, threshold_beacon_seat_score(seed, 7, &second));
     }
     #[test]
-    fn council_members_map_to_peer_ids_in_epoch_roster() {
+    fn legacy_council_snapshot_does_not_change_threshold_beacon_committee() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
@@ -14415,172 +14549,48 @@ mod stake_snapshot_tests {
             let nexus = state.nexus.get_mut();
             nexus.staking.min_validator_stake = 1_u64.into();
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.max_validators = NonZeroU32::new(4).expect("nonzero validator limit");
         }
-        let kp: Vec<KeyPair> = (0..4).map(|_| crate::state::checked_keypair()).collect();
+        let keypairs: Vec<KeyPair> = (0..7).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
-        for keypair in &kp {
-            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 10);
-        }
-        let members = vec![
-            DMAccountId::of(kp[1].public_key().clone()),
-            DMAccountId::of(kp[0].public_key().clone()),
-            DMAccountId::of(kp[3].public_key().clone()),
-            DMAccountId::of(kp[2].public_key().clone()),
-        ];
-        let council = CouncilState {
-            epoch: 0,
-            members,
-            candidate_count: 4,
-            ..CouncilState::default()
-        };
-        wb.council.insert(0, council);
-        wb.commit();
-        let sv = state.view();
-        let out = sv.epoch_validator_peer_ids_for_testing(0).unwrap();
-        let mut expected: Vec<_> = kp
-            .iter()
-            .map(|keypair| PeerId::from(keypair.public_key().clone()))
-            .collect();
-        expected.sort();
-        assert_eq!(out, expected);
-    }
-    #[test]
-    fn council_members_without_eligible_validator_bindings_cannot_fill_epoch_roster() {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-        }
-        let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
-        let mut world = state.world.block();
-        let mut members = Vec::with_capacity(keypairs.len());
+        let mut all_peers = Vec::with_capacity(keypairs.len());
         for keypair in &keypairs {
-            let peer = PeerId::from(keypair.public_key().clone());
-            let _ = world.peers.get_mut().push(peer.clone());
-            seed_consensus_key(&mut world, &peer, ConsensusKeyStatus::Active, 0);
-            members.push(DMAccountId::of(keypair.public_key().clone()));
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 10);
+            all_peers.push(PeerId::from(keypair.public_key().clone()));
         }
-        world.council.insert(
-            0,
-            CouncilState {
-                epoch: 0,
-                members,
-                candidate_count: 4,
-                ..CouncilState::default()
-            },
-        );
-        world.commit();
-        assert!(
-            state
-                .view()
-                .epoch_validator_peer_ids_for_testing(0)
-                .is_none(),
-            "council membership must not synthesize validator authority without an eligible lane binding"
-        );
-    }
-    #[test]
-    fn council_multisig_member_without_peer_binding_is_ignored_without_unwinding() {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-        }
-        let keypair = crate::state::checked_keypair();
-        let single_key_account = DMAccountId::of(keypair.public_key().clone());
-        let member =
-            iroha_data_model::account::MultisigMember::new(keypair.public_key().clone(), 1)
-                .expect("valid multisig member");
-        let policy = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
-            .expect("valid multisig policy");
-        let multisig_account = DMAccountId::new_multisig(policy);
-        let mut world = state.world.block();
-        seed_active_public_lane_validator(&mut world, &keypair, LaneId::SINGLE, 10);
-        world.council.insert(
-            0,
-            CouncilState {
-                epoch: 0,
-                members: vec![multisig_account, single_key_account],
-                candidate_count: 2,
-                ..CouncilState::default()
-            },
-        );
-        world.commit();
-        assert!(
-            state
-                .view()
-                .epoch_validator_peer_ids_for_testing(0)
-                .is_none(),
-            "ignoring the multisig member leaves an underfilled committee"
-        );
-    }
-    #[test]
-    fn council_explicit_peer_bindings_survive_topology_widening() {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-        }
-        let account_keys: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
-        let peer_keys: Vec<_> = (0..4)
-            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
-            .collect();
-        let accounts: Vec<_> = account_keys
+        wb.commit();
+
+        let baseline = state
+            .view()
+            .epoch_validator_peer_ids_for_testing(0)
+            .expect("threshold-beacon committee");
+        let legacy_members = all_peers
             .iter()
-            .map(|keypair| DMAccountId::of(keypair.public_key().clone()))
-            .collect();
-        let peers: Vec<_> = peer_keys
-            .iter()
-            .map(|keypair| PeerId::from(keypair.public_key().clone()))
-            .collect();
-        for (account, peer) in accounts.iter().zip(&peers) {
-            assert_ne!(peer.public_key(), account.expect_single_signatory());
-        }
+            .filter(|peer| !baseline.contains(peer))
+            .take(3)
+            .chain(baseline.iter().take(1))
+            .map(|peer| DMAccountId::of(peer.public_key().clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(legacy_members.len(), 4);
         let mut wb = state.world.block();
-        {
-            let world_peers = wb.peers.get_mut();
-            for peer in &peers {
-                let _ = world_peers.push(peer.clone());
-            }
-        }
-        for peer in &peers {
-            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
-        }
-        for (account, peer) in accounts.iter().cloned().zip(peers.iter().cloned()) {
-            wb.public_lane_validators.insert(
-                (LaneId::SINGLE, account.clone()),
-                active_lane_validator_record(LaneId::SINGLE, &account, peer, 10_u32),
-            );
-        }
         wb.council.insert(
             0,
             CouncilState {
                 epoch: 0,
-                members: accounts,
+                members: legacy_members,
                 candidate_count: 4,
                 ..CouncilState::default()
             },
         );
         wb.commit();
-        {
-            let mut topo_block = state.commit_topology.block();
-            topo_block.mutate_vec(|topology| *topology = vec![peers[0].clone()]);
-            topo_block.commit();
-        }
-        let sv = state.view();
-        let roster = sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
-        let mut expected = peers;
-        expected.sort();
+
+        let restored = state
+            .view()
+            .epoch_validator_peer_ids_for_testing(0)
+            .expect("threshold-beacon committee with restored legacy snapshot");
         assert_eq!(
-            roster, expected,
-            "the newly widened explicit peer binding must not be dropped from the council roster"
+            restored, baseline,
+            "decode-only legacy council bytes must not affect the NPoS committee"
         );
     }
     #[test]
@@ -21746,10 +21756,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> &mut StorageTransaction<'block, 'world, String, GovernanceSlashLedger> {
         &mut self.governance_slashes
     }
-    /// Test helper: get mutable access to council roster storage for direct seeding.
-    pub fn council_mut(&mut self) -> &mut StorageTransaction<'block, 'world, u64, CouncilState> {
-        &mut self.council
-    }
     /// Validate and persist one canonical attempt-local Parliament reducer snapshot.
     pub(crate) fn put_parliament_attempt(
         &mut self,
@@ -25449,14 +25455,23 @@ impl State {
                 "persisted private-settlement state is invalid during startup: {error}"
             ))
         })?;
+        crate::smartcontracts::isi::sorafs_moderation::validate_persisted_moderation_schema_v1(
+            &world.view(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "incompatible persisted SoraFS moderation V1 policy/case state; regenerate first-release genesis and snapshots: {error}"
+            ))
+        })?;
         crate::smartcontracts::ivm::active_runtime_abi_hash(&world.view(), u64::MAX)
             .unwrap_or_else(|error| {
                 panic!(
                     "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
                 )
             });
-        crate::smartcontracts::code::initialize_contract_subject_bindings(&mut world)
-            .expect("new v2 world must contain valid contract subject bindings");
+        crate::smartcontracts::code::initialize_contract_subject_bindings(&mut world).expect(
+            "incompatible contract lifecycle state; regenerate first-release genesis and snapshots",
+        );
         let default_sns_payment_asset_id =
             iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
         crate::sns::try_seed_default_namespace_policies(
@@ -25797,23 +25812,13 @@ impl State {
                 max_conviction: 6,
                 min_enactment_delay: 20,
                 window_span: 100,
-                plain_voting_enabled: false,
+                plain_voting_enabled:
+                    iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
                 approval_threshold_q_num: 1,
                 approval_threshold_q_den: 2,
                 min_turnout: 0,
-                parliament_committee_size:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
-                parliament_term_blocks:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
-                parliament_min_stake:
-                    iroha_config::parameters::defaults::governance::parliament_min_stake(),
-                parliament_eligibility_asset_id: iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
-                    .parse()
-                    .expect("valid default governance asset id"),
                 parliament_alternate_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
-                parliament_quorum_bps:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
                 parliament_sortition_pulse_delay_blocks:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_SORTITION_PULSE_DELAY_BLOCKS,
                 parliament_invitation_phase_blocks:
@@ -27020,7 +27025,7 @@ impl State {
                         },
                     ),
                 ));
-                // Automatic decision at h_end: compute tally and emit Approved/Rejected.
+                // Compute the exact standalone-referendum tally after its inclusive end height.
                 let mut approve: u128 = 0;
                 let mut reject: u128 = 0;
                 let mut abstain: u128 = 0;
@@ -27081,16 +27086,6 @@ impl State {
                         }
                     }
                 }
-                let referendum_event_id = if let Ok(bytes) =
-                    hex::decode(rid.trim_start_matches("0x"))
-                    && bytes.len() == 32
-                {
-                    let mut id = [0u8; 32];
-                    id.copy_from_slice(&bytes);
-                    id
-                } else {
-                    [0u8; 32]
-                };
                 if decision_ready {
                     let turnout = approve.saturating_add(reject).saturating_add(abstain);
                     let threshold_numerator = sb.gov.approval_threshold_q_num;
@@ -27102,23 +27097,15 @@ impl State {
                     } else {
                         false
                     };
-                    if decision_approve {
-                        wtx.emit_events(Some(
-                            governance_events::GovernanceEvent::ProposalApproved(
-                                governance_events::GovernanceProposalApproved {
-                                    id: referendum_event_id,
-                                },
-                            ),
-                        ));
-                    } else {
-                        wtx.emit_events(Some(
-                            governance_events::GovernanceEvent::ProposalRejected(
-                                governance_events::GovernanceProposalRejected {
-                                    id: referendum_event_id,
-                                },
-                            ),
-                        ));
-                    }
+                    wtx.emit_events(Some(governance_events::GovernanceEvent::ReferendumDecided(
+                        governance_events::GovernanceReferendumDecided {
+                            referendum_id: rid,
+                            approve,
+                            reject,
+                            abstain,
+                            approved: decision_approve,
+                        },
+                    )));
                 }
             }
             wtx.apply();
@@ -47829,6 +47816,12 @@ impl<'state> StateBlock<'state> {
         {
             return Err(TransactionsBlockError::MergeAdmission);
         }
+        // Seed fixture-defined genesis assets while the parent block history is
+        // still empty. Staging this synthetic block's hash first would make the
+        // production finalizer treat height one as a post-genesis block and
+        // reject every fixture asset as missing its incarnation token.
+        self.finalize_axt_asset_incarnations()
+            .map_err(|_| TransactionsBlockError::AxtAssetIncarnation)?;
         let block_height = self
             ._curr_block
             .height()
@@ -55607,6 +55600,54 @@ impl StateTransaction<'_, '_> {
     pub fn block_height(&self) -> u64 {
         self._curr_block.height().get()
     }
+    /// Resolve the current height's exact finality-frozen validator order for
+    /// threshold-key lifecycle certificate authentication.
+    ///
+    /// The mutable commit topology rotates consensus roles after every block,
+    /// so its positions are not stable signer indices. The parent finality
+    /// artifact instead authenticates either the unchanged epoch roster or the
+    /// complete next-epoch snapshot governing this block.
+    pub(crate) fn threshold_key_lifecycle_frozen_roster_v1(
+        &self,
+    ) -> core::result::Result<Vec<PeerId>, String> {
+        let current_height = self.block_height();
+        let parent_height = current_height
+            .checked_sub(1)
+            .filter(|height| *height != 0)
+            .ok_or_else(|| {
+                "threshold-key lifecycle authority has no finalized parent height".to_owned()
+            })?;
+        let parent = match self.kura.v2_finality_artifact(parent_height) {
+            Ok(Some(parent)) => parent,
+            Ok(None) => {
+                #[cfg(test)]
+                {
+                    let fixture_roster = self.commit_topology().get().clone();
+                    if !fixture_roster.is_empty() {
+                        return Ok(fixture_roster);
+                    }
+                }
+                return Err(format!(
+                    "threshold-key lifecycle authority lacks finality at parent height {parent_height}"
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to authenticate threshold-key lifecycle parent finality: {error}"
+                ));
+            }
+        };
+        if parent.height_context.network_id != self.network_id {
+            return Err(
+                "threshold-key lifecycle parent finality belongs to another network".to_owned(),
+            );
+        }
+        threshold_key_lifecycle_successor_roster_v1(current_height, &parent.height_context)
+            .ok_or_else(|| {
+                "threshold-key lifecycle parent finality does not define this height's frozen roster"
+                    .to_owned()
+            })
+    }
     fn ensure_private_settlement_feature_active_v1(
         &self,
         authority_context_height: u64,
@@ -57610,24 +57651,28 @@ impl StateTransaction<'_, '_> {
         &mut self,
     ) -> Result<Vec<(EventBox, TriggerId, u64)>, TransactionRejectionReason> {
         let drained = core::mem::take(&mut self.world.internal_event_buf);
-        let check_count = u64::try_from(drained.len())
-            .unwrap_or(u64::MAX)
-            .saturating_mul(
-                u64::try_from(self.world.triggers.data_triggers().len()).unwrap_or(u64::MAX),
-            );
-        self.charge_trigger_work_gas(
-            check_count.saturating_mul(TRIGGER_FILTER_CHECK_GAS),
-            "data trigger filter checks",
-        )?;
         let mut matches = Vec::new();
         for event in &drained {
-            for (trg_id, action) in self.world.triggers.data_triggers().iter() {
+            let candidates = self.world.triggers.data_trigger_candidates(event.as_ref());
+            let check_count = u64::try_from(candidates.len()).unwrap_or(u64::MAX);
+            self.charge_trigger_work_gas(
+                check_count.saturating_mul(TRIGGER_FILTER_CHECK_GAS),
+                "data trigger filter checks",
+            )?;
+            for trg_id in candidates {
+                let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
+                    warn!(
+                        trigger_id = %trg_id,
+                        "data-trigger index referenced a missing trigger; skipping candidate"
+                    );
+                    continue;
+                };
                 if data_trigger_action_matches(action, event.as_ref()) {
                     // Preserve emission order so every matching event in a batch
                     // produces its own trigger execution.
                     let shared = SharedDataEvent::from_arc(Arc::clone(event));
-                    let generation = self.world.triggers.registration_generation(trg_id);
-                    matches.push((EventBox::Data(shared), trg_id.clone(), generation));
+                    let generation = self.world.triggers.registration_generation(&trg_id);
+                    matches.push((EventBox::Data(shared), trg_id, generation));
                 }
             }
         }

@@ -16,7 +16,7 @@ front door for on-call handoffs; detailed procedures still live in
 | Path | Purpose | Allowed values / notes |
 |------|---------|------------------------|
 | `torii.transport.norito_rpc.enabled` | Hard on/off switch for the Norito transport. | `true` keeps the HTTP handlers registered; `false` disables them regardless of stage. |
-| `torii.transport.norito_rpc.require_mtls` | Enforce mutual TLS for Norito endpoints. | Default `true`. Turn off only in isolated staging pools. |
+| `torii.transport.norito_rpc.require_mtls` | Enforce mutual TLS for Norito endpoints. | Default `false`; production ingress may require it as deployment policy. |
 | `torii.transport.norito_rpc.allowed_clients` | Whitelist of service accounts / API tokens that may use Norito. | Supply CIDR blocks, token hashes, or OIDC client IDs depending on your deployment. |
 | `torii.transport.norito_rpc.stage` | Rollout stage advertised to SDKs. | `disabled` (reject Norito, force JSON), `canary` (allow only the allowlist, trigger enhanced telemetry), `ga` (default-on for every authenticated client). |
 | `torii.preauth_scheme_limits.norito_rpc` | Per-scheme concurrency + burst budget. | Mirror the keys used for the HTTP/WS throttles (e.g., `max_in_flight`, `rate_per_sec`). Raising the cap without updating Alertmanager defeats the rollout guard. |
@@ -94,8 +94,8 @@ release post (replace the bracketed fields) and attach the evidence bundle
 described underneath.
 
 > **Torii Norito-RPC transport** — Norito envelopes are now served alongside the
-> JSON API. The `torii.transport.norito_rpc.stage` flag ships set to
-> **[stage: disabled/canary/ga]** and follows the staged rollout checklist in
+> JSON API. The `torii.transport.norito_rpc.stage` flag ships set to **ga**;
+> `disabled` and `canary` remain available for brownouts and staged rollouts in
 > `specs/torii/norito_rpc_rollout_plan.md`. Operators can opt out temporarily
 > by setting `torii.transport.norito_rpc.stage=disabled` while leaving
 > `torii.transport.norito_rpc.enabled=true`; SDKs will fall back to JSON

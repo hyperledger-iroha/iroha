@@ -119,7 +119,7 @@ pub enum ConsensusMessageControlAction {
     /// Retain the authenticated message in the receiver's bounded queue.
     Hold,
 }
-/// Exact feature-isolated Native AMX process-cut phase.
+/// Exact feature-isolated Native AMX or private-settlement process-cut phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeAmxFaultPhase {
     /// Abort after authenticating and aggregating the participant PrepareQC.
@@ -128,6 +128,20 @@ pub enum NativeAmxFaultPhase {
     AfterCommitQc,
     /// Abort after constructing the exact State overlay and immediately before WSV publication.
     BeforeWorldCommit,
+    /// Abort after the provisional private-settlement sidecar reaches stable storage.
+    AfterPrivateSettlementSidecarFsync,
+    /// Abort after a verified private-settlement delta and its reservations reach stable storage.
+    AfterPrivateSettlementStagedDeltaFsync,
+    /// Abort after a private-settlement Prepare QC reaches stable storage.
+    AfterPrivateSettlementPrepareQcFsync,
+    /// Abort after a private-settlement Commit QC reaches stable storage.
+    AfterPrivateSettlementCommitQcFsync,
+    /// Abort after Kura durably appends a block containing the private-settlement carrier.
+    AfterPrivateSettlementKuraAppend,
+    /// Abort after the private-settlement carrier is atomically applied to WSV.
+    AfterPrivateSettlementWsvApplication,
+    /// Abort after a committee publishes its durable terminal private-settlement receipt.
+    AfterPrivateSettlementReceiptPublication,
 }
 impl NativeAmxFaultPhase {
     const fn as_str(self) -> &'static str {
@@ -135,6 +149,21 @@ impl NativeAmxFaultPhase {
             Self::AfterPrepareQc => "after_prepare_qc",
             Self::AfterCommitQc => "after_commit_qc",
             Self::BeforeWorldCommit => "before_world_commit",
+            Self::AfterPrivateSettlementSidecarFsync => "after_private_settlement_sidecar_fsync",
+            Self::AfterPrivateSettlementStagedDeltaFsync => {
+                "after_private_settlement_staged_delta_fsync"
+            }
+            Self::AfterPrivateSettlementPrepareQcFsync => {
+                "after_private_settlement_prepare_qc_fsync"
+            }
+            Self::AfterPrivateSettlementCommitQcFsync => "after_private_settlement_commit_qc_fsync",
+            Self::AfterPrivateSettlementKuraAppend => "after_private_settlement_kura_append",
+            Self::AfterPrivateSettlementWsvApplication => {
+                "after_private_settlement_wsv_application"
+            }
+            Self::AfterPrivateSettlementReceiptPublication => {
+                "after_private_settlement_receipt_publication"
+            }
         }
     }
     fn parse(value: &str) -> Result<Self> {
@@ -142,18 +171,38 @@ impl NativeAmxFaultPhase {
             "after_prepare_qc" => Ok(Self::AfterPrepareQc),
             "after_commit_qc" => Ok(Self::AfterCommitQc),
             "before_world_commit" => Ok(Self::BeforeWorldCommit),
+            "after_private_settlement_sidecar_fsync" => {
+                Ok(Self::AfterPrivateSettlementSidecarFsync)
+            }
+            "after_private_settlement_staged_delta_fsync" => {
+                Ok(Self::AfterPrivateSettlementStagedDeltaFsync)
+            }
+            "after_private_settlement_prepare_qc_fsync" => {
+                Ok(Self::AfterPrivateSettlementPrepareQcFsync)
+            }
+            "after_private_settlement_commit_qc_fsync" => {
+                Ok(Self::AfterPrivateSettlementCommitQcFsync)
+            }
+            "after_private_settlement_kura_append" => Ok(Self::AfterPrivateSettlementKuraAppend),
+            "after_private_settlement_wsv_application" => {
+                Ok(Self::AfterPrivateSettlementWsvApplication)
+            }
+            "after_private_settlement_receipt_publication" => {
+                Ok(Self::AfterPrivateSettlementReceiptPublication)
+            }
             _ => Err(eyre!("unknown Native AMX fault phase `{value}`")),
         }
     }
 }
-/// Durable proof that the controlled daemon reached an exact Native AMX cut.
+/// Durable proof that the controlled daemon reached an exact protocol cut.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeAmxFaultAck {
     /// Monotonic controller-local command revision.
     pub revision: u64,
     /// Exact phase reached before process abort.
     pub phase: NativeAmxFaultPhase,
-    /// Exact Native AMX source transaction identity.
+    /// Exact protocol source identity: a Native AMX transaction digest or private-settlement
+    /// bundle id.
     pub source_id: [u8; 32],
 }
 impl ConsensusMessageControlAction {
@@ -676,8 +725,8 @@ impl ConsensusMessageControl {
     }
     /// Arm one exact, one-shot Native AMX process cut for this peer.
     ///
-    /// `source_id` is the 32-byte digest of the exact signed source transaction,
-    /// not its external-entrypoint projection.
+    /// `source_id` is the 32-byte digest of the exact signed Native AMX source transaction, or the
+    /// exact private-settlement bundle id for a private-settlement durability cut.
     ///
     /// The feature-isolated daemon fsyncs an acknowledgement at the named phase and then aborts.
     /// Restart sees the acknowledgement and will not repeat the same revision.
@@ -2432,6 +2481,32 @@ mod tests {
             );
         let uppercase = canonical_json(&noncanonical).expect("encode uppercase source");
         assert!(parse_native_amx_fault(&uppercase).is_err());
+    }
+    #[test]
+    fn private_settlement_fault_boundaries_roundtrip_through_canonical_control() {
+        let phases = [
+            NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync,
+            NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync,
+            NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync,
+            NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync,
+            NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend,
+            NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication,
+            NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication,
+        ];
+        for (index, phase) in phases.into_iter().enumerate() {
+            let revision = u64::try_from(index + 1).expect("small revision");
+            let source_id = [u8::try_from(index + 1).expect("small source seed"); 32];
+            let encoded = canonical_json(&native_amx_fault_value(revision, phase, source_id))
+                .expect("canonical private-settlement fault command");
+            assert_eq!(
+                parse_native_amx_fault(&encoded).expect("parse private-settlement fault command"),
+                NativeAmxFaultAck {
+                    revision,
+                    phase,
+                    source_id,
+                }
+            );
+        }
     }
     #[test]
     fn staged_initial_rules_replace_revision_one_before_startup() {
