@@ -166,10 +166,14 @@ else
   [[ -n "$JAVA_HOME_DIR" ]] \
     || fail "NORITO_MOBILE_JAVA_HOME must pin the setup-java JDK on non-macOS hosts"
 fi
-[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" && ! -L "$JAVA_HOME_DIR" ]] \
-  || fail "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an absolute regular JDK directory"
+[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" ]] \
+  || fail "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an absolute JDK directory"
 NM_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$NM_BINARY")"
+# setup-java intentionally exposes JAVA_HOME through a hosted-toolcache symlink.
+# Authenticate and use its resolved directory instead of rejecting that runner API.
 JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$JAVA_HOME_DIR")"
+[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" && ! -L "$JAVA_HOME_DIR" ]] \
+  || fail "resolved JDK root must be an absolute canonical directory"
 JAVA_BINARY="$JAVA_HOME_DIR/bin/java"
 for tool in "$NM_BINARY" "$JAVA_BINARY"; do
   [[ -f "$tool" && ! -L "$tool" && -x "$tool" ]] \
