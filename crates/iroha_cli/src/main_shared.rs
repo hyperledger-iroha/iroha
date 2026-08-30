@@ -735,7 +735,7 @@ mod ledger {
         Multisig(crate::multisig::Command),
         /// Subscribe to events: state changes, transaction/block/trigger progress
         Events(crate::events::Args),
-        /// Subscribe to blocks
+        /// Subscribe to full signed blocks (requires CanReadAllLedgerData)
         Blocks(crate::blocks::Args),
     }
     impl Run for Command {

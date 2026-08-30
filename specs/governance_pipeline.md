@@ -465,6 +465,48 @@ reducer. The first-release public contract contains no proposal approval
 snapshot, equal Parliament stage ballot, caller-selected referendum window or
 mode, client finalization, or client enactment path.
 
+An exact 32-byte typed proposal fingerprint is reserved across this boundary in
+lower-, upper-, or mixed-case hexadecimal form, with or without an exact `0x`
+or `0X` prefix. Standalone ballot/state admission, typed-proposal admission, and
+snapshot restoration all reject such cross-subsystem aliases. Standalone
+closure emits `ReferendumDecided` with the original selector and exact tally;
+it never emits `ProposalApproved` or `ProposalRejected`, and the Torii
+governance stream therefore publishes only referendum/lock/tally updates for
+that decision.
+
+PLAIN admission accepts only direction `0` (Aye), `1` (Nay), or `2`
+(Abstain), and rejects a replacement before mutation if its exact quadratic
+category tally or total turnout would exceed `u128`. Both conviction parameters
+must be nonzero, and the retained voter-lock corpus is capped at 1,000 so the
+exact scan is consensus-bounded. Restore rechecks the same PLAIN record shape
+and loaded conviction policy before execution resumes without applying the
+integer tally domain to fractional ZK bonds. Minimum
+turnout includes abstentions, while the approval fraction is
+`Aye / (Aye + Nay)`; an empty decisive tally rejects. Threshold products use an
+exact 192-bit comparison rather than saturation. For standalone ZK voting,
+closure without a finalized tally durably records `Closed` and emits no
+decision; a later verified finalization emits that deferred
+`ReferendumDecided` exactly once, while finalization before closure leaves the
+decision to the one-shot close transition.
+
+`CastPlainBallot` and `CastZkBallot` must be the sole direct instruction in a
+signed transaction; contracts, triggers, IVM programs, and mixed instruction
+lists receive no ballot entrypoint binding. A penalized ballot still returns
+its normal transaction error. If the rejected overlay prevalidated a nonzero slash,
+the block rejection corridor replays that exact amount in a fresh state
+transaction before rejected-fee settlement, committing `LockSlashed` and
+`BallotRejected` while emitting no `BallotAccepted`. A later fee failure cannot
+roll that penalty back. Rejections for which no slash was applied persist no
+penalty. Rejected ZK verification attempts still consume the block's
+confidential operation, verifier-call, proof-byte, confidential-gas, and
+ordinary gas budgets. The same exactly-once block accounting applies to
+ordinary prepared overlays, trigger work, detached fallback, and early
+mixed-batch rejection. Sealed reveals commit both their carrier identity and
+the enclosed signed execution identity in ordinary and autonomous-merge
+admission, preventing replay through the same or a different sealed carrier.
+Public transaction lookups accept either identity and project the canonical
+outer carrier.
+
 # Outstanding release gates
 
 - Re-run the already-green focused data-model/Core/Torii and source/model gates

@@ -451,12 +451,20 @@ ledger.
 
 ### Torii server-sent events
 
-`HttpClientTransport.newEventStreamClient()` opens SSE feeds with the same base
-URI, authentication headers, and observers as the HTTP client. The canonical
-`/v1/events/sse` and `/v1/contracts/events/sse` feeds are live-only and have no
-replay log. `ToriiEventStreamClient` therefore rejects every case variant of
-`Last-Event-ID` before dispatch for exactly those two paths; custom streams that
-provide replay may still receive the header through `ToriiEventStreamOptions`.
+`HttpClientTransport.newEventStreamClient()` does not synthesize an account
+identity; without auth-bearing default headers its requests remain fully
+anonymous and public-only. It still inherits the HTTP client's base URI,
+default headers, and observers. Use `newEventStreamClient(canonicalAuth)` with
+a configured `LocalSigningContext` to add a canonical account identity. The
+client generates all four canonical headers after path resolution, filter
+normalisation, and option-query assembly, so the signature is bound to the
+exact final URI;
+precomputed or partial canonical headers are rejected before dispatch. The
+canonical `/v1/events/sse` and `/v1/contracts/events/sse` feeds are live-only
+and have no replay log. `ToriiEventStreamClient` therefore rejects every case
+variant of `Last-Event-ID` before dispatch for exactly those two paths; custom
+streams that provide replay may still receive the header through
+`ToriiEventStreamOptions`.
 
 Raw listeners receive terminal `event: stream_error` frames. Call
 `ServerSentEvent.terminalStreamError()` before application-event projection to

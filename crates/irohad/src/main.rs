@@ -7713,7 +7713,15 @@ impl Iroha {
             // snapshot boundary, so install it exactly once here before replay.
             install_zk_config_before_kura_replay(&mut state, &config)?;
         }
-        if !emergency_fast {
+        if emergency_fast {
+            state
+                .validate_restored_governance(&config.gov)
+                .map_err(|error| {
+                    Report::new(StartError::InitKura).attach(format!(
+                        "emergency Fast restored governance is incompatible with configured governance: {error}"
+                    ))
+                })?;
+        } else {
             apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
         }
         if !emergency_fast && !provisional_imported_prefix {
@@ -15798,8 +15806,12 @@ mod tests {
         assert!(compact_source.contains(
             "lettelemetry=ifemergency_fast||!telemetry_profile.metrics_enabled(){iroha_core::telemetry::Telemetry::from(state_telemetry.clone())}else{"
         ));
+        assert!(
+            compact_source
+                .contains("ifemergency_fast{state.validate_restored_governance(&config.gov)")
+        );
         assert!(compact_source.contains(
-            "if!emergency_fast{apply_state_runtime_config_before_snapshot_auth(&mutstate,&config);}"
+            "}else{apply_state_runtime_config_before_snapshot_auth(&mutstate,&config);}"
         ));
         assert!(compact_source.contains(
             "letevents_buffer_capacity=ifemergency_fast{1}else{config.torii.events_buffer_capacity.get()};"

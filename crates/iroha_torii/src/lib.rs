@@ -12374,10 +12374,19 @@ async fn handler_transactions_history_get(
 async fn handler_contracts_activity_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(params): AxQuery<crate::routing::ContractActivityGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/contracts/activity",
+    )?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -12400,6 +12409,7 @@ async fn handler_contracts_activity_get(
     }
     routing::handle_v1_contracts_activity_get(
         app.state.clone(),
+        visibility.current_visibility(),
         crate::NoritoQuery(params),
         app.telemetry.clone(),
     )
@@ -12410,10 +12420,14 @@ async fn handler_contracts_activity_get(
 async fn handler_contracts_events_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility =
+        torii_dataspace_context_from_headers(&app, &headers, &method, &uri, "v1/contracts/events")?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -12437,6 +12451,7 @@ async fn handler_contracts_events_get(
     }
     routing::handle_v1_contracts_events_get(
         app.state.clone(),
+        visibility.current_visibility(),
         crate::NoritoQuery(params),
         app.telemetry.clone(),
     )
@@ -12447,10 +12462,19 @@ async fn handler_contracts_events_get(
 async fn handler_contracts_rollups_swaps_fills_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(params): AxQuery<crate::routing::ContractRollupSwapsFillsParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/contracts/rollups/swaps/fills",
+    )?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -12471,6 +12495,7 @@ async fn handler_contracts_rollups_swaps_fills_get(
     }
     routing::handle_v1_contracts_rollups_swaps_fills_get(
         app.state.clone(),
+        visibility.current_visibility(),
         crate::NoritoQuery(params),
         app.telemetry.clone(),
     )
@@ -12481,10 +12506,19 @@ async fn handler_contracts_rollups_swaps_fills_get(
 async fn handler_contracts_rollups_swaps_candles_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(params): AxQuery<crate::routing::ContractRollupSwapsCandlesParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/contracts/rollups/swaps/candles",
+    )?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -12505,6 +12539,7 @@ async fn handler_contracts_rollups_swaps_candles_get(
     }
     routing::handle_v1_contracts_rollups_swaps_candles_get(
         app.state.clone(),
+        visibility.current_visibility(),
         crate::NoritoQuery(params),
         app.telemetry.clone(),
     )
@@ -12515,10 +12550,19 @@ async fn handler_contracts_rollups_swaps_candles_get(
 async fn handler_contracts_rollups_uranai_markets_history_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(params): AxQuery<crate::routing::UranaiMarketHistoryParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/contracts/rollups/uranai/markets/history",
+    )?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -12539,6 +12583,7 @@ async fn handler_contracts_rollups_uranai_markets_history_get(
     }
     routing::handle_v1_contracts_rollups_uranai_markets_history_get(
         app.state.clone(),
+        visibility.current_visibility(),
         crate::NoritoQuery(params),
         app.telemetry.clone(),
     )
@@ -12549,10 +12594,19 @@ async fn handler_contracts_rollups_uranai_markets_history_get(
 async fn handler_contracts_rollups_trader_activity_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/contracts/rollups/trader/activity",
+    )?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -12574,6 +12628,7 @@ async fn handler_contracts_rollups_trader_activity_get(
     }
     routing::handle_v1_contracts_rollups_trader_activity_get(
         app.state.clone(),
+        visibility.current_visibility(),
         crate::NoritoQuery(params),
         app.telemetry.clone(),
     )
@@ -12584,10 +12639,19 @@ async fn handler_contracts_rollups_trader_activity_get(
 async fn handler_contracts_rollups_trader_account_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(params): AxQuery<crate::routing::TraderRollupAccountParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_dataspace_context_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        "v1/contracts/rollups/trader/account",
+    )?;
     let rate_limit_bypassed =
         limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
@@ -12607,6 +12671,7 @@ async fn handler_contracts_rollups_trader_account_get(
     }
     routing::handle_v1_contracts_rollups_trader_account_get(
         app.state.clone(),
+        visibility.current_visibility(),
         crate::NoritoQuery(params),
         app.telemetry.clone(),
     )
@@ -12620,10 +12685,19 @@ macro_rules! contracts_rollup_event_get_handlers {
             async fn $handler(
                 State(app): State<SharedAppState>,
                 headers: axum::http::HeaderMap,
+                method: axum::http::Method,
+                uri: axum::http::Uri,
                 axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
                 AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
             ) -> Result<Response, Error> {
                 let remote_ip = remote.ip();
+                let visibility = torii_dataspace_context_from_headers(
+                    &app,
+                    &headers,
+                    &method,
+                    &uri,
+                    $key_hint,
+                )?;
                 let rate_limit_bypassed =
                     limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
                 let limits = crate::routing::app_query_limits();
@@ -12643,6 +12717,7 @@ macro_rules! contracts_rollup_event_get_handlers {
                 }
                 routing::$routing_handler(
                     app.state.clone(),
+                    visibility.current_visibility(),
                     crate::NoritoQuery(params),
                     app.telemetry.clone(),
                 )
@@ -19998,6 +20073,26 @@ fn signed_transaction_hash_for_entrypoint(
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
+}
+fn transaction_entrypoint_matches_indexed_identity(
+    entrypoint: &TransactionEntrypoint,
+    indexed_identity: &HashOf<TransactionEntrypoint>,
+) -> bool {
+    if &entrypoint.hash() == indexed_identity {
+        return true;
+    }
+    matches!(
+        entrypoint,
+        TransactionEntrypoint::SealedReveal(reveal)
+            if &reveal.signed_transaction().hash_as_entrypoint() == indexed_identity
+    )
+}
+fn signed_transaction_carrier_matches_indexed_identity(
+    carrier_hash: &HashOf<TransactionEntrypoint>,
+    signed: &SignedTransaction,
+    indexed_identity: &HashOf<TransactionEntrypoint>,
+) -> bool {
+    carrier_hash == indexed_identity || &signed.hash_as_entrypoint() == indexed_identity
 }
 fn insert_transaction_submission_identity_headers(
     response: &mut Response,
@@ -48940,19 +49035,19 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, application_api;
             TRANSACTIONS_HISTORY_GET => public_get(handler_transactions_history_get);
-            CONTRACTS_ACTIVITY_GET => public_get(handler_contracts_activity_get);
-            CONTRACTS_EVENTS_GET => public_get(handler_contracts_events_get);
-            CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => public_get(handler_contracts_rollups_swaps_fills_get);
-            CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET => public_get(handler_contracts_rollups_swaps_candles_get);
-            CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET => public_get(handler_contracts_rollups_uranai_markets_history_get);
-            CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET => public_get(handler_contracts_rollups_trader_activity_get);
-            CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET => public_get(handler_contracts_rollups_trader_account_get);
-            CONTRACTS_ROLLUPS_INTENTS_GET => public_get(handler_contracts_rollups_intents_get);
-            CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET => public_get(handler_contracts_rollups_vault_positions_get);
-            CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET => public_get(handler_contracts_rollups_operators_status_get);
-            CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET => public_get(handler_contracts_rollups_margin_health_get);
-            CONTRACTS_ROLLUPS_RWA_LOTS_GET => public_get(handler_contracts_rollups_rwa_lots_get);
-            CONTRACTS_ROLLUPS_DLMM_HOOKS_GET => public_get(handler_contracts_rollups_dlmm_hooks_get);
+            CONTRACTS_ACTIVITY_GET => optional_canonical_signature_get(handler_contracts_activity_get);
+            CONTRACTS_EVENTS_GET => optional_canonical_signature_get(handler_contracts_events_get);
+            CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => optional_canonical_signature_get(handler_contracts_rollups_swaps_fills_get);
+            CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET => optional_canonical_signature_get(handler_contracts_rollups_swaps_candles_get);
+            CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET => optional_canonical_signature_get(handler_contracts_rollups_uranai_markets_history_get);
+            CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET => optional_canonical_signature_get(handler_contracts_rollups_trader_activity_get);
+            CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET => optional_canonical_signature_get(handler_contracts_rollups_trader_account_get);
+            CONTRACTS_ROLLUPS_INTENTS_GET => optional_canonical_signature_get(handler_contracts_rollups_intents_get);
+            CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET => optional_canonical_signature_get(handler_contracts_rollups_vault_positions_get);
+            CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET => optional_canonical_signature_get(handler_contracts_rollups_operators_status_get);
+            CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET => optional_canonical_signature_get(handler_contracts_rollups_margin_health_get);
+            CONTRACTS_ROLLUPS_RWA_LOTS_GET => optional_canonical_signature_get(handler_contracts_rollups_rwa_lots_get);
+            CONTRACTS_ROLLUPS_DLMM_HOOKS_GET => optional_canonical_signature_get(handler_contracts_rollups_dlmm_hooks_get);
             ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => public_get(handler_account_assets);
         );
         mount_account_assets_query(builder, app_state.clone(), transaction_max_content_len);

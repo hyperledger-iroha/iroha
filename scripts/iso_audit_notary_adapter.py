@@ -45,7 +45,7 @@ ANCHOR_DIGEST_FIELD = "anchor_sha256"
 ANCHOR_DIR = "anchors"
 ANCHOR_VERSION = 1
 PERSISTED_RECORD_DIGEST_FIELD = "record_sha256"
-PERSISTED_RECORD_VERSION = 1
+PERSISTED_RECORD_VERSION = 2
 RECORDS_DIR = "messages"
 MAX_BEARER_TOKEN_BYTES = 8192
 MAX_HTTP_URL_CHARS = 2048
@@ -101,7 +101,7 @@ DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
 MAX_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024
 INDEX_DIGEST_FIELD = "index_sha256"
 INDEX_FILE = "messages.index.json"
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 LATEST_ANCHOR_FILE = "latest.notary.json"
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_VERSION = 1
@@ -127,6 +127,8 @@ PERSISTED_RECORD_KEYS = {
     "rejection_reason_code",
     "context",
     "metadata",
+    "parties",
+    "replay_expires_at_ms",
     "status_history",
     PERSISTED_RECORD_DIGEST_FIELD,
 }
@@ -168,6 +170,21 @@ PERSISTED_METADATA_KEYS = {
     "payload_hash",
     "reference_snapshot_id",
     "embedded_signature_detected",
+}
+PERSISTED_PARTIES_KEYS = {
+    "originator_participant_id",
+    "counterparty_participant_id",
+    "admitting_participant_id",
+    "admitting_operator_key",
+    "originator_financial_id",
+    "counterparty_financial_id",
+    "pinned_profile_id",
+    "pinned_signature_policy",
+}
+PERSISTED_SIGNATURE_POLICIES = {
+    "record_only",
+    "reject_unsupported",
+    "require_verified",
 }
 PERSISTED_HISTORY_KEYS = {
     "status",
@@ -1713,6 +1730,27 @@ def _verify_persisted_metadata(
             raise AdapterError(f"{label}.{key} does not match audit index record")
 
 
+def _verify_persisted_parties(
+    value: Any,
+    label: str,
+    metadata: dict[str, Any],
+) -> None:
+    if type(value) is not dict:
+        raise AdapterError(f"{label} must be an object")
+    _require_exact_keys(value, PERSISTED_PARTIES_KEYS, label)
+    for key in PERSISTED_PARTIES_KEYS:
+        _require_nonsecret_clean_string(value.get(key), f"{label}.{key}")
+    policy = value.get("pinned_signature_policy")
+    if policy not in PERSISTED_SIGNATURE_POLICIES:
+        raise AdapterError(
+            f"{label}.pinned_signature_policy must be record_only, "
+            "reject_unsupported, or require_verified"
+        )
+    profile_id = metadata.get("profile_id")
+    if profile_id is not None and value.get("pinned_profile_id") != profile_id:
+        raise AdapterError(f"{label}.pinned_profile_id does not match metadata.profile_id")
+
+
 def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, int]:
     if type(value) is not dict:
         raise AdapterError(f"{label} must be an object")
@@ -1782,6 +1820,15 @@ def _verify_persisted_record_source(
         value.get("metadata"),
         f"{label}.metadata",
         index_record,
+    )
+    _verify_persisted_parties(
+        value.get("parties"),
+        f"{label}.parties",
+        value["metadata"],
+    )
+    _require_nonnegative_int(
+        value.get("replay_expires_at_ms"),
+        f"{label}.replay_expires_at_ms",
     )
     history = _require_json_array(value.get("status_history"), f"{label}.status_history")
     if not history:

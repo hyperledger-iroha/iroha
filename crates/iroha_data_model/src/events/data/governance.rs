@@ -36,9 +36,9 @@ mod model {
     pub enum GovernanceEvent {
         /// A governance proposal was submitted.
         ProposalSubmitted(GovernanceProposalSubmitted),
-        /// A governance proposal was approved by referendum.
+        /// A typed governance proposal was approved by Parliament.
         ProposalApproved(GovernanceProposalApproved),
-        /// A governance proposal was rejected by referendum.
+        /// A typed governance proposal was rejected by Parliament.
         ProposalRejected(GovernanceProposalRejected),
         /// A governance token lock was created for a referendum.
         LockCreated(GovernanceLockCreated),
@@ -52,7 +52,7 @@ mod model {
         BallotRejected(GovernanceBallotRejected),
         /// A referendum was opened for voting (status becomes Open).
         ReferendumOpened(GovernanceReferendumOpened),
-        /// A referendum was closed (e.g., finalized/decided).
+        /// A standalone referendum voting window was closed.
         ReferendumClosed(GovernanceReferendumClosed),
         /// A governance lock expired and was unlocked.
         LockUnlocked(GovernanceLockUnlocked),
@@ -602,7 +602,8 @@ pub mod prelude {
         GovernanceParliamentLifecycleTransitionApplied, GovernanceParliamentSelected,
         GovernanceProposalApproved, GovernanceProposalEnacted, GovernanceProposalRejected,
         GovernanceProposalSubmitted, GovernanceReferendumClosed, GovernanceReferendumDecided,
-        GovernanceReferendumOpened, GovernanceSlashReason, GovernanceThresholdKeyLifecycleAppliedV1,
+        GovernanceReferendumOpened, GovernanceSlashReason,
+        GovernanceThresholdKeyLifecycleAppliedV1,
     };
 }
 
@@ -631,15 +632,13 @@ mod tests {
 
     #[test]
     fn standalone_referendum_decision_roundtrips_exact_identity_and_tally() {
-        let event = GovernanceEvent::ReferendumDecided(
-            GovernanceReferendumDecided {
-                referendum_id: "0XAbCd-referendum".to_owned(),
-                approve: u128::MAX,
-                reject: u128::from(u64::MAX) + 1,
-                abstain: 17,
-                approved: true,
-            },
-        );
+        let event = GovernanceEvent::ReferendumDecided(GovernanceReferendumDecided {
+            referendum_id: "0XAbCd-referendum".to_owned(),
+            approve: u128::MAX,
+            reject: u128::from(u64::MAX) + 1,
+            abstain: 17,
+            approved: true,
+        });
         assert_eq!(
             event.encode().get(..4),
             Some(28_u32.to_le_bytes().as_slice()),

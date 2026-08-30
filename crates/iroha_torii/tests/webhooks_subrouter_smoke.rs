@@ -16,11 +16,10 @@ use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 #[tokio::test]
-async fn webhooks_endpoints_exposed() {
+async fn webhooks_endpoints_exposed_by_default() {
     // Minimal Torii setup
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.webhooks_enabled = true;
     cfg.torii.operator_signatures.enabled = true;
     cfg.torii.operator_signatures.allow_node_key = true;
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -104,9 +103,10 @@ async fn webhooks_endpoints_exposed() {
     ));
 }
 #[tokio::test]
-async fn webhooks_endpoints_disabled_by_default() {
+async fn webhooks_endpoints_hidden_when_disabled() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.webhooks_enabled = false;
     cfg.torii.operator_signatures.enabled = true;
     cfg.torii.operator_signatures.allow_node_key = true;
     let (kiso, _child) = KisoHandle::start(cfg.clone());

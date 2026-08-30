@@ -32,6 +32,7 @@ class HttpClientTransportGovernanceTest {
     fun getGovernanceContractParsesResponse() {
         val contractAddress = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         val owner = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        val u64Max = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -51,10 +52,17 @@ class HttpClientTransportGovernanceTest {
                     "pending_owner": "parliament",
                     "parliament_delegated": true,
                     "active_code_hash_hex": "${"77".repeat(32)}",
-                    "revision": 7,
-                    "emergency_hold": null
+                    "revision": $u64Max,
+                    "emergency_hold": {
+                      "incident_digest_hex": "${"11".repeat(32)}",
+                      "proposal_content_id_hex": "${"22".repeat(32)}",
+                      "governance_attempt_id_hex": "${"33".repeat(32)}",
+                      "reason": "incident response",
+                      "imposed_at_height": ${u64Max - BigInteger.ONE},
+                      "expires_at_height": $u64Max
+                    }
                   },
-                  "emergency_hold_active": false,
+                  "emergency_hold_active": true,
                   "code_hash_hex": "${"77".repeat(32)}",
                   "abi_hash_hex": "${"88".repeat(32)}",
                   "public_entrypoints": ["transfer", "view_balance"]
@@ -83,9 +91,11 @@ class HttpClientTransportGovernanceTest {
         assertEquals("router", response.dataspace)
         assertEquals("77".repeat(32), response.codeHashHex)
         assertEquals(1, response.lifecycle?.version)
-        assertEquals(7L, response.lifecycle?.revision)
+        assertEquals(u64Max, response.lifecycle?.revision)
         assertEquals("parliament", response.lifecycle?.pendingOwner)
         assertEquals("77".repeat(32), response.lifecycle?.activeCodeHashHex)
+        assertEquals(u64Max - BigInteger.ONE, response.lifecycle?.emergencyHold?.imposedAtHeight)
+        assertEquals(u64Max, response.lifecycle?.emergencyHold?.expiresAtHeight)
         assertEquals(listOf("transfer", "view_balance"), response.publicEntrypoints)
 
         val request = assertNotNull(executor.lastRequest)
@@ -137,6 +147,7 @@ class HttpClientTransportGovernanceTest {
                 "[\"view_balance\", \"transfer\"]",
             ),
             active.replace("\"version\": 1", "\"version\": 2"),
+            active.replace("\"revision\": 7", "\"revision\": 18446744073709551616"),
             """{"found":false,"contract_address":"$contractAddress","dataspace":"router","active":null}""",
         )
         for (payload in invalid) {

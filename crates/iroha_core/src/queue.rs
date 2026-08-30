@@ -5712,7 +5712,7 @@ impl Queue {
             if excluded_entrypoint_hashes.contains(&tx.as_accepted().hash_as_entrypoint()) {
                 continue;
             }
-            if routing_state_view.transactions.get(&hash).is_some() {
+            if tx.is_in_blockchain(&routing_state_view) {
                 continue;
             }
             let routing_plan = match self.immutable_queued_routing_plan_in_view(
@@ -11026,7 +11026,7 @@ impl Queue {
             }
             let has_materialized_owner = self.txs.contains_key(&hash);
             let has_durable_reservation_owner = reservation_owner.is_present();
-            let state_committed = state_view.transactions.get(&hash).is_some();
+            let state_committed = accepted.has_committed_replay_identity(&state_view);
             // A release terminal outcome can become Complete only after Queue
             // durably forgets its release owner. The post-Complete crash image
             // therefore reaches this branch with the QueuePlan record as its
@@ -14646,7 +14646,7 @@ impl Queue {
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
         let hash = tx.hash_as_entrypoint();
-        if state_view.transactions.get(&hash).is_some() {
+        if tx.has_committed_replay_identity(&state_view) {
             return Ok(None);
         }
         let _queue_guard = self.push_remove_lock.lock();
@@ -14726,7 +14726,7 @@ impl Queue {
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
         let tx_hash = tx.hash_as_entrypoint();
-        if state_view.transactions.get(&tx_hash).is_some() {
+        if tx.has_committed_replay_identity(&state_view) {
             return false;
         }
         let _queue_guard = self.push_remove_lock.lock();
@@ -14842,13 +14842,13 @@ impl Queue {
             return false;
         };
         let tx = entry.value().as_ref();
-        if state.has_committed_entrypoint(hash) {
+        let state_view = state.view();
+        if tx.is_in_blockchain(&state_view) {
             return false;
         }
         if !self.is_expired(tx.as_accepted()) {
             return true;
         }
-        let state_view = state.view();
         match self.global_admission_registry_match_for_hash(hash, &state_view) {
             Ok(Some((
                 _,
@@ -15023,7 +15023,7 @@ impl Queue {
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
         let tx_hash = tx.hash_as_entrypoint();
-        if state_view.transactions.get(&tx_hash).is_some() {
+        if tx.has_committed_replay_identity(&state_view) {
             return Err(Failure {
                 tx: tx.into(),
                 err: Error::InBlockchain,
@@ -16753,7 +16753,7 @@ impl Queue {
                 "Pushing to the queue in batch"
             );
             let hash = tx.hash_as_entrypoint();
-            if state_view.transactions.get(&hash).is_some() {
+            if tx.has_committed_replay_identity(&state_view) {
                 precheck_failure = Some(Failure {
                     tx: tx.into(),
                     err: Error::InBlockchain,
@@ -16862,7 +16862,8 @@ impl Queue {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(tx.entrypoint());
         let hash = tx.hash_as_entrypoint();
-        if state.has_committed_entrypoint(hash) {
+        let state_view = state.view();
+        if tx.has_committed_replay_identity(&state_view) {
             return Err(Failure {
                 tx: Box::new(tx),
                 err: Error::InBlockchain,
@@ -16875,7 +16876,6 @@ impl Queue {
                 err: Error::Expired,
             });
         }
-        let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
         let routing_plan = match self.resolve_precomputed_routing_plan_with_view(
             checked.as_accepted(),

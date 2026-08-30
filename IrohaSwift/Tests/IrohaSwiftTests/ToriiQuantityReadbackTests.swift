@@ -73,8 +73,9 @@ final class ToriiQuantityReadbackTests: XCTestCase {
             "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             "created_at":"2025-01-01T00:00:00Z",
             "kind":"\(kind)",
-            "r#box":{
-                "scale":"0x00",
+            "box":{
+                "encoded":"0x00",
+                "framed_sha256":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "json":{
                     "kind":"\(kind)",
                     "payload":\(payload),

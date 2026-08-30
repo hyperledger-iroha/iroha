@@ -221,7 +221,22 @@ class HttpClientTransport(
         if (lazyScheduler.isInitialized()) scheduler.shutdownNow()
     }
     fun newNoritoRpcClient(): NoritoRpcClient = config.toNoritoRpcClient(executor)
-    fun newEventStreamClient(): ToriiEventStreamClient = ToriiEventStreamClient.builder().setBaseUri(config.baseUri()).setTransportExecutor(executor).defaultHeaders(config.defaultHeaders()).observers(config.observers()).build()
+    /** Creates an event-stream client without a canonical account identity. */
+    fun newEventStreamClient(): ToriiEventStreamClient = newEventStreamClientBuilder().build()
+
+    /** Creates an event-stream client that signs each exact final request URI. */
+    fun newEventStreamClient(canonicalAuth: ToriiCanonicalRequestAuth): ToriiEventStreamClient =
+        newEventStreamClientBuilder()
+            .canonicalRequestAuth(config.requireLocalSigningContext(), canonicalAuth)
+            .build()
+
+    private fun newEventStreamClientBuilder(): ToriiEventStreamClient.Builder =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(config.baseUri())
+            .setTransportExecutor(executor)
+            .defaultHeaders(config.defaultHeaders())
+            .observers(config.observers())
+
     fun newSorafsGatewayClient(): SorafsGatewayClient = newSorafsGatewayClient(config.sorafsGatewayUri())
     fun newSorafsGatewayClient(baseUri: URI): SorafsGatewayClient = SorafsGatewayClient(executor = executor, baseUri = baseUri, timeout = config.requestTimeout(), defaultHeaders = config.defaultHeaders(), observers = config.observers())
     fun newDaToriiClient(): DaToriiClient = DaToriiClient.builder()

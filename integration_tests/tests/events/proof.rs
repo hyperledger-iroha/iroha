@@ -114,7 +114,7 @@ fn proof_network_builder() -> NetworkBuilder {
     let (_, rejected_vk) = rejected_halo2_attachment_and_registration();
     NetworkBuilder::new()
         .with_config_layer(|layer| {
-            // Enable Halo2 verification explicitly; default configs keep it off so operators must opt in.
+            // Pin Halo2 verification on for this proof-event fixture; it is also the shipping default.
             layer.write(["zk", "halo2", "enabled"], true).write(
                 ["confidential", "verify_timeout_ms"],
                 PROOF_VERIFY_TIMEOUT_MS,

@@ -14840,7 +14840,16 @@ impl Client {
         method: HttpMethod,
         url: Url,
     ) -> DefaultRequestBuilder {
-        let headers = self.headers.iter().filter(|(name, _)| {
+        let headers = self.headers_without_canonical_account_auth();
+        let mut builder = DefaultRequestBuilder::new(method, url).headers(headers);
+        if self.torii_request_timeout != Duration::ZERO {
+            builder = builder.timeout(self.torii_request_timeout);
+        }
+        builder
+    }
+    fn headers_without_canonical_account_auth(&self) -> HashMap<String, String> {
+        let mut headers = self.headers.clone();
+        headers.retain(|name, _| {
             ![
                 HEADER_ACCOUNT,
                 HEADER_SIGNATURE,
@@ -14851,11 +14860,7 @@ impl Client {
             .iter()
             .any(|reserved| name.eq_ignore_ascii_case(reserved))
         });
-        let mut builder = DefaultRequestBuilder::new(method, url).headers(headers);
-        if self.torii_request_timeout != Duration::ZERO {
-            builder = builder.timeout(self.torii_request_timeout);
-        }
-        builder
+        headers
     }
     fn send_builder(&self, builder: DefaultRequestBuilder) -> Result<Response<Vec<u8>>> {
         let request = builder.build()?;
@@ -15012,6 +15017,22 @@ impl Client {
         url: Url,
         body: Vec<u8>,
     ) -> Result<DefaultRequestBuilder> {
+        let headers = self.account_signed_headers(&method, &url, &body)?;
+        let mut builder = DefaultRequestBuilder::new(method, url).headers(headers);
+        if self.torii_request_timeout != Duration::ZERO {
+            builder = builder.timeout(self.torii_request_timeout);
+        }
+        if !body.is_empty() {
+            builder = builder.body(body);
+        }
+        Ok(builder)
+    }
+    fn account_signed_headers(
+        &self,
+        method: &HttpMethod,
+        url: &Url,
+        body: &[u8],
+    ) -> Result<HashMap<String, String>> {
         let timestamp_ms: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -15021,9 +15042,9 @@ impl Client {
         let nonce = Self::signed_request_nonce()?;
         let message = Self::exact_network_request_message(
             &self.network_id,
-            &method,
-            &url,
-            &body,
+            method,
+            url,
+            body,
             timestamp_ms,
             &nonce,
         )?;
@@ -15032,16 +15053,12 @@ impl Client {
         let account = canonical_request_account_header_value(&self.account)?;
         let signature_b64 = canonical_request_signature_header_value(&signature)?;
         let timestamp = canonical_request_timestamp_header_value(timestamp_ms)?;
-        let mut builder = self
-            .request_without_canonical_account_auth(method, url)
-            .header(HEADER_ACCOUNT, &account)
-            .header(HEADER_SIGNATURE, &signature_b64)
-            .header(HEADER_TIMESTAMP_MS, &timestamp)
-            .header(HEADER_NONCE, &nonce);
-        if !body.is_empty() {
-            builder = builder.body(body);
-        }
-        Ok(builder)
+        let mut headers = self.headers_without_canonical_account_auth();
+        headers.insert(HEADER_ACCOUNT.to_owned(), account);
+        headers.insert(HEADER_SIGNATURE.to_owned(), signature_b64);
+        headers.insert(HEADER_TIMESTAMP_MS.to_owned(), timestamp);
+        headers.insert(HEADER_NONCE.to_owned(), nonce);
+        Ok(headers)
     }
     fn build_sorafs_gateway_fetch_config(
         &self,
@@ -16806,25 +16823,31 @@ impl Client {
     ) -> Result<AsyncEventStream> {
         events_api::AsyncEventStream::new(self.events_handler(event_filters)?).await
     }
-    /// Constructs an Events API handler. With it, you can use any WS client you want.
+    /// Constructs an account-authenticated Events API handler for the exact WebSocket upgrade.
+    /// With it, you can use any WS client you want.
     ///
     /// # Errors
-    /// Fails if handler construction fails
+    /// Fails if canonical account signing or handler construction fails.
     #[inline]
     pub fn events_handler(
         &self,
         event_filters: impl IntoIterator<Item = impl Into<EventFilterBox>>,
     ) -> Result<events_api::flow::Init> {
+        let url = join_torii_url(&self.torii_url, torii_uri::SUBSCRIPTION);
+        let headers = self.account_signed_headers(&HttpMethod::GET, &url, &[])?;
         events_api::flow::Init::new(
             event_filters.into_iter().map(Into::into).collect(),
-            self.headers.clone(),
-            join_torii_url(&self.torii_url, torii_uri::SUBSCRIPTION),
+            headers,
+            url,
         )
     }
-    /// Connect (through `WebSocket`) to listen for `Iroha` blocks
+    /// Connect (through `WebSocket`) to listen for full `Iroha` signed blocks.
+    ///
+    /// The configured account must hold `CanReadAllLedgerData`. The WebSocket
+    /// upgrade is authenticated with a fresh canonical account signature.
     ///
     /// # Errors
-    /// - Forwards from [`Self::events_handler`]
+    /// - Forwards from [`Self::blocks_handler`]
     /// - Forwards from `blocks_api::BlockIterator::new`
     pub fn listen_for_blocks(
         &self,
@@ -16832,25 +16855,30 @@ impl Client {
     ) -> Result<impl Iterator<Item = Result<SignedBlock>>> {
         blocks_api::BlockIterator::new(self.blocks_handler(height)?)
     }
-    /// Connect asynchronously (through `WebSocket`) to listen for `Iroha` blocks
+    /// Connect asynchronously (through `WebSocket`) to listen for full `Iroha` signed blocks.
+    ///
+    /// The configured account must hold `CanReadAllLedgerData`. The WebSocket
+    /// upgrade is authenticated with a fresh canonical account signature.
     ///
     /// # Errors
-    /// - Forwards from [`Self::events_handler`]
-    /// - Forwards from `blocks_api::BlockIterator::new`
+    /// - Forwards from [`Self::blocks_handler`]
+    /// - Forwards from `blocks_api::AsyncBlockStream::new`
     pub async fn listen_for_blocks_async(&self, height: NonZeroU64) -> Result<AsyncBlockStream> {
         blocks_api::AsyncBlockStream::new(self.blocks_handler(height)?).await
     }
-    /// Construct a handler for Blocks API. With this handler you can use any WS client you want.
+    /// Construct a handler for the global-reader-only Blocks API.
+    ///
+    /// The configured account must hold `CanReadAllLedgerData`. The handler
+    /// carries a fresh canonical account signature for the exact WebSocket
+    /// upgrade target.
     ///
     /// # Errors
-    /// - if handler construction fails
+    /// - if canonical account signing or handler construction fails
     #[inline]
     pub fn blocks_handler(&self, height: NonZeroU64) -> Result<blocks_api::flow::Init> {
-        blocks_api::flow::Init::new(
-            height,
-            self.headers.clone(),
-            join_torii_url(&self.torii_url, torii_uri::BLOCKS_STREAM),
-        )
+        let url = join_torii_url(&self.torii_url, torii_uri::BLOCKS_STREAM);
+        let headers = self.account_signed_headers(&HttpMethod::GET, &url, &[])?;
+        blocks_api::flow::Init::new(height, headers, url)
     }
     /// Get value of config on peer
     ///
@@ -19867,7 +19895,8 @@ impl Client {
         get_sorafs_moderation_ballot_events(filter: SorafsModerationBallotEventsFilter)
             => SorafsEndpoint::anonymous_json_get("v1/sorafs/moderation/ballots/events"),
     );
-    /// Build an exact caller-signed native `SoraFS` moderation transaction.
+    /// Build an exact caller-signed native `SoraFS` moderation transaction with
+    /// quorum-certified `QueuePlan` admission.
     /// # Errors
     /// Returns an error if the configured signing key cannot sign the exact V1 envelope.
     pub fn try_build_sorafs_moderation_transaction<I>(
@@ -19883,7 +19912,8 @@ impl Client {
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([instruction])
-        .with_metadata(Metadata::default());
+        .with_metadata(Metadata::default())
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
         builder.set_ttl(SORAFS_MODERATION_TRANSACTION_TTL);
         self.try_sign_transaction(builder)
             .wrap_err("sign exact caller-owned native SoraFS moderation transaction")
@@ -23065,6 +23095,10 @@ impl Client {
     }
     /// GET `/v1/explorer/accounts/{account_id}/qr` — share-ready QR metadata.
     ///
+    /// The exact GET is canonically signed so Torii may include a restricted
+    /// dataspace visible to this client account; public dataspaces remain
+    /// readable through clients that intentionally issue anonymous requests.
+    ///
     /// # Errors
     /// Returns an error if the account id fails validation, the HTTP request fails,
     /// the response is non-OK, or JSON deserialization fails.
@@ -23078,7 +23112,7 @@ impl Client {
         let path = format!("v1/explorer/accounts/{trimmed}/qr");
         let url = join_torii_url(&self.torii_url, &path);
         let builder = self
-            .default_request(HttpMethod::GET, url)
+            .account_signed_request(HttpMethod::GET, url, Vec::new())?
             .header("Accept", APPLICATION_JSON);
         let resp = self.send_builder(builder)?;
         let payload = Self::parse_json_ok_response(&resp, "explorer account qr request")?;
@@ -29612,6 +29646,38 @@ mod tests {
             sorafs_rollout_phase: SorafsRolloutPhase::Canary,
         }
     }
+    #[derive(Debug)]
+    struct CapturedWebSocketRequestBuilder {
+        method: HttpMethod,
+        url: Url,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    }
+    impl crate::http::RequestBuilder for CapturedWebSocketRequestBuilder {
+        fn new(method: HttpMethod, url: Url) -> Self {
+            Self {
+                method,
+                url,
+                headers: Vec::new(),
+                body: Vec::new(),
+            }
+        }
+        fn param<K: AsRef<str>, V: ToString + ?Sized>(mut self, key: K, value: &V) -> Self {
+            self.url
+                .query_pairs_mut()
+                .append_pair(key.as_ref(), &value.to_string());
+            self
+        }
+        fn header<N: AsRef<str>, V: ToString + ?Sized>(mut self, name: N, value: &V) -> Self {
+            self.headers
+                .push((name.as_ref().to_owned(), value.to_string()));
+            self
+        }
+        fn body(mut self, data: Vec<u8>) -> Self {
+            self.body = data;
+            self
+        }
+    }
     #[test]
     fn events_ws_flow_uses_framed_norito() {
         use crate::data_model::events::{
@@ -29694,6 +29760,87 @@ mod tests {
         let error = canonical_norito_websocket_headers(resume)
             .expect_err("SSE resume header must fail on WebSocket");
         assert!(error.to_string().contains("Last-Event-ID is unsupported"));
+    }
+    #[test]
+    fn events_handler_canonically_authenticates_exact_stream_upgrade() {
+        use crate::data_model::events::{
+            EventFilterBox,
+            pipeline::{PipelineEventFilterBox, TransactionEventFilter},
+        };
+
+        let mut client = client_with_static_canonical_auth_headers();
+        client
+            .headers
+            .insert("X-Iroha-Test".to_owned(), "preserved".to_owned());
+        let filters = vec![EventFilterBox::Pipeline(
+            PipelineEventFilterBox::Transaction(TransactionEventFilter::default()),
+        )];
+        let init = client
+            .events_handler(filters)
+            .expect("construct authenticated events handler");
+        let init_data = <events_api::flow::Init as crate::http::ws::conn_flow::Init<
+            CapturedWebSocketRequestBuilder,
+        >>::init(init);
+        let request = init_data.req;
+        let snapshot = RequestSnapshot {
+            method: request.method,
+            url: request.url,
+            headers: request.headers,
+            body: request.body,
+            timeout: None,
+            max_response_bytes: 0,
+            direct_loopback: false,
+        };
+
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.scheme(), "ws");
+        assert_eq!(snapshot.url.path(), torii_uri::SUBSCRIPTION);
+        assert_eq!(snapshot.url.query(), None);
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, value)| name == "X-Iroha-Test" && value == "preserved"),
+            "unrelated configured headers must survive canonical signing",
+        );
+        assert_canonical_account_signed_request(&client, &snapshot);
+    }
+    #[test]
+    fn blocks_handler_canonically_authenticates_exact_stream_upgrade() {
+        let mut client = client_with_static_canonical_auth_headers();
+        client
+            .headers
+            .insert("X-Iroha-Test".to_owned(), "preserved".to_owned());
+        let height = NonZeroU64::new(1).expect("height");
+        let init = client
+            .blocks_handler(height)
+            .expect("construct authenticated blocks handler");
+        let init_data = <blocks_api::flow::Init as crate::http::ws::conn_flow::Init<
+            CapturedWebSocketRequestBuilder,
+        >>::init(init);
+        let request = init_data.req;
+        let snapshot = RequestSnapshot {
+            method: request.method,
+            url: request.url,
+            headers: request.headers,
+            body: request.body,
+            timeout: None,
+            max_response_bytes: 0,
+            direct_loopback: false,
+        };
+
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.scheme(), "ws");
+        assert_eq!(snapshot.url.path(), torii_uri::BLOCKS_STREAM);
+        assert_eq!(snapshot.url.query(), None);
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, value)| name == "X-Iroha-Test" && value == "preserved"),
+            "unrelated configured headers must survive canonical signing",
+        );
+        assert_canonical_account_signed_request(&client, &snapshot);
     }
     #[test]
     fn events_websocket_rejects_empty_filter_set_before_connecting() {
@@ -31652,6 +31799,7 @@ mod tests {
             }),
             "request should set Accept: application/json"
         );
+        assert_canonical_account_signed_request(&client, &snapshot);
     }
     #[test]
     fn txs_same_except_for_nonce_have_different_hashes() {
@@ -34587,6 +34735,11 @@ mod tests {
         let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
             .expect("request body is a versioned SignedTransaction");
         assert_eq!(decoded.hash(), expected_hash);
+        assert_eq!(
+            decoded.admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "strict native SoraFS routes must carry an unambiguous signature-bound QueuePlanSynced intent"
+        );
     }
     macro_rules! assert_sorafs_routes {
         ($($route:expr => $path:expr),+ $(,)?) => {
@@ -34615,6 +34768,10 @@ mod tests {
             assert_eq!(
                 transaction.time_to_live(),
                 Some(SORAFS_MODERATION_TRANSACTION_TTL)
+            );
+            assert_eq!(
+                transaction.admission_intent(),
+                TransactionAdmissionIntent::QueuePlanSynced
             );
             assert!(transaction.nonce().is_none());
             assert!(transaction.metadata().is_empty());

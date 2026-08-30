@@ -726,10 +726,9 @@ mod tests {
         };
 
         let mut changed = runtime.clone();
-        changed.hydration_concurrency = NonZeroUsize::new(
-            soracloud_runtime_defaults::HYDRATION_CONCURRENCY.get() + 1,
-        )
-        .expect("changed hydration-worker count is nonzero");
+        changed.hydration_concurrency =
+            NonZeroUsize::new(soracloud_runtime_defaults::HYDRATION_CONCURRENCY.get() + 1)
+                .expect("changed hydration-worker count is nonzero");
         assert_rejected(&changed);
 
         let mut changed = runtime.clone();

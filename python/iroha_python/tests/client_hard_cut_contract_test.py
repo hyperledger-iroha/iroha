@@ -10,7 +10,18 @@ import requests
 from iroha_python import (
     ExplorerCursorMeta,
     ExplorerRwasPage,
+    ToriiCanonicalRequestAuth,
     ToriiClient,
+    canonical_network_request_signature_message,
+)
+
+from .helpers import RecordingSession, StubResponse
+
+_CANONICAL_ACCOUNT_ID = (
+    "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+)
+_CANONICAL_NETWORK_ID = (
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 )
 
 
@@ -26,6 +37,7 @@ class FakeSession:
                 "path": urlsplit(url).path,
                 "params": kwargs.get("params"),
                 "data": kwargs.get("data"),
+                "headers": dict(kwargs.get("headers") or {}),
             }
         )
         if not self.responses:
@@ -107,6 +119,58 @@ def test_explorer_rwa_list_uses_strict_cursor_contract() -> None:
         "owned_by": "account",
         "domain": "commodities",
     }
+    assert not any(
+        str(name).lower().startswith("x-iroha-")
+        for name in session.calls[0]["headers"]
+    )
+
+
+def test_explorer_rwa_list_optionally_signs_exact_final_uri() -> None:
+    cursor = base64.urlsafe_b64encode(b"signed explorer cursor").rstrip(b"=").decode()
+    payload = {
+        "pagination": {"limit": 2, "next_cursor": None, "has_more": False},
+        "items": [],
+    }
+    session = RecordingSession(StubResponse(payload=payload))
+    captured: list[bytes] = []
+    auth = ToriiCanonicalRequestAuth(
+        network_id=_CANONICAL_NETWORK_ID,
+        account_id=_CANONICAL_ACCOUNT_ID,
+        signer=lambda message: captured.append(message) or b"\x5a" * 64,
+        timestamp_ms=4_102_444_801_000,
+        nonce="python-explorer-final-uri",
+    )
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        canonical_request_auth=auth,
+        max_retries=3,
+    )
+
+    page = client.list_explorer_rwas_typed(
+        cursor=cursor,
+        limit=2,
+        domain="commodities",
+    )
+
+    assert page.items == []
+    call = session.calls[0]
+    prepared_url = str(call["url"])
+    prepared = urlsplit(prepared_url)
+    exact_target = prepared.path + (f"?{prepared.query}" if prepared.query else "")
+    assert prepared.query == f"cursor={cursor}&limit=2&domain=commodities"
+    assert captured == [
+        canonical_network_request_signature_message(
+            auth.network_id,
+            "GET",
+            exact_target,
+            b"",
+            timestamp_ms=auth.timestamp_ms or 0,
+            nonce=auth.nonce or "",
+        )
+    ]
+    assert "X-Iroha-Account" in call["headers"]
+    assert "X-Iroha-Signature" in call["headers"]
 
 
 @pytest.mark.parametrize("limit", [0, 101, True, 1.5])

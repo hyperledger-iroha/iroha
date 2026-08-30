@@ -1710,6 +1710,52 @@ seiyaku LifecycleAba {
         validate_contract_subject_bindings(&world).expect("validated subject ledger");
     }
     #[test]
+    fn emergency_hold_blocks_only_its_exact_interval_and_remains_auditable_after_expiry() {
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &authority,
+            71,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let mut binding = ContractSubjectBinding::new_direct(&address, authority);
+        binding.lifecycle.emergency_hold =
+            Some(iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                incident_digest: [0xC1; 32],
+                proposal_content_id: [0xC2; 32],
+                governance_attempt_id: [0xC3; 32],
+                reason: "bounded incident containment".to_owned(),
+                imposed_at_height: 8,
+                expires_at_height: 10,
+            });
+        let mut world = World::default();
+        world
+            .contract_subject_bindings
+            .insert(address.clone(), binding);
+        let view = world.view();
+
+        assert!(ensure_contract_execution_allowed(&view, &address, 7).is_ok());
+        for height in [8, 9] {
+            let error = ensure_contract_execution_allowed(&view, &address, height)
+                .expect_err("hold interval must suspend execution");
+            assert!(error.contains("held by Parliament"));
+            assert!(error.contains("through block 9"));
+        }
+        assert!(ensure_contract_execution_allowed(&view, &address, 10).is_ok());
+        assert!(
+            view.contract_subject_bindings()
+                .get(&address)
+                .expect("retained lifecycle")
+                .lifecycle
+                .emergency_hold
+                .is_some(),
+            "expiry must not erase the hold before its certified retrospective"
+        );
+    }
+    #[test]
     fn lifecycle_lookup_rejects_active_index_drift() {
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let address = ContractAddress::derive(

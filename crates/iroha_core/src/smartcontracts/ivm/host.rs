@@ -2523,6 +2523,9 @@ impl HostExecutionArtifacts {
             &self.durable_state_authorizations,
         )?;
         Self::seed_queued_call_hash_if_missing(tx, &self.queued)?;
+        if self.confidential_gas_delta > 0 {
+            tx.record_confidential_gas_delta(self.confidential_gas_delta);
+        }
         let executor = tx.world.executor.clone();
         for queued in &self.queued {
             if let Some(authorization) = self.entrypoint_authorization.as_ref() {
@@ -2564,9 +2567,6 @@ impl HostExecutionArtifacts {
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
         )?;
-        if self.confidential_gas_delta > 0 {
-            tx.record_confidential_gas_delta(self.confidential_gas_delta);
-        }
         Self::record_completed_axt_states(tx, self.completed_axt)?;
         if !self.durable_state_overlay.is_empty() {
             for (path, value) in self.durable_state_overlay {
@@ -5104,6 +5104,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             &self.durable_state_authorizations,
         )?;
         HostExecutionArtifacts::seed_queued_call_hash_if_missing(tx, &queued)?;
+        let confidential_gas_delta =
+            crate::gas::sum_confidential_gas_costs(queued.iter().map(|queued| &queued.instruction));
+        if confidential_gas_delta > 0 {
+            tx.record_confidential_gas_delta(confidential_gas_delta);
+        }
         let executor = tx.world.executor.clone();
         for queued in &queued {
             HostExecutionArtifacts::validate_queued_authorization(&tx.world, queued)?;
@@ -5126,14 +5131,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
         )?;
-        if !queued.is_empty() {
-            let delta = crate::gas::sum_confidential_gas_costs(
-                queued.iter().map(|queued| &queued.instruction),
-            );
-            if delta > 0 {
-                tx.record_confidential_gas_delta(delta);
-            }
-        }
         self.flush_completed_axt(tx)?;
         self.flush_durable_state(tx)?;
         Ok(queued
@@ -23283,6 +23280,71 @@ seiyaku Callee {
             .clone();
         assert_eq!(source_balance.as_ref(), &Quantity::from(4_u32));
         assert_eq!(recipient_balance.as_ref(), &Quantity::from(1_u32));
+    }
+    #[test]
+    fn rejected_queued_confidential_instruction_retains_host_artifact_gas() {
+        let authority = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let fixture =
+            crate::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add", [0_u8; 32]);
+        let proof = fixture.proof_box("halo2/ipa");
+        let instruction: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(
+            iroha_data_model::proof::ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                proof,
+                iroha_data_model::proof::VerifyingKeyId::new(
+                    "halo2/ipa",
+                    "missing-host-artifact-vk",
+                ),
+            ),
+        )
+        .into();
+        let confidential_gas_delta = crate::gas::confidential_gas_cost(&instruction);
+        assert!(confidential_gas_delta > 0);
+        let artifacts = HostExecutionArtifacts {
+            queued: vec![QueuedInstruction {
+                instruction: instruction.clone(),
+                authority: authority.clone(),
+                contract_runtime_context: None,
+                entrypoint_authorization: None,
+            }],
+            entrypoint_authorization: None,
+            confidential_gas_delta,
+            completed_axt: Vec::new(),
+            durable_state_overlay: BTreeMap::new(),
+            durable_state_authorizations: BTreeMap::new(),
+        };
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+
+        artifacts
+            .apply_to_transaction(&mut transaction, &authority)
+            .expect_err("missing verifying key must reject the queued proof");
+
+        assert_eq!(transaction.zk_confidential_ops_in_tx, 1);
+        assert_eq!(transaction.zk_verify_calls_in_tx, 1);
+        assert_eq!(
+            transaction.confidential_gas_used_in_tx, confidential_gas_delta,
+            "host-artifact gas must be retained before queued execution can reject"
+        );
+        drop(transaction);
+
+        let mut mutable_host = CoreHost::new(authority.clone());
+        mutable_host.queue_instruction(instruction);
+        let mut mutable_host_transaction = block.transaction();
+        mutable_host
+            .apply_queued(&mut mutable_host_transaction, &authority)
+            .expect_err("missing verifying key must reject the mutable host queue");
+        assert_eq!(mutable_host_transaction.zk_confidential_ops_in_tx, 1);
+        assert_eq!(mutable_host_transaction.zk_verify_calls_in_tx, 1);
+        assert_eq!(
+            mutable_host_transaction.confidential_gas_used_in_tx, confidential_gas_delta,
+            "mutable-host gas must be retained before queued execution can reject"
+        );
     }
     #[test]
     fn host_execution_artifacts_reject_foreign_durable_path_before_any_write() {

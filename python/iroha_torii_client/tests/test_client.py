@@ -5353,6 +5353,47 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     assert call["url"].endswith(f"/v1/explorer/accounts/{quote(CANONICAL_OWNER, safe='')}/qr")
     assert call["params"] == {}
     assert call["headers"]["Accept"] == "application/json"
+    assert all(not name.lower().startswith("x-iroha-") for name in call["headers"])
+
+
+def test_get_explorer_account_qr_optionally_signs_exact_final_path() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "canonical_id": CANONICAL_OWNER,
+                "literal": CANONICAL_OWNER,
+                "network_prefix": 26,
+                "error_correction": "quartile",
+                "modules": 33,
+                "qr_version": 5,
+                "svg": "<svg></svg>",
+            }
+        )
+    )
+    captured: List[bytes] = []
+    auth = _governance_auth(captured)
+    client = ToriiClient("https://node.test", session=session)
+
+    qr = client.get_explorer_account_qr(CANONICAL_OWNER, canonical_auth=auth)
+
+    exact_path = f"/v1/explorer/accounts/{quote(CANONICAL_OWNER, safe='')}/qr"
+    assert qr.canonical_id == CANONICAL_OWNER
+    assert captured == [
+        canonical_network_request_signature_message(
+            auth.network_id,
+            "GET",
+            exact_path,
+            b"",
+            timestamp_ms=auth.timestamp_ms or 0,
+            nonce=auth.nonce or "",
+        )
+    ]
+    call = session.calls[0]
+    assert call["url"].endswith(exact_path)
+    assert call["allow_redirects"] is False
+    assert "X-Iroha-Account" in call["headers"]
+    assert "X-Iroha-Signature" in call["headers"]
 
 
 def test_get_explorer_account_qr_accepts_account_alias_path_literal() -> None:

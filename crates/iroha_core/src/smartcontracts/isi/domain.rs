@@ -7635,6 +7635,82 @@ mod tests {
         });
     }
     #[test]
+    fn unregister_account_rejects_contract_owner_and_pending_recipient_until_cleared() {
+        with_registered_account_unregistration_candidate(|authority, _, account_id, tx| {
+            let contract =
+                ContractAddress::derive(tx.network_id(), &authority, 17, DataSpaceId::UNIVERSAL)
+                    .expect("contract address");
+            let subject = contract.subject_id();
+            Register::account(NewAccount::new(subject.clone()))
+                .execute(&authority, tx)
+                .expect("register contract subject");
+            let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                &contract,
+                authority.clone(),
+            );
+            binding.lifecycle.owner =
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    account_id.clone(),
+                );
+            tx.world
+                .contract_subject_bindings
+                .insert(contract.clone(), binding);
+            tx.world
+                .contract_subject_addresses
+                .insert(subject, contract.clone());
+
+            let owned = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("current contract owner must not be unregistered");
+            assert!(
+                owned.to_string().contains(&format!(
+                    "transfer or cancel its lifecycle ownership of contract `{contract}` first"
+                )),
+                "error should identify the retained owned contract: {owned}"
+            );
+            assert!(tx.world.accounts.get(&account_id).is_some());
+
+            let lifecycle = &mut tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract)
+                .expect("contract lifecycle binding")
+                .lifecycle;
+            lifecycle.owner =
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Parliament;
+            lifecycle.pending_owner = Some(
+                iroha_data_model::smart_contract::ContractLifecycleOwnerV1::Account(
+                    account_id.clone(),
+                ),
+            );
+            lifecycle.revision += 1;
+
+            let pending = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("pending contract owner must not be unregistered");
+            assert!(
+                pending.to_string().contains(&format!(
+                    "transfer or cancel its lifecycle ownership of contract `{contract}` first"
+                )),
+                "error should identify the retained pending contract: {pending}"
+            );
+            assert!(tx.world.accounts.get(&account_id).is_some());
+
+            let lifecycle = &mut tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract)
+                .expect("contract lifecycle binding")
+                .lifecycle;
+            lifecycle.pending_owner = None;
+            lifecycle.revision += 1;
+            Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect("account removal succeeds after lifecycle references are cleared");
+            assert!(tx.world.accounts.get(&account_id).is_none());
+        });
+    }
+    #[test]
     fn unregister_account_rejects_when_account_has_contract_deployment_nonce_state() {
         let mut state = test_state();
         let domain_id: DomainId =

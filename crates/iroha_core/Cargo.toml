@@ -49,7 +49,9 @@ workspace = true
 # The node surface is selected explicitly by shipping leaves. `runtime` keeps
 # the mandatory first-release Halo2/IPA policy intact; STARK support remains a
 # named proof aggregate rather than workspace-wide inheritance.
-default = ["node"]
+# Portable node semantics are usable independently by integration and recovery
+# corridors; ordinary Core builds additionally select the optional accelerator.
+default = ["node", "simd"]
 dev-tools = []
 # Non-shipping, feature-isolated process-cut hooks used by the dedicated
 # `iroha_test_network` daemon. The default/node feature graph never enables
@@ -67,7 +69,6 @@ node = [
     "gost",
     "sm",
     "telemetry",
-    "simd",
     "zk-preverify",
 ]
 proofs-halo2 = ["zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"]
@@ -105,7 +106,7 @@ app_api = []
 telemetry = ["ivm/telemetry"]
 # Support Prometheus metrics. See https://prometheus.io/.
 expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
-# Enable portable SIMD acceleration for small-set helpers.
+# Enable stable fixed-width Core kernels and primitives SIMD backends.
 simd = ["iroha_primitives/simd-accel"]
 profiling = []
 # Enable FASTPQ GPU helper paths used by the daemon feature of the same name.

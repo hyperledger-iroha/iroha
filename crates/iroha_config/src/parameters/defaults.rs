@@ -2782,7 +2782,7 @@ pub mod torii {
         }
         /// Norito-RPC transport defaults surfaced via `torii.transport.norito_rpc`.
         pub mod norito_rpc {
-            /// Enable Norito-RPC decoding by default so lab/devnet builds can exercise the transport.
+            /// Enable the production Norito-RPC transport by default.
             pub const ENABLED: bool = true;
             /// Require the forwarded client certificate header from a trusted ingress proxy.
             pub const REQUIRE_MTLS: bool = false;

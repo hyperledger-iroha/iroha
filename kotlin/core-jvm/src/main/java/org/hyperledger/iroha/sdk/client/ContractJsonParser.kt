@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
@@ -236,8 +237,8 @@ object ContractJsonParser {
         }
         val origin = requiredExactString(record["origin"], "$context.origin")
         check(origin == "direct" || origin == "parliament") { "$context.origin must be direct or parliament" }
-        val revision = asNonNegativeLong(record["revision"], "$context.revision")
-        check(revision > 0) { "$context.revision must be positive" }
+        val revision = asU64(record["revision"], "$context.revision")
+        check(revision.signum() > 0) { "$context.revision must be positive" }
         val proposalContentId = optionalExactHash(
             record["origin_proposal_content_id_hex"],
             "$context.origin_proposal_content_id_hex",
@@ -281,9 +282,9 @@ object ContractJsonParser {
             ),
             context,
         )
-        val imposedAtHeight = asNonNegativeLong(record["imposed_at_height"], "$context.imposed_at_height")
-        val expiresAtHeight = asNonNegativeLong(record["expires_at_height"], "$context.expires_at_height")
-        check(imposedAtHeight > 0) { "$context.imposed_at_height must be positive" }
+        val imposedAtHeight = asU64(record["imposed_at_height"], "$context.imposed_at_height")
+        val expiresAtHeight = asU64(record["expires_at_height"], "$context.expires_at_height")
+        check(imposedAtHeight.signum() > 0) { "$context.imposed_at_height must be positive" }
         check(expiresAtHeight > imposedAtHeight) { "$context.expires_at_height must follow imposed_at_height" }
         return GovernanceContractEmergencyHold(
             incidentDigestHex = optionalExactHash(record["incident_digest_hex"], "$context.incident_digest_hex")
@@ -414,6 +415,16 @@ object ContractJsonParser {
         return parsed
     }
 
+    private fun asU64(value: Any?, path: String): BigInteger {
+        val parsed = when (value) {
+            is BigInteger -> value
+            is Byte, is Short, is Int, is Long -> BigInteger.valueOf((value as Number).toLong())
+            else -> throw IllegalStateException("$path must be an integer")
+        }
+        check(parsed.signum() >= 0 && parsed <= U64_MAX) { "$path must fit u64" }
+        return parsed
+    }
+
     private fun requiredList(value: Any?, path: String): List<Any?> {
         check(value is List<*>) { "$path must be an array" }
         return value
@@ -502,4 +513,6 @@ object ContractJsonParser {
         "placeholder_transaction_hash_hex",
         "placeholder_entrypoint_hash_hex",
     )
+
+    private val U64_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 }

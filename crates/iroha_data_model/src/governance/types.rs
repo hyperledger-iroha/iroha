@@ -4341,6 +4341,32 @@ mod tests {
             emergency.validate(),
             Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold)
         );
+        let below_emergency_threshold_tally = ParliamentAggregateTallyV1 {
+            original_seats: 500,
+            accepted_ballots: 334,
+            aye: 333,
+            nay: 1,
+            abstain: 0,
+        };
+        emergency.body_bindings[0].result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            below_emergency_threshold_tally,
+            outcome,
+            result_height,
+        );
+        emergency.body_bindings[0]
+            .ballot
+            .as_mut()
+            .expect("fixture ballot")
+            .tally = below_emergency_threshold_tally;
+        assert_eq!(
+            emergency.validate(),
+            Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold),
+            "one aye below two-thirds of original seats must reject an emergency hold"
+        );
         let emergency_tally = ParliamentAggregateTallyV1 {
             original_seats: 500,
             accepted_ballots: 334,

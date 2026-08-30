@@ -240,13 +240,25 @@ function sseResponse(chunks, { close = true, onCancel } = {}) {
   );
 }
 
-test("ToriiBrowserClient strips API suffixes and calls current explorer block routes", async () => {
+test("ToriiBrowserClient strips API suffixes and calls snapshot-bound explorer block routes", async () => {
+  const cursor = "Y3Vyc29y";
+  const nextCursor = "bmV4dA";
+  const snapshotHash = "ab".repeat(32);
   const fetchImpl = async (url, init) => {
-    assert.equal(String(url), "https://localhost:8080/v1/explorer/blocks?page=2&per_page=5");
+    assert.equal(
+      String(url),
+      `https://localhost:8080/v1/explorer/blocks?limit=5&cursor=${cursor}`,
+    );
     assert.equal(init.method, "GET");
     assert.equal(init.headers["x-test-client"], "browser-sdk");
     return jsonResponse({
-      pagination: { page: 2, per_page: 5, total_pages: 3, total_items: 11 },
+      pagination: {
+        limit: 5,
+        snapshot_height: 11,
+        snapshot_hash: snapshotHash,
+        next_cursor: nextCursor,
+        has_more: true,
+      },
       items: [],
     });
   };
@@ -254,8 +266,386 @@ test("ToriiBrowserClient strips API suffixes and calls current explorer block ro
     fetchImpl,
     defaultHeaders: { "x-test-client": "browser-sdk" },
   });
-  const payload = await client.listExplorerBlocks({ page: 2, perPage: 5 });
-  assert.equal(payload.pagination.page, 2);
+  const payload = await client.listExplorerBlocks({ cursor, limit: 5 });
+  assert.deepEqual(payload.pagination, {
+    limit: 5,
+    snapshot_height: 11,
+    snapshot_hash: snapshotHash,
+    next_cursor: nextCursor,
+    has_more: true,
+  });
+});
+
+test("ToriiBrowserClient uses snapshot cursors on transaction and instruction history routes", async () => {
+  const cursor = "Y3Vyc29y";
+  const nextCursor = "bmV4dA";
+  const snapshotHash = "cd".repeat(32);
+  const seen = [];
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      seen.push(parsed.pathname);
+      assert.equal(parsed.searchParams.get("cursor"), cursor);
+      assert.equal(parsed.searchParams.get("limit"), "2");
+      assert.equal(parsed.searchParams.get("page"), null);
+      assert.equal(parsed.searchParams.get("per_page"), null);
+      assert.equal(parsed.searchParams.get("offset"), null);
+      assert.equal(parsed.searchParams.get("authority"), "alice@wonderland");
+      assert.equal(parsed.searchParams.get("block"), "9");
+      assert.equal(parsed.searchParams.get("asset_id"), "asset-id");
+      if (parsed.pathname.includes("/transactions")) {
+        assert.equal(parsed.searchParams.get("status"), "committed");
+      } else {
+        assert.equal(parsed.searchParams.get("account"), "bob@wonderland");
+        assert.equal(parsed.searchParams.get("kind"), "transfer");
+        assert.equal(parsed.searchParams.get("transaction_hash"), "transaction-hash");
+        assert.equal(parsed.searchParams.get("transaction_status"), "rejected");
+      }
+      const payload = {
+        pagination: {
+          limit: 2,
+          snapshot_height: 9,
+          snapshot_hash: snapshotHash,
+          next_cursor: nextCursor,
+          has_more: true,
+        },
+        items: [],
+      };
+      if (parsed.pathname.endsWith("/latest")) payload.sampled_at = "2026-08-30T01:02:03Z";
+      return jsonResponse(payload);
+    },
+  });
+
+  const transactionOptions = {
+    cursor,
+    limit: 2,
+    authority: "alice@wonderland",
+    block: 9,
+    status: "committed",
+    assetId: "asset-id",
+  };
+  const instructionOptions = {
+    cursor,
+    limit: 2,
+    account: "bob@wonderland",
+    authority: "alice@wonderland",
+    kind: "transfer",
+    transactionHash: "transaction-hash",
+    transactionStatus: "rejected",
+    block: 9,
+    assetId: "asset-id",
+  };
+  const transactionPage = await client.listExplorerTransactions(transactionOptions);
+  const latestTransactionPage = await client.listLatestExplorerTransactions(transactionOptions);
+  const instructionPage = await client.listExplorerInstructions(instructionOptions);
+  const latestInstructionPage = await client.listLatestExplorerInstructions(instructionOptions);
+
+  assert.deepEqual(seen, [
+    "/v1/explorer/transactions",
+    "/v1/explorer/transactions/latest",
+    "/v1/explorer/instructions",
+    "/v1/explorer/instructions/latest",
+  ]);
+  for (const page of [transactionPage, instructionPage]) {
+    assert.equal(page.pagination.snapshot_height, 9);
+    assert.equal(page.pagination.snapshot_hash, snapshotHash);
+  }
+  for (const page of [latestTransactionPage, latestInstructionPage]) {
+    assert.equal(page.sampled_at, "2026-08-30T01:02:03Z");
+    assert.equal(page.pagination.next_cursor, nextCursor);
+  }
+});
+
+test("ToriiBrowserClient signs every scoped Explorer and contract read over its final URL", async () => {
+  const signed = [];
+  const fetched = [];
+  const snapshotHash = "ef".repeat(32);
+  const cursorPage = {
+    pagination: { limit: 25, next_cursor: null, has_more: false },
+    items: [],
+  };
+  const historyPage = {
+    pagination: {
+      limit: 25,
+      snapshot_height: 1,
+      snapshot_hash: snapshotHash,
+      next_cursor: null,
+      has_more: false,
+    },
+    items: [],
+  };
+  const responseFor = (url) => {
+    const path = new URL(url).pathname.replace(/^\/proxy/u, "");
+    if (path === "/v1/contracts/events/sse") {
+      return sseResponse(["event: contract_event\ndata: {}\n\n"]);
+    }
+    if (path === "/v1/explorer/assets/asset-id") {
+      return jsonResponse({ quantity: "0" });
+    }
+    if (path === "/v1/explorer/rwas/rwa-id") {
+      return jsonResponse({ quantity: "0", held_quantity: "0" });
+    }
+    if (
+      [
+        "/v1/explorer/accounts",
+        "/v1/explorer/domains",
+        "/v1/explorer/assets",
+        "/v1/explorer/asset-definitions",
+        "/v1/explorer/nfts",
+        "/v1/explorer/rwas",
+      ].includes(path)
+    ) {
+      return jsonResponse(cursorPage);
+    }
+    if (
+      path === "/v1/explorer/blocks"
+      || path === "/v1/explorer/transactions"
+      || path === "/v1/explorer/instructions"
+    ) {
+      return jsonResponse(historyPage);
+    }
+    if (
+      path === "/v1/explorer/transactions/latest"
+      || path === "/v1/explorer/instructions/latest"
+    ) {
+      return jsonResponse({ sampled_at: "2026-08-30T01:02:03Z", ...historyPage });
+    }
+    return jsonResponse({});
+  };
+  const client = new ToriiBrowserClient("https://localhost:8080/proxy/v1", {
+    networkId: QUERY_NETWORK_ID,
+    canonicalRequestAuth: {
+      accountId: FIXTURE_ALICE_ID,
+      sign: async (input) => {
+        signed.push(input);
+        return Buffer.alloc(64, 0x31);
+      },
+    },
+    fetchImpl: async (url, init) => {
+      fetched.push({ url: new URL(url), init });
+      assert.equal(init.method, "GET");
+      assert.equal(init.redirect, "error");
+      assert.equal(init.credentials, "omit");
+      assert.ok(init.headers["X-Iroha-Account"]);
+      assert.ok(init.headers["X-Iroha-Signature"]);
+      assert.ok(init.headers["X-Iroha-Timestamp-Ms"]);
+      assert.ok(init.headers["X-Iroha-Nonce"]);
+      return responseFor(url);
+    },
+  });
+
+  const aborted = new AbortController();
+  aborted.abort();
+  const invocations = [
+    () => client.listExplorerAccounts({ limit: 1, domain: "wonderland" }),
+    () => client.getExplorerAccount(FIXTURE_ALICE_ID, { addressFormat: "i105" }),
+    () => client.listExplorerDomains({ limit: 1, ownedBy: FIXTURE_ALICE_ID }),
+    () => client.getExplorerDomain("wonderland"),
+    () => client.listExplorerAssets({ limit: 1, definition: "rose#wonderland" }),
+    () => client.getExplorerAsset("asset-id"),
+    () => client.listExplorerAssetDefinitions({ limit: 1, owningDomain: "wonderland" }),
+    () => client.getExplorerAssetDefinitionEconometrics("rose#wonderland"),
+    () => client.getExplorerAssetDefinitionSnapshot("rose#wonderland"),
+    () => client.listExplorerNfts({ limit: 1, domain: "wonderland" }),
+    () => client.getExplorerNft("nft-id"),
+    () => client.listExplorerRwas({ limit: 1, domain: "wonderland" }),
+    () => client.getExplorerRwa("rwa-id"),
+    () => client.listExplorerBlocks({ limit: 1 }),
+    () => client.getExplorerBlock(1),
+    () => client.getExplorerMetrics(),
+    () => client.listExplorerTransactions({ limit: 1, status: "committed" }),
+    () => client.listLatestExplorerTransactions({ limit: 1, status: "rejected" }),
+    () => client.getExplorerTransaction("transaction-hash", { addressFormat: "i105" }),
+    () => client.listExplorerInstructions({ limit: 1, kind: "transfer" }),
+    () => client.listLatestExplorerInstructions({ limit: 1, kind: "transfer" }),
+    () => client.getExplorerInstruction("transaction-hash", 0, { addressFormat: "i105" }),
+    () => client.getExplorerInstructionContractView("transaction-hash", 0),
+    () => client.listContractActivity({ limit: 1, contractAlias: "demo::module" }),
+    () => client.listContractEvents({ limit: 1, eventKind: "filled" }),
+    async () => {
+      for await (const _event of client.streamContractEvents({
+        eventKind: "filled",
+        signal: aborted.signal,
+      })) {
+        // Consume the one test frame; the pre-aborted signal makes EOF graceful.
+      }
+    },
+  ];
+  for (const invoke of invocations) await invoke();
+
+  assert.equal(signed.length, invocations.length);
+  assert.equal(fetched.length, invocations.length);
+  for (let index = 0; index < signed.length; index += 1) {
+    assert.equal(signed[index].method, "GET");
+    assert.equal(signed[index].path, fetched[index].url.pathname);
+    assert.equal(signed[index].query ?? "", fetched[index].url.search.slice(1));
+    assert.equal(signed[index].body, "");
+  }
+});
+
+test("ToriiBrowserClient leaves optional dataspace reads anonymous without a signer", async () => {
+  const calls = [];
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url, init) => {
+      calls.push({ url: new URL(url), init });
+      if (new URL(url).pathname.endsWith("/events/sse")) {
+        return sseResponse([]);
+      }
+      return jsonResponse({});
+    },
+  });
+  await client.getExplorerDomain("wonderland");
+  await client.getExplorerMetrics();
+  await client.listContractEvents();
+  const aborted = new AbortController();
+  aborted.abort();
+  for await (const _event of client.streamContractEvents({ signal: aborted.signal })) {
+    // No frames are expected.
+  }
+  assert.equal(calls.length, 4);
+  for (const { init } of calls) {
+    assert.equal(init.credentials, "omit");
+    assert.equal(init.headers["X-Iroha-Account"], undefined);
+    assert.equal(init.headers["X-Iroha-Signature"], undefined);
+    assert.equal(init.headers["X-Iroha-Timestamp-Ms"], undefined);
+    assert.equal(init.headers["X-Iroha-Nonce"], undefined);
+  }
+});
+
+test("ToriiBrowserClient keeps Explorer health public when canonical read auth is configured", async () => {
+  let signCalls = 0;
+  let captured;
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    networkId: QUERY_NETWORK_ID,
+    canonicalRequestAuth: {
+      accountId: FIXTURE_ALICE_ID,
+      sign: async () => {
+        signCalls += 1;
+        return Buffer.alloc(64, 0x32);
+      },
+    },
+    fetchImpl: async (url, init) => {
+      captured = { url: new URL(url), init };
+      return jsonResponse({ status: "ok" });
+    },
+  });
+  await client.getExplorerHealth();
+  assert.equal(signCalls, 0);
+  assert.equal(captured.url.pathname, "/v1/explorer/health");
+  assert.equal(captured.init.headers["X-Iroha-Account"], undefined);
+  assert.equal(captured.init.headers["X-Iroha-Signature"], undefined);
+  assert.equal(captured.init.redirect, undefined);
+});
+
+test("ToriiBrowserClient rejects partial, precomputed, and redirected canonical read auth", async () => {
+  const noFetch = async () => {
+    throw new Error("must not fetch");
+  };
+  assert.throws(
+    () => new ToriiBrowserClient("https://localhost:8080", {
+      networkId: QUERY_NETWORK_ID,
+      canonicalRequestAuth: { accountId: FIXTURE_ALICE_ID },
+      fetchImpl: noFetch,
+    }),
+    /requires exactly accountId and sign/u,
+  );
+  assert.throws(
+    () => new ToriiBrowserClient("https://localhost:8080", {
+      canonicalRequestAuth: {
+        accountId: FIXTURE_ALICE_ID,
+        sign: async () => Buffer.alloc(64, 0x33),
+      },
+      fetchImpl: noFetch,
+    }),
+    /requires options.networkId/u,
+  );
+  assert.throws(
+    () => new ToriiBrowserClient("https://localhost:8080", {
+      defaultHeaders: { "X-Iroha-Nonce": "precomputed" },
+      fetchImpl: noFetch,
+    }),
+    /cannot be precomputed/u,
+  );
+
+  const redirected = new ToriiBrowserClient("https://localhost:8080", {
+    networkId: QUERY_NETWORK_ID,
+    canonicalRequestAuth: {
+      accountId: FIXTURE_ALICE_ID,
+      sign: async () => Buffer.alloc(64, 0x34),
+    },
+    fetchImpl: async () => ({
+      status: 200,
+      redirected: true,
+      text: async () => "{}",
+    }),
+  });
+  await assert.rejects(
+    redirected.getExplorerDomain("wonderland"),
+    /must not accept a redirected response/u,
+  );
+});
+
+test("ToriiBrowserClient rejects retired history pagination and exact totals", async () => {
+  let fetchCalls = 0;
+  const localClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  for (const invoke of [
+    () => localClient.listExplorerBlocks({ page: 2 }),
+    () => localClient.listExplorerTransactions({ offset: 10 }),
+    () => localClient.listLatestExplorerTransactions({ perPage: 5 }),
+    () => localClient.listExplorerInstructions({ per_page: 5 }),
+    () => localClient.listLatestExplorerInstructions({ page: 2 }),
+  ]) {
+    assert.throws(invoke, /contains unsupported option/u);
+  }
+  assert.throws(
+    () => localClient.listExplorerBlocks({ cursor: "padded==" }),
+    /canonical base64url without padding/u,
+  );
+  assert.throws(
+    () => localClient.listExplorerTransactions({ limit: 101 }),
+    /limit must be between 1 and 100/u,
+  );
+  assert.equal(fetchCalls, 0);
+
+  const retiredTotalClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: {
+        limit: 25,
+        snapshot_height: 7,
+        snapshot_hash: "ab".repeat(32),
+        next_cursor: null,
+        has_more: false,
+        total_items: 7,
+      },
+      items: [],
+    }),
+  });
+  await assert.rejects(
+    retiredTotalClient.listExplorerTransactions(),
+    /contains unknown field total_items/u,
+  );
+
+  const inconsistentSnapshotClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: {
+        limit: 25,
+        snapshot_height: 0,
+        snapshot_hash: "ab".repeat(32),
+        next_cursor: null,
+        has_more: false,
+      },
+      items: [],
+    }),
+  });
+  await assert.rejects(
+    inconsistentSnapshotClient.listExplorerInstructions(),
+    /snapshot_hash must be null exactly when snapshot_height is zero/u,
+  );
 });
 
 test("ToriiBrowserClient uses opaque cursors for world Explorer lists", async () => {
@@ -1015,7 +1405,7 @@ test("ToriiBrowserClient rejects adversarial query options before fetch", async 
 
   assert.throws(
     () => client.listExplorerBlocks({ page: 0 }),
-    /positive safe integer/,
+    /contains unsupported option page/,
   );
   assert.throws(
     () => client.queryVisibleTransactions({ sort: "timestamp_ms:drop" }),

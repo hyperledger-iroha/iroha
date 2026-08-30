@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Base64;
@@ -266,8 +267,8 @@ public final class ContractJsonParser {
     if (!"direct".equals(origin) && !"parliament".equals(origin)) {
       throw new IllegalStateException(context + ".origin must be direct or parliament");
     }
-    final long revision = asNonNegativeLong(record.get("revision"), context + ".revision");
-    if (revision == 0L) {
+    final BigInteger revision = asU64(record.get("revision"), context + ".revision");
+    if (revision.signum() == 0) {
       throw new IllegalStateException(context + ".revision must be positive");
     }
     final String proposalContentIdHex = optionalExactHash(
@@ -319,14 +320,14 @@ public final class ContractJsonParser {
             "imposed_at_height",
             "expires_at_height"),
         context);
-    final long imposedAtHeight =
-        asNonNegativeLong(record.get("imposed_at_height"), context + ".imposed_at_height");
-    final long expiresAtHeight =
-        asNonNegativeLong(record.get("expires_at_height"), context + ".expires_at_height");
-    if (imposedAtHeight == 0L) {
+    final BigInteger imposedAtHeight =
+        asU64(record.get("imposed_at_height"), context + ".imposed_at_height");
+    final BigInteger expiresAtHeight =
+        asU64(record.get("expires_at_height"), context + ".expires_at_height");
+    if (imposedAtHeight.signum() == 0) {
       throw new IllegalStateException(context + ".imposed_at_height must be positive");
     }
-    if (expiresAtHeight <= imposedAtHeight) {
+    if (expiresAtHeight.compareTo(imposedAtHeight) <= 0) {
       throw new IllegalStateException(context + ".expires_at_height must follow imposed_at_height");
     }
     final String incidentDigestHex =
@@ -513,6 +514,14 @@ public final class ContractJsonParser {
     return parsed;
   }
 
+  private static BigInteger asU64(final Object value, final String path) {
+    final BigInteger parsed = JsonNumbers.asBigInteger(value, path);
+    if (parsed.signum() < 0 || parsed.compareTo(U64_MAX) > 0) {
+      throw new IllegalStateException(path + " must fit u64");
+    }
+    return parsed;
+  }
+
   @SuppressWarnings("unchecked")
   private static List<Object> requiredList(final Object value, final String path) {
     if (!(value instanceof List<?>)) {
@@ -618,4 +627,7 @@ public final class ContractJsonParser {
           "signed_transaction_b64",
           "placeholder_transaction_hash_hex",
           "placeholder_entrypoint_hash_hex");
+
+  private static final BigInteger U64_MAX =
+      BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
 }

@@ -4495,21 +4495,6 @@ public struct ToriiExplorerAccountQr: Decodable, Sendable {
     }
 }
 
-/// Pagination metadata returned by explorer list endpoints.
-public struct ToriiExplorerPaginationMeta: Decodable, Sendable, Equatable {
-    public let page: UInt64
-    public let perPage: UInt64
-    public let totalPages: UInt64
-    public let totalItems: UInt64
-
-    private enum CodingKeys: String, CodingKey {
-        case page
-        case perPage = "per_page"
-        case totalPages = "total_pages"
-        case totalItems = "total_items"
-    }
-}
-
 private let toriiExplorerCursorMaxLength = 1_424
 
 private func normalizeToriiExplorerCursor(_ raw: String?, field: String) throws -> String? {
@@ -4608,11 +4593,103 @@ public struct ToriiExplorerCursorMeta: Decodable, Sendable, Equatable {
     }
 }
 
+/// Strict snapshot-bound seek metadata returned by Explorer history lists.
+public struct ToriiExplorerHistoryCursorMeta: Decodable, Sendable, Equatable {
+    public let limit: UInt32
+    public let snapshotHeight: UInt64
+    public let snapshotHash: String?
+    public let nextCursor: String?
+    public let hasMore: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case snapshotHeight = "snapshot_height"
+        case snapshotHash = "snapshot_hash"
+        case nextCursor = "next_cursor"
+        case hasMore = "has_more"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["limit", "snapshot_height", "snapshot_hash", "next_cursor", "has_more"],
+            debugName: "Explorer history cursor pagination"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        limit = try container.decode(UInt32.self, forKey: .limit)
+        guard (1...100).contains(limit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .limit,
+                in: container,
+                debugDescription: "Explorer history cursor pagination limit must be between 1 and 100"
+            )
+        }
+        snapshotHeight = try container.decode(UInt64.self, forKey: .snapshotHeight)
+        guard container.contains(.snapshotHash) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.snapshotHash,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "Explorer history cursor pagination requires snapshot_hash"
+                )
+            )
+        }
+        snapshotHash = try container.decodeIfPresent(String.self, forKey: .snapshotHash)
+        if let snapshotHash {
+            let bytes = Array(snapshotHash.utf8)
+            guard bytes.count == 64,
+                  bytes.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .snapshotHash,
+                    in: container,
+                    debugDescription: "Explorer history snapshot_hash must be 64 lowercase hexadecimal characters"
+                )
+            }
+        }
+        guard (snapshotHeight == 0) == (snapshotHash == nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .snapshotHash,
+                in: container,
+                debugDescription: "Explorer history snapshot_hash must be null exactly for an empty snapshot"
+            )
+        }
+        guard container.contains(.nextCursor) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.nextCursor,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "Explorer history cursor pagination requires next_cursor"
+                )
+            )
+        }
+        nextCursor = try normalizeToriiExplorerCursor(
+            container.decodeIfPresent(String.self, forKey: .nextCursor),
+            field: "Explorer history cursor pagination next_cursor"
+        )
+        hasMore = try container.decode(Bool.self, forKey: .hasMore)
+        guard hasMore == (nextCursor != nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .hasMore,
+                in: container,
+                debugDescription: "Explorer history cursor pagination has_more must match next_cursor presence"
+            )
+        }
+    }
+}
+
 /// Instruction payload wrapper returned by `/v1/explorer/instructions`.
 public struct ToriiExplorerInstructionBox: Decodable, Sendable, Equatable {
     public let encoded: String?
+    public let framedSha256: String?
     public let scale: String?
     public let json: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey {
+        case encoded
+        case framedSha256 = "framed_sha256"
+        case scale
+        case json
+    }
 }
 
 /// Instruction projection returned by `/v1/explorer/instructions`.
@@ -4630,7 +4707,7 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
         case authority
         case createdAt = "created_at"
         case kind
-        case box = "r#box"
+        case box
         case transactionHash = "transaction_hash"
         case transactionStatus = "transaction_status"
         case block
@@ -4647,7 +4724,7 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
                 CodingKeys.box,
                 DecodingError.Context(
                     codingPath: container.codingPath,
-                    debugDescription: "Expected key \"r#box\"."
+                    debugDescription: "Expected key \"box\"."
                 )
             )
         }
@@ -4661,8 +4738,31 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
 
 /// Paginated instruction list returned by `/v1/explorer/instructions`.
 public struct ToriiExplorerInstructionsPage: Decodable, Sendable, Equatable {
-    public let pagination: ToriiExplorerPaginationMeta
+    public let pagination: ToriiExplorerHistoryCursorMeta
     public let items: [ToriiExplorerInstructionItem]
+
+    private enum CodingKeys: String, CodingKey {
+        case pagination
+        case items
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["pagination", "items"],
+            debugName: "Explorer instructions page"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pagination = try container.decode(ToriiExplorerHistoryCursorMeta.self, forKey: .pagination)
+        items = try container.decode([ToriiExplorerInstructionItem].self, forKey: .items)
+        guard items.count <= Int(pagination.limit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .items,
+                in: container,
+                debugDescription: "Explorer instructions page contains more items than its limit"
+            )
+        }
+    }
 }
 
 /// Transaction summary returned by `/v1/explorer/transactions`.
@@ -4686,8 +4786,31 @@ public struct ToriiExplorerTransactionItem: Decodable, Sendable, Equatable {
 
 /// Paginated transaction list returned by `/v1/explorer/transactions`.
 public struct ToriiExplorerTransactionsPage: Decodable, Sendable, Equatable {
-    public let pagination: ToriiExplorerPaginationMeta
+    public let pagination: ToriiExplorerHistoryCursorMeta
     public let items: [ToriiExplorerTransactionItem]
+
+    private enum CodingKeys: String, CodingKey {
+        case pagination
+        case items
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: ["pagination", "items"],
+            debugName: "Explorer transactions page"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pagination = try container.decode(ToriiExplorerHistoryCursorMeta.self, forKey: .pagination)
+        items = try container.decode([ToriiExplorerTransactionItem].self, forKey: .items)
+        guard items.count <= Int(pagination.limit) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .items,
+                in: container,
+                debugDescription: "Explorer transactions page contains more items than its limit"
+            )
+        }
+    }
 }
 
 /// Explorer RWA lot projection returned by `/v1/explorer/rwas`.
@@ -5297,8 +5420,8 @@ public extension ToriiExplorerInstructionsPage {
 
 /// Query parameters accepted by `/v1/explorer/instructions`.
 public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
-    public var page: UInt64?
-    public var perPage: UInt64?
+    public var cursor: String?
+    public var limit: UInt32?
     /// Filter transfer instructions by participant account (source or destination).
     public var account: String?
     public var authority: String?
@@ -5308,8 +5431,8 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
     public var kind: String?
     public var assetDefinitionId: String?
 
-    public init(page: UInt64? = nil,
-                perPage: UInt64? = nil,
+    public init(cursor: String? = nil,
+                limit: UInt32? = nil,
                 account: String? = nil,
                 authority: String? = nil,
                 transactionHash: String? = nil,
@@ -5317,8 +5440,8 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
                 block: UInt64? = nil,
                 kind: String? = nil,
                 assetDefinitionId: String? = nil) {
-        self.page = page
-        self.perPage = perPage
+        self.cursor = cursor
+        self.limit = limit
         self.account = account
         self.authority = authority
         self.transactionHash = transactionHash
@@ -5330,17 +5453,19 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
 
     public func queryItems() throws -> [URLQueryItem]? {
         var items: [URLQueryItem] = []
-        if let page {
-            guard page > 0 else {
-                throw ToriiClientError.invalidPayload("page must be at least 1.")
-            }
-            items.append(URLQueryItem(name: "page", value: String(page)))
+        if let cursor = try normalizeToriiExplorerCursor(
+            cursor,
+            field: "Explorer instructions cursor"
+        ) {
+            items.append(URLQueryItem(name: "cursor", value: cursor))
         }
-        if let perPage {
-            guard perPage > 0 else {
-                throw ToriiClientError.invalidPayload("perPage must be at least 1.")
+        if let limit {
+            guard (1...100).contains(limit) else {
+                throw ToriiClientError.invalidPayload(
+                    "Explorer instructions limit must be between 1 and 100."
+                )
             }
-            items.append(URLQueryItem(name: "per_page", value: String(perPage)))
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
         }
         if let account {
             let exactAccount = try requireToriiExactNonEmptyQueryValue(account, field: "account")
@@ -5387,21 +5512,21 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
 
 /// Query parameters accepted by `/v1/explorer/transactions`.
 public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
-    public var page: UInt64?
-    public var perPage: UInt64?
+    public var cursor: String?
+    public var limit: UInt32?
     public var authority: String?
     public var block: UInt64?
     public var status: String?
     public var assetDefinitionId: String?
 
-    public init(page: UInt64? = nil,
-                perPage: UInt64? = nil,
+    public init(cursor: String? = nil,
+                limit: UInt32? = nil,
                 authority: String? = nil,
                 block: UInt64? = nil,
                 status: String? = nil,
                 assetDefinitionId: String? = nil) {
-        self.page = page
-        self.perPage = perPage
+        self.cursor = cursor
+        self.limit = limit
         self.authority = authority
         self.block = block
         self.status = status
@@ -5410,17 +5535,19 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
 
     public func queryItems() throws -> [URLQueryItem]? {
         var items: [URLQueryItem] = []
-        if let page {
-            guard page > 0 else {
-                throw ToriiClientError.invalidPayload("page must be at least 1.")
-            }
-            items.append(URLQueryItem(name: "page", value: String(page)))
+        if let cursor = try normalizeToriiExplorerCursor(
+            cursor,
+            field: "Explorer transactions cursor"
+        ) {
+            items.append(URLQueryItem(name: "cursor", value: cursor))
         }
-        if let perPage {
-            guard perPage > 0 else {
-                throw ToriiClientError.invalidPayload("perPage must be at least 1.")
+        if let limit {
+            guard (1...100).contains(limit) else {
+                throw ToriiClientError.invalidPayload(
+                    "Explorer transactions limit must be between 1 and 100."
+                )
             }
-            items.append(URLQueryItem(name: "per_page", value: String(perPage)))
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
         }
         if let authority {
             let exactAuthority = try requireToriiExactNonEmptyQueryValue(authority, field: "authority")
@@ -21849,14 +21976,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
     public func getAccountTransferHistory(accountId: String,
-                                          page: UInt64? = nil,
-                                          perPage: UInt64? = nil,
+                                          cursor: String? = nil,
+                                          limit: UInt32? = nil,
                                           assetDefinitionId: String? = nil,
                                           completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getAccountTransferHistory(accountId: accountId,
-                                                     page: page,
-                                                     perPage: perPage,
+                                                     cursor: cursor,
+                                                     limit: limit,
                                                      assetDefinitionId: assetDefinitionId)
         }
     }
@@ -21865,22 +21992,22 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
     public func getTransactionHistory(accountId: String,
-                                      page: UInt64? = nil,
-                                      perPage: UInt64? = nil,
+                                      cursor: String? = nil,
+                                      limit: UInt32? = nil,
                                       assetDefinitionId: String? = nil,
                                       completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getTransactionHistory(accountId: accountId,
-                                                 page: page,
-                                                 perPage: perPage,
+                                                 cursor: cursor,
+                                                 limit: limit,
                                                  assetDefinitionId: assetDefinitionId)
         }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     public func iterateAccountTransferHistory(accountId: String,
-                                              page: UInt64? = nil,
-                                              perPage: UInt64? = nil,
+                                              cursor: String? = nil,
+                                              limit: UInt32? = nil,
                                               assetDefinitionId: String? = nil,
                                               maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         AsyncThrowingStream { continuation in
@@ -21888,18 +22015,22 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 do {
                     let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId,
                                                                                            field: "accountId")
-                    var currentPage = page ?? 1
-                    var currentPerPage = perPage
+                    var currentCursor = cursor
+                    var currentLimit = limit
+                    var seenCursors = Set<String>()
+                    if let currentCursor {
+                        seenCursors.insert(currentCursor)
+                    }
                     var remaining = maxItems
                     while true {
                         try Task.checkCancellation()
-                        let params = ToriiExplorerInstructionsParams(page: currentPage,
-                                                                     perPage: currentPerPage,
+                        let params = ToriiExplorerInstructionsParams(cursor: currentCursor,
+                                                                     limit: currentLimit,
                                                                      kind: "Transfer",
                                                                      assetDefinitionId: assetDefinitionId)
                         let response = try await getExplorerInstructions(params: params)
-                        if currentPerPage == nil {
-                            currentPerPage = response.pagination.perPage
+                        if currentLimit == nil {
+                            currentLimit = response.pagination.limit
                         }
                         let summaries = response.transferSummaries(matchingAccount: normalizedAccount,
                                                                    assetDefinitionId: assetDefinitionId,
@@ -21917,13 +22048,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         if remaining == 0 {
                             break
                         }
-                        if response.items.isEmpty || response.pagination.totalPages == 0 {
+                        guard response.pagination.hasMore else {
                             break
                         }
-                        if currentPage >= response.pagination.totalPages {
-                            break
+                        guard let nextCursor = response.pagination.nextCursor else {
+                            throw ToriiClientError.invalidPayload(
+                                "Explorer instructions response omitted next_cursor while has_more was true"
+                            )
                         }
-                        currentPage += 1
+                        guard seenCursors.insert(nextCursor).inserted else {
+                            throw ToriiClientError.invalidPayload(
+                                "Explorer instructions response repeated a cursor"
+                            )
+                        }
+                        currentCursor = nextCursor
                     }
                     continuation.finish()
                 } catch {
@@ -23572,42 +23710,54 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func getExplorerAccountQr(accountId: String) async throws -> ToriiExplorerAccountQr {
         let encodedAccountId = try encodeAccountIdPath(accountId)
-        let request = try makeRequest(path: "/v1/explorer/accounts/\(encodedAccountId)/qr")
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/explorer/accounts/\(encodedAccountId)/qr"
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerAccountQr.self, from: data)
     }
 
     public func getExplorerInstructions(params: ToriiExplorerInstructionsParams? = nil) async throws -> ToriiExplorerInstructionsPage {
-        let request = try makeRequest(path: "/v1/explorer/instructions",
-                                      queryItems: try params?.queryItems())
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/explorer/instructions",
+            queryItems: try params?.queryItems()
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerInstructionsPage.self, from: data)
     }
 
     public func getExplorerTransactions(params: ToriiExplorerTransactionsParams? = nil) async throws -> ToriiExplorerTransactionsPage {
-        let request = try makeRequest(path: "/v1/explorer/transactions",
-                                      queryItems: try params?.queryItems())
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/explorer/transactions",
+            queryItems: try params?.queryItems()
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerTransactionsPage.self, from: data)
     }
 
     public func getExplorerRwas(params: ToriiExplorerRwasParams? = nil) async throws -> ToriiExplorerRwasPage {
-        let request = try makeRequest(path: "/v1/explorer/rwas",
-                                      queryItems: try params?.queryItems())
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/explorer/rwas",
+            queryItems: try params?.queryItems()
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerRwasPage.self, from: data)
     }
 
     public func getContractActivity(params: ToriiContractActivityParams? = nil) async throws -> ToriiContractActivityList {
-        let request = try makeRequest(path: "/v1/contracts/activity",
-                                      queryItems: try params?.queryItems())
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/contracts/activity",
+            queryItems: try params?.queryItems()
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiContractActivityList.self, from: data)
     }
 
     public func getContractEvents(params: ToriiContractEventParams? = nil) async throws -> ToriiContractEventList {
-        let request = try makeRequest(path: "/v1/contracts/events",
-                                      queryItems: try params?.queryItems())
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/contracts/events",
+            queryItems: try params?.queryItems()
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiContractEventList.self, from: data)
     }
@@ -23615,8 +23765,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func getExplorerRwaDetail(rwaId: String) async throws -> ToriiExplorerRwaRecord {
         let normalizedRwaId = try ToriiRequestValidation.normalizedNonEmpty(rwaId, field: "rwaId")
         let encodedRwaId = encodePathComponent(normalizedRwaId)
-        let request = try makeRequest(path: "/v1/explorer/rwas/\(encodedRwaId)",
-                                      queryItems: nil)
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/explorer/rwas/\(encodedRwaId)"
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerRwaRecord.self, from: data)
     }
@@ -23624,8 +23775,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func getExplorerTransactionDetail(hashHex: String) async throws -> ToriiExplorerTransactionDetail {
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
         let encodedHash = encodePathComponent(normalizedHash)
-        let request = try makeRequest(path: "/v1/explorer/transactions/\(encodedHash)",
-                                      queryItems: nil)
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/explorer/transactions/\(encodedHash)"
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerTransactionDetail.self, from: data)
     }
@@ -23634,8 +23786,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                              index: UInt64) async throws -> ToriiExplorerInstructionItem {
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
         let encodedHash = encodePathComponent(normalizedHash)
-        let request = try makeRequest(path: "/v1/explorer/instructions/\(encodedHash)/\(index)",
-                                      queryItems: nil)
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/explorer/instructions/\(encodedHash)/\(index)"
+        )
         let data = try await data(for: request)
         return try decodeJSON(ToriiExplorerInstructionItem.self, from: data)
     }
@@ -23700,19 +23853,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             return []
         }
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
-        var currentPage: UInt64 = 1
-        var currentPerPage: UInt64?
+        var currentCursor: String?
+        var currentLimit: UInt32?
+        var seenCursors = Set<String>()
         var remaining = maxItems
         var records: [ToriiExplorerTransferRecord] = []
         while true {
-            let params = ToriiExplorerInstructionsParams(page: currentPage,
-                                                         perPage: currentPerPage,
+            let params = ToriiExplorerInstructionsParams(cursor: currentCursor,
+                                                         limit: currentLimit,
                                                          transactionHash: normalizedHash,
                                                          kind: "Transfer",
                                                          assetDefinitionId: assetDefinitionId)
             let response = try await getExplorerInstructions(params: params)
-            if currentPerPage == nil {
-                currentPerPage = response.pagination.perPage
+            if currentLimit == nil {
+                currentLimit = response.pagination.limit
             }
             let pageRecords = response.transferRecords(
                 matchingAccount: accountId,
@@ -23731,13 +23885,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             if remaining == 0 {
                 break
             }
-            if response.items.isEmpty || response.pagination.totalPages == 0 {
+            guard response.pagination.hasMore else {
                 break
             }
-            if currentPage >= response.pagination.totalPages {
-                break
+            guard let nextCursor = response.pagination.nextCursor else {
+                throw ToriiClientError.invalidPayload(
+                    "Explorer instructions response omitted next_cursor while has_more was true"
+                )
             }
-            currentPage += 1
+            guard seenCursors.insert(nextCursor).inserted else {
+                throw ToriiClientError.invalidPayload(
+                    "Explorer instructions response repeated a cursor"
+                )
+            }
+            currentCursor = nextCursor
         }
         return records
     }
@@ -23843,12 +24004,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getAccountTransferHistory(accountId: String,
-                                          page: UInt64? = nil,
-                                          perPage: UInt64? = nil,
+                                          cursor: String? = nil,
+                                          limit: UInt32? = nil,
                                           assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId, field: "accountId")
-        let params = ToriiExplorerInstructionsParams(page: page,
-                                                     perPage: perPage,
+        let params = ToriiExplorerInstructionsParams(cursor: cursor,
+                                                     limit: limit,
                                                      kind: "Transfer",
                                                      assetDefinitionId: assetDefinitionId)
         return try await getExplorerTransferSummaries(params: params,
@@ -23859,12 +24020,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     /// Convenience alias for transfer-rich transaction history derived from explorer instructions.
     public func getTransactionHistory(accountId: String,
-                                      page: UInt64? = nil,
-                                      perPage: UInt64? = nil,
+                                      cursor: String? = nil,
+                                      limit: UInt32? = nil,
                                       assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         try await getAccountTransferHistory(accountId: accountId,
-                                            page: page,
-                                            perPage: perPage,
+                                            cursor: cursor,
+                                            limit: limit,
                                             assetDefinitionId: assetDefinitionId)
     }
 
@@ -26878,9 +27039,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         serverSentEventStream(
             request: {
                 let queryItems = try filter.queryItems()
-                return try self.makeRequest(path: "/v1/events/sse",
-                                            queryItems: queryItems,
-                                            headers: ["Accept": "text/event-stream"])
+                return try self.makeDataspaceVisibleRequest(
+                    path: "/v1/events/sse",
+                    queryItems: queryItems,
+                    headers: ["Accept": "text/event-stream"]
+                )
             },
             parse: { try self.parseVerifyingKeyEvent(from: $0) }
         )
@@ -26891,9 +27054,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         serverSentEventStream(
             request: {
                 let queryItems = try filter.queryItems()
-                return try self.makeRequest(path: "/v1/events/sse",
-                                            queryItems: queryItems,
-                                            headers: ["Accept": "text/event-stream"])
+                return try self.makeDataspaceVisibleRequest(
+                    path: "/v1/events/sse",
+                    queryItems: queryItems,
+                    headers: ["Accept": "text/event-stream"]
+                )
             },
             parse: { try self.parseTriggerEvent(from: $0) }
         )
@@ -26904,9 +27069,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         serverSentEventStream(
             request: {
                 let queryItems = try filter.queryItems()
-                return try self.makeRequest(path: "/v1/events/sse",
-                                            queryItems: queryItems,
-                                            headers: ["Accept": "text/event-stream"])
+                return try self.makeDataspaceVisibleRequest(
+                    path: "/v1/events/sse",
+                    queryItems: queryItems,
+                    headers: ["Accept": "text/event-stream"]
+                )
             },
             parse: { try self.parseProofEvent(from: $0) }
         )
@@ -26921,8 +27088,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 if let lastEventId {
                     headers["Last-Event-ID"] = lastEventId
                 }
-                return try self.makeRequest(path: "/v1/explorer/transactions/stream",
-                                            headers: headers)
+                return try self.makeDataspaceVisibleRequest(
+                    path: "/v1/explorer/transactions/stream",
+                    headers: headers
+                )
             },
             parse: { try self.parseExplorerTransactionEvent(from: $0) }
         )
@@ -26937,8 +27106,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 if let lastEventId {
                     headers["Last-Event-ID"] = lastEventId
                 }
-                return try self.makeRequest(path: "/v1/explorer/instructions/stream",
-                                            headers: headers)
+                return try self.makeDataspaceVisibleRequest(
+                    path: "/v1/explorer/instructions/stream",
+                    headers: headers
+                )
             },
             parse: { try self.parseExplorerInstructionEvent(from: $0) }
         )
@@ -27038,8 +27209,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// Stream existing account transfer history first, then keep streaming live transfer updates.
     @available(iOS 15.0, macOS 12.0, *)
     public func streamAccountTransferHistory(accountId: String,
-                                             page: UInt64? = nil,
-                                             perPage: UInt64? = nil,
+                                             cursor: String? = nil,
+                                             limit: UInt32? = nil,
                                              assetDefinitionId: String? = nil,
                                              lastEventId: String? = nil,
                                              maxItems: UInt64? = nil,
@@ -27072,8 +27243,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                     }
 
                     for try await summary in iterateAccountTransferHistory(accountId: normalizedAccount,
-                                                                           page: page,
-                                                                           perPage: perPage,
+                                                                           cursor: cursor,
+                                                                           limit: limit,
                                                                            assetDefinitionId: assetDefinitionId,
                                                                            maxItems: remaining) {
                         if Task.isCancelled {
@@ -27929,7 +28100,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         decoding: Self.queryEqualsFilter(field: "tx_hash", value: normalizedHash).encodedData(),
                         as: UTF8.self
                     )
-                    let request = try makeRequest(
+                    let request = try makeDataspaceVisibleRequest(
                         path: "/v1/events/sse",
                         queryItems: [URLQueryItem(name: "filter", value: filterValue)],
                         headers: ["Accept": "text/event-stream"]
@@ -28336,6 +28507,31 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             request.setValue(value, forHTTPHeaderField: key)
         }
         return request
+    }
+
+    /// Build a request for a dataspace-visible route.
+    ///
+    /// These routes remain anonymously readable for public dataspaces. When a
+    /// default canonical account signer is configured, signing the exact GET
+    /// lets Torii add every restricted dataspace visible to that principal.
+    private func makeDataspaceVisibleRequest(
+        path: String,
+        queryItems: [URLQueryItem]? = nil,
+        headers: [String: String] = [:]
+    ) throws -> URLRequest {
+        guard let canonicalRequestAuth else {
+            return try makeRequest(
+                path: path,
+                queryItems: queryItems,
+                headers: headers
+            )
+        }
+        return try makeCanonicalAccountRequest(
+            path: path,
+            queryItems: queryItems,
+            headers: headers,
+            canonicalAuth: canonicalRequestAuth
+        )
     }
 
     /// Build one fresh, empty-body, exact-network operator-authenticated GET.

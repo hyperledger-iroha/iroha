@@ -11443,9 +11443,9 @@ pub struct StateBlock<'state> {
     pub gas_used_in_block: u64,
     /// Confidential gas charged so far in this block.
     pub confidential_gas_used_in_block: u64,
-    /// Confidential operations applied so far in this block.
+    /// Confidential operations attempted so far in this block, including rejected proofs.
     pub zk_confidential_ops_in_block: u32,
-    /// Confidential proof verifications applied so far in this block.
+    /// Confidential proof verifications attempted so far in this block.
     pub zk_verify_calls_in_block: u32,
     /// Total confidential proof bytes seen in this block.
     pub zk_proof_bytes_in_block: u64,
@@ -12414,6 +12414,99 @@ pub(crate) enum PrivacyTransactionIntentConsumptionErrorV1 {
     #[error("the signed privacy submission has already been consumed")]
     AlreadyConsumed,
 }
+/// Exact direct governance-ballot instruction authorized by a signed transaction.
+///
+/// Penalized ballot failures are committed through the block rejection corridor,
+/// so the native instruction must not be reachable through a contract, trigger,
+/// or dynamically substituted batch item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GovernanceBallotEntrypointBindingV1 {
+    instruction: iroha_data_model::isi::InstructionBox,
+    consumed: bool,
+}
+/// Failure while consuming a transaction-scoped governance-ballot binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ThisError)]
+pub(crate) enum GovernanceBallotEntrypointConsumptionErrorV1 {
+    /// No exact direct ballot was bound from the signed payload.
+    #[error("the current signed transaction has no bound standalone governance ballot")]
+    MissingBinding,
+    /// The executing instruction differs from the exact signed direct ballot.
+    #[error("governance ballot differs from the exact direct instruction in the signed payload")]
+    InstructionMismatch,
+    /// The exact direct ballot was already consumed in this transaction.
+    #[error("the signed governance ballot has already been consumed")]
+    AlreadyConsumed,
+}
+/// Governance penalty that must survive rejection of its originating transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DeferredGovernanceBallotPenaltyV1 {
+    /// Referendum whose retained lock is penalized.
+    pub(crate) referendum_id: String,
+    /// Owner of the retained governance lock.
+    pub(crate) owner: AccountId,
+    /// Exact amount prevalidated against the rejected transaction's live state.
+    pub(crate) amount: Quantity,
+    /// Canonical slash classification.
+    pub(crate) slash_reason: governance_events::GovernanceSlashReason,
+    /// Stable slash audit note.
+    pub(crate) slash_note: String,
+    /// Stable ballot-rejection reason emitted with the committed penalty.
+    pub(crate) ballot_rejection_reason: String,
+}
+
+/// Return the exact standalone direct governance ballot carried by an executable.
+///
+/// A ballot may be represented by either the legacy instruction-list envelope or
+/// a one-item mixed batch, but it must be the sole direct entrypoint. Contracts,
+/// IVM programs, and triggers receive no binding and therefore cannot synthesize
+/// either ballot instruction during signed execution.
+pub(crate) fn standalone_governance_ballot_instruction_v1(
+    executable: &iroha_data_model::transaction::Executable,
+) -> core::result::Result<Option<iroha_data_model::isi::InstructionBox>, &'static str> {
+    use iroha_data_model::transaction::{Executable, executable::ExecutableBatchItem};
+
+    fn is_ballot(instruction: &iroha_data_model::isi::InstructionBox) -> bool {
+        instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::governance::CastPlainBallot>()
+            .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::governance::CastZkBallot>()
+                .is_some()
+    }
+
+    match executable {
+        Executable::Instructions(instructions) => {
+            let ballot = instructions
+                .iter()
+                .find(|instruction| is_ballot(instruction));
+            match ballot {
+                None => Ok(None),
+                Some(instruction) if instructions.len() == 1 => Ok(Some(instruction.clone())),
+                Some(_) => Err(
+                    "a governance ballot must be the sole direct instruction in its signed transaction",
+                ),
+            }
+        }
+        Executable::Batch(items) => {
+            let ballot = items.iter().find_map(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) if is_ballot(instruction) => {
+                    Some(instruction)
+                }
+                ExecutableBatchItem::Instruction(_) | ExecutableBatchItem::ContractCall(_) => None,
+            });
+            match ballot {
+                None => Ok(None),
+                Some(instruction) if items.len() == 1 => Ok(Some(instruction.clone())),
+                Some(_) => Err(
+                    "a governance ballot must be the sole direct instruction in its signed transaction",
+                ),
+            }
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => Ok(None),
+    }
+}
 /// Aggregated state changes for one transaction.
 pub struct StateTransaction<'block, 'state> {
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
@@ -12597,6 +12690,10 @@ pub struct StateTransaction<'block, 'state> {
     pub tx_call_hash: Option<iroha_crypto::Hash>,
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash: Option<HashOf<SignedTransaction>>,
+    /// One-shot binding to the exact standalone ballot in the signed payload.
+    governance_ballot_entrypoint_binding: Option<GovernanceBallotEntrypointBindingV1>,
+    /// Penalties that must be replayed after this transaction overlay is rejected.
+    deferred_governance_ballot_penalties: Vec<DeferredGovernanceBallotPenaltyV1>,
     /// One-shot binding to the exact direct privacy submission in the signed payload.
     pub(crate) privacy_transaction_intent_binding: Option<PrivacyTransactionIntentBindingV1>,
     /// One-shot binding to the exact direct private-settlement carrier.
@@ -12664,6 +12761,11 @@ pub struct StateTransaction<'block, 'state> {
     accounts_snapshot_cache: OnceCell<Arc<Vec<AccountId>>>,
 }
 impl<'block, 'state> StateTransaction<'block, 'state> {
+    /// Return whether execution is currently inside a scheduled or data-trigger body.
+    #[inline]
+    pub(crate) const fn is_trigger_execution_active(&self) -> bool {
+        self.active_trigger_execution_depth != 0
+    }
     /// Block creation timestamp expressed as Unix epoch milliseconds.
     #[must_use]
     pub fn block_unix_timestamp_ms(&self) -> u64 {
@@ -17526,7 +17628,42 @@ impl World {
         let mut lock_expiries =
             BTreeMap::<u64, BTreeSet<(String, iroha_data_model::account::AccountId)>>::new();
         for (referendum_id, locks) in self.governance_locks.view().iter() {
+            let enforce_plain_tally_domain = !matches!(
+                self.governance_referenda
+                    .view()
+                    .get(referendum_id)
+                    .map(|referendum| referendum.mode),
+                Some(GovernanceReferendumMode::Zk)
+            );
+            if enforce_plain_tally_domain
+                && locks.locks.len()
+                    > crate::smartcontracts::isi::world::isi::MAX_STANDALONE_PLAIN_BALLOTS_V1
+            {
+                return Err(format!(
+                    "governance locks for referendum {referendum_id} exceed the first-release standalone PLAIN ballot corpus limit of {}",
+                    crate::smartcontracts::isi::world::isi::MAX_STANDALONE_PLAIN_BALLOTS_V1
+                ));
+            }
             for (owner, lock) in &locks.locks {
+                if lock.owner != *owner {
+                    return Err(format!(
+                        "governance lock for referendum {referendum_id} is stored under an owner different from its record"
+                    ));
+                }
+                if lock.direction > 2 {
+                    return Err(format!(
+                        "governance lock for referendum {referendum_id} has invalid direction {}; expected 0 (Aye), 1 (Nay), or 2 (Abstain)",
+                        lock.direction
+                    ));
+                }
+                if enforce_plain_tally_domain
+                    && (lock.amount.scale() != 0
+                        || lock.amount.as_numeric().try_mantissa_u128().is_none())
+                {
+                    return Err(format!(
+                        "governance lock for referendum {referendum_id} has an amount outside the exact integer u128 tally domain"
+                    ));
+                }
                 lock_expiries
                     .entry(lock.expiry_height)
                     .or_default()
@@ -17573,6 +17710,35 @@ impl World {
         }
         self.parliament_timed_ovn_resource_reservations =
             timed_ovn_resource_reservations.into_iter().collect();
+        Ok(())
+    }
+    fn validate_plain_governance_tally_capacity(
+        &self,
+        governance: &iroha_config::parameters::actual::Governance,
+    ) -> Result<(), String> {
+        for (referendum_id, locks) in self.governance_locks.view().iter() {
+            if matches!(
+                self.governance_referenda
+                    .view()
+                    .get(referendum_id)
+                    .map(|referendum| referendum.mode),
+                Some(GovernanceReferendumMode::Zk)
+            ) {
+                continue;
+            }
+            crate::smartcontracts::isi::world::isi::plain_governance_tally_v1(
+                locks,
+                None,
+                None,
+                governance.conviction_step_blocks,
+                governance.max_conviction,
+            )
+            .map_err(|error| {
+                format!(
+                    "governance locks for referendum {referendum_id} exceed the exact configured tally domain: {error}"
+                )
+            })?;
+        }
         Ok(())
     }
     /// Rebuild the unique `(network, height)` lookup for finalized global-beacon pulses.
@@ -25460,7 +25626,7 @@ impl State {
         )
         .map_err(|error| {
             MergeLedgerCommitError::ExecutionStatePublication(format!(
-                "incompatible persisted SoraFS moderation V1 policy/case state; regenerate first-release genesis and snapshots: {error}"
+                "incompatible persisted SoraFS moderation V1 policy/appeal/anchor/case state; regenerate first-release genesis and snapshots: {error}"
             ))
         })?;
         crate::smartcontracts::ivm::active_runtime_abi_hash(&world.view(), u64::MAX)
@@ -26725,6 +26891,20 @@ impl State {
         };
         sb.freeze_axt_block_start();
         stage(&mut sb)?;
+        let pinned_sortition_anchors =
+            crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(&mut sb)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "persisted SoraFS moderation anchor schedule became invalid at block start: {error}"
+                    )
+                });
+        if pinned_sortition_anchors != 0 {
+            debug!(
+                count = pinned_sortition_anchors,
+                height = sb._curr_block.height().get(),
+                "pinned first post-registration SoraFS moderation sortition anchors"
+            );
+        }
         // Chain-wide privacy policy changes take effect at the start of their
         // exact incoming height, before protocol promotions or transactions.
         sb.apply_due_privacy_consensus_policy();
@@ -27033,43 +27213,17 @@ impl State {
                 match mode {
                     super::state::GovernanceReferendumMode::Plain => {
                         if let Some(locks) = wtx.governance_locks.get(&rid) {
-                            let isqrt = |n: u128| -> u128 {
-                                if n == 0 {
-                                    return 0;
-                                }
-                                let mut x0 = n;
-                                let mut x1 = u128::midpoint(x0, n / x0);
-                                while x1 < x0 {
-                                    x0 = x1;
-                                    x1 = u128::midpoint(x0, n / x0);
-                                }
-                                x0
-                            };
-                            let step = sb.gov.conviction_step_blocks.max(1);
-                            let max_c = sb.gov.max_conviction;
-                            for rec in locks.locks.values() {
-                                if rec.expiry_height < at_h {
-                                    continue;
-                                }
-                                let voting_units = crate::smartcontracts::isi::world::isi::quantity_to_voting_units(
-                                    &rec.amount,
+                            [approve, reject, abstain] =
+                                crate::smartcontracts::isi::world::isi::plain_governance_tally_v1(
+                                    locks,
+                                    None,
+                                    Some(at_h),
+                                    sb.gov.conviction_step_blocks,
+                                    sb.gov.max_conviction,
                                 )
                                 .expect(
-                                    "persisted plain-governance lock amount must remain in the integer u128 tally domain",
+                                    "persisted plain-governance locks must retain an exact bounded tally",
                                 );
-                                let base = isqrt(voting_units);
-                                let mut f = 1u64 + (rec.duration_blocks / step);
-                                if f > max_c {
-                                    f = max_c;
-                                }
-                                let w = base.saturating_mul(u128::from(f));
-                                match rec.direction {
-                                    0 => approve = approve.saturating_add(w),
-                                    1 => reject = reject.saturating_add(w),
-                                    2 => abstain = abstain.saturating_add(w),
-                                    _ => {}
-                                }
-                            }
                         }
                     }
                     super::state::GovernanceReferendumMode::Zk => {
@@ -27087,27 +27241,20 @@ impl State {
                     }
                 }
                 if decision_ready {
-                    let turnout = approve.saturating_add(reject).saturating_add(abstain);
-                    let threshold_numerator = sb.gov.approval_threshold_q_num;
-                    let threshold_denominator = sb.gov.approval_threshold_q_den.max(1);
-                    let decision_approve = if turnout >= sb.gov.min_turnout {
-                        let lhs = approve.saturating_mul(u128::from(threshold_denominator));
-                        let rhs = turnout.saturating_mul(u128::from(threshold_numerator));
-                        lhs >= rhs
-                    } else {
-                        false
-                    };
-                    wtx.emit_events(Some(
-                        governance_events::GovernanceEvent::ReferendumDecided(
-                            governance_events::GovernanceReferendumDecided {
-                                referendum_id: rid,
-                                approve,
-                                reject,
-                                abstain,
-                                approved: decision_approve,
-                            },
-                        ),
-                    ));
+                    let decision =
+                        crate::smartcontracts::isi::world::isi::standalone_referendum_decision_v1(
+                            rid,
+                            approve,
+                            reject,
+                            abstain,
+                            sb.gov.approval_threshold_q_num,
+                            sb.gov.approval_threshold_q_den,
+                            sb.gov.min_turnout,
+                        )
+                        .expect("persisted standalone referendum tally must remain exact");
+                    wtx.emit_events(Some(governance_events::GovernanceEvent::ReferendumDecided(
+                        decision,
+                    )));
                 }
             }
             wtx.apply();
@@ -27522,6 +27669,22 @@ impl State {
             replay_prevalidation: false,
         };
         state_block.freeze_axt_block_start();
+        let pinned_sortition_anchors =
+            crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(
+                &mut state_block,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "reverted SoraFS moderation anchor schedule became invalid at replacement-block start: {error}"
+                )
+            });
+        if pinned_sortition_anchors != 0 {
+            debug!(
+                count = pinned_sortition_anchors,
+                height = state_block._curr_block.height().get(),
+                "repinned first post-registration SoraFS moderation sortition anchors on replacement block"
+            );
+        }
         state_block
     }
     /// Create a point-in-time view of just the world state.
@@ -27954,7 +28117,7 @@ impl State {
     pub fn prev_block_hash_fast(&self) -> Option<HashOf<BlockHeader>> {
         self.block_hashes.view().iter().nth_back(1).copied()
     }
-    /// Whether a canonical entrypoint identity is already committed.
+    /// Whether a canonical carrier or sealed signed-execution replay identity is committed.
     ///
     /// This avoids acquiring a full [`StateView`] when only committed-entrypoint
     /// membership is required.
@@ -28801,7 +28964,7 @@ impl State {
             .lanes
             .iter()
             .flat_map(|execution| {
-                StateBlock::merge_execution_entrypoint_hashes(&execution.entrypoints)
+                crate::tx::canonical_replay_alias_hashes(&execution.entrypoints)
             })
             .collect::<Vec<_>>();
         let height = NonZeroUsize::new(usize::try_from(carrier.block_height).map_err(|_| {
@@ -30594,7 +30757,10 @@ impl State {
             let fastpq_transcripts =
                 state_block.take_merge_lane_fastpq_transcripts(&source.input.entrypoints)?;
             state_block.stage_merge_carrier_entrypoints(
-                StateBlock::merge_execution_entrypoint_hashes(&source.input.entrypoints),
+                crate::tx::canonical_carrier_membership_hashes(
+                    state_block,
+                    &source.input.entrypoints,
+                ),
             );
             let placeholder = LaneBlockCommitment {
                 block_height: descriptor.lane_block_height,
@@ -37598,11 +37764,17 @@ impl State {
                 }
             }
             for entrypoint_hash in
-                StateBlock::merge_execution_entrypoint_hashes(&execution.entrypoints)
+                crate::tx::canonical_replay_alias_hashes(&execution.entrypoints)
             {
                 if !seen_committed_entrypoints.insert(entrypoint_hash) {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                         "duplicate committed entrypoint across lanes".to_owned(),
+                    ));
+                }
+                if validate_live_authority && authority.has_entrypoint(entrypoint_hash) {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "autonomous merge execution reuses a committed carrier or sealed signed-execution identity"
+                            .to_owned(),
                     ));
                 }
             }
@@ -41343,6 +41515,8 @@ impl State {
     /// trusted bootstrap step may precede genesis account registration; after
     /// genesis, owner transitions require an enacted native referendum.
     pub fn set_gov(&mut self, gov: iroha_config::parameters::actual::Governance) {
+        self.validate_restored_governance(&gov)
+            .unwrap_or_else(|error| panic!("refusing governance configuration: {error}"));
         let bootstrap = self.block_hashes.view().len() == 0;
         for (provider, owner) in gov.sorafs_provider_owners.iter().filter(|_| bootstrap) {
             let existing = self.world.provider_owners.view().get(provider).cloned();
@@ -41389,6 +41563,29 @@ impl State {
             );
         }
         self.gov = gov;
+    }
+
+    /// Validate restored governance state against runtime governance policy without mutating it.
+    ///
+    /// Emergency Fast startup uses this check while deliberately leaving runtime services and
+    /// configuration inert. It rejects invalid conviction/threshold parameters and any restored
+    /// standalone PLAIN ballot corpus that cannot be tallied exactly under the supplied policy.
+    ///
+    /// # Errors
+    /// Returns an error when the policy is invalid or incompatible with restored PLAIN locks.
+    pub fn validate_restored_governance(
+        &self,
+        gov: &iroha_config::parameters::actual::Governance,
+    ) -> Result<(), String> {
+        if gov.conviction_step_blocks == 0 || gov.max_conviction == 0 {
+            return Err("zero conviction parameter".to_owned());
+        }
+        if gov.approval_threshold_q_den == 0
+            || gov.approval_threshold_q_num > gov.approval_threshold_q_den
+        {
+            return Err("invalid approval threshold".to_owned());
+        }
+        self.world.validate_plain_governance_tally_capacity(gov)
     }
 }
 include!("state/lane_lifecycle_support.rs");
@@ -45841,7 +46038,7 @@ impl_state_ro! { StateBlock<'_>, StateTransaction<'_, '_>, StateView<'_>, StateQ
 pub trait StateReadOnlyWithTransactions: StateReadOnly {
     /// Returns transactions map
     fn transactions(&self) -> &impl TransactionsReadOnly;
-    /// Check if a canonical transaction entrypoint is already committed.
+    /// Check if a canonical carrier or signed-execution replay identity is committed.
     #[inline]
     fn has_entrypoint(&self, hash: HashOf<TransactionEntrypoint>) -> bool {
         self.transactions().get(&hash).is_some()
@@ -46438,6 +46635,8 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
             current_tx_hash: None,
+            governance_ballot_entrypoint_binding: None,
+            deferred_governance_ballot_penalties: Vec::new(),
             privacy_transaction_intent_binding: None,
             private_settlement_carrier_binding: None,
             kagemusha_taira_canary_wire_identity: None,
@@ -46479,7 +46678,9 @@ impl<'state> StateBlock<'state> {
             .and_then(|entry| entry.execution_batch.as_ref())
             .into_iter()
             .flat_map(|batch| &batch.lanes)
-            .flat_map(|execution| Self::merge_execution_entrypoint_hashes(&execution.entrypoints))
+            .flat_map(|execution| {
+                crate::tx::canonical_carrier_membership_hashes(self, &execution.entrypoints)
+            })
             .collect()
     }
     fn validate_merge_carrier_entrypoint_binding(&self) -> Result<(), MergeLedgerCommitError> {
@@ -47319,11 +47520,6 @@ impl<'state> StateBlock<'state> {
             self.world.smart_contract_state.insert(key, payload);
         }
         Ok(())
-    }
-    fn merge_execution_entrypoint_hashes(
-        entrypoints: &[TransactionEntrypoint],
-    ) -> Vec<HashOf<TransactionEntrypoint>> {
-        committed_entrypoint_hashes(entrypoints)
     }
     fn merge_execution_call_hash(entrypoint: &TransactionEntrypoint) -> Hash {
         Hash::from(entrypoint.execution_call_hash())
@@ -48925,9 +49121,13 @@ impl<'state> StateBlock<'state> {
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
         let signed_block = block.as_ref();
-        if let Err(error) =
-            self.stage_canonical_carrier_membership(signed_block.entrypoint_hashes(), block_height)
-        {
+        if let Err(error) = self.stage_canonical_carrier_membership(
+            crate::tx::canonical_carrier_membership_hashes(
+                self,
+                signed_block.external_entrypoints_slice(),
+            ),
+            block_height,
+        ) {
             return (Vec::new(), Err(error));
         }
         if let Some(bundle) = block.as_ref().da_commitments() {
@@ -51202,6 +51402,41 @@ mod committed_transaction_context_tests {
             Some(crate::tx::AcceptedTransaction::prepare_signed_metadata(&signed).signed_hash)
         );
         assert_eq!(transaction.current_entrypoint_index, Some(7));
+    }
+
+    #[test]
+    fn committed_transaction_context_binds_exact_standalone_governance_ballot() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut transaction = state_block.transaction();
+        let ballot = InstructionBox::from(iroha_data_model::isi::governance::CastZkBallot {
+            election_id: "committed.replay.v1".to_owned(),
+            proof_b64: "AA==".to_owned(),
+            public_inputs_json: "{}".to_owned(),
+        });
+        let signed = TransactionBuilder::new(
+            state.network_id,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([ballot.clone()])
+        .sign(ALICE_KEYPAIR.private_key());
+        let entrypoint = TransactionEntrypoint::External(signed);
+
+        crate::state::seed_committed_transaction_context(&mut transaction, &entrypoint, 3);
+
+        transaction
+            .consume_governance_ballot_entrypoint_v1(&ballot)
+            .expect("committed replay must bind the exact standalone ballot");
+        assert_eq!(
+            transaction.consume_governance_ballot_entrypoint_v1(&ballot),
+            Err(GovernanceBallotEntrypointConsumptionErrorV1::AlreadyConsumed)
+        );
     }
 }
 #[cfg(test)]
@@ -56106,6 +56341,51 @@ impl StateTransaction<'_, '_> {
         binding: Option<PrivateSettlementCarrierBindingV1>,
     ) {
         self.private_settlement_carrier_binding = binding;
+    }
+    /// Install the exact standalone governance ballot derived from a signed payload.
+    ///
+    /// Passing `None` clears the binding. Nested execution paths must never install
+    /// or reset it.
+    pub(crate) fn bind_governance_ballot_entrypoint_v1(
+        &mut self,
+        instruction: Option<iroha_data_model::isi::InstructionBox>,
+    ) {
+        self.governance_ballot_entrypoint_binding =
+            instruction.map(|instruction| GovernanceBallotEntrypointBindingV1 {
+                instruction,
+                consumed: false,
+            });
+    }
+    /// Consume the exact signed standalone governance ballot once.
+    pub(crate) fn consume_governance_ballot_entrypoint_v1(
+        &mut self,
+        actual: &iroha_data_model::isi::InstructionBox,
+    ) -> core::result::Result<(), GovernanceBallotEntrypointConsumptionErrorV1> {
+        let binding = self
+            .governance_ballot_entrypoint_binding
+            .as_mut()
+            .ok_or(GovernanceBallotEntrypointConsumptionErrorV1::MissingBinding)?;
+        if binding.instruction != *actual {
+            return Err(GovernanceBallotEntrypointConsumptionErrorV1::InstructionMismatch);
+        }
+        if binding.consumed {
+            return Err(GovernanceBallotEntrypointConsumptionErrorV1::AlreadyConsumed);
+        }
+        binding.consumed = true;
+        Ok(())
+    }
+    /// Stage a prevalidated ballot penalty for replay if this overlay is rejected.
+    pub(crate) fn defer_governance_ballot_penalty_v1(
+        &mut self,
+        penalty: DeferredGovernanceBallotPenaltyV1,
+    ) {
+        self.deferred_governance_ballot_penalties.push(penalty);
+    }
+    /// Take every ballot penalty that must outlive rejection of this overlay.
+    pub(crate) fn take_deferred_governance_ballot_penalties_v1(
+        &mut self,
+    ) -> Vec<DeferredGovernanceBallotPenaltyV1> {
+        core::mem::take(&mut self.deferred_governance_ballot_penalties)
     }
     /// Consume the exact signed private-settlement carrier once.
     pub(crate) fn consume_private_settlement_carrier_binding_v1(

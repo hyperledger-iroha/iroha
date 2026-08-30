@@ -50,6 +50,8 @@ mod scheduler_teu;
 mod set_parameter;
 #[path = "sns.rs"]
 mod sns;
+#[path = "sorafs_moderation_anchor.rs"]
+mod sorafs_moderation_anchor;
 #[path = "sorting.rs"]
 mod sorting;
 #[path = "telemetry.rs"]

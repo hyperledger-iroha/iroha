@@ -8230,6 +8230,28 @@ fn build_state(
             "restored committed height does not fit the Parliament height domain: {error}"
         ))
     })?;
+    crate::smartcontracts::isi::sorafs_moderation::validate_persisted_moderation_schema_v1(
+        &world.view(),
+    )
+    .map_err(|error| {
+        MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "incompatible persisted SoraFS moderation V1 policy/appeal/anchor/case state; regenerate first-release genesis and snapshots: {error}"
+        ))
+    })?;
+    {
+        // Preserve the global State view lock order even though restoration is single-threaded.
+        let committed_block_hashes = block_hashes.view();
+        let world_view = world.view();
+        crate::smartcontracts::isi::sorafs_moderation::validate_persisted_moderation_anchor_history_v1(
+            &world_view,
+            &committed_block_hashes,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "restored SoraFS moderation sortition anchors are not bound to committed block history: {error}"
+            ))
+        })?;
+    }
     if !emergency_fast {
         validate_tle_ovn_snapshot_network_v1(&world, &network_id)
             .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
@@ -8627,8 +8649,7 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
         max_conviction: 6,
         min_enactment_delay: 20,
         window_span: 100,
-        plain_voting_enabled:
-            iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
+        plain_voting_enabled: iroha_config::parameters::defaults::governance::PLAIN_VOTING_ENABLED,
         approval_threshold_q_num: 1,
         approval_threshold_q_den: 2,
         min_turnout: 0,
@@ -8736,10 +8757,9 @@ mod decode_tests {
     fn restore_rejects_every_standalone_state_alias_for_a_typed_proposal() {
         let kind = ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
-                contract_address:
-                    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-                        .parse()
-                        .expect("contract address"),
+                contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                    .parse()
+                    .expect("contract address"),
                 code_hash: iroha_data_model::governance::types::ContractCodeHash::new([0x31; 32]),
                 abi_hash: iroha_data_model::governance::types::ContractAbiHash::new([0x41; 32]),
                 abi_version: iroha_data_model::governance::types::AbiVersion::new(1),
@@ -8747,16 +8767,19 @@ mod decode_tests {
             },
         );
         let proposal_id = kind.fingerprint();
-        let mut world = World::default();
-        world.governance_proposals.insert(
-            proposal_id,
-            GovernanceProposalRecord {
-                proposer: musubi_account(59),
-                kind,
-                created_height: 1,
-                status: GovernanceProposalStatus::Proposed,
-            },
-        );
+        let typed_world = || {
+            let mut world = World::default();
+            world.governance_proposals.insert(
+                proposal_id,
+                GovernanceProposalRecord {
+                    proposer: musubi_account(59),
+                    kind: kind.clone(),
+                    created_height: 1,
+                    status: GovernanceProposalStatus::Proposed,
+                },
+            );
+            world
+        };
         let lowercase = hex::encode(proposal_id);
         let uppercase = lowercase.to_ascii_uppercase();
         let mixed = lowercase
@@ -8771,6 +8794,7 @@ mod decode_tests {
             })
             .collect::<String>();
         let referendum_alias = uppercase;
+        let mut world = typed_world();
         world.governance_referenda.insert(
             referendum_alias.clone(),
             GovernanceReferendumRecord {
@@ -8786,8 +8810,7 @@ mod decode_tests {
             error,
             json::Error::InvalidField { ref field, .. } if field == "governance_referenda"
         ));
-        world.governance_referenda.remove(referendum_alias);
-
+        let mut world = typed_world();
         world
             .governance_locks
             .insert(mixed.clone(), GovernanceLocksForReferendum::default());
@@ -8797,22 +8820,19 @@ mod decode_tests {
             error,
             json::Error::InvalidField { ref field, .. } if field == "governance_locks"
         ));
-        world.governance_locks.remove(mixed);
-
         let lower_prefixed = format!("0x{lowercase}");
-        world.governance_slashes.insert(
-            lower_prefixed.clone(),
-            GovernanceSlashLedger::default(),
-        );
+        let mut world = typed_world();
+        world
+            .governance_slashes
+            .insert(lower_prefixed.clone(), GovernanceSlashLedger::default());
         let error = validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
             .expect_err("0x-prefixed restored slash alias must fail closed");
         assert!(matches!(
             error,
             json::Error::InvalidField { ref field, .. } if field == "governance_slashes"
         ));
-        world.governance_slashes.remove(lower_prefixed);
-
         let upper_prefixed = format!("0X{}", lowercase.to_ascii_uppercase());
+        let mut world = typed_world();
         world
             .elections
             .insert(upper_prefixed.clone(), ElectionState::default());
@@ -8822,9 +8842,7 @@ mod decode_tests {
             error,
             json::Error::InvalidField { ref field, .. } if field == "elections"
         ));
-        world.elections.remove(upper_prefixed);
-
-        validate_no_standalone_governance_state_for_typed_proposals_v1(&world)
+        validate_no_standalone_governance_state_for_typed_proposals_v1(&typed_world())
             .expect("typed proposal without standalone state is valid");
     }
 

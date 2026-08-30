@@ -7481,11 +7481,11 @@ redistributable schemas, and official trust/revocation bundles.
   audit, V1 Kagemusha, and version-nested routes instead of preserving
   rejection or compatibility shims. Router and catalog tests assert those
   method/path pairs cannot resolve through aliases or parameter capture.
-- Completed 2026-07-30: removed the unshipped governance council
-  `derive-vrf` prototype, its `gov_vrf` feature, HTTP/MCP surfaces, and
-  documentation. Council selection uses the canonical on-chain bonded-citizen
-  sortition path; the independently authorized persist/replace administration
-  helpers remain.
+- Completed 2026-07-30 and finalized 2026-08-30: removed the unshipped
+  governance council `derive-vrf` prototype, its `gov_vrf` feature, HTTP/MCP
+  surfaces, and independently authorized persist/replace/manual epoch-roster
+  surfaces. Attempt-local Parliament bodies use canonical bonded-citizen
+  snapshots plus finalized threshold-beacon pulses.
 - Completed 2026-06-06: refreshed `fixtures/offline/interop_contract_v2.json`
   and its generator so the published redeem vector uses
   `OFFLINE_NOTE_KEY_CERTIFICATE_VERSION` directly. Torii now consumes the
@@ -10517,9 +10517,8 @@ redistributable schemas, and official trust/revocation bundles.
     account plus one-use key-certificate fixtures now use checked deterministic
     Ed25519 seed expansion before STARK and offline recursive proof regressions
     consume them;
-    gated Torii council persist integration candidate accounts and BLS VRF
-    keypairs now use checked domain-separated Ed25519/BLS seed expansion before
-    persist/derive-vrf regressions consume them;
+    the retired Torii council-persist and governance derive-VRF fixtures and
+    regressions are removed with their unshipped surfaces;
     Torii account-activity unit-test account helpers now use checked
     deterministic Ed25519 seed expansion before activity extraction regressions
     consume them;
@@ -10675,8 +10674,8 @@ redistributable schemas, and official trust/revocation bundles.
     repair, and routed-read regressions rerun;
     Torii grouped core/Nexus/governance test fixtures now use checked
     `Signature::try_new` and `KeyPair::try_from_seed`, with portfolio filtering,
-    bridge finality, Nexus disabled/enabled lanes, push rejection/success, and
-    gated governance VRF ordering regressions rerun;
+    bridge finality, Nexus disabled/enabled lanes, and push rejection/success
+    regressions rerun;
     Torii routing overlong multisig selector, contract bundle, repair native
     action transaction, and account transaction filter fixtures now use checked seed and
     signature constructors before selector, receipt, repair, and filter

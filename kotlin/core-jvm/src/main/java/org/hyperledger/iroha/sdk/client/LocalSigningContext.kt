@@ -3,7 +3,8 @@ package org.hyperledger.iroha.sdk.client
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /**
- * Immutable local context used to validate server-prepared transaction drafts before signing.
+ * Immutable local context used to bind locally signed Torii requests and validate
+ * server-prepared transaction drafts before signing.
  *
  * The exact network identity is configured by the caller and is never inferred from a server
  * response.
@@ -11,7 +12,7 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId
 class LocalSigningContext(
     private val networkId: NetworkId,
 ) {
-    /** Exact canonical genesis-hash identity required in every locally signed draft. */
+    /** Exact canonical genesis-hash identity required in every locally signed request or draft. */
     fun networkId(): NetworkId = networkId
 
     override fun equals(other: Any?): Boolean =

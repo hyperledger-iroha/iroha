@@ -93,6 +93,70 @@ pub(crate) fn exact_signed_transaction_hash(
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
+/// Return every identity that must be checked for replay before executing entrypoints.
+///
+/// A sealed reveal always exposes both its carrier and enclosed signed identity
+/// to duplicate/replay validation. This helper does not decide which identities
+/// a rejected reveal is authenticated to commit; use
+/// [`canonical_carrier_membership_hashes`] at the persistence boundary.
+pub(crate) fn canonical_replay_alias_hashes(
+    entrypoints: &[TransactionEntrypoint],
+) -> Vec<HashOf<TransactionEntrypoint>> {
+    let mut hashes = Vec::with_capacity(entrypoints.len().saturating_mul(2));
+    for entrypoint in entrypoints {
+        let carrier_hash = entrypoint.hash();
+        hashes.push(carrier_hash);
+        if let TransactionEntrypoint::SealedReveal(reveal) = entrypoint {
+            let execution_hash = reveal.signed_transaction().hash_as_entrypoint();
+            if execution_hash != carrier_hash {
+                hashes.push(execution_hash);
+            }
+        }
+    }
+    hashes
+}
+/// Return the identities authenticated for canonical carrier membership.
+///
+/// Every entrypoint commits its outer carrier identity. A sealed reveal commits
+/// the enclosed signed identity only when it exactly authenticates a pending
+/// commitment from the pre-block state at this block's height. Re-reading the
+/// pre-block value keeps the classification stable after successful removal,
+/// rejected execution rollback, or end-of-block expiry pruning.
+pub(crate) fn canonical_carrier_membership_hashes(
+    state_block: &StateBlock<'_>,
+    entrypoints: &[TransactionEntrypoint],
+) -> Vec<HashOf<TransactionEntrypoint>> {
+    let mut hashes = Vec::with_capacity(entrypoints.len().saturating_mul(2));
+    for entrypoint in entrypoints {
+        let carrier_hash = entrypoint.hash();
+        hashes.push(carrier_hash);
+        if let TransactionEntrypoint::SealedReveal(reveal) = entrypoint
+            && sealed_reveal_authenticated_at_block_start(state_block, reveal)
+        {
+            let execution_hash = reveal.signed_transaction().hash_as_entrypoint();
+            if execution_hash != carrier_hash {
+                hashes.push(execution_hash);
+            }
+        }
+    }
+    hashes
+}
+fn rejected_live_execution_fee_eligible(executable: &Executable) -> bool {
+    matches!(executable, Executable::Batch(_))
+        || matches!(
+            crate::state::standalone_governance_ballot_instruction_v1(executable),
+            Ok(Some(_))
+        )
+}
+fn rejected_transaction_gas_is_accountable(gas_used: u64, result: &TransactionResultInner) -> bool {
+    gas_used > 0
+        && !matches!(
+            result,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::InternalError(_)
+            ))
+        )
+}
 /// Project a hash known to identify an external signed transaction into its entrypoint identity.
 ///
 /// `TransactionEntrypoint::External` deliberately preserves the signed transaction's digest.
@@ -333,6 +397,81 @@ fn sealed_state_encode_error(error: impl fmt::Display) -> TransactionRejectionRe
         "sealed transaction commitment state encode failed: {error}"
     )))
 }
+fn validate_sealed_reveal_authentication(
+    reveal: &SealedTransactionReveal,
+    record: &PendingSealedTransactionCommitment,
+    height: u64,
+) -> Result<(), TransactionRejectionReason> {
+    if height < record.payload.reveal_after_height {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(format!(
+                "sealed transaction reveal is too early: height {height}, reveal_after_height {}",
+                record.payload.reveal_after_height
+            )),
+        ));
+    }
+    if height > record.payload.reveal_deadline_height {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(format!(
+                "sealed transaction reveal deadline {} passed at height {height}",
+                record.payload.reveal_deadline_height
+            )),
+        ));
+    }
+    let signed = reveal.signed_transaction();
+    if signed.network_id() != Some(&record.payload.network_id) {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(format!(
+                "sealed transaction network mismatch: commitment network {} reveal domain {:?}",
+                record.payload.network_id,
+                signed.domain()
+            )),
+        ));
+    }
+    if signed.authority() != &record.payload.authority {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "sealed transaction reveal authority does not match commitment authority".into(),
+            ),
+        ));
+    }
+    let expected = compute_sealed_transaction_commitment(
+        &record.payload.network_id,
+        signed,
+        reveal.salt,
+        record.payload.reveal_deadline_height,
+    );
+    if expected != record.payload.commitment || expected != reveal.commitment {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "sealed transaction reveal does not match commitment".into(),
+            ),
+        ));
+    }
+    Ok(())
+}
+fn sealed_reveal_authenticated_at_block_start(
+    state_block: &StateBlock<'_>,
+    reveal: &SealedTransactionReveal,
+) -> bool {
+    let key = sealed_commitment_state_key(&reveal.commitment);
+    let Some(bytes) = state_block
+        .world
+        .smart_contract_state
+        .get_before_block(&key)
+    else {
+        return false;
+    };
+    let Ok(record) = norito::decode_from_bytes::<PendingSealedTransactionCommitment>(bytes) else {
+        return false;
+    };
+    validate_sealed_reveal_authentication(
+        reveal,
+        &record,
+        state_block._curr_block.height().get(),
+    )
+    .is_ok()
+}
 pub(crate) fn validate_sealed_commitment_stateless(
     commitment: &SignedSealedTransactionCommitment,
     expected_network_id: &NetworkId,
@@ -539,7 +678,7 @@ impl<'tx> CheckedTransaction<'tx> {
         tx: AcceptedTransaction<'tx>,
         state: &impl StateReadOnlyWithTransactions,
     ) -> Result<Self, (AcceptedTransaction<'tx>, TransactionAlreadyCommitted)> {
-        if state.has_entrypoint(tx.hash_as_entrypoint()) {
+        if tx.has_committed_replay_identity(state) {
             return Err((tx, TransactionAlreadyCommitted));
         }
         Ok(Self(tx))
@@ -565,7 +704,7 @@ impl<'tx> CheckedTransaction<'tx> {
     /// Check whether the transaction is now recorded in the blockchain.
     #[must_use]
     pub fn is_in_blockchain(&self, state: &impl StateReadOnlyWithTransactions) -> bool {
-        state.has_entrypoint(self.hash_as_entrypoint())
+        self.as_accepted().has_committed_replay_identity(state)
     }
 }
 impl<'tx> core::ops::Deref for CheckedTransaction<'tx> {
@@ -1226,6 +1365,21 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[must_use]
     pub(crate) fn validation_time(&self) -> Option<Duration> {
         self.validation_time
+    }
+    /// Return whether the ledger already commits this carrier or an authenticated replay alias.
+    #[must_use]
+    pub(crate) fn has_committed_replay_identity(
+        &self,
+        state: &impl StateReadOnlyWithTransactions,
+    ) -> bool {
+        state.has_entrypoint(self.hash_as_entrypoint())
+            || match self.entrypoint() {
+                TransactionEntrypoint::SealedReveal(reveal) => state
+                    .has_entrypoint(reveal.signed_transaction().hash_as_entrypoint()),
+                TransactionEntrypoint::External(_)
+                | TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::Time(_) => false,
+            }
     }
     fn from_external_with_cached_bytes(
         tx: SignedTransaction,
@@ -2754,6 +2908,60 @@ impl AsRef<SignedTransaction> for AcceptedTransaction<'_> {
     }
 }
 impl StateBlock<'_> {
+    /// Carry bounded confidential work from one live overlay into block totals.
+    pub(crate) fn account_confidential_work_v1(
+        &mut self,
+        operations: u32,
+        verify_calls: u32,
+        proof_bytes: u64,
+        confidential_gas: u64,
+    ) {
+        self.zk_confidential_ops_in_block =
+            self.zk_confidential_ops_in_block.saturating_add(operations);
+        self.zk_verify_calls_in_block = self.zk_verify_calls_in_block.saturating_add(verify_calls);
+        self.zk_proof_bytes_in_block = self.zk_proof_bytes_in_block.saturating_add(proof_bytes);
+        self.confidential_gas_used_in_block = self
+            .confidential_gas_used_in_block
+            .saturating_add(confidential_gas);
+    }
+    /// Commit prevalidated ballot penalties after their originating transaction was rejected.
+    ///
+    /// This shared corridor is used by ordinary scheduler, sealed-entrypoint,
+    /// and autonomous-lane execution paths. Penalties commit before any rejected
+    /// fee transaction, so a fee failure cannot roll them back.
+    pub(crate) fn apply_rejected_governance_ballot_penalties_v1(
+        &mut self,
+        tx: &SignedTransaction,
+        penalties: Vec<crate::state::DeferredGovernanceBallotPenaltyV1>,
+        routing: Option<crate::queue::RoutingDecision>,
+        entrypoint_index: Option<u64>,
+    ) -> Result<(), TransactionRejectionReason> {
+        if penalties.is_empty() {
+            return Ok(());
+        }
+        let mut penalty_tx = self.transaction();
+        if let Some(routing) = routing {
+            penalty_tx.current_lane_id = Some(routing.lane_id);
+            penalty_tx.current_dataspace_id = Some(routing.dataspace_id);
+            penalty_tx.world.current_dataspace_id = Some(routing.dataspace_id);
+        }
+        penalty_tx.current_entrypoint_index = entrypoint_index;
+        penalty_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+        penalty_tx.current_tx_hash = Some(tx.hash());
+        for penalty in &penalties {
+            crate::smartcontracts::isi::world::isi::apply_deferred_governance_ballot_penalty_v1(
+                penalty,
+                &mut penalty_tx,
+            )
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+                    "failed to commit deferred governance ballot penalty: {error}"
+                )))
+            })?;
+        }
+        penalty_tx.apply();
+        Ok(())
+    }
     /// Validate stateful admission rules that must hold before transaction execution.
     ///
     /// This helper intentionally does not execute instructions or apply state. Callers must only
@@ -3090,13 +3298,16 @@ impl StateBlock<'_> {
         entrypoint_index: Option<u64>,
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
-        // Capture gas accounting inputs up front to avoid borrowing conflicts
+        let signed_transaction = match tx.entrypoint() {
+            TransactionEntrypoint::External(signed) => Some(signed.clone()),
+            TransactionEntrypoint::SealedReveal(reveal) => {
+                Some(reveal.signed_transaction().clone())
+            }
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+        };
+        // Capture gas accounting inputs up front to avoid borrowing conflicts.
         let gas_total_before = self.gas_used_in_block;
         let gas_limit = self.gas_limit_per_block;
-        let ops_total_before = self.zk_confidential_ops_in_block;
-        let verify_calls_before = self.zk_verify_calls_in_block;
-        let proof_bytes_before = self.zk_proof_bytes_in_block;
-        let conf_gas_before = self.confidential_gas_used_in_block;
         let mut state_transaction = self.transaction();
         state_transaction.current_entrypoint_index = entrypoint_index;
         state_transaction.kagemusha_taira_canary_external_entrypoint =
@@ -3107,18 +3318,37 @@ impl StateBlock<'_> {
             state_transaction.world.current_dataspace_id = Some(routing.dataspace_id);
         }
         let hash = tx.hash_as_entrypoint();
-        let result = Self::validate_transaction_internal(
+        let mut result = Self::validate_transaction_internal(
             tx,
             &mut state_transaction,
             ivm_cache,
             routing_decision,
         );
+        let rejected_gas_used = state_transaction.last_tx_gas_used;
+        let rejected_confidential_work = (
+            state_transaction.zk_confidential_ops_in_tx,
+            state_transaction.zk_verify_calls_in_tx,
+            state_transaction.zk_proof_bytes_in_tx,
+            state_transaction.confidential_gas_used_in_tx,
+        );
+        let governance_penalties = if result.is_err() {
+            state_transaction.take_deferred_governance_ballot_penalties_v1()
+        } else {
+            Vec::new()
+        };
         if result.is_ok() {
             // Enforce block gas limit if configured; accumulate gas used by last tx (IVM path)
             let used = state_transaction.last_tx_gas_used;
             // Compute new total without touching `self` while `state_transaction` borrows it
             let new_total = gas_total_before.saturating_add(used);
-            if used > 0 && new_total > gas_limit {
+            if gas_limit != 0 && used > 0 && new_total > gas_limit {
+                drop(state_transaction);
+                self.account_confidential_work_v1(
+                    rejected_confidential_work.0,
+                    rejected_confidential_work.1,
+                    rejected_confidential_work.2,
+                    rejected_confidential_work.3,
+                );
                 return (
                     hash,
                     Err(TransactionRejectionReason::Validation(
@@ -3132,26 +3362,75 @@ impl StateBlock<'_> {
             let tx_verify_calls = state_transaction.zk_verify_calls_in_tx;
             let tx_proof_bytes = state_transaction.zk_proof_bytes_in_tx;
             let tx_conf_gas = state_transaction.confidential_gas_used_in_tx;
-            let new_ops_total = ops_total_before.saturating_add(tx_ops);
-            let new_verify_total = verify_calls_before.saturating_add(tx_verify_calls);
-            let new_proof_bytes_total = proof_bytes_before.saturating_add(tx_proof_bytes);
-            let new_conf_total = conf_gas_before.saturating_add(tx_conf_gas);
             // Apply staged changes first, then update gas accounting after borrow ends
             state_transaction.apply();
             if used > 0 {
                 self.gas_used_in_block = new_total;
             }
-            if tx_ops > 0 {
-                self.zk_confidential_ops_in_block = new_ops_total;
+            self.account_confidential_work_v1(tx_ops, tx_verify_calls, tx_proof_bytes, tx_conf_gas);
+        } else {
+            drop(state_transaction);
+            self.account_confidential_work_v1(
+                rejected_confidential_work.0,
+                rejected_confidential_work.1,
+                rejected_confidential_work.2,
+                rejected_confidential_work.3,
+            );
+            let mut penalty_committed = true;
+            if !governance_penalties.is_empty() {
+                let penalty_result = signed_transaction.as_ref().map_or_else(
+                    || {
+                        Err(TransactionRejectionReason::Validation(
+                            ValidationFail::InternalError(
+                                "deferred governance ballot penalty has no signed transaction"
+                                    .to_owned(),
+                            ),
+                        ))
+                    },
+                    |signed| {
+                        self.apply_rejected_governance_ballot_penalties_v1(
+                            signed,
+                            governance_penalties,
+                            routing_decision,
+                            entrypoint_index,
+                        )
+                    },
+                );
+                if let Err(error) = penalty_result {
+                    result = Err(error);
+                    penalty_committed = false;
+                }
             }
-            if tx_conf_gas > 0 {
-                self.confidential_gas_used_in_block = new_conf_total;
-            }
-            if tx_verify_calls > 0 {
-                self.zk_verify_calls_in_block = new_verify_total;
-            }
-            if tx_proof_bytes > 0 {
-                self.zk_proof_bytes_in_block = new_proof_bytes_total;
+            if penalty_committed
+                && let Some(signed) = signed_transaction.as_ref()
+                && rejected_live_execution_fee_eligible(signed.instructions())
+                && rejected_transaction_gas_is_accountable(rejected_gas_used, &result)
+            {
+                let authority = signed.authority().clone();
+                let mut fee_tx = self.transaction();
+                if let Some(routing) = routing_decision {
+                    fee_tx.current_lane_id = Some(routing.lane_id);
+                    fee_tx.current_dataspace_id = Some(routing.dataspace_id);
+                    fee_tx.world.current_dataspace_id = Some(routing.dataspace_id);
+                }
+                fee_tx.current_entrypoint_index = entrypoint_index;
+                fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()));
+                fee_tx.current_tx_hash = Some(signed.hash());
+                let fee_result = crate::executor::charge_fees_for_rejected_live_batch(
+                    &mut fee_tx,
+                    &authority,
+                    signed,
+                    rejected_gas_used,
+                )
+                .map_err(TransactionRejectionReason::Validation);
+                match &fee_result {
+                    Ok(()) => fee_tx.apply(),
+                    Err(_) => drop(fee_tx),
+                }
+                self.gas_used_in_block = self.gas_used_in_block.saturating_add(rejected_gas_used);
+                if let Err(error) = fee_result {
+                    result = Err(error);
+                }
             }
         }
         (hash, result)
@@ -3344,53 +3623,8 @@ impl StateBlock<'_> {
         let record: PendingSealedTransactionCommitment =
             norito::decode_from_bytes(bytes).map_err(sealed_state_decode_error)?;
         let height = state_transaction._curr_block.height().get();
-        if height < record.payload.reveal_after_height {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(format!(
-                    "sealed transaction reveal is too early: height {height}, reveal_after_height {}",
-                    record.payload.reveal_after_height
-                )),
-            ));
-        }
-        if height > record.payload.reveal_deadline_height {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(format!(
-                    "sealed transaction reveal deadline {} passed at height {height}",
-                    record.payload.reveal_deadline_height
-                )),
-            ));
-        }
+        validate_sealed_reveal_authentication(reveal, &record, height)?;
         let signed = reveal.signed_transaction();
-        if signed.network_id() != Some(&record.payload.network_id) {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(format!(
-                    "sealed transaction network mismatch: commitment network {} reveal domain {:?}",
-                    record.payload.network_id,
-                    signed.domain()
-                )),
-            ));
-        }
-        if signed.authority() != &record.payload.authority {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "sealed transaction reveal authority does not match commitment authority"
-                        .into(),
-                ),
-            ));
-        }
-        let expected = compute_sealed_transaction_commitment(
-            &record.payload.network_id,
-            signed,
-            reveal.salt,
-            record.payload.reveal_deadline_height,
-        );
-        if expected != record.payload.commitment || expected != reveal.commitment {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "sealed transaction reveal does not match commitment".into(),
-                ),
-            ));
-        }
         state_transaction.world.smart_contract_state.remove(key);
         let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(signed));
         // The outer entrypoint's route was authenticated before the reveal was opened. Preserve it
@@ -12182,6 +12416,97 @@ pub mod tests {
                 .is_some(),
             "a rejected reveal must roll back pending-commitment removal"
         );
+    }
+    #[test]
+    fn sealed_reveal_commits_carrier_and_signed_replay_identities() {
+        let (authority, keypair) = gen_account_in("sealed-replay-identities");
+        let signed = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed replay identity".to_owned())])
+        .sign(keypair.private_key());
+        let salt = [0x5A; 32];
+        let deadline = 9;
+        let commitment =
+            compute_sealed_transaction_commitment(&test_network_id(), &signed, salt, deadline);
+        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment,
+            signed.clone(),
+            salt,
+        ));
+
+        let identities = canonical_carrier_membership_hashes(core::slice::from_ref(&reveal));
+
+        assert_eq!(identities.len(), 2);
+        assert!(identities.contains(&reveal.hash()));
+        assert!(identities.contains(&signed.hash_as_entrypoint()));
+    }
+    #[test]
+    fn rejected_confidential_work_consumes_the_next_overlay_block_budget() {
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut zk = state.zk.clone();
+        zk.max_confidential_ops_per_block = 1;
+        zk.max_verify_calls_per_block = 1;
+        zk.max_verify_calls_per_tx = 2;
+        zk.max_proof_bytes_block = 64;
+        zk.max_proof_size_bytes = 64;
+        state
+            .set_zk(zk)
+            .expect("empty SCCP state accepts focused confidential limits");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut rejected = block.transaction();
+        rejected
+            .register_confidential_proof(8)
+            .expect("first attempted proof fits the block budget");
+        let work = (
+            rejected.zk_confidential_ops_in_tx,
+            rejected.zk_verify_calls_in_tx,
+            rejected.zk_proof_bytes_in_tx,
+            rejected.confidential_gas_used_in_tx,
+        );
+        drop(rejected);
+        block.account_confidential_work_v1(work.0, work.1, work.2, work.3);
+
+        let mut next = block.transaction();
+        let error = next
+            .register_confidential_proof(8)
+            .expect_err("a rejected proof must still exhaust the one-call block budget");
+        assert!(error.to_string().contains("per block exceeded"));
+    }
+    #[test]
+    fn zero_block_gas_limit_remains_unlimited_in_shared_validation() {
+        let chain: ChainId = "zero-block-gas-unlimited".parse().expect("chain id");
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain,
+        );
+        let signed = TransactionBuilder::new(
+            *state.network_id_ref(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "unlimited block gas".to_owned())])
+        .sign(keypair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        block.gas_limit_per_block = 0;
+        let mut cache = IvmCache::new();
+
+        let (_, result) = block.validate_transaction(accepted, &mut cache);
+
+        result.expect("zero block gas limit must mean unlimited");
+        assert!(block.gas_used_in_block > 0);
     }
     #[test]
     fn lane_block_execution_input_rejects_forged_hashes_before_state_execution() {

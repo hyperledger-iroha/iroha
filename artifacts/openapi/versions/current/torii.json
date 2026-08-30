@@ -15630,6 +15630,496 @@
         ],
         "type": "object"
       },
+      "Iso20022AuditIndexEntryV2": {
+        "additionalProperties": false,
+        "description": "One bounded entry in the party-scoped durable ISO 20022 V2 audit index.",
+        "properties": {
+          "business_message_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "filename": {
+            "description": "SHA-256-derived durable record filename.",
+            "maxLength": 69,
+            "minLength": 69,
+            "pattern": "^[0-9a-f]{64}\\.json$",
+            "type": "string"
+          },
+          "message_id": {
+            "$ref": "#/components/schemas/Iso20022RecordStringV2"
+          },
+          "message_type": {
+            "$ref": "#/components/schemas/Iso20022NullableMessageTypeV2"
+          },
+          "pacs002_code": {
+            "$ref": "#/components/schemas/Iso20022Pacs002CodeV2"
+          },
+          "payload_hash": {
+            "$ref": "#/components/schemas/Iso20022NullableSha256HexV2"
+          },
+          "profile_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "record_sha256": {
+            "$ref": "#/components/schemas/Iso20022Sha256HexV2"
+          },
+          "reference_snapshot_id": {
+            "$ref": "#/components/schemas/Iso20022NullableSha256HexV2"
+          },
+          "settled_at_ms": {
+            "$ref": "#/components/schemas/Iso20022NullableU64V2"
+          },
+          "state": {
+            "$ref": "#/components/schemas/Iso20022StatusStateV2"
+          },
+          "transaction_hash": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "uetr": {
+            "$ref": "#/components/schemas/Iso20022NullableUetrV2"
+          },
+          "updated_at_ms": {
+            "$ref": "#/components/schemas/Iso20022U64V2"
+          }
+        },
+        "required": [
+          "message_id",
+          "filename",
+          "record_sha256",
+          "state",
+          "pacs002_code",
+          "updated_at_ms",
+          "settled_at_ms",
+          "transaction_hash",
+          "profile_id",
+          "message_type",
+          "business_message_id",
+          "uetr",
+          "payload_hash",
+          "reference_snapshot_id"
+        ],
+        "type": "object"
+      },
+      "Iso20022AuditIndexV2": {
+        "additionalProperties": false,
+        "description": "Party-scoped, tamper-evident ISO 20022 audit index. `record_count` equals the number of entries in `records`; `index_sha256` covers the other three fields.",
+        "properties": {
+          "index_sha256": {
+            "$ref": "#/components/schemas/Iso20022Sha256HexV2"
+          },
+          "record_count": {
+            "format": "uint64",
+            "maximum": 1024,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/Iso20022AuditIndexEntryV2"
+            },
+            "maxItems": 1024,
+            "type": "array"
+          },
+          "version": {
+            "const": 2,
+            "description": "First-release durable audit-index schema version.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "record_count",
+          "records",
+          "index_sha256"
+        ],
+        "type": "object"
+      },
+      "Iso20022ChangeReasonCodeV2": {
+        "description": "Non-empty trimmed change-reason code. The complete array has a 16 KiB encoded ceiling.",
+        "maxLength": 16384,
+        "minLength": 1,
+        "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
+        "type": "string"
+      },
+      "Iso20022HistoryTextV2": {
+        "anyOf": [
+          {
+            "maxLength": 262144,
+            "minLength": 1,
+            "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Optional clean transition text. The complete status-history array has a 256 KiB encoded ceiling."
+      },
+      "Iso20022MessageStatusV2": {
+        "additionalProperties": false,
+        "description": "Public party-scoped view of an ISO 20022 V2 record. This HTTP projection is not the persisted envelope and therefore does not emit a `version` field.",
+        "properties": {
+          "admitting_operator_key": {
+            "$ref": "#/components/schemas/Iso20022RecordStringV2"
+          },
+          "admitting_participant_id": {
+            "$ref": "#/components/schemas/Iso20022ParticipantIdV2"
+          },
+          "asset_definition_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "asset_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "business_message_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "business_service": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "change_reason_codes": {
+            "items": {
+              "$ref": "#/components/schemas/Iso20022ChangeReasonCodeV2"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "collateral_effective_date": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_haircut": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_obligation_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_original_amount": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_original_currency": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_original_instrument_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_reason_code": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_substitute_amount": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_substitute_currency": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_substitute_instrument_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "collateral_substitution_type": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "counterparty_participant_id": {
+            "$ref": "#/components/schemas/Iso20022ParticipantIdV2"
+          },
+          "detail": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "embedded_signature_detected": {
+            "type": "boolean"
+          },
+          "hold_reason_code": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "ledger_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "message_id": {
+            "$ref": "#/components/schemas/Iso20022RecordStringV2"
+          },
+          "message_type": {
+            "$ref": "#/components/schemas/Iso20022NullableMessageTypeV2"
+          },
+          "originator_participant_id": {
+            "$ref": "#/components/schemas/Iso20022ParticipantIdV2"
+          },
+          "pacs002_code": {
+            "$ref": "#/components/schemas/Iso20022Pacs002CodeV2"
+          },
+          "payload_hash": {
+            "$ref": "#/components/schemas/Iso20022NullableSha256HexV2"
+          },
+          "pinned_profile_id": {
+            "$ref": "#/components/schemas/Iso20022RecordStringV2"
+          },
+          "pinned_signature_policy": {
+            "$ref": "#/components/schemas/Iso20022SignaturePolicyV2"
+          },
+          "plan_atomicity": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "plan_execution_order": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "profile_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "reference_snapshot_id": {
+            "$ref": "#/components/schemas/Iso20022NullableSha256HexV2"
+          },
+          "security_instrument_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "settlement_amount": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "settlement_currency": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "settlement_date": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "settlement_movement_type": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "settlement_payment_type": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "settlement_quantity": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "source_account_address": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "source_account_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Iso20022StatusStateV2"
+          },
+          "status_history": {
+            "items": {
+              "$ref": "#/components/schemas/Iso20022StatusHistoryEntryV2"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "target_account_address": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "target_account_id": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "transaction_hash": {
+            "$ref": "#/components/schemas/Iso20022NullableRecordStringV2"
+          },
+          "uetr": {
+            "$ref": "#/components/schemas/Iso20022NullableUetrV2"
+          },
+          "updated_at_ms": {
+            "$ref": "#/components/schemas/Iso20022U64V2"
+          }
+        },
+        "required": [
+          "message_id",
+          "status",
+          "pacs002_code",
+          "transaction_hash",
+          "detail",
+          "hold_reason_code",
+          "change_reason_codes",
+          "updated_at_ms",
+          "ledger_id",
+          "source_account_id",
+          "source_account_address",
+          "target_account_id",
+          "target_account_address",
+          "asset_definition_id",
+          "asset_id",
+          "settlement_amount",
+          "settlement_currency",
+          "settlement_date",
+          "settlement_quantity",
+          "settlement_movement_type",
+          "settlement_payment_type",
+          "security_instrument_id",
+          "collateral_obligation_id",
+          "collateral_original_amount",
+          "collateral_original_currency",
+          "collateral_original_instrument_id",
+          "collateral_substitute_amount",
+          "collateral_substitute_currency",
+          "collateral_substitute_instrument_id",
+          "collateral_effective_date",
+          "collateral_substitution_type",
+          "collateral_haircut",
+          "collateral_reason_code",
+          "plan_execution_order",
+          "plan_atomicity",
+          "profile_id",
+          "message_type",
+          "business_service",
+          "business_message_id",
+          "uetr",
+          "payload_hash",
+          "reference_snapshot_id",
+          "embedded_signature_detected",
+          "originator_participant_id",
+          "counterparty_participant_id",
+          "admitting_participant_id",
+          "admitting_operator_key",
+          "pinned_profile_id",
+          "pinned_signature_policy",
+          "status_history"
+        ],
+        "type": "object"
+      },
+      "Iso20022MessageTypeV2": {
+        "enum": [
+          "pacs.008",
+          "pacs.009",
+          "pacs.002",
+          "pacs.004",
+          "camt.056",
+          "sese.023",
+          "sese.024",
+          "sese.025",
+          "colr.012"
+        ],
+        "type": "string"
+      },
+      "Iso20022NullableMessageTypeV2": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Iso20022MessageTypeV2"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "Iso20022NullableRecordStringV2": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Iso20022RecordStringV2"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "Iso20022NullableSha256HexV2": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Iso20022Sha256HexV2"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "Iso20022NullableU64V2": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Iso20022U64V2"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "Iso20022NullableUetrV2": {
+        "anyOf": [
+          {
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "Iso20022Pacs002CodeV2": {
+        "enum": [
+          "ACTC",
+          "ACSP",
+          "ACSC",
+          "ACWC",
+          "PDNG",
+          "RJCT"
+        ],
+        "type": "string"
+      },
+      "Iso20022ParticipantIdV2": {
+        "description": "Canonical configured ISO bridge participant identifier.",
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$",
+        "type": "string"
+      },
+      "Iso20022RecordStringV2": {
+        "description": "Non-empty trimmed text without control characters. Each durable V2 record has a 1 MiB encoded ceiling.",
+        "maxLength": 1048576,
+        "minLength": 1,
+        "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
+        "type": "string"
+      },
+      "Iso20022Sha256HexV2": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "Iso20022SignaturePolicyV2": {
+        "enum": [
+          "record_only",
+          "reject_unsupported",
+          "require_verified"
+        ],
+        "type": "string"
+      },
+      "Iso20022StatusHistoryEntryV2": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/Iso20022HistoryTextV2"
+          },
+          "pacs002_code": {
+            "$ref": "#/components/schemas/Iso20022Pacs002CodeV2"
+          },
+          "reason_code": {
+            "$ref": "#/components/schemas/Iso20022HistoryTextV2"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Iso20022StatusStateV2"
+          },
+          "updated_at_ms": {
+            "$ref": "#/components/schemas/Iso20022U64V2"
+          }
+        },
+        "required": [
+          "status",
+          "pacs002_code",
+          "updated_at_ms",
+          "detail",
+          "reason_code"
+        ],
+        "type": "object"
+      },
+      "Iso20022StatusStateV2": {
+        "enum": [
+          "Pending",
+          "Accepted",
+          "Rejected"
+        ],
+        "type": "string"
+      },
+      "Iso20022U64V2": {
+        "format": "uint64",
+        "maximum": 18446744073709551615,
+        "minimum": 0,
+        "type": "integer"
+      },
       "JsonValue": {
         "additionalProperties": true,
         "description": "Arbitrary JSON payload.",
@@ -64632,7 +65122,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/Iso20022AuditIndexV2"
                 }
               }
             },
@@ -64895,7 +65385,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/Iso20022MessageStatusV2"
                 }
               }
             },

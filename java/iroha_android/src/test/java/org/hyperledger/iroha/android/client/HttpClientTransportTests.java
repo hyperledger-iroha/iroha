@@ -5314,6 +5314,7 @@ public final class HttpClientTransportTests {
     final String contractAddress =
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     final String owner = TestAccountIds.ed25519Authority(0x11);
+    final BigInteger u64Max = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
     final String responseBody =
         "{"
             + "\"found\":true,"
@@ -5341,9 +5342,27 @@ public final class HttpClientTransportTests {
             + "\"active_code_hash_hex\":\""
             + "77".repeat(32)
             + "\","
-            + "\"revision\":7,"
-            + "\"emergency_hold\":null},"
-            + "\"emergency_hold_active\":false,"
+            + "\"revision\":"
+            + u64Max
+            + ","
+            + "\"emergency_hold\":{"
+            + "\"incident_digest_hex\":\""
+            + "11".repeat(32)
+            + "\","
+            + "\"proposal_content_id_hex\":\""
+            + "22".repeat(32)
+            + "\","
+            + "\"governance_attempt_id_hex\":\""
+            + "33".repeat(32)
+            + "\","
+            + "\"reason\":\"incident response\","
+            + "\"imposed_at_height\":"
+            + u64Max.subtract(BigInteger.ONE)
+            + ","
+            + "\"expires_at_height\":"
+            + u64Max
+            + "}},"
+            + "\"emergency_hold_active\":true,"
             + "\"code_hash_hex\":\""
             + "77".repeat(32)
             + "\","
@@ -5380,12 +5399,19 @@ public final class HttpClientTransportTests {
     assert "77".repeat(32).equals(response.codeHashHex()) : "Governance code hash mismatch";
     assert response.lifecycle() != null && response.lifecycle().version() == 1
         : "Governance lifecycle version mismatch";
-    assert response.lifecycle() != null && response.lifecycle().revision() == 7L
+    assert response.lifecycle() != null && u64Max.equals(response.lifecycle().revision())
         : "Governance lifecycle revision mismatch";
     assert "parliament".equals(response.lifecycle().pendingOwner())
         : "Governance pending owner mismatch";
     assert "77".repeat(32).equals(response.lifecycle().activeCodeHashHex())
         : "Governance lifecycle active code hash mismatch";
+    assert response.lifecycle().emergencyHold() != null
+        && u64Max.subtract(BigInteger.ONE)
+            .equals(response.lifecycle().emergencyHold().imposedAtHeight())
+        : "Governance emergency-hold imposed height mismatch";
+    assert response.lifecycle().emergencyHold() != null
+        && u64Max.equals(response.lifecycle().emergencyHold().expiresAtHeight())
+        : "Governance emergency-hold expiry height mismatch";
     assert response.publicEntrypoints().equals(List.of("transfer", "view_balance"))
         : "Governance public entrypoints mismatch";
 
@@ -5417,6 +5443,14 @@ public final class HttpClientTransportTests {
                 .replace("\"version\":1", "\"version\":2")
                 .getBytes(StandardCharsets.UTF_8)),
         "Governance response must reject incompatible lifecycle versions");
+    expectIllegalState(
+        () -> ContractJsonParser.parseGovernanceContractResponse(
+            responseBody
+                .replace(
+                    "\"revision\":" + u64Max,
+                    "\"revision\":18446744073709551616")
+                .getBytes(StandardCharsets.UTF_8)),
+        "Governance response must reject lifecycle revisions above u64");
     expectIllegalState(
         () -> ContractJsonParser.parseGovernanceContractResponse(
             ("{\"found\":false,\"contract_address\":\""

@@ -25719,9 +25719,6 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     if decode_canonical_content_cid(&cid).is_none() {
         return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
     }
-    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
-        return response;
-    }
     let stored = match resolve_site_manifest_by_cid(&state, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
@@ -25733,6 +25730,10 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     if let Err(response) =
         enforce_local_gateway_pre_read(&state, &headers, &stored, None, remote).await
     {
+        return response;
+    }
+    // Keep browser redirects behind the same local admission boundary as byte reads.
+    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
         return response;
     }
     if raw_path == crate::soracloud::PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT
@@ -39685,7 +39686,7 @@ mod advert_tests {
         );
     }
     #[tokio::test]
-    async fn public_site_and_cid_reads_share_provider_admission_policy() {
+    async fn public_site_and_every_cid_read_share_provider_admission_policy() {
         let mut context = token_test_context();
         let stored = context.manifest();
         let content_cid = encode_content_cid(stored.manifest_cid());
@@ -39703,6 +39704,20 @@ mod advert_tests {
         }));
         inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
         inner.sorafs_gateway_config.enforce_admission = true;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .path_gateway_redirect = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .redirect_html_only = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
         refresh_api_test_gateway_security(&mut inner);
         context.app = Arc::new(inner);
 
@@ -39722,13 +39737,43 @@ mod advert_tests {
         let cid_response = crate::sorafs::public_gateway::handle_get_sorafs_cid_lookup(
             State(context.app.clone()),
             HeaderMap::new(),
-            Path(content_cid),
+            Path(content_cid.clone()),
             axum::extract::RawQuery(None),
         )
         .await;
         let cid_value =
             api_test_response_json_with_status(cid_response, StatusCode::PRECONDITION_FAILED).await;
         assert_json_fields!(cid_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
+
+        let mut cid_headers = HeaderMap::new();
+        cid_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        cid_headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+        let cid_root = crate::sorafs::public_gateway::handle_get_sorafs_cid_root(
+            State(context.app.clone()),
+            cid_headers.clone(),
+            format!("/sorafs/cid/{content_cid}")
+                .parse::<Uri>()
+                .expect("CID root URI"),
+            Path(content_cid.clone()),
+        )
+        .await;
+        let cid_root_value =
+            api_test_response_json_with_status(cid_root, StatusCode::PRECONDITION_FAILED).await;
+        assert_json_fields!(cid_root_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
+
+        cid_headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-0"));
+        let cid_range = crate::sorafs::public_gateway::handle_get_sorafs_cid_path(
+            State(context.app),
+            cid_headers,
+            format!("/sorafs/cid/{content_cid}/asset.bin")
+                .parse::<Uri>()
+                .expect("CID range URI"),
+            Path((content_cid, "asset.bin".to_owned())),
+        )
+        .await;
+        let cid_range_value =
+            api_test_response_json_with_status(cid_range, StatusCode::PRECONDITION_FAILED).await;
+        assert_json_fields!(cid_range_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
     }
     #[derive(Clone, Copy)]
     enum AuthoritativeSiteBindingCase {

@@ -2473,10 +2473,10 @@ pub struct Governance {
     /// Trusted pre-genesis SoraFS provider→owner bindings (hex provider id → account id).
     #[config(default = "BTreeMap::new()")]
     pub sorafs_provider_owners: BTreeMap<String, String>,
-    /// Conviction step in blocks. duration/step increases conviction by 1.
+    /// Nonzero conviction step in blocks. duration/step increases conviction by 1.
     #[config(env = "GOV_CONVICTION_STEP_BLOCKS", default = "100")]
     pub conviction_step_blocks: u64,
-    /// Maximum conviction multiplier.
+    /// Nonzero maximum conviction multiplier.
     #[config(env = "GOV_MAX_CONVICTION", default = "6")]
     pub max_conviction: u64,
     /// Minimum enactment delay in blocks when scheduling a referendum.
@@ -2678,6 +2678,22 @@ impl Governance {
         assert!(
             self.min_enactment_delay > 0,
             "min_enactment_delay must be non-zero"
+        );
+        assert!(
+            self.conviction_step_blocks > 0,
+            "governance.conviction_step_blocks must be non-zero"
+        );
+        assert!(
+            self.max_conviction > 0,
+            "governance.max_conviction must be non-zero"
+        );
+        assert!(
+            self.approval_threshold_q_den > 0,
+            "governance.approval_threshold_q_den must be non-zero"
+        );
+        assert!(
+            self.approval_threshold_q_num <= self.approval_threshold_q_den,
+            "governance.approval_threshold_q_num must not exceed governance.approval_threshold_q_den"
         );
         assert!(
             self.parliament_sortition_pulse_delay_blocks > 0,
@@ -2956,6 +2972,63 @@ mod governance_tests {
             panic.is_err(),
             "zero enactment delay must fail before a proposal can become stranded"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "governance.approval_threshold_q_den must be non-zero")]
+    fn governance_approval_threshold_rejects_zero_denominator() {
+        Governance {
+            approval_threshold_q_den: 0,
+            ..Governance::default()
+        }
+        .parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "governance.approval_threshold_q_num must not exceed governance.approval_threshold_q_den"
+    )]
+    fn governance_approval_threshold_rejects_numerator_above_denominator() {
+        Governance {
+            approval_threshold_q_num: 3,
+            approval_threshold_q_den: 2,
+            ..Governance::default()
+        }
+        .parse();
+    }
+
+    #[test]
+    fn governance_approval_threshold_accepts_closed_unit_interval_boundaries() {
+        for (numerator, denominator) in [(0, 1), (1, 1)] {
+            let parsed = Governance {
+                approval_threshold_q_num: numerator,
+                approval_threshold_q_den: denominator,
+                ..Governance::default()
+            }
+            .parse();
+            assert_eq!(parsed.approval_threshold_q_num, numerator);
+            assert_eq!(parsed.approval_threshold_q_den, denominator);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "governance.conviction_step_blocks must be non-zero")]
+    fn governance_conviction_step_rejects_zero() {
+        Governance {
+            conviction_step_blocks: 0,
+            ..Governance::default()
+        }
+        .parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "governance.max_conviction must be non-zero")]
+    fn governance_max_conviction_rejects_zero() {
+        Governance {
+            max_conviction: 0,
+            ..Governance::default()
+        }
+        .parse();
     }
 
     #[test]

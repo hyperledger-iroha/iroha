@@ -9,7 +9,12 @@ use iroha::data_model::{
         consensus::{SumeragiCommittedLaneBlock, committed_lane_block_status_counts_as_progress},
         consensus_v2::SumeragiV2GenesisContextParameters,
     },
+    isi::smart_contract_code::{
+        AcceptContractOwnership, ActivateContractInstance, DeactivateContractInstance,
+        OfferContractOwnership, SetContractParliamentDelegation,
+    },
     parameter::system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
+    smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_executor_data_model::permission::{
@@ -975,6 +980,464 @@ async fn contract_view_json_value(
         .cloned()
         .ok_or_else(|| eyre!("contract view response is missing result: {response:?}"))
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ContractLifecycleSnapshot {
+    version: u64,
+    active: bool,
+    origin: String,
+    origin_account: String,
+    owner: String,
+    pending_owner: Option<String>,
+    parliament_delegated: bool,
+    active_code_hash_hex: Option<String>,
+    revision: u64,
+    emergency_hold_present: bool,
+    emergency_hold_active: bool,
+}
+
+fn optional_json_string(
+    value: Option<&norito::json::Value>,
+    field: &str,
+) -> Result<Option<String>> {
+    match value {
+        None => Err(eyre!("governed contract response is missing `{field}`")),
+        Some(norito::json::Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|value| Some(value.to_owned()))
+            .ok_or_else(|| eyre!("governed contract field `{field}` is not a string or null")),
+    }
+}
+
+fn contract_lifecycle_snapshot(
+    response: &norito::json::Value,
+) -> Result<ContractLifecycleSnapshot> {
+    if response.get("found").and_then(norito::json::Value::as_bool) != Some(true) {
+        return Err(eyre!(
+            "governed contract response has no retained lifecycle: {response:?}"
+        ));
+    }
+    let active = response
+        .get("active")
+        .and_then(norito::json::Value::as_bool)
+        .ok_or_else(|| eyre!("governed contract response has no `active` flag: {response:?}"))?;
+    let emergency_hold_active = response
+        .get("emergency_hold_active")
+        .and_then(norito::json::Value::as_bool)
+        .ok_or_else(|| eyre!("governed contract response has no hold status: {response:?}"))?;
+    let lifecycle = response
+        .get("lifecycle")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| eyre!("governed contract response has no lifecycle: {response:?}"))?;
+    let string_field = |field: &str| -> Result<String> {
+        lifecycle
+            .get(field)
+            .and_then(norito::json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| eyre!("governed contract lifecycle has no `{field}`: {response:?}"))
+    };
+    let parliament_delegated = lifecycle
+        .get("parliament_delegated")
+        .and_then(norito::json::Value::as_bool)
+        .ok_or_else(|| eyre!("governed contract lifecycle has no delegation flag: {response:?}"))?;
+    let revision = lifecycle
+        .get("revision")
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| eyre!("governed contract lifecycle has no revision: {response:?}"))?;
+    let version = lifecycle
+        .get("version")
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| eyre!("governed contract lifecycle has no version: {response:?}"))?;
+    let emergency_hold_present = match lifecycle.get("emergency_hold") {
+        None => {
+            return Err(eyre!(
+                "governed contract lifecycle has no emergency-hold field: {response:?}"
+            ));
+        }
+        Some(norito::json::Value::Null) => false,
+        Some(norito::json::Value::Object(_)) => true,
+        Some(_) => {
+            return Err(eyre!(
+                "governed contract lifecycle has malformed emergency-hold state: {response:?}"
+            ));
+        }
+    };
+    Ok(ContractLifecycleSnapshot {
+        version,
+        active,
+        origin: string_field("origin")?,
+        origin_account: string_field("origin_account")?,
+        owner: string_field("owner")?,
+        pending_owner: optional_json_string(lifecycle.get("pending_owner"), "pending_owner")?,
+        parliament_delegated,
+        active_code_hash_hex: optional_json_string(
+            lifecycle.get("active_code_hash_hex"),
+            "active_code_hash_hex",
+        )?,
+        revision,
+        emergency_hold_present,
+        emergency_hold_active,
+    })
+}
+
+async fn wait_for_contract_lifecycle_on_all_peers(
+    network: &iroha_test_network::Network,
+    contract_address: &ContractAddress,
+    expected: &ContractLifecycleSnapshot,
+    stage: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut last_observed = Vec::new();
+    loop {
+        last_observed.clear();
+        let mut converged = true;
+        for (peer_index, peer) in network.peers().iter().enumerate() {
+            let client = peer.client_for(
+                &iroha_test_samples::ALICE_ID,
+                iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
+            );
+            let contract_address = contract_address.clone();
+            let observed = tokio::task::spawn_blocking(move || {
+                client
+                    .get_gov_contract_json(&contract_address)
+                    .and_then(|response| contract_lifecycle_snapshot(&response))
+            })
+            .await
+            .map_err(|error| eyre!("{stage}: peer {peer_index} lifecycle task failed: {error}"))?;
+            match observed {
+                Ok(snapshot) => {
+                    converged &= &snapshot == expected;
+                    last_observed.push(format!("peer {peer_index}: {snapshot:?}"));
+                }
+                Err(error) => {
+                    converged = false;
+                    last_observed.push(format!("peer {peer_index}: error={error:#}"));
+                }
+            }
+        }
+        if converged {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "{stage}: four peers did not converge on {expected:?}; last observations: {}",
+                last_observed.join("; ")
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+fn assert_submission_error_contains(error: &eyre::Report, expected: &str, stage: &str) {
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(expected),
+        "{stage}: expected rejection containing `{expected}`, got `{message}`"
+    );
+}
+
+#[tokio::test]
+async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> Result<()> {
+    let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_block_cadence(Duration::from_secs(4))
+        .with_npos_consensus()
+        .with_genesis_instruction(Grant::account_permission(
+            register_permission,
+            iroha_test_samples::ALICE_ID.clone(),
+        ));
+    let context = stringify!(contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+    assert_eq!(network.peers().len(), 4, "test requires four voting peers");
+    let handshake = signed_consensus_handshake(&network)?;
+    handshake
+        .validate()
+        .map_err(|error| eyre!("invalid signed consensus handshake: {error}"))?;
+    assert_eq!(handshake.mode, SumeragiConsensusMode::Npos);
+    assert_eq!(
+        handshake.sumeragi_v2.da_layout,
+        SumeragiV2GenesisContextParameters::recommended().da_layout,
+        "contract lifecycle gate requires the signed mandatory DA layout"
+    );
+    network.ensure_blocks(1).await?;
+
+    let alice = network.peers()[0].client_for(
+        &iroha_test_samples::ALICE_ID,
+        iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
+    );
+    let bob = network.peers()[1].client_for(
+        &iroha_test_samples::BOB_ID,
+        iroha_test_samples::BOB_KEYPAIR.private_key().clone(),
+    );
+    let artifact = minimal_contract_artifact();
+    let verified = ivm::verify_contract_artifact(&artifact)
+        .map_err(|error| eyre!("verify lifecycle test artifact: {error}"))?;
+    let code_hash = verified.code_hash;
+    let code_hash_hex = hex::encode(code_hash.as_ref());
+    let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        "owner_lifecycle_four_peer",
+        None,
+        "universal",
+    )?;
+    let (contract_address, _, _, _) = deploy_contract_locally_signed(&alice, &artifact, alias)?;
+
+    let direct_active = ContractLifecycleSnapshot {
+        version: 1,
+        active: true,
+        origin: "direct".to_owned(),
+        origin_account: iroha_test_samples::ALICE_ID.to_string(),
+        owner: iroha_test_samples::ALICE_ID.to_string(),
+        pending_owner: None,
+        parliament_delegated: false,
+        active_code_hash_hex: Some(code_hash_hex.clone()),
+        revision: 1,
+        emergency_hold_present: false,
+        emergency_hold_active: false,
+    };
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &direct_active,
+        "direct deployment lifecycle",
+    )
+    .await?;
+
+    let unauthorized = bob
+        .submit_blocking(
+            DeactivateContractInstance {
+                contract_address: contract_address.clone(),
+                expected_revision: 1,
+                reason: Some("unauthorized takeover attempt".to_owned()),
+            },
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("a non-owner must not deactivate the contract");
+    assert_submission_error_contains(
+        &unauthorized,
+        "only the current account owner may deactivate",
+        "non-owner deactivation",
+    );
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &direct_active,
+        "non-owner deactivation rollback",
+    )
+    .await?;
+
+    alice.submit_blocking(
+        DeactivateContractInstance {
+            contract_address: contract_address.clone(),
+            expected_revision: 1,
+            reason: Some("owner maintenance".to_owned()),
+        },
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let inactive_revision_2 = ContractLifecycleSnapshot {
+        active: false,
+        active_code_hash_hex: None,
+        revision: 2,
+        ..direct_active.clone()
+    };
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &inactive_revision_2,
+        "owner deactivation",
+    )
+    .await?;
+
+    let stale_activation = alice
+        .submit_blocking(
+            ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                expected_revision: 1,
+                code_hash,
+            },
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("a consumed lifecycle revision must reject activation");
+    assert_submission_error_contains(
+        &stale_activation,
+        "stale contract lifecycle revision",
+        "stale owner activation",
+    );
+
+    alice.submit_blocking(
+        SetContractParliamentDelegation {
+            contract_address: contract_address.clone(),
+            expected_revision: 2,
+            delegated: true,
+        },
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let delegated_revision_3 = ContractLifecycleSnapshot {
+        parliament_delegated: true,
+        revision: 3,
+        ..inactive_revision_2.clone()
+    };
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &delegated_revision_3,
+        "Parliament delegation",
+    )
+    .await?;
+
+    alice.submit_blocking(
+        SetContractParliamentDelegation {
+            contract_address: contract_address.clone(),
+            expected_revision: 3,
+            delegated: false,
+        },
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let revoked_revision_4 = ContractLifecycleSnapshot {
+        parliament_delegated: false,
+        revision: 4,
+        ..delegated_revision_3
+    };
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &revoked_revision_4,
+        "Parliament delegation revocation",
+    )
+    .await?;
+
+    alice.submit_blocking(
+        OfferContractOwnership {
+            contract_address: contract_address.clone(),
+            expected_revision: 4,
+            new_owner: ContractLifecycleOwnerV1::Account(iroha_test_samples::BOB_ID.clone()),
+        },
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let offered_revision_5 = ContractLifecycleSnapshot {
+        pending_owner: Some(iroha_test_samples::BOB_ID.to_string()),
+        revision: 5,
+        ..revoked_revision_4
+    };
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &offered_revision_5,
+        "two-party ownership offer",
+    )
+    .await?;
+
+    let wrong_acceptor = alice
+        .submit_blocking(
+            AcceptContractOwnership {
+                contract_address: contract_address.clone(),
+                expected_revision: 5,
+            },
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("the current owner cannot accept an offer made to another account");
+    assert_submission_error_contains(
+        &wrong_acceptor,
+        "authority is not the pending account owner",
+        "wrong ownership acceptor",
+    );
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &offered_revision_5,
+        "wrong ownership acceptor rollback",
+    )
+    .await?;
+
+    bob.submit_blocking(
+        AcceptContractOwnership {
+            contract_address: contract_address.clone(),
+            expected_revision: 5,
+        },
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let transferred_revision_6 = ContractLifecycleSnapshot {
+        owner: iroha_test_samples::BOB_ID.to_string(),
+        pending_owner: None,
+        parliament_delegated: false,
+        revision: 6,
+        ..offered_revision_5
+    };
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &transferred_revision_6,
+        "two-party ownership acceptance",
+    )
+    .await?;
+
+    let former_owner = alice
+        .submit_blocking(
+            ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                expected_revision: 6,
+                code_hash,
+            },
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("the former owner must not reactivate the transferred contract");
+    assert_submission_error_contains(
+        &former_owner,
+        "only the current account owner may activate",
+        "former-owner activation",
+    );
+
+    bob.submit_blocking(
+        ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            expected_revision: 6,
+            code_hash,
+        },
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let bob_active_revision_7 = ContractLifecycleSnapshot {
+        active: true,
+        active_code_hash_hex: Some(code_hash_hex),
+        revision: 7,
+        ..transferred_revision_6
+    };
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &bob_active_revision_7,
+        "new-owner activation",
+    )
+    .await?;
+
+    let stale_deactivation = bob
+        .submit_blocking(
+            DeactivateContractInstance {
+                contract_address: contract_address.clone(),
+                expected_revision: 6,
+                reason: Some("stale replay".to_owned()),
+            },
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("the activation revision must not be replayable");
+    assert_submission_error_contains(
+        &stale_deactivation,
+        "stale contract lifecycle revision",
+        "stale new-owner deactivation",
+    );
+    wait_for_contract_lifecycle_on_all_peers(
+        &network,
+        &contract_address,
+        &bob_active_revision_7,
+        "stale new-owner deactivation rollback",
+    )
+    .await
+}
+
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {

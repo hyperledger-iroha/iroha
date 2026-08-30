@@ -2283,6 +2283,82 @@ fn deserialize_state_snapshot_value_with_kura(
 fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<State, json::Error> {
     deserialize_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
 }
+state_test! { sync contract_lifecycle_survives_state_snapshot_and_preserves_canonical_root
+    use iroha_data_model::smart_contract::{
+        ContractEmergencyHoldV1, ContractLifecycleOwnerV1, ContractParliamentDelegationV1,
+    };
+
+    let owner = AccountId::new(checked_keypair().public_key().clone());
+    let pending_owner = AccountId::new(checked_keypair().public_key().clone());
+    let address = iroha_data_model::smart_contract::ContractAddress::derive(
+        &*DEFAULT_TEST_NETWORK_ID,
+        &owner,
+        41,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("contract address");
+    let active_code_hash = Hash::new(b"snapshot-active-contract");
+    let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+        &address,
+        owner.clone(),
+    );
+    binding.lifecycle.pending_owner =
+        Some(ContractLifecycleOwnerV1::Account(pending_owner.clone()));
+    binding.lifecycle.parliament_delegation = ContractParliamentDelegationV1::Lifecycle;
+    binding.lifecycle.active_code_hash = Some(active_code_hash);
+    binding.lifecycle.revision = 7;
+    binding.lifecycle.emergency_hold = Some(ContractEmergencyHoldV1 {
+        incident_digest: [0xA1; 32],
+        proposal_content_id: [0xA2; 32],
+        governance_attempt_id: [0xA3; 32],
+        reason: "snapshot containment".to_owned(),
+        imposed_at_height: 12,
+        expires_at_height: 24,
+    });
+    let expected_binding = binding.clone();
+    let expected_subject = binding.subject.clone();
+
+    let mut world = World::default();
+    for account in [owner, pending_owner] {
+        world.accounts.insert(
+            account,
+            iroha_data_model::account::AccountValue::new(AccountDetails::default()),
+        );
+    }
+    world
+        .contract_instances
+        .insert(address.clone(), active_code_hash);
+    world
+        .contract_subject_bindings
+        .insert(address.clone(), binding);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let expected_root = crate::snapshot::canonical_state_snapshot_hash(&state);
+
+    let snapshot = norito::json::to_value(&state).expect("serialize contract lifecycle state");
+    let restored = deserialize_state_snapshot_value(snapshot)
+        .expect("restore contract lifecycle state");
+    let restored_world = restored.world_view();
+    assert_eq!(
+        restored_world.contract_subject_bindings().get(&address),
+        Some(&expected_binding),
+        "snapshot restart must preserve origin, owner, offer, delegation, revision, active code, and hold"
+    );
+    assert_eq!(
+        restored_world.contract_subject_addresses().get(&expected_subject),
+        Some(&address),
+        "restart must deterministically rebuild the skipped reverse subject index"
+    );
+    drop(restored_world);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&restored),
+        expected_root,
+        "contract lifecycle snapshot restore must preserve the canonical WSV root"
+    );
+}
 fn install_axt_counter_for_test(state: &State, dataspace: DataSpaceId, next: u64, generation: u64) {
     let record = AxtHandleCounterRecord::try_from_parts(next, generation)
         .expect("AXT counter fixture must use a non-zero next value");
@@ -15611,6 +15687,61 @@ state_test! { sync set_gov_does_not_mutate_provider_owners_after_genesis
             .get(&owner)
             .is_some_and(|permissions| permissions.contains(&permission))
     );
+}
+state_test! { sync validate_restored_governance_is_read_only_and_rejects_invalid_policy
+    let state = blank_test_state();
+    let provider_id = ProviderId::new([0x92; 32]);
+    let mut candidate = iroha_config::parameters::actual::Governance::default();
+    candidate
+        .sorafs_provider_owners
+        .insert(provider_id, (*ALICE_ID).clone());
+    state
+        .validate_restored_governance(&candidate)
+        .expect("valid restored governance policy");
+    assert!(state.world.provider_owners.view().get(&provider_id).is_none());
+    assert!(state.gov.sorafs_provider_owners.get(&provider_id).is_none());
+
+    candidate.conviction_step_blocks = 0;
+    let error = state
+        .validate_restored_governance(&candidate)
+        .expect_err("zero conviction step must fail closed");
+    assert!(error.contains("zero conviction parameter"), "{error}");
+
+    candidate.conviction_step_blocks = 1;
+    candidate.approval_threshold_q_den = 0;
+    let error = state
+        .validate_restored_governance(&candidate)
+        .expect_err("zero approval denominator must fail closed");
+    assert!(error.contains("invalid approval threshold"), "{error}");
+}
+state_test! { sync governance_restore_rejects_oversized_plain_ballot_corpus
+    let mut locks = GovernanceLocksForReferendum::default();
+    for index in 0..=crate::smartcontracts::isi::world::isi::MAX_STANDALONE_PLAIN_BALLOTS_V1 {
+        let mut seed = [0xA5; 32];
+        seed[..8].copy_from_slice(
+            &u64::try_from(index)
+                .expect("test ballot index fits u64")
+                .to_le_bytes(),
+        );
+        let owner = AccountId::new(
+            KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+                .expect("deterministic ballot owner key")
+                .public_key()
+                .clone(),
+        );
+        locks.locks.insert(
+            owner.clone(),
+            indexed_governance_lock(owner, 100),
+        );
+    }
+    let mut world = World::default();
+    world
+        .governance_locks
+        .insert("oversized-plain-restore".to_owned(), locks);
+    let error = world
+        .rebuild_governance_read_indexes()
+        .expect_err("oversized restored PLAIN ballot corpus must fail closed");
+    assert!(error.contains("PLAIN ballot corpus limit"), "{error}");
 }
 #[cfg(feature = "telemetry")]
 state_test! { sync state_transaction_metrics_exposes_state_telemetry
@@ -32400,6 +32531,58 @@ state_test! { result time_trigger_failure_populates_entrypoint_instructions
     assert_eq!(entrypoint.authority, *ALICE_ID);
     Ok(())
 }
+state_test! { result time_trigger_cannot_synthesize_governance_ballot
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = State::new(World::default(), kura, query);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let mut state_block = state.block(header);
+    let trigger_id: TriggerId = "governance_ballot_time_trigger".parse()?;
+    {
+        let mut stx = state_block.transaction();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
+        Register::domain(Domain::new(domain_id))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+        let ballot = iroha_data_model::isi::governance::CastZkBallot {
+            election_id: "trigger.referendum.v1".to_owned(),
+            proof_b64: "AA==".to_owned(),
+            public_inputs_json: "{}".to_owned(),
+        };
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                vec![InstructionBox::from(ballot)],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter(ExecutionTime::Schedule(Schedule {
+                    start_ms: 0,
+                    period_ms: None,
+                })),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
+        );
+        Register::trigger(trigger).execute(&ALICE_ID, &mut stx)?;
+        stx.apply();
+    }
+    let time_event = state_block.create_time_event(&header);
+    let action = state_block
+        .world
+        .triggers()
+        .time_triggers()
+        .get(&trigger_id)
+        .expect("time trigger registered")
+        .clone();
+    let (_entrypoint, result) =
+        state_block.execute_time_trigger(&trigger_id, &action, &time_event, 0);
+    let error = result.expect_err("trigger-carried governance ballot must fail closed");
+    assert!(
+        format!("{error:?}").contains("governance ballots cannot execute from trigger bodies"),
+        "unexpected trigger rejection: {error:?}"
+    );
+    Ok(())
+}
 state_test! { result time_trigger_same_id_reschedule_keeps_new_repeat_budget
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -33731,10 +33914,10 @@ state_test! { sync state_restore_rejects_noncanonical_governance_proposal_key
         "unexpected proposal-key error: {error}"
     );
 }
-state_test! { sync state_restore_rejects_proposal_backed_legacy_referendum_state
+state_test! { sync state_restore_rejects_proposal_backed_standalone_referendum_state
     let proposal = indexed_deploy_contract_proposal(0);
     let proposal_id = proposal.kind.fingerprint();
-    let referendum_id = hex::encode(proposal_id);
+    let referendum_id = format!("0X{}", hex::encode(proposal_id).to_ascii_uppercase());
     let mut world = World::default();
     world.governance_proposals.insert(proposal_id, proposal);
     world.governance_referenda.insert(
@@ -33751,13 +33934,14 @@ state_test! { sync state_restore_rejects_proposal_backed_legacy_referendum_state
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let snapshot = norito::json::to_value(&state).expect("serialize legacy referendum fixture");
+    let snapshot =
+        norito::json::to_value(&state).expect("serialize standalone referendum fixture");
     let error = deserialize_state_snapshot_value(snapshot)
         .err()
-        .expect("proposal-backed legacy referendum state must fail closed");
+        .expect("proposal-backed standalone referendum state must fail closed");
     assert!(
-        error.to_string().contains("certificate-only governance proposals"),
-        "unexpected legacy-referendum error: {error}"
+        error.to_string().contains("aliases an exact typed proposal"),
+        "unexpected standalone-referendum error: {error}"
     );
 }
 state_test! { sync first_release_governance_state_fields_are_required
@@ -39331,7 +39515,7 @@ let _ev = ev;
         "denied raw trigger must not emit an externally observable execute event"
     );
 }
-state_test! { sync contract_call_trigger_enforces_entrypoint_authorization_before_argument_decode
+state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_argument_decode
     use crate::smartcontracts::code::{activate_instance, register_code_bytes, register_manifest};
     use iroha_data_model::{
         events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
@@ -39457,6 +39641,70 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_authorization_befor
             "authorized ContractCall trigger arguments must be prepared exactly once"
         );
         let_row! { authorized_marker = stx .world .account(&contract_subject) .expect("ContractCall trigger contract subject account") .metadata() .get(&metadata_marker) .cloned() .expect("authorized trigger writes its metadata marker") };
+        {
+            let binding = stx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("active trigger contract retains its lifecycle binding");
+            binding.lifecycle.emergency_hold =
+                Some(iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                incident_digest: [0xB1; 32],
+                proposal_content_id: [0xB2; 32],
+                governance_attempt_id: [0xB3; 32],
+                reason: "contain trigger-backed contract execution".to_owned(),
+                imposed_at_height: 2,
+                expires_at_height: 3,
+            });
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+        }
+        let held_events_before = stx.world.external_event_buf.len();
+        ivm::reset_argument_record_decode_count();
+        let_row! { held = stx .execute_called_trigger(&trigger_id, &event) .expect_err("an active Parliament hold must suspend trigger-backed contract execution") };
+        assert!(
+            matches!(
+                &held,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message.contains("held by Parliament")
+            ),
+            "unexpected trigger emergency-hold error: {held:?}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "a held ContractCall trigger must fail before decoding event arguments"
+        );
+        assert_eq!(
+            stx.world
+                .account(&contract_subject)
+                .expect("ContractCall trigger contract subject account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "a held ContractCall trigger must apply no queued effect"
+        );
+        assert_eq!(
+            stx.world.external_event_buf.len(),
+            held_events_before,
+            "a held ContractCall trigger must emit no completion event"
+        );
+        {
+            let binding = stx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("held trigger contract retains its lifecycle binding");
+            binding.lifecycle.emergency_hold = None;
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+        }
         Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("revoke trigger entrypoint permission");
@@ -40160,6 +40408,132 @@ fn parliament_timed_ovn_resource_index_rebuild_is_deterministic_and_fail_atomic(
         before_failed_rebuild,
         "a failed restore rebuild must not publish a partial derived index"
     );
+}
+
+#[test]
+fn governance_lock_index_rebuild_rejects_invalid_authoritative_records_fail_atomically() {
+    let referendum_id = "restore-lock-validation".to_owned();
+    let sentinel_id = "retained-index-entry".to_owned();
+    let sentinel = BTreeMap::from([(77_u64, BTreeSet::from([(sentinel_id, ALICE_ID.clone())]))]);
+    let assert_rejected = |record: GovernanceLockRecord, expected: &str| {
+        let mut world = World::new();
+        world.governance_lock_expiry_index = sentinel.clone().into_iter().collect();
+        world.governance_locks.insert(
+            referendum_id.clone(),
+            GovernanceLocksForReferendum {
+                locks: BTreeMap::from([(ALICE_ID.clone(), record)]),
+            },
+        );
+
+        let error = world
+            .rebuild_governance_read_indexes()
+            .expect_err("invalid authoritative governance lock must fail restore");
+        assert!(
+            error.contains(expected),
+            "unexpected governance-lock restore rejection: {error}"
+        );
+        assert_eq!(
+            world
+                .governance_lock_expiry_index
+                .view()
+                .iter()
+                .map(|(height, entries)| (*height, entries.clone()))
+                .collect::<BTreeMap<_, _>>(),
+            sentinel,
+            "failed restore validation must not publish a partial expiry index"
+        );
+    };
+
+    let mut wrong_owner = indexed_governance_lock(BOB_ID.clone(), 10);
+    wrong_owner.direction = 0;
+    assert_rejected(wrong_owner, "owner different from its record");
+
+    let mut wrong_direction = indexed_governance_lock(ALICE_ID.clone(), 10);
+    wrong_direction.direction = 3;
+    assert_rejected(wrong_direction, "invalid direction 3");
+
+    let mut fractional = indexed_governance_lock(ALICE_ID.clone(), 10);
+    fractional.amount =
+        Quantity::try_from_numeric(Numeric::new(1_u32, 1)).expect("positive fractional fixture");
+    assert_rejected(fractional, "outside the exact integer u128 tally domain");
+}
+
+#[test]
+fn governance_lock_restore_preserves_fractional_zk_bonds() {
+    let referendum_id = "restore-fractional-zk-lock".to_owned();
+    let mut record = indexed_governance_lock(ALICE_ID.clone(), 10);
+    record.amount =
+        Quantity::try_from_numeric(Numeric::new(15_u32, 1)).expect("fractional ZK bond fixture");
+    let expiry_height = record.expiry_height;
+    let mut world = World::new();
+    world.governance_referenda.insert(
+        referendum_id.clone(),
+        GovernanceReferendumRecord {
+            h_start: 1,
+            h_end: 10,
+            status: GovernanceReferendumStatus::Open,
+            mode: GovernanceReferendumMode::Zk,
+        },
+    );
+    world.governance_locks.insert(
+        referendum_id.clone(),
+        GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(ALICE_ID.clone(), record)]),
+        },
+    );
+
+    world
+        .rebuild_governance_read_indexes()
+        .expect("fractional ZK bonds are outside PLAIN tally-domain validation");
+    world
+        .validate_plain_governance_tally_capacity(
+            &iroha_config::parameters::actual::Governance::default(),
+        )
+        .expect("fractional ZK bonds do not participate in the PLAIN tally");
+    assert!(
+        world
+            .governance_lock_expiry_index
+            .view()
+            .get(&expiry_height)
+            .is_some_and(|bucket| bucket.contains(&(referendum_id, ALICE_ID.clone())))
+    );
+}
+
+#[test]
+fn restored_plain_governance_tally_capacity_is_checked_against_loaded_configuration() {
+    let mut record = indexed_governance_lock(ALICE_ID.clone(), u64::MAX);
+    record.amount = Quantity::from(u128::MAX);
+    record.duration_blocks = u64::MAX;
+    let mut second = record.clone();
+    second.owner = BOB_ID.clone();
+    let mut world = World::new();
+    world.governance_locks.insert(
+        "aggregate-overflow".to_owned(),
+        GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(ALICE_ID.clone(), record.clone()), (BOB_ID.clone(), second)]),
+        },
+    );
+    let mut governance = iroha_config::parameters::actual::Governance::default();
+    governance.conviction_step_blocks = 1;
+    governance.max_conviction = u64::MAX;
+
+    let error = world
+        .validate_plain_governance_tally_capacity(&governance)
+        .expect_err("restored aggregate outside u128 must fail before block execution");
+    assert!(
+        error.contains("exceed the exact configured tally domain"),
+        "unexpected aggregate restore rejection: {error}"
+    );
+
+    world.governance_locks.insert(
+        "aggregate-overflow".to_owned(),
+        GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(ALICE_ID.clone(), record)]),
+        },
+    );
+    world
+        .validate_plain_governance_tally_capacity(&governance)
+        .expect("one maximum-width lock remains exactly representable");
 }
 
 #[test]

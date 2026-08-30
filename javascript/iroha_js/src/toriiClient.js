@@ -1447,9 +1447,7 @@ export function decodePdpCommitmentHeader(headers) {
 
 /**
  * @typedef {Object} BlockListOptions
- * @property {number} [page]
- * @property {number} [perPage]
- * @property {number} [per_page]
+ * @property {string} [cursor]
  * @property {number} [limit]
  * @property {AbortSignal} [signal]
  *
@@ -1552,7 +1550,7 @@ export class ToriiClient {
    * @param {string} [options.apiToken]
    * @param {LocalSigningContext} [options.localSigningContext] Immutable context required by local-signing APIs.
    * @param {OperatorSigningContext} [options.operatorSigningContext] Immutable exact-network signer required by operator-only APIs.
-   * @param {CanonicalRequestAuth} [options.canonicalRequestAuth] Default exact-network signer for authenticated calls, including expensive query POSTs.
+   * @param {CanonicalRequestAuth} [options.canonicalRequestAuth] Default exact-network signer for authenticated calls, including expensive query POSTs and optional-auth dataspace reads.
    * @param {typeof sorafsGatewayFetch} [options.sorafsGatewayFetch] Custom gateway fetch hook (tests).
    * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
    * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
@@ -2085,6 +2083,7 @@ export class ToriiClient {
       params,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
+      canonicalAuth: this._canonicalRequestAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -2247,6 +2246,7 @@ export class ToriiClient {
       params,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
+      canonicalAuth: this._canonicalRequestAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -2271,6 +2271,7 @@ export class ToriiClient {
       {
         headers: JSON_ACCEPT_HEADERS,
         signal,
+        canonicalAuth: this._canonicalRequestAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -2577,6 +2578,7 @@ export class ToriiClient {
       options,
       normalizeContractActivityListResponse,
       CONTRACT_ACTIVITY_LIST_OPTION_KEYS,
+      this._canonicalRequestAuth,
     );
   }
 
@@ -2592,7 +2594,9 @@ export class ToriiClient {
       optionContext,
       CONTRACT_EVENT_LIST_OPTION_KEYS,
     );
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
+      ? this._canonicalRequestAuth
+      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
     const params = {};
     if (rest.limit !== undefined && rest.limit !== null) {
@@ -7214,6 +7218,7 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/explorer/metrics", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      canonicalAuth: this._canonicalRequestAuth,
     });
     if (response.status === 403 || response.status === 404 || response.status === 503) {
       return null;
@@ -7241,6 +7246,7 @@ export class ToriiClient {
       {
         headers: JSON_ACCEPT_HEADERS,
         signal,
+        canonicalAuth: this._canonicalRequestAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -8550,6 +8556,7 @@ export class ToriiClient {
     const response = await this._request("GET", `/v1/explorer/blocks/${encodeURIComponent(normalized)}`, {
       signal,
       headers: JSON_ACCEPT_HEADERS,
+      canonicalAuth: this._canonicalRequestAuth,
     });
     if (response.status === 404) {
       return null;
@@ -8569,17 +8576,13 @@ export class ToriiClient {
    */
   async listBlocks(options) {
     const normalizedOptions = ToriiClient._normalizeBlockListOptions(options);
-    const params = {};
-    if (normalizedOptions.page !== undefined) {
-      params.page = normalizedOptions.page;
-    }
-    if (normalizedOptions.perPage !== undefined) {
-      params.per_page = normalizedOptions.perPage;
-    }
+    const params = { limit: normalizedOptions.limit };
+    if (normalizedOptions.cursor !== undefined) params.cursor = normalizedOptions.cursor;
     const response = await this._request("GET", "/v1/explorer/blocks", {
-      params: Object.keys(params).length > 0 ? params : undefined,
+      params,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalizedOptions.signal,
+      canonicalAuth: this._canonicalRequestAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -8612,6 +8615,7 @@ export class ToriiClient {
     return this._streamSse("/v1/events/sse", {
       params: Object.keys(params).length > 0 ? params : undefined,
       signal,
+      canonicalAuth: this._canonicalRequestAuth,
     });
   }
 
@@ -8690,6 +8694,7 @@ export class ToriiClient {
     return this._streamSse("/v1/contracts/events/sse", {
       params: Object.keys(params).length > 0 ? params : undefined,
       signal,
+      canonicalAuth: this._canonicalRequestAuth,
     });
   }
 
@@ -12243,6 +12248,7 @@ export class ToriiClient {
     options = {},
     normalizePage,
     allowedKeys = ITERABLE_LIST_OPTION_KEYS,
+    defaultCanonicalAuth = null,
   ) {
     const optionContext = `options for ${path}`;
     const normalizedOptions = normalizeIterableListOptions(
@@ -12250,7 +12256,9 @@ export class ToriiClient {
       optionContext,
       allowedKeys,
     );
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
+      ? defaultCanonicalAuth
+      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
     const params = ToriiClient._encodeIterableListParams(rest, optionContext, allowedKeys);
     const response = await this._request("GET", path, {
@@ -12953,27 +12961,26 @@ export class ToriiClient {
 
   static _normalizeBlockListOptions(options) {
     if (options === undefined || options === null) {
-      return { page: 1, perPage: DEFAULT_PAGE_SIZE, signal: undefined };
+      return { limit: EXPLORER_CURSOR_DEFAULT_LIMIT, signal: undefined };
     }
     const record = requirePlainObjectOption(options, "block list options");
     assertSupportedOptionKeys(
       record,
-      new Set(["page", "page_number", "perPage", "per_page", "limit", "signal"]),
+      new Set(["cursor", "limit", "signal"]),
       "block list options",
     );
     const { signal } = normalizeSignalOption(record, "listBlocks");
-    const normalized = {};
-    normalized.page = ToriiClient._normalizeUnsignedInteger(
-      record.page ?? record.page_number ?? 1,
-      "page",
-      { allowZero: false },
-    );
-    normalized.perPage = ToriiClient._normalizeUnsignedInteger(
-      record.perPage ?? record.per_page ?? record.limit ?? DEFAULT_PAGE_SIZE,
-      "perPage",
-      { allowZero: false },
-    );
-    normalized.signal = signal;
+    const normalized = {
+      limit: ToriiClient._normalizeUnsignedInteger(
+        record.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
+        "limit",
+        { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
+      ),
+      signal,
+    };
+    if (record.cursor !== undefined && record.cursor !== null) {
+      normalized.cursor = normalizeExplorerCursorValue(record.cursor, "cursor");
+    }
     return normalized;
   }
 
@@ -17835,15 +17842,24 @@ function normalizeExplorerRwaPage(payload) {
 
 function normalizeExplorerBlocksPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer blocks response");
+  requireExactExplorerCursorFields(
+    record,
+    ["pagination", "items"],
+    "explorer blocks response",
+  );
   const items = record.items;
   if (!Array.isArray(items)) {
     throw new TypeError("explorer blocks response.items must be an array");
   }
+  const pagination = normalizeExplorerHistoryCursorMeta(
+    record.pagination,
+    "explorer blocks response.pagination",
+  );
+  if (items.length > pagination.limit) {
+    throw new TypeError("explorer blocks response.items must not exceed pagination.limit");
+  }
   return {
-    pagination: normalizeExplorerPaginationMeta(
-      record.pagination ?? {},
-      "explorer blocks response.pagination",
-    ),
+    pagination,
     items: items.map((item, index) =>
       normalizeExplorerBlockRecord(item, `explorer blocks response.items[${index}]`),
     ),
@@ -17885,30 +17901,6 @@ function normalizeExplorerAccountQrResponse(payload, context) {
     modules,
     qrVersion,
     svg,
-  };
-}
-
-function normalizeExplorerPaginationMeta(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    page: ToriiClient._normalizeUnsignedInteger(record.page ?? 1, `${context}.page`, {
-      allowZero: false,
-    }),
-    perPage: ToriiClient._normalizeUnsignedInteger(
-      record.per_page ?? 1,
-      `${context}.per_page`,
-      { allowZero: false },
-    ),
-    totalPages: ToriiClient._normalizeUnsignedInteger(
-      record.total_pages ?? 0,
-      `${context}.total_pages`,
-      { allowZero: true },
-    ),
-    totalItems: ToriiClient._normalizeUnsignedInteger(
-      record.total_items ?? 0,
-      `${context}.total_items`,
-      { allowZero: true },
-    ),
   };
 }
 
@@ -17979,6 +17971,52 @@ function normalizeExplorerCursorMeta(payload, context) {
   }
   return {
     limit,
+    nextCursor,
+    hasMore: record.has_more,
+  };
+}
+
+function normalizeExplorerHistoryCursorMeta(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  requireExactExplorerCursorFields(
+    record,
+    ["limit", "snapshot_height", "snapshot_hash", "next_cursor", "has_more"],
+    context,
+  );
+  const limit = requireExactJsonUnsignedInteger(record.limit, `${context}.limit`, {
+    allowZero: false,
+  });
+  if (limit > EXPLORER_CURSOR_MAX_LIMIT) {
+    throw new TypeError(`${context}.limit must be between 1 and ${EXPLORER_CURSOR_MAX_LIMIT}`);
+  }
+  const snapshotHeight = requireExactJsonUnsignedInteger(
+    record.snapshot_height,
+    `${context}.snapshot_height`,
+  );
+  const snapshotHash = requireOptionalExactLowerHex32String(
+    record.snapshot_hash,
+    `${context}.snapshot_hash`,
+  );
+  if ((snapshotHeight === 0) !== (snapshotHash === null)) {
+    throw new TypeError(
+      `${context}.snapshot_hash must be null exactly when snapshot_height is zero`,
+    );
+  }
+  if (typeof record.has_more !== "boolean") {
+    throw new TypeError(`${context}.has_more must be a boolean`);
+  }
+  const nextCursor = normalizeExplorerCursorValue(
+    record.next_cursor,
+    `${context}.next_cursor`,
+    { nullable: true },
+  );
+  if (record.has_more !== (nextCursor !== null)) {
+    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+  }
+  return {
+    limit,
+    snapshotHeight,
+    snapshotHash,
     nextCursor,
     hasMore: record.has_more,
   };

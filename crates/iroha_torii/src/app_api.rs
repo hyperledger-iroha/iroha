@@ -132,6 +132,21 @@ fn adapter_is_supported(adapter: &str) -> bool {
             | ADAPTER_DLMM_HOOKS_V1
     )
 }
+fn adapter_is_dataspace_visible_read(adapter: &str) -> bool {
+    matches!(
+        adapter,
+        ADAPTER_SWAPS_FILLS_V1
+            | ADAPTER_SWAPS_CANDLES_V1
+            | ADAPTER_TRADER_ACTIVITY_V1
+            | ADAPTER_TRADER_ACCOUNT_V1
+            | ADAPTER_INTENTS_V1
+            | ADAPTER_VAULT_POSITIONS_V1
+            | ADAPTER_OPERATORS_STATUS_V1
+            | ADAPTER_MARGIN_HEALTH_V1
+            | ADAPTER_RWA_LOTS_V1
+            | ADAPTER_DLMM_HOOKS_V1
+    )
+}
 fn validate_route(route: &ToriiAppApiRouteV1) -> Result<(), Response> {
     if !is_supported_method(&route.method) {
         return Err(json_error(
@@ -475,6 +490,19 @@ fn attach_dispatch_headers(
             .insert("x-torii-app-api-adapter", value);
     }
 }
+fn enforce_dispatch_response_policy(
+    mut response: Response,
+    route: &ToriiAppApiRouteV1,
+) -> Response {
+    if route.method.eq_ignore_ascii_case("GET") && adapter_is_dataspace_visible_read(&route.adapter)
+    {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+    }
+    response
+}
 async fn dispatch_app_api_route(
     app: SharedAppState,
     headers: HeaderMap,
@@ -521,6 +549,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_swaps_fills_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -545,6 +575,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_swaps_candles_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -565,6 +597,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_trader_activity_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -586,6 +620,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_trader_account_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -606,6 +642,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_intents_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -626,6 +664,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_vault_positions_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -646,6 +686,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_operators_status_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -666,6 +708,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_margin_health_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -686,6 +730,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_rwa_lots_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -706,6 +752,8 @@ async fn dispatch_app_api_route(
             match super::handler_contracts_rollups_dlmm_hooks_get(
                 State(app),
                 headers,
+                method.clone(),
+                uri.clone(),
                 ConnectInfo(remote),
                 crate::NoritoQuery(params),
             )
@@ -748,7 +796,9 @@ async fn dispatch_manifest_path(
             ),
         );
     };
-    dispatch_app_api_route(app, headers, remote, method, uri, route, source, body).await
+    let response =
+        dispatch_app_api_route(app, headers, remote, method, uri, route, source, body).await;
+    enforce_dispatch_response_policy(response, route)
 }
 pub(crate) async fn handle_get_app_api_bindings(State(app): State<SharedAppState>) -> Response {
     let candidates = match resolve_binding_candidates(&app) {
@@ -955,6 +1005,44 @@ mod tests {
         assert!(
             find_matching_route(&routes, &Method::POST, "/v1/contracts/rollups/swaps/fills")
                 .is_none()
+        );
+    }
+    #[test]
+    fn dataspace_rollup_dispatch_is_private_no_store_even_for_early_responses() {
+        let route = ToriiAppApiRouteV1 {
+            method: "GET".to_owned(),
+            path: "/v1/contracts/rollups/swaps/fills".to_owned(),
+            adapter: ADAPTER_SWAPS_FILLS_V1.to_owned(),
+            cache_ttl_ms: Some(60_000),
+        };
+        let mut response = StatusCode::BAD_REQUEST.into_response();
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=60"),
+        );
+        let response = enforce_dispatch_response_policy(response, &route);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+    }
+    #[test]
+    fn non_dataspace_dispatch_keeps_its_existing_cache_policy() {
+        let route = ToriiAppApiRouteV1 {
+            method: "POST".to_owned(),
+            path: "/v1/contracts/view/batch".to_owned(),
+            adapter: ADAPTER_CONTRACT_VIEW_BATCH_V1.to_owned(),
+            cache_ttl_ms: None,
+        };
+        let mut response = StatusCode::OK.into_response();
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=60"),
+        );
+        let response = enforce_dispatch_response_policy(response, &route);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("public, max-age=60"))
         );
     }
 }

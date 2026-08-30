@@ -1,4 +1,4 @@
-//! Validation-fee proposals reject the legacy public PLAIN ballot path.
+//! Validation-fee proposals reject the standalone public PLAIN ballot path.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
 use core::num::NonZeroU64;
@@ -132,8 +132,7 @@ fn validation_fee_proposal_rejects_plain_ballot_without_state_effects() {
     .expect_err("validation-fee proposals must reject public PLAIN ballots");
     let message = error.to_string();
     assert!(
-        message.contains("validation-fee")
-            && (message.contains("PLAIN") || message.contains("private Parliament")),
+        message.contains("typed governance proposals") && message.contains("private Parliament"),
         "unexpected validation-fee PLAIN rejection: {message}"
     );
     assert!(

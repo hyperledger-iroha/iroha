@@ -31,6 +31,10 @@ pub(crate) fn seed_committed_transaction_context(
     state_transaction.tx_call_hash = Some(Hash::from(entrypoint.execution_call_hash()));
     state_transaction.current_tx_hash =
         Some(AcceptedTransaction::prepare_signed_metadata(transaction).signed_hash);
+    let governance_ballot_binding =
+        crate::state::standalone_governance_ballot_instruction_v1(transaction.instructions())
+            .expect("committed governance ballot carrier must be exact");
+    state_transaction.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
     if state_transaction.kagemusha_taira_canary_external_entrypoint {
         state_transaction.kagemusha_taira_canary_wire_identity =
             signed_kagemusha_taira_canary_wire_identity_v1(transaction)

@@ -36,6 +36,9 @@ Construction validates the catalog once and indexes its stable route IDs.
 Each mount then performs a direct catalog lookup instead of scanning or
 cloning the growing registration manifest. This approach guarantees that:
 
+- Every descriptor and every mounted, OpenAPI, SDK, or MCP projection carries
+  route-auth metadata schema V1. Catalog validation rejects an absent/legacy
+  version instead of inferring authentication or admission semantics.
 - A route's method, authentication policy, path, feature gate, and stable ID
   agree with its canonical descriptor.
 - Duplicate registrations are rejected by stable ID, while finalization

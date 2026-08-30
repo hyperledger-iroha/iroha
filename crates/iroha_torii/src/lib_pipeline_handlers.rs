@@ -170,9 +170,7 @@ async fn handler_post_transactions_batch(
             )?;
             app_for_push
                 .state
-                .warm_stateless_validation_cache_for_torii_prechecked_batch(
-                    &stateless_cache_warm,
-                );
+                .warm_stateless_validation_cache_for_torii_prechecked_batch(&stateless_cache_warm);
             Ok::<(), Error>(())
         },
     )
@@ -351,12 +349,12 @@ async fn handler_pipeline_recovery(
     let kura = Arc::clone(&app.kura);
     let (result, _admission) = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(move || {
-        // Keep both general-query and heavy-work permits in the physical worker.
-        // Cancelling the HTTP future cannot release capacity while Kura reads,
-        // JSON projection, or encoding still consume memory.
-        let result = build_pipeline_recovery_response(&kura, height);
-        (result, admission)
-    }),
+            // Keep both general-query and heavy-work permits in the physical worker.
+            // Cancelling the HTTP future cannot release capacity while Kura reads,
+            // JSON projection, or encoding still consume memory.
+            let result = build_pipeline_recovery_response(&kura, height);
+            (result, admission)
+        }),
     )
     .await
     .map_err(|error| Error::AppServiceUnavailable {
@@ -492,12 +490,12 @@ async fn handler_pipeline_recovery_fastpq_proofs(
     let kura = Arc::clone(&app.kura);
     let (result, _admission) = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(move || {
-        // Keep both general-query and heavy-work permits in the physical worker.
-        // Cancelling the HTTP future therefore cannot release capacity while
-        // Kura reads, transcript reconstruction, or encoding still run.
-        let result = build_pipeline_recovery_fastpq_response(&kura, height, page);
-        (result, admission)
-    }),
+            // Keep both general-query and heavy-work permits in the physical worker.
+            // Cancelling the HTTP future therefore cannot release capacity while
+            // Kura reads, transcript reconstruction, or encoding still run.
+            let result = build_pipeline_recovery_fastpq_response(&kura, height, page);
+            (result, admission)
+        }),
     )
     .await
     .map_err(|error| Error::AppServiceUnavailable {
@@ -1281,7 +1279,7 @@ fn pipeline_status_from_state(
         if index >= block_ref.external_entrypoint_count() {
             break;
         }
-        if entrypoint.hash() != entrypoint_hash {
+        if !transaction_entrypoint_matches_indexed_identity(&entrypoint, &entrypoint_hash) {
             continue;
         }
         let (kind, rejection) = match &result.0 {
@@ -1319,7 +1317,12 @@ fn pipeline_status_from_state(
     let transactions = certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?;
     let transaction = transactions
         .iter()
-        .find(|(membership_hash, _, _)| membership_hash == &entrypoint_hash)
+        .find(|(_, _, transaction)| {
+            transaction_entrypoint_matches_indexed_identity(
+                transaction.entrypoint(),
+                &entrypoint_hash,
+            )
+        })
         .map(|(_, _, transaction)| transaction)
         .ok_or_else(|| {
             pipeline_status_projection_error(format!(
@@ -1510,6 +1513,61 @@ fn transaction_details_authority_is_involved(
                 outcome.asset.account() == authority || &outcome.destination == authority
             })
 }
+fn canonical_carrier_hash_for_indexed_transaction_identity(
+    app: &AppState,
+    block_height: NonZeroUsize,
+    indexed_identity: &HashOf<TransactionEntrypoint>,
+) -> Result<HashOf<TransactionEntrypoint>, Error> {
+    let block = app.kura.get_block(block_height).ok_or_else(|| {
+        pipeline_status_projection_error(format!(
+            "canonical block {} is unavailable",
+            block_height.get()
+        ))
+    })?;
+    let block_ref = block.as_ref();
+    for (index, entrypoint, _) in block_ref.entrypoint_results() {
+        if index >= block_ref.external_entrypoint_count() {
+            break;
+        }
+        if transaction_entrypoint_matches_indexed_identity(&entrypoint, indexed_identity) {
+            return Ok(entrypoint.hash());
+        }
+    }
+    let reference = block_ref
+        .execution_context()
+        .and_then(|context| context.merge_entry.as_ref())
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "indexed transaction identity {indexed_identity} is absent from block {}",
+                block_height.get()
+            ))
+        })?;
+    let entry = app
+        .kura
+        .get_merge_entry_by_carrier_height(block_height)
+        .map_err(pipeline_status_projection_error)?
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "block {} has a merge reference but no canonical sidecar",
+                block_height.get()
+            ))
+        })?;
+    certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?
+        .into_iter()
+        .find(|(_, _, transaction)| {
+            transaction_entrypoint_matches_indexed_identity(
+                transaction.entrypoint(),
+                indexed_identity,
+            )
+        })
+        .map(|(carrier_hash, _, _)| carrier_hash)
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "indexed transaction identity {indexed_identity} is absent from merge carrier {}",
+                block_height.get()
+            ))
+        })
+}
 fn pipeline_transaction_details_response(
     app: &SharedAppState,
     authority: &AccountId,
@@ -1528,11 +1586,19 @@ fn pipeline_transaction_details_response(
         )))
     })?;
     let is_operator = transaction_details_operator_authority(world, authority);
+    drop(state_view);
+    let canonical_entrypoint_hash = canonical_carrier_hash_for_indexed_transaction_identity(
+        app.as_ref(),
+        block_height,
+        &entrypoint_hash,
+    )?;
+    let canonical_entrypoint_hash_text = canonical_entrypoint_hash.to_string();
+    let state_view = app.state.view();
     let mut transactions =
         iroha_core::smartcontracts::isi::tx::committed_transactions_indexed_snapshot(
             &state_view,
             CompoundPredicate::from_filters(CommittedTxFilters {
-                entry_eq: Some(entrypoint_hash),
+                entry_eq: Some(canonical_entrypoint_hash),
                 ..CommittedTxFilters::default()
             }),
         )
@@ -1564,7 +1630,7 @@ fn pipeline_transaction_details_response(
         trigger_completions: trigger_completion_summaries_for_entrypoint_hash(
             app,
             block_height,
-            &hash,
+            &canonical_entrypoint_hash_text,
         ),
         hash,
         transaction,

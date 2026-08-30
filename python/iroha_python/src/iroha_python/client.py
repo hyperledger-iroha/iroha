@@ -14645,15 +14645,41 @@ class ToriiClient(
     # Explorer APIs
     # -------------------------
 
+    def _get_explorer_response(
+        self,
+        path: str,
+        *,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> requests.Response:
+        """Issue one optionally account-signed Explorer GET.
+
+        A configured canonical signer is bound after Requests prepares the final
+        path and query. Without one, Explorer's public projection remains an
+        ordinary anonymous request.
+        """
+
+        canonical_auth = self._canonical_request_auth
+        headers = self._canonical_request_headers(
+            "GET",
+            path,
+            b"",
+            canonical_auth=canonical_auth,
+            headers={"Accept": "application/json"},
+            has_body=False,
+        )
+        return self._request(
+            "GET",
+            path,
+            params=params,
+            headers=headers,
+            allow_retry=canonical_auth is None,
+            allow_redirects=canonical_auth is None,
+        )
+
     def get_explorer_metrics(self) -> Optional[Any]:
         """Fetch `/v1/explorer/metrics`. Returns `None` when telemetry is gated."""
 
-        response = self._request(
-            "GET",
-            "/v1/explorer/metrics",
-            headers={"Accept": "application/json"},
-            allow_retry=True,
-        )
+        response = self._get_explorer_response("/v1/explorer/metrics")
         if response.status_code in {403, 404, 503}:
             return None
         self._expect_status(response, (200,))
@@ -14676,12 +14702,11 @@ class ToriiClient(
         """Fetch explorer QR metadata via `GET /v1/explorer/accounts/{account_id}/qr`."""
 
         canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
-        payload = self.request_json(
-            "GET",
-            f"/v1/explorer/accounts/{quote(canonical_account_id, safe='')}/qr",
-            headers={"Accept": "application/json"},
-            expected_status=(200,),
+        response = self._get_explorer_response(
+            f"/v1/explorer/accounts/{quote(canonical_account_id, safe='')}/qr"
         )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
         if payload is None:
             raise RuntimeError("explorer account qr endpoint returned no payload")
         if not isinstance(payload, Mapping):
@@ -14720,13 +14745,12 @@ class ToriiClient(
         domain_value = _normalize_optional_string(domain, "list_explorer_rwas.domain")
         if domain_value is not None:
             params["domain"] = domain_value
-        payload = self.request_json(
-            "GET",
+        response = self._get_explorer_response(
             "/v1/explorer/rwas",
             params=params or None,
-            headers={"Accept": "application/json"},
-            expected_status=(200,),
         )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
         if payload is None:
             raise RuntimeError("explorer RWA endpoint returned no payload")
         if not isinstance(payload, Mapping):
@@ -14758,12 +14782,11 @@ class ToriiClient(
         rwa_id_value = _normalize_optional_string(rwa_id, "get_explorer_rwa_detail.rwa_id")
         if rwa_id_value is None:
             raise ValueError("get_explorer_rwa_detail.rwa_id must be a non-empty string")
-        payload = self.request_json(
-            "GET",
-            f"/v1/explorer/rwas/{quote(rwa_id_value, safe='')}",
-            headers={"Accept": "application/json"},
-            expected_status=(200,),
+        response = self._get_explorer_response(
+            f"/v1/explorer/rwas/{quote(rwa_id_value, safe='')}"
         )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
         if payload is None:
             raise RuntimeError("explorer RWA detail endpoint returned no payload")
         if not isinstance(payload, Mapping):
@@ -22639,9 +22662,19 @@ class ToriiClient(
             else:
                 on_event(event.data, event.id)
 
+        path = "/v1/events/sse"
+        event_headers = self._canonical_request_headers(
+            "GET",
+            path,
+            b"",
+            canonical_auth=self._canonical_request_auth,
+            headers={"Accept": "text/event-stream"},
+            has_body=False,
+        )
         iterator = self._stream_sse(
-            "/v1/events/sse",
+            path,
             params=params,
+            headers=event_headers,
             timeout=timeout,
             max_retries=max_retries,
             backoff_base=backoff_base,

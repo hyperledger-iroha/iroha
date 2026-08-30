@@ -203,15 +203,17 @@ server-side deploy or deploy-bundle route. The maintained public HTTP paths are:
 - `POST /v1/contracts/view/batch` for batched read-only contract queries in one
   round-trip
 
-For the public-safe Torii posture, contract call/view/status routes stay public,
-while higher-risk app-facing surfaces are opt-in:
+For the public-safe Torii posture, contract call/view/status routes stay public.
+The bounded app surfaces ship enabled so a default node exposes its complete
+production API:
 
-- `torii.webhooks_enabled = false` by default
-- `torii.zk_attachments_enabled = false` by default
+- `torii.webhooks_enabled = true` by default, with destination guard rails
+- `torii.zk_attachments_enabled = true` by default, with quotas and sanitization
 - trader/app rollups such as `/v1/contracts/rollups/swaps/fills` and
   `/v1/contracts/rollups/trader/account` remain app-facing surfaces rather than
   part of the public-safe baseline
-- enable them explicitly when the node is meant to expose those app features
+- deployments may explicitly disable either subsystem when policy requires a
+  reduced surface
 
 ## Codex Integration
 

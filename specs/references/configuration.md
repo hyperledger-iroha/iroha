@@ -231,7 +231,7 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   - `feature_bits` (default: `0b11`): Capability mask advertised during QUIC capability negotiation. Bit 0 enables feedback hints, bit 1 flags privacy-overlay provider support, and higher bits are reserved. Viewers demanding unsupported bits are rejected.
   - SoraNet route descriptors are signed protocol data carried by streaming tickets and manifests. V1 has no `[streaming.soranet]` node configuration; supplying that table is an unknown-parameter error. Token-bearing filesystem exit publication remains unavailable until RouteOpen binds an authoritative segment proof and viewer credential and the producer provides durable revocation.
   - `sync` (default: observe-only): Audio/video sync enforcement policy for NSC-28b.
-    - `enabled` (default: `false`): Flip to `true` once the validator should start evaluating drift reports.
+    - `enabled` (default: `true`): Evaluates drift reports in the shipping profile; pair with `observe_only = false` only when the validator should reject violating segments.
     - `observe_only` (default: `true`): When `true`, violations are logged and exported via telemetry but segments are still accepted; set to `false` to hard-fail.
     - `min_window_ms` (default: `5000`): Minimum diagnostic window required before enforcement.
     - `ewma_threshold_ms` (default: `10`): Sustained EWMA drift threshold (milliseconds) that triggers rejections.

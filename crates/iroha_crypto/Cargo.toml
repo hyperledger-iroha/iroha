@@ -34,7 +34,7 @@ sm-ffi-openssl = ["dep:openssl"]
 sm-neon = ["dep:sm4-neon", "dep:sm3-neon"]
 sm-neon-force = ["sm", "sm-neon", "sm4-neon/force-neon", "sm3-neon/force-neon"]
 crypto-parity-tests = ["dep:amcl", "dep:openssl", "dep:secp256k1"]
-# Enable support for BLS signatures. Disabled by default due to long compile times.
+# Enable support for BLS signatures. The shipping `node-crypto` aggregate includes it.
 bls = ["dep:blst", "dep:blstrs", "dep:group", "dep:pairing", "dep:subtle", "dep:w3f-bls"]
 
 # Expose FFI API for dynamic linking (Internal use only)

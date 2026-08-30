@@ -4,7 +4,44 @@ import { OperatorSigningContext } from "./operator-request.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./src/blockProofTypes.js";
 import type { BufferEncoding } from "./src/nodeBufferTypes.js";
-import type { ToriiBrowserExplorerAccountsOptions, ToriiBrowserExplorerAssetDefinition, ToriiBrowserExplorerAssetDefinitionsOptions, ToriiBrowserExplorerAssetsOptions, ToriiBrowserExplorerCursorPage, ToriiBrowserExplorerDomainsOptions, ToriiBrowserExplorerOwnedDomainOptions } from "./src/toriiBrowserExplorerTypes.js";
+import type {
+  ToriiBrowserExplorerAccountsOptions,
+  ToriiBrowserExplorerAssetDefinition,
+  ToriiBrowserExplorerAssetDefinitionsOptions,
+  ToriiBrowserExplorerAssetsOptions,
+  ToriiBrowserExplorerBlock,
+  ToriiBrowserExplorerCursorPage,
+  ToriiBrowserExplorerDomainsOptions,
+  ToriiBrowserExplorerHistoryOptions,
+  ToriiBrowserExplorerHistoryPage,
+  ToriiBrowserExplorerInstruction,
+  ToriiBrowserExplorerInstructionHistoryOptions,
+  ToriiBrowserExplorerLatestHistoryPage,
+  ToriiBrowserExplorerOwnedDomainOptions,
+  ToriiBrowserExplorerTransaction,
+  ToriiBrowserExplorerTransactionHistoryOptions,
+} from "./src/toriiBrowserExplorerTypes.js";
+export type {
+  ToriiBrowserExplorerAccountsOptions,
+  ToriiBrowserExplorerAssetDefinition,
+  ToriiBrowserExplorerAssetDefinitionsOptions,
+  ToriiBrowserExplorerAssetsOptions,
+  ToriiBrowserExplorerBlock,
+  ToriiBrowserExplorerCursorMeta,
+  ToriiBrowserExplorerCursorOptions,
+  ToriiBrowserExplorerCursorPage,
+  ToriiBrowserExplorerDomainsOptions,
+  ToriiBrowserExplorerHistoryCursorMeta,
+  ToriiBrowserExplorerHistoryOptions,
+  ToriiBrowserExplorerHistoryPage,
+  ToriiBrowserExplorerInstruction,
+  ToriiBrowserExplorerInstructionBox,
+  ToriiBrowserExplorerInstructionHistoryOptions,
+  ToriiBrowserExplorerLatestHistoryPage,
+  ToriiBrowserExplorerOwnedDomainOptions,
+  ToriiBrowserExplorerTransaction,
+  ToriiBrowserExplorerTransactionHistoryOptions,
+} from "./src/toriiBrowserExplorerTypes.js";
 import type { SubscriptionActionResponse, SubscriptionAuthorityActionRequest, SubscriptionCancelActionRequest, SubscriptionChargeActionRequest, SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListItem, SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse, SubscriptionPlanListItem, SubscriptionPlanListResponse, SubscriptionUsageDraft, SubscriptionUsageRequest } from "./src/subscriptionTypes.js";
 import type { SorafsOrderbookSignedTransaction, SorafsOrderbookSubmissionReceipt, SorafsOrderbookTransactionSubmitOptions } from "./src/sorafsOrderbookSubmission.js";
 import { NetworkId } from "./src/networkId.js";
@@ -1541,10 +1578,7 @@ export function extractConfidentialGasConfig(
 ): ConfidentialGasSchedule | null;
 
 export interface BlockListOptions {
-  page?: NumericLike;
-  page_number?: NumericLike;
-  perPage?: NumericLike;
-  per_page?: NumericLike;
+  cursor?: string;
   limit?: NumericLike;
   signal?: AbortSignal;
 }
@@ -2569,11 +2603,13 @@ export interface ToriiExplorerMetricsSnapshot {
   averageBlockTimeMs: number | null;
 }
 
-export interface ToriiExplorerPaginationMeta {
-  page: number;
-  perPage: number;
-  totalPages: number;
-  totalItems: number;
+/** Snapshot-bound seek metadata for Explorer chain-history collections. */
+export interface ToriiExplorerHistoryCursorMeta {
+  limit: number;
+  snapshotHeight: number;
+  snapshotHash: string | null;
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 /** Seek-pagination metadata for canonical Explorer world collections. */
@@ -2622,7 +2658,7 @@ export interface ToriiExplorerBlock {
 }
 
 export interface ToriiExplorerBlocksPage {
-  pagination: ToriiExplorerPaginationMeta;
+  pagination: ToriiExplorerHistoryCursorMeta;
   items: ReadonlyArray<ToriiExplorerBlock>;
 }
 
@@ -10697,6 +10733,12 @@ export interface ToriiBrowserClientOptions {
   fetchImpl?: typeof fetch;
   /** Exact genesis-derived network identity required by canonical-auth methods. */
   networkId?: NetworkId;
+  /**
+   * Immutable default identity for scoped ledger browser GETs, including
+   * optional-auth dataspace reads and the global-reader Explorer metrics route.
+   * The callback signs the final pathname and wire query for each request.
+   */
+  canonicalRequestAuth?: ToriiBrowserCanonicalRequestAuth;
   /** Immutable exact-network signer required by operator-only browser reads. */
   operatorSigningContext?: OperatorSigningContext;
   defaultHeaders?: Record<string, string>;
@@ -10784,6 +10826,16 @@ export type CanonicalJsonRequestSignature =
   | ArrayBufferView
   | string;
 
+/** Browser-keystore identity used for optional canonical Torii reads. */
+export interface ToriiBrowserCanonicalRequestAuth {
+  /** Exact canonical I105 account or canonical ASCII account alias. */
+  readonly accountId: string;
+  /** Sign one freshly constructed exact-network canonical request message. */
+  readonly sign: (
+    input: CanonicalJsonRequestSignerInput,
+  ) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
+}
+
 export interface ToriiBrowserContractDeploymentStateOptions
   extends ToriiBrowserRequestOptions {
   authAccountId?: string;
@@ -10829,6 +10881,7 @@ export declare class ToriiBrowserStreamGapError extends Error {
 
 export declare class ToriiBrowserClient {
   readonly baseUrl: string;
+  readonly networkId: NetworkId | null;
   constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
   submitTransaction(
     signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
@@ -10971,7 +11024,9 @@ export declare class ToriiBrowserClient {
     rwaId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerBlocks(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerBlocks<T = ToriiBrowserExplorerBlock>(
+    options?: ToriiBrowserExplorerHistoryOptions,
+  ): Promise<ToriiBrowserExplorerHistoryPage<T>>;
   getExplorerBlock(
     identifier: string | number | bigint,
     options?: Record<string, unknown>,
@@ -10997,18 +11052,22 @@ export declare class ToriiBrowserClient {
   ): Promise<ToriiBlockProofs>;
   getExplorerMetrics(options?: Record<string, unknown>): Promise<unknown>;
   getExplorerHealth(options?: Record<string, unknown>): Promise<unknown>;
-  listExplorerTransactions(options?: Record<string, unknown>): Promise<unknown>;
-  listLatestExplorerTransactions(
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  listExplorerTransactions<T = ToriiBrowserExplorerTransaction>(
+    options?: ToriiBrowserExplorerTransactionHistoryOptions,
+  ): Promise<ToriiBrowserExplorerHistoryPage<T>>;
+  listLatestExplorerTransactions<T = ToriiBrowserExplorerTransaction>(
+    options?: ToriiBrowserExplorerTransactionHistoryOptions,
+  ): Promise<ToriiBrowserExplorerLatestHistoryPage<T>>;
   getExplorerTransaction(
     hash: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerInstructions(options?: Record<string, unknown>): Promise<unknown>;
-  listLatestExplorerInstructions(
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  listExplorerInstructions<T = ToriiBrowserExplorerInstruction>(
+    options?: ToriiBrowserExplorerInstructionHistoryOptions,
+  ): Promise<ToriiBrowserExplorerHistoryPage<T>>;
+  listLatestExplorerInstructions<T = ToriiBrowserExplorerInstruction>(
+    options?: ToriiBrowserExplorerInstructionHistoryOptions,
+  ): Promise<ToriiBrowserExplorerLatestHistoryPage<T>>;
   getExplorerInstruction(
     transactionHash: string,
     index: number,

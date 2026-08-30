@@ -4375,11 +4375,6 @@ pub(crate) fn charge_fees_for_applied_overlay(
             "out of gas: used {gas_used} > limit {limit}"
         )));
     }
-    let confidential_delta =
-        crate::gas::sum_confidential_gas_costs(overlay.instruction_slice().iter());
-    if confidential_delta > 0 {
-        state_transaction.record_confidential_gas_delta(confidential_delta);
-    }
     state_transaction.last_tx_gas_used = gas_used;
     Executor::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
     let tx_hash = transaction.hash();
@@ -4419,11 +4414,12 @@ pub(crate) fn charge_fees_for_applied_overlay(
     }
     Ok(())
 }
-/// Charge fees for a rejected mixed batch after its staged business effects were discarded.
+/// Charge fees for rejected live execution after its staged business effects were discarded.
 ///
-/// Mixed batches execute directly against a live [`StateTransaction`] instead of producing a
-/// [`crate::pipeline::overlay::TxOverlay`]. The caller must therefore pass the gas captured before
-/// dropping that failed transaction and invoke this helper on a fresh fee-only transaction.
+/// Mixed batches and exact standalone governance ballots execute directly against a live
+/// [`StateTransaction`] instead of producing a [`crate::pipeline::overlay::TxOverlay`]. The caller
+/// must therefore pass the gas captured before dropping that failed transaction and invoke this
+/// helper on a fresh fee-only transaction.
 pub(crate) fn charge_fees_for_rejected_live_batch(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -4434,13 +4430,23 @@ pub(crate) fn charge_fees_for_rejected_live_batch(
         return Ok(());
     }
     let instruction_count = match transaction.instructions() {
+        Executable::Instructions(items)
+            if matches!(
+                crate::state::standalone_governance_ballot_instruction_v1(
+                    transaction.instructions()
+                ),
+                Ok(Some(_))
+            ) =>
+        {
+            items.len()
+        }
         Executable::Batch(items) => items
             .iter()
             .filter(|item| matches!(item, ExecutableBatchItem::Instruction(_)))
             .count(),
         _ => {
             return Err(ValidationFail::InternalError(
-                "non-batch transaction reached rejected live-batch fee settlement".to_owned(),
+                "non-live transaction reached rejected live-execution fee settlement".to_owned(),
             ));
         }
     };
@@ -5362,6 +5368,14 @@ impl Executor {
             )));
         }
         Self::enforce_transaction_gas_fits_block(state_transaction, used)?;
+        // Preserve deterministic work accounting even if an instruction later
+        // rejects. The block corridor decides whether the rejected live
+        // transaction is fee-eligible and carries these counters forward.
+        state_transaction.last_tx_gas_used = used;
+        let confidential_delta = crate::gas::sum_confidential_gas_costs(instructions.iter());
+        if confidential_delta > 0 {
+            state_transaction.record_confidential_gas_delta(confidential_delta);
+        }
         match (contract_runtime_context, entrypoint_authorization) {
             (Some(context), Some(authorization)) => {
                 if !authorization.is_root() {
@@ -5421,7 +5435,6 @@ impl Executor {
             )?;
         }
         let instruction_count = instructions.len();
-        let confidential_delta = crate::gas::sum_confidential_gas_costs(instructions.iter());
         // 3) Execute ISIs in order.
         let prior_sccp_ivm_proved_execution_binding =
             state_transaction.sccp_ivm_proved_execution_binding.clone();
@@ -5579,13 +5592,7 @@ impl Executor {
         state_transaction.sccp_ivm_proved_execution_binding =
             prior_sccp_ivm_proved_execution_binding;
         execution_result?;
-        // Track confidential gas after successful execution.
-        if confidential_delta > 0 {
-            state_transaction.record_confidential_gas_delta(confidential_delta);
-        }
-        // 4) Record gas used for block-level budget enforcement.
-        state_transaction.last_tx_gas_used = used;
-        // 5) Charge gas fees when configured and the transaction specified a gas asset.
+        // 4) Charge gas fees when configured and the transaction specified a gas asset.
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
             &state_transaction.nexus.fees,
@@ -5959,6 +5966,7 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         state_transaction.bind_privacy_transaction_intent_v1(None);
         state_transaction.bind_private_settlement_carrier_v1(None);
+        state_transaction.bind_governance_ballot_entrypoint_v1(None);
         state_transaction.kagemusha_taira_canary_wire_identity = None;
         state_transaction.kagemusha_release_lifecycle_entrypoint = None;
         if transaction.authority() != authority {
@@ -5975,6 +5983,10 @@ impl Executor {
                 &transaction,
             )?;
         state_transaction.bind_private_settlement_carrier_v1(private_settlement_carrier_binding);
+        let governance_ballot_binding =
+            crate::state::standalone_governance_ballot_instruction_v1(transaction.instructions())
+                .map_err(|message| ValidationFail::NotPermitted(message.to_owned()))?;
+        state_transaction.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
         if state_transaction.kagemusha_taira_canary_external_entrypoint {
             state_transaction.kagemusha_taira_canary_wire_identity =
                 signed_kagemusha_taira_canary_wire_identity_v1(&transaction)?;
@@ -6507,6 +6519,11 @@ impl Executor {
                 // Native ISIs are metered as one authored set, matching the existing
                 // `Executable::Instructions` rejected-business fee behavior.
                 state_transaction.last_tx_gas_used = explicit_gas;
+                let confidential_delta =
+                    crate::gas::sum_confidential_gas_costs(explicit_instructions.iter());
+                if confidential_delta > 0 {
+                    state_transaction.record_confidential_gas_delta(confidential_delta);
+                }
                 for item in items {
                     match item {
                         ExecutableBatchItem::Instruction(instruction) => {
@@ -6545,11 +6562,6 @@ impl Executor {
                             }
                         }
                     }
-                }
-                let confidential_delta =
-                    crate::gas::sum_confidential_gas_costs(explicit_instructions.iter());
-                if confidential_delta > 0 {
-                    state_transaction.record_confidential_gas_delta(confidential_delta);
                 }
                 Self::settle_live_transaction_fees(
                     state_transaction,
@@ -10989,7 +11001,7 @@ mod tests {
         parameter::{CustomParameter, CustomParameterId},
         prelude::*,
         query::{QueryRequest, SingularQueryBox, prelude::FindParameters},
-        smart_contract::ContractAddress,
+        smart_contract::{ContractAddress, ContractEmergencyHoldV1},
         transaction::executable::IvmBytecode,
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -11072,6 +11084,41 @@ mod tests {
             .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         state
+    }
+    #[test]
+    fn rejected_standalone_ballot_records_equal_gas_for_instruction_and_batch_carriers() {
+        let ballot = InstructionBox::from(iroha_data_model::isi::governance::CastZkBallot {
+            election_id: "gas.parity.v1".to_owned(),
+            proof_b64: "AA==".to_owned(),
+            public_inputs_json: "{}".to_owned(),
+        });
+        let expected_gas = isi_gas::meter_instructions(core::slice::from_ref(&ballot));
+        assert!(expected_gas > 0);
+        let execute_rejected = |executable: Executable| {
+            let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let state = state_for_testing(World::with([], [account], []));
+            let signed = TransactionBuilder::new(
+                *state.network_id_ref(),
+                ALICE_ID.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_executable(executable)
+            .sign(ALICE_KEYPAIR.private_key());
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            let mut transaction = block.transaction();
+            let mut cache = IvmCache::new();
+            crate::executor::Executor::Initial
+                .execute_transaction(&mut transaction, &ALICE_ID, signed, &mut cache)
+                .expect_err("an unpermitted ballot must reject");
+            transaction.last_tx_gas_used
+        };
+        let instructions_gas =
+            execute_rejected(Executable::Instructions(vec![ballot.clone()].into()));
+        let batch_gas = execute_rejected(Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(ballot)].into(),
+        ));
+        assert_eq!(instructions_gas, expected_gas);
+        assert_eq!(batch_gas, expected_gas);
     }
     fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
         let total = world
@@ -19184,7 +19231,7 @@ seiyaku TriggerArguments {
             .expect("prepare parameterized trigger callback")
     }
     #[test]
-    fn protected_contract_call_is_denied_before_argument_record_decode() {
+    fn contract_call_enforces_entrypoint_and_hold_before_argument_decode() {
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (program, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
@@ -19331,6 +19378,68 @@ seiyaku GuardedValue {
             .get(&metadata_marker)
             .cloned()
             .expect("authorized direct call writes its metadata marker");
+        {
+            let binding = state_tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("active contract retains its lifecycle binding");
+            binding.lifecycle.emergency_hold = Some(ContractEmergencyHoldV1 {
+                incident_digest: [0xA1; 32],
+                proposal_content_id: [0xA2; 32],
+                governance_attempt_id: [0xA3; 32],
+                reason: "contain direct contract execution".to_owned(),
+                imposed_at_height: 1,
+                expires_at_height: 2,
+            });
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+        }
+        ivm::reset_argument_record_decode_count();
+        let held = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("an active Parliament hold must suspend the direct contract call");
+        assert!(
+            matches!(held, ValidationFail::NotPermitted(ref message)
+                if message.contains("held by Parliament")),
+            "unexpected emergency-hold error: {held}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "a held direct call must fail before decoding its arguments"
+        );
+        assert_eq!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "a held direct call must apply no queued effect"
+        );
+        {
+            let binding = state_tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("held contract retains its lifecycle binding");
+            binding.lifecycle.emergency_hold = None;
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+        }
         let live_code = state_tx
             .world
             .contract_code

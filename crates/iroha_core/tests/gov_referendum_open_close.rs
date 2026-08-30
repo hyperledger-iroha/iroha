@@ -133,7 +133,8 @@ fn referendum_open_and_close_by_height() {
     // Block H=4: closes at h_end + 1.
     let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let mut sblock4 = state.block(header4);
-    let has_closed_event_at_h4 = sblock4.world.take_external_events().iter().any(|event| {
+    let events_at_h4 = sblock4.world.take_external_events();
+    let has_closed_event_at_h4 = events_at_h4.iter().any(|event| {
         matches!(
             event,
             iroha_data_model::events::EventBox::Data(payload)
@@ -145,6 +146,33 @@ fn referendum_open_and_close_by_height() {
                 )
         )
     });
+    let decision = events_at_h4
+        .iter()
+        .find_map(|event| match event.as_data_event() {
+            Some(iroha_data_model::events::data::DataEvent::Governance(
+                GovernanceEvent::ReferendumDecided(decision),
+            )) => Some(decision),
+            _ => None,
+        });
+    let decision = decision.expect("standalone close must emit its exact referendum decision");
+    assert_eq!(decision.referendum_id, rid);
+    assert_eq!(
+        (decision.approve, decision.reject, decision.abstain),
+        (0, 0, 0)
+    );
+    assert!(
+        !decision.approved,
+        "a nonzero approval threshold cannot approve an empty decisive tally"
+    );
+    assert!(
+        !events_at_h4.iter().any(|event| matches!(
+            event.as_data_event(),
+            Some(iroha_data_model::events::data::DataEvent::Governance(
+                GovernanceEvent::ProposalApproved(_) | GovernanceEvent::ProposalRejected(_)
+            ))
+        )),
+        "standalone closure must never masquerade as a typed proposal decision"
+    );
     sblock4
         .commit_empty_block_for_testing()
         .expect("commit block at H=4");

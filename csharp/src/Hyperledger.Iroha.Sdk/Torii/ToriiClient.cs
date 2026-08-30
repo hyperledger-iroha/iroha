@@ -649,12 +649,12 @@ public sealed partial class ToriiClient : IDisposable
     }
 
     public async Task<ToriiExplorerBlocksPage> GetExplorerBlocksAsync(
-        ToriiExplorerPaginationQuery? query = null,
+        ToriiExplorerCursorQuery? query = null,
         CancellationToken cancellationToken = default)
     {
         var response = await GetAsync<ToriiExplorerBlocksPage>(
             "/v1/explorer/blocks",
-            BuildExplorerPaginationQuery(query),
+            BuildExplorerCursorQuery(query),
             cancellationToken);
         ValidateExplorerBlocksPage(response, "explorer blocks response");
         return response;
@@ -2392,7 +2392,8 @@ public sealed partial class ToriiClient : IDisposable
 
         byte[]? signedBodyBytes = null;
         IReadOnlyDictionary<string, string>? signedHeaders = null;
-        if (Options.CanonicalRequestCredentials is not null)
+        var canonicalCredentials = Options.CanonicalRequestCredentials;
+        if (canonicalCredentials is not null)
         {
             foreach (var headerName in new[]
                      {
@@ -2404,12 +2405,16 @@ public sealed partial class ToriiClient : IDisposable
                     throw new InvalidOperationException("Canonical signing headers must be generated locally and cannot be precomputed.");
                 }
             }
+        }
+
+        if (canonicalCredentials is not null && !IsAnonymousPublicRoute(exactPath))
+        {
             var bodyBytes = content is null ? Array.Empty<byte>() : await content.ReadAsByteArrayAsync(cancellationToken);
             var headers = CanonicalRequest.BuildHeaders(
                 Options.LocalSigningContext?.NetworkId
                     ?? throw new InvalidOperationException("Canonical request authentication requires ToriiClientOptions.LocalSigningContext."),
-                Options.CanonicalRequestCredentials.AccountId,
-                Options.CanonicalRequestCredentials.PrivateKeySeed,
+                canonicalCredentials.AccountId,
+                canonicalCredentials.PrivateKeySeed,
                 exactMethod,
                 requestUri.AbsolutePath,
                 requestUri.Query,
@@ -2437,6 +2442,20 @@ public sealed partial class ToriiClient : IDisposable
             signedHeaders,
             cancellationToken);
         return request;
+    }
+
+    private static bool IsAnonymousPublicRoute(string path)
+    {
+        // These protocol-public probes and local-content gateways stay anonymous
+        // even when the client also carries credentials for visibility-sensitive reads.
+        return string.Equals(path, "/v1/health", StringComparison.Ordinal)
+            || string.Equals(path, "/v1/version", StringComparison.Ordinal)
+            || string.Equals(path, "/v1/explorer/health", StringComparison.Ordinal)
+            || string.Equals(path, "/.well-known/sorafs/manifest", StringComparison.Ordinal)
+            || string.Equals(path, "/v1/sorafs/cid", StringComparison.Ordinal)
+            || path.StartsWith("/v1/sorafs/cid/", StringComparison.Ordinal)
+            || string.Equals(path, "/sorafs/cid", StringComparison.Ordinal)
+            || path.StartsWith("/sorafs/cid/", StringComparison.Ordinal);
     }
 
     private static async Task EnsureConfigureRequestDidNotMutateProtectedStateAsync(
@@ -6461,8 +6480,7 @@ public sealed partial class ToriiClient : IDisposable
 
     private static void ValidateExplorerBlocksPage(ToriiExplorerBlocksPage response, string context)
     {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerBlock);
+        ToriiExplorerJson.ValidateExplorerBlocksPage(response, context);
     }
 
     private static void ValidateExplorerAccountsPage(ToriiExplorerAccountsPage response, string context)
@@ -6599,11 +6617,6 @@ public sealed partial class ToriiClient : IDisposable
         ToriiExplorerSnapshotJson.ValidateExplorerMetricsSnapshot(response, context);
     }
 
-    private static void ValidateExplorerPagination(ToriiExplorerPaginationMeta? response, string context)
-    {
-        ToriiExplorerJson.ValidateExplorerPagination(response, context);
-    }
-
     private static void ValidateExplorerBlock(ToriiExplorerBlock response, string context)
     {
         ToriiExplorerJson.ValidateExplorerBlock(response, context);
@@ -6611,16 +6624,14 @@ public sealed partial class ToriiClient : IDisposable
 
     private static void ValidateExplorerTransactionsPage(ToriiExplorerTransactionsPage response, string context)
     {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerTransaction);
+        ToriiExplorerJson.ValidateExplorerTransactionsPage(response, context);
     }
 
     private static void ValidateExplorerLatestTransactionsResponse(
         ToriiExplorerLatestTransactionsResponse response,
         string context)
     {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerTransaction);
+        ToriiExplorerJson.ValidateExplorerLatestTransactionsResponse(response, context);
     }
 
     private static void ValidateExplorerTransaction(ToriiExplorerTransaction response, string context)
@@ -6644,16 +6655,14 @@ public sealed partial class ToriiClient : IDisposable
 
     private static void ValidateExplorerInstructionsPage(ToriiExplorerInstructionsPage response, string context)
     {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerInstruction);
+        ToriiExplorerJson.ValidateExplorerInstructionsPage(response, context);
     }
 
     private static void ValidateExplorerLatestInstructionsResponse(
         ToriiExplorerLatestInstructionsResponse response,
         string context)
     {
-        ArgumentNullException.ThrowIfNull(response);
-        ValidateExplorerItems(response.Items, $"{context}.items", ValidateExplorerInstruction);
+        ToriiExplorerJson.ValidateExplorerLatestInstructionsResponse(response, context);
     }
 
     private static void ValidateExplorerInstruction(ToriiExplorerInstruction response, string context)
@@ -8265,19 +8274,19 @@ public sealed partial class ToriiClient : IDisposable
         ]);
     }
 
-    private static string? BuildExplorerPaginationQuery(ToriiExplorerPaginationQuery? query)
+    private static string? BuildExplorerCursorQuery(ToriiExplorerCursorQuery? query)
     {
         if (query is null)
         {
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
         ]);
     }
 
@@ -8396,12 +8405,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("authority", NormalizeOptionalAccountId(query.Authority, nameof(query.Authority))),
             new KeyValuePair<string, string?>("block", query.Block?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>(
@@ -8418,12 +8427,12 @@ public sealed partial class ToriiClient : IDisposable
             return null;
         }
 
-        ValidateExplorerPagination(query, nameof(query));
+        ValidateExplorerCursor(query, nameof(query));
 
         return BuildQueryString(
         [
-            new KeyValuePair<string, string?>("page", query.Page?.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, string?>("per_page", query.PerPage?.ToString(CultureInfo.InvariantCulture)),
+            new KeyValuePair<string, string?>("cursor", query.Cursor),
+            new KeyValuePair<string, string?>("limit", query.Limit?.ToString(CultureInfo.InvariantCulture)),
             new KeyValuePair<string, string?>("authority", NormalizeOptionalAccountId(query.Authority, nameof(query.Authority))),
             new KeyValuePair<string, string?>("account", NormalizeOptionalAccountId(query.Account, nameof(query.Account))),
             new KeyValuePair<string, string?>("transaction_hash", NormalizeOptionalExactValue(query.TransactionHash, nameof(query.TransactionHash))),
@@ -9923,19 +9932,6 @@ public sealed partial class ToriiClient : IDisposable
         }
 
         return value;
-    }
-
-    private static void ValidateExplorerPagination(ToriiExplorerPaginationQuery query, string paramName)
-    {
-        if (query.Page == 0)
-        {
-            throw new ArgumentOutOfRangeException(paramName, "Explorer page numbers must be positive when provided.");
-        }
-
-        if (query.PerPage == 0)
-        {
-            throw new ArgumentOutOfRangeException(paramName, "Explorer per-page values must be positive when provided.");
-        }
     }
 
     private static PipelineTransactionStatus ParsePipelineTransactionStatus(

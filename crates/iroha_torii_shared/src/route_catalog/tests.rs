@@ -46,6 +46,19 @@ mod tests {
             streaming::CONTRACT_EVENTS_SSE,
             streaming::SUBSCRIPTION_WS,
             telemetry::ASSET_HOLDERS,
+            application_api::CONTRACTS_ACTIVITY_GET,
+            application_api::CONTRACTS_EVENTS_GET,
+            application_api::CONTRACTS_ROLLUPS_SWAPS_FILLS_GET,
+            application_api::CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET,
+            application_api::CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET,
+            application_api::CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET,
+            application_api::CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET,
+            application_api::CONTRACTS_ROLLUPS_INTENTS_GET,
+            application_api::CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET,
+            application_api::CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET,
+            application_api::CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET,
+            application_api::CONTRACTS_ROLLUPS_RWA_LOTS_GET,
+            application_api::CONTRACTS_ROLLUPS_DLMM_HOOKS_GET,
             application_api::EXPLORER_ACCOUNTS_GET,
             application_api::EXPLORER_DOMAINS_GET,
             application_api::EXPLORER_ASSET_DEFINITIONS_GET,
@@ -53,8 +66,13 @@ mod tests {
             application_api::EXPLORER_NFTS_GET,
             application_api::EXPLORER_RWAS_GET,
             application_api::EXPLORER_BLOCKS_GET,
+            application_api::EXPLORER_BLOCKS_STREAM_GET,
             application_api::EXPLORER_TRANSACTIONS_GET,
+            application_api::EXPLORER_TRANSACTIONS_LATEST_GET,
+            application_api::EXPLORER_TRANSACTIONS_STREAM_GET,
             application_api::EXPLORER_INSTRUCTIONS_GET,
+            application_api::EXPLORER_INSTRUCTIONS_LATEST_GET,
+            application_api::EXPLORER_INSTRUCTIONS_STREAM_GET,
             application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET,
             application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET,
             application_api::EXPLORER_DOMAINS_BY_DOMAIN_ID_GET,
@@ -64,6 +82,9 @@ mod tests {
             application_api::EXPLORER_ASSETS_BY_ASSET_ID_GET,
             application_api::EXPLORER_NFTS_BY_NFT_ID_GET,
             application_api::EXPLORER_RWAS_BY_RWA_ID_GET,
+            application_api::EXPLORER_BLOCKS_BY_IDENTIFIER_GET,
+            application_api::EXPLORER_TRANSACTIONS_BY_HASH_GET,
+            application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET,
             application_api::EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET,
         ] {
             assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
@@ -83,6 +104,34 @@ mod tests {
             AdmissionPolicy::AuthenticatedAccount
         );
         assert_eq!(validate_catalog(&[streaming::BLOCKS_WS]), Ok(()));
+    }
+
+    #[test]
+    fn contract_rollup_replays_are_dataspace_visible_optional_identity_reads() {
+        let routes = [
+            application_api::CONTRACTS_ROLLUPS_SWAPS_FILLS_GET,
+            application_api::CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET,
+            application_api::CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY_GET,
+            application_api::CONTRACTS_ROLLUPS_TRADER_ACTIVITY_GET,
+            application_api::CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET,
+            application_api::CONTRACTS_ROLLUPS_INTENTS_GET,
+            application_api::CONTRACTS_ROLLUPS_VAULTS_POSITIONS_GET,
+            application_api::CONTRACTS_ROLLUPS_OPERATORS_STATUS_GET,
+            application_api::CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET,
+            application_api::CONTRACTS_ROLLUPS_RWA_LOTS_GET,
+            application_api::CONTRACTS_ROLLUPS_DLMM_HOOKS_GET,
+        ];
+        assert_eq!(routes.len(), 11);
+        for route in routes {
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(route.admission(), AdmissionPolicy::DataspaceVisible);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OptionalCanonicalAccountSignature
+            );
+            assert!(route.requires_private_no_store());
+        }
+        assert_eq!(validate_catalog(&routes), Ok(()));
     }
 
     #[test]
@@ -546,9 +595,11 @@ mod tests {
                 .all(|route| route.path() != retired_current_council_path)
         );
         let retired_current_council_route_id = ["governance.", "council.", "current"].concat();
-        assert!(runtime_governance::ROUTES.iter().all(|route| {
-            route.stable_route_id() != retired_current_council_route_id.as_str()
-        }));
+        assert!(
+            runtime_governance::ROUTES.iter().all(|route| {
+                route.stable_route_id() != retired_current_council_route_id.as_str()
+            })
+        );
         for active_path in [
             "/v1/gov/parliament/attempts/draft",
             "/v1/gov/parliament/attempts/{governance_attempt_id}",
@@ -1648,6 +1699,34 @@ mod tests {
         assert_ne!(openapi, mcp);
     }
     #[test]
+    fn route_auth_metadata_schema_is_v1_in_every_projection_and_fails_closed() {
+        let catalog = RouteCatalog::new(FEATURED_ROUTES);
+        let features = EnabledFeatures::new(&["app_api"]);
+        for projection in [
+            CatalogProjection::Mounted,
+            CatalogProjection::OpenApi,
+            CatalogProjection::Sdk,
+            CatalogProjection::Mcp,
+        ] {
+            let projected = catalog.project(projection, features);
+            assert!(!projected.is_empty(), "{projection:?} projection");
+            assert!(projected.iter().all(|route| {
+                route.auth_metadata_schema_version() == ROUTE_AUTH_METADATA_SCHEMA_VERSION_V1
+            }));
+        }
+
+        let mut incompatible = FEATURED_ROUTES[0];
+        incompatible.auth_metadata_schema_version = 0;
+        let errors = validate_catalog(&[incompatible])
+            .expect_err("pre-versioned route-auth metadata must fail validation");
+        assert!(errors.iter().any(|error| {
+            matches!(
+                error.kind,
+                CatalogValidationErrorKind::UnsupportedAuthMetadataSchemaVersion { found: 0 }
+            )
+        }));
+    }
+    #[test]
     fn feature_expressions_have_deterministic_semantics() {
         let enabled = EnabledFeatures::new(&["app_api", "telemetry"]);
         assert!(FeatureGate::Always.is_enabled(enabled));
@@ -1684,6 +1763,10 @@ mod tests {
         assert_eq!(descriptor.path(), "/content/{*tail}");
         assert_eq!(descriptor.surface(), ApiSurface::Protocol);
         assert_eq!(descriptor.listener(), Listener::Torii);
+        assert_eq!(
+            descriptor.auth_metadata_schema_version(),
+            ROUTE_AUTH_METADATA_SCHEMA_VERSION_V1
+        );
         assert_eq!(
             descriptor.authentication(),
             AuthenticationPolicy::ProtocolHandshake

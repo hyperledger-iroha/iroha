@@ -6,13 +6,14 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{
         ElectionState, GovernanceReferendumMode, GovernanceReferendumRecord,
-        GovernanceReferendumStatus, State, World,
+        GovernanceReferendumStatus, State, World, WorldReadOnly,
     },
 };
 use iroha_data_model::{
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
 };
+use mv::storage::StorageReadOnly;
 #[test]
 fn zk_referendum_auto_close_defers_decision_without_tally() {
     let kura = Kura::blank_kura_for_testing();
@@ -78,12 +79,24 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
         matches!(
             event.as_data_event(),
             Some(DataEvent::Governance(
-                GovernanceEvent::ProposalApproved(_) | GovernanceEvent::ProposalRejected(_)
+                GovernanceEvent::ReferendumDecided(_)
+                    | GovernanceEvent::ProposalApproved(_)
+                    | GovernanceEvent::ProposalRejected(_)
             ))
         )
     });
     assert!(
         !has_decision,
         "unexpected decision without finalized zk tally"
+    );
+    sblock3.commit_empty_block_for_testing().unwrap();
+    assert!(
+        state
+            .view()
+            .world()
+            .governance_referenda()
+            .get(&rid)
+            .is_some_and(|record| record.status == GovernanceReferendumStatus::Closed),
+        "a ZK referendum awaiting its tally remains durably closed"
     );
 }

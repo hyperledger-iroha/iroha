@@ -980,8 +980,7 @@ Use `getExplorerTransfers` to fetch a page and derive transfer records:
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
-    let params = ToriiExplorerInstructionsParams(page: 1,
-                                                 perPage: 50,
+    let params = ToriiExplorerInstructionsParams(limit: 50,
                                                  kind: "Transfer",
                                                  assetDefinitionId: "<base58-asset-definition-id>")
     let transfers = try await torii.getExplorerTransfers(params: params,
@@ -1005,12 +1004,25 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
+Raw `getExplorerInstructions` and `getExplorerTransactions` history pages use snapshot-bound seek
+cursors. Omit `cursor` for the first request, then pass the exact
+`page.pagination.nextCursor` into the next request while keeping the same filters. Pagination
+metadata exposes `limit`, `snapshotHeight`, `snapshotHash`, `nextCursor`, and `hasMore`; page
+numbers and aggregate totals are not part of the first-release contract. Treat cursor strings as
+opaque. `iterateAccountTransferHistory` advances these cursors for you.
+
+Explorer list/detail/stream calls and contract activity/event reads are public-dataspace requests
+when the client has no `canonicalRequestAuth`. If the client was initialized with a default
+canonical request signer, the SDK signs those exact GET requests automatically so Torii can add
+restricted dataspaces visible to that account. Invalid or partial authentication fails at Torii;
+it never falls back to anonymous visibility.
+
 If you prefer a flattened, UI-ready shape, ask for transfer summaries:
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
     let summaries = try await torii.getExplorerTransferSummaries(
-        params: ToriiExplorerInstructionsParams(page: 1, perPage: 50, kind: "Transfer"),
+        params: ToriiExplorerInstructionsParams(limit: 50, kind: "Transfer"),
         matchingAccount: "<account_i105>"
     )
     for summary in summaries {
@@ -1035,8 +1047,7 @@ For a one-shot transaction history helper, use `getTransactionHistory` (alias of
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
     let history = try await torii.getTransactionHistory(accountId: "<account_i105>",
-                                                        page: 1,
-                                                        perPage: 50)
+                                                        limit: 50)
     for item in history {
         print(item.isIncoming ? "in" : "out", item.amount, item.assetDefinitionId)
     }
@@ -1054,7 +1065,7 @@ To stream multiple pages, use `iterateAccountTransferHistory`:
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
     for try await item in torii.iterateAccountTransferHistory(accountId: "<account_i105>",
-                                                              perPage: 25) {
+                                                              limit: 25) {
         print(item.direction, item.amount, item.assetDefinitionId)
     }
 }
@@ -1065,7 +1076,7 @@ You can also list transaction summaries or fetch a transaction detail payload:
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
     let txPage = try await torii.getExplorerTransactions(
-        params: ToriiExplorerTransactionsParams(page: 1, perPage: 25)
+        params: ToriiExplorerTransactionsParams(limit: 25)
     )
     if let first = txPage.items.first {
         let detail = try await torii.getExplorerTransactionDetail(hashHex: first.hash)
@@ -1894,7 +1905,9 @@ can therefore have a gap. If Torii emits terminal `event: stream_error`, the typ
 helpers fail with `ToriiClientError.stream(ToriiStreamError)`, preserving the stable
 code, message, optional dropped-message count, and replay flag. Malformed terminal
 error payloads fail closed as `ToriiClientError.invalidPayload` rather than being
-silently filtered as an unrelated event.
+silently filtered as an unrelated event. These generic event helpers remain anonymous
+without `canonicalRequestAuth`; when configured, the SDK signs the final GET including
+its exact `filter` query so restricted-dataspace events visible to that account are included.
 
 ### Hardware acceleration (Metal / NEON / StrongBox)
 

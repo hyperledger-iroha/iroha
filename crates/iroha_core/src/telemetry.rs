@@ -2129,11 +2129,9 @@ impl StateTelemetry {
             GovernanceEvent::ProposalSubmitted(payload) => {
                 self.update_governance_status(payload.id, GPS::Proposed);
             }
-            GovernanceEvent::ProposalApproved(_) => {}
             GovernanceEvent::ProposalRejected(payload) => {
                 self.update_governance_status(payload.id, GPS::Rejected);
             }
-            GovernanceEvent::ReferendumDecided(_) => {}
             GovernanceEvent::ProposalEnacted(payload) => {
                 self.update_governance_status(payload.id, GPS::Enacted);
             }
@@ -2158,7 +2156,25 @@ impl StateTelemetry {
             GovernanceEvent::CitizenServiceRecorded(payload) => {
                 self.record_citizen_service_event(payload.event, &payload.slashed);
             }
-            _ => {}
+            GovernanceEvent::ProposalApproved(_)
+            | GovernanceEvent::BallotAccepted(_)
+            | GovernanceEvent::BallotRejected(_)
+            | GovernanceEvent::ReferendumOpened(_)
+            | GovernanceEvent::ReferendumClosed(_)
+            | GovernanceEvent::ParliamentSelected(_)
+            | GovernanceEvent::ParliamentAttemptCreated(_)
+            | GovernanceEvent::ParliamentLifecycleTransitionApplied(_)
+            | GovernanceEvent::ParliamentAttemptTransitioned(_)
+            | GovernanceEvent::ParliamentBodyTransitioned(_)
+            | GovernanceEvent::ParliamentBallotTransitioned(_)
+            | GovernanceEvent::ParliamentConcentrationWarning(_)
+            | GovernanceEvent::ParliamentAggregateFinalized(_)
+            | GovernanceEvent::ThresholdKeyLifecycleApplied(_)
+            | GovernanceEvent::ParliamentCertificateIssued(_)
+            | GovernanceEvent::ParliamentApprovalRecorded(_)
+            | GovernanceEvent::CitizenRegistered(_)
+            | GovernanceEvent::CitizenRevoked(_)
+            | GovernanceEvent::ReferendumDecided(_) => {}
         }
     }
     #[cfg(feature = "telemetry")]

@@ -5,6 +5,17 @@ Last updated: 2026-08-30
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Default-on capability follow-up
+
+- Upgrade the locked QUIC stack to a qualified `quinn-proto` release, rerun the
+  transport security and four-validator loss/recovery matrix, and only then add
+  QUIC to the portable daemon aggregate.
+- Extend Kagami's prepared-Compose projection with an immutable, read-only
+  prover-key directory per validator; remove the generated-profile prover
+  opt-out after its custody and restart tests pass.
+- During a separately authorized lockfile refresh, remove the retired
+  OpenTelemetry exporter dependency tombstone from `iroha_telemetry`.
+
 ## Security-audit release qualification
 
 - Settle the 21 source-level dispositions in
@@ -15749,9 +15760,8 @@ workflows remain excluded from the first release.
   plus one-use key-certificate fixtures now use checked deterministic Ed25519
   seed expansion before STARK and offline recursive proof regressions consume
   them;
-  gated Torii council persist integration candidate accounts and BLS VRF
-  keypairs now use checked domain-separated Ed25519/BLS seed expansion before
-  persist/derive-vrf regressions consume them;
+  the retired Torii council-persist and governance derive-VRF fixtures and
+  regressions are removed with their unshipped surfaces;
   Torii account-activity unit-test account helpers now use checked
   deterministic Ed25519 seed expansion before activity extraction regressions
   consume them;
@@ -15910,8 +15920,8 @@ workflows remain excluded from the first release.
   routed-read regressions rerun;
   Torii grouped core/Nexus/governance test fixtures now use checked
   `Signature::try_new` and `KeyPair::try_from_seed`, with portfolio filtering,
-  bridge finality, Nexus disabled/enabled lanes, push rejection/success, and
-  gated governance VRF ordering regressions rerun;
+  bridge finality, Nexus disabled/enabled lanes, and push rejection/success
+  regressions rerun;
   Torii routing overlong multisig selector, contract bundle, repair native
   action transaction, and account transaction filter fixtures now use checked seed and
   signature constructors before selector, receipt, repair, and filter

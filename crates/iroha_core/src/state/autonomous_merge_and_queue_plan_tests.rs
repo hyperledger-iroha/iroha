@@ -287,6 +287,51 @@ fn assert_fastpq_batch_rejected(
 }
 include!("autonomous_merge_fastpq_shape_tests.rs");
 #[test]
+fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias() {
+    let (state, entry, _) = autonomous_sealed_reveal_merge_commit_authorization_fixture();
+    let batch = entry
+        .execution_batch
+        .as_ref()
+        .expect("fixture carries one sealed-reveal execution batch");
+    let reveal = match &batch.lanes[0].entrypoints[0] {
+        TransactionEntrypoint::SealedReveal(reveal) => reveal,
+        _ => panic!("fixture execution entrypoint must be a sealed reveal"),
+    };
+    let outer_hash = batch.lanes[0].entrypoints[0].hash();
+    let signed_execution_alias = reveal.signed_transaction().hash_as_entrypoint();
+    assert_ne!(outer_hash, signed_execution_alias);
+
+    let historical_height = NonZeroUsize::new(state.committed_height())
+        .expect("fixture has a non-zero committed parent height");
+    state.record_committed_entrypoints_for_tests([signed_execution_alias], historical_height);
+    assert!(state.has_committed_entrypoint(signed_execution_alias));
+    assert!(
+        !state.has_committed_entrypoint(outer_hash),
+        "the regression must exercise a fresh outer carrier with a replayed signed identity"
+    );
+
+    state
+        .validate_merge_execution_batch(
+            &entry.active_lanes,
+            batch,
+            &std::collections::BTreeMap::new(),
+            false,
+            None,
+        )
+        .expect("historical validation must not reject its already-committed identities");
+    assert!(matches!(
+        state.validate_merge_execution_batch(
+            &entry.active_lanes,
+            batch,
+            &std::collections::BTreeMap::new(),
+            true,
+            Some(ConsensusMode::Permissioned),
+        ),
+        Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
+            if reason == "autonomous merge execution reuses a committed carrier or sealed signed-execution identity"
+    ));
+}
+#[test]
 fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity() {
     let (state, entry, carrier) = autonomous_merge_transfer_commit_authorization_fixture();
     let lane = &entry

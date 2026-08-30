@@ -4243,6 +4243,28 @@ Governance evidence travels inline with the register/transfer/unfreeze request b
 
 ## Torii Queries & Events
 
+Browser keystores can configure one immutable read identity. Explorer
+list/detail/latest/snapshot/metrics calls and contract activity/event replay or
+streams then sign the exact final pathname and wire query. Without
+`canonicalRequestAuth`, dataspace reads stay anonymous and public-only, while
+the global-reader metrics route is expected to reject the request. The public
+Explorer health call is never signed by this context. Incomplete contexts,
+caller-precomputed canonical headers, and redirects are rejected.
+
+```js
+import { NetworkId, ToriiBrowserClient } from "@iroha/iroha-js/torii-browser";
+
+const browserTorii = new ToriiBrowserClient("https://torii.example", {
+  networkId: NetworkId.parse(genesisNetworkHash),
+  canonicalRequestAuth: {
+    accountId: walletAccountId,
+    sign: ({ messageBase64 }) => wallet.signCanonicalRequest(messageBase64),
+  },
+});
+
+const visibleNfts = await browserTorii.listExplorerNfts({ limit: 25 });
+```
+
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
@@ -4279,11 +4301,17 @@ console.log(block?.height); // null when the block is missing
 
 const recentBlocks = await torii.listBlocks({ limit: 5 });
 console.log(
-  `returned ${recentBlocks.items.length} of ${recentBlocks.pagination.totalItems} blocks`,
+  `returned ${recentBlocks.items.length} blocks from snapshot #${recentBlocks.pagination.snapshotHeight}`,
 );
+console.log(`more=${recentBlocks.pagination.hasMore}`);
 for (const entry of recentBlocks.items) {
   console.log(`${entry.hash} rejected=${entry.transactionsRejected}`);
 }
+
+// With `canonicalRequestAuth` configured, Explorer, generic event SSE, and
+// contract activity/event GETs are signed over the final path and query so
+// restricted visible dataspaces are included. Without it, reads stay anonymous
+// and public-only; invalid authentication never falls back to anonymous access.
 
 // NFT and account-asset iteration mirrors the Torii JSON envelopes while handling pagination.
 const holdings = [];
@@ -4661,7 +4689,7 @@ rejected.
   See `specs/sdk/js/publishing.md` for the full workflow.
 
 - `ToriiClient` accepts `timeoutMs`, `maxRetries`, `backoffInitialMs`, `backoffMultiplier`, `maxBackoffMs`, `retryStatuses`, and `retryMethods`, mirroring the retry knobs exposed in `iroha_config`.
-- Retry settings never apply to signed transaction or batch submission, or to a request carrying `canonicalAuth`/`X-Iroha-Nonce`: those final dispatches always use `redirect: "error"` and make exactly one Fetch call. `ToriiBrowserClient` applies the same redirect policy to signed transactions and canonical nonce-bearing requests. Pre-dispatch validation reads, such as the node-capabilities check, retain the normal safe retry policy. A custom `fetchImpl` must preserve this one-shot boundary whenever it receives `redirect: "error"`; it must not follow 307/308 responses or replay the request after a network error, timeout, or retryable status.
+- Retry settings never apply to signed transaction or batch submission, or to a request carrying `canonicalAuth`/`X-Iroha-Nonce`: those final dispatches always use `redirect: "error"` and make exactly one Fetch call. `ToriiBrowserClient` applies the same redirect policy to signed transactions, canonical nonce-bearing requests, and configured dataspace-visible reads. Pre-dispatch validation reads, such as the node-capabilities check, retain the normal safe retry policy. A custom `fetchImpl` must preserve this one-shot boundary whenever it receives `redirect: "error"`; it must not follow 307/308 responses or replay the request after a network error, timeout, or retryable status.
 - Attach `retryTelemetryHook` to capture deterministic per-attempt telemetry for dashboards and SLO drills; events include phase (`response`/`network`/`timeout`), attempt numbers, method/URL, status or error metadata, backoffMs, profile name when set, durationMs for the attempt, and timestampMs so logs can be correlated with Torii-side traces.
 - Authentication headers can be supplied via `authToken` (maps to `Authorization: Bearer ...`) or `apiToken` (maps to `X-API-Token`). Requests that carry auth headers, `canonicalAuth`, or raw `private_key*` JSON fields pin to the client's base scheme/host; cross-host overrides are rejected, insecure `http`/`ws` requires `allowInsecure: true` (dev-only), and `insecureTransportTelemetryHook` captures any downgraded transports. Cross-host requests without sensitive material require `allowAbsoluteUrl: true`.
 - Runtime defaults can be pulled from `iroha_config` JSON/TOML by passing a camelCase config object (map `torii.api_tokens` to `torii.apiTokens`) to `new ToriiClient(url, { config })`. The helper `resolveToriiClientConfig({ config })` returns the merged settings if you need to inspect them directly.

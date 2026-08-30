@@ -21,7 +21,9 @@ categories.workspace = true
 workspace = true
 
 [features]
-default = ["daemon"]
+# Shipping daemon builds retain the Core accelerator. Test/recovery corridors
+# can select `daemon` explicitly to exercise identical node semantics portably.
+default = ["daemon", "iroha_core/simd"]
 daemon = [
     "telemetry",
     "schema-endpoint",

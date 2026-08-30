@@ -2200,9 +2200,9 @@ pub struct Governance {
     pub sorafs_telemetry: SorafsTelemetryPolicy,
     /// Trusted provider→owner bindings seeded only before the first block.
     pub sorafs_provider_owners: BTreeMap<ProviderId, AccountId>,
-    /// Conviction step in blocks for plain (non‑ZK) voting. Duration/step yields extra weight.
+    /// Nonzero conviction step in blocks for plain (non‑ZK) voting. Duration/step yields extra weight.
     pub conviction_step_blocks: u64,
-    /// Maximum conviction multiplier allowed in plain (non‑ZK) voting.
+    /// Nonzero maximum conviction multiplier allowed in plain (non‑ZK) voting.
     pub max_conviction: u64,
     /// Minimum enactment delay (in blocks) for generating referendum windows.
     pub min_enactment_delay: u64,

@@ -43,11 +43,10 @@ fn assert_query_validation_message(body: &[u8], expected_message: &str) {
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn zk_verify_and_attachments_endpoints_exposed() {
+async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
     let _guard = attachments_smoke_lock();
     // Minimal Torii setup (no telemetry requirement for these endpoints)
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.zk_attachments_enabled = true;
+    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let account_id = AccountId::new(cfg.common.key_pair.public_key().clone());
     let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
         .build(&account_id);
@@ -94,9 +93,10 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn zk_attachments_endpoints_disabled_by_default() {
+async fn zk_attachments_endpoints_hidden_when_disabled() {
     let _guard = attachments_smoke_lock();
-    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.zk_attachments_enabled = false;
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
     let app = torii.router();
     for request in [

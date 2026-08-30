@@ -9950,15 +9950,27 @@ class ToriiClient(
     def get_explorer_account_qr(
         self,
         account_id: str,
+        *,
+        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
     ) -> ExplorerAccountQr:
-        """Fetch QR metadata for an account (`GET /v1/explorer/accounts/{account_id}/qr`)."""
+        """Fetch optionally account-signed QR metadata for an Explorer account."""
 
         canonical = self._normalize_canonical_account_id(account_id, "account_id")
-        response = self._request(
-            "GET",
-            f"/v1/explorer/accounts/{quote(canonical, safe='')}/qr",
-            headers={"Accept": "application/json"},
-        )
+        path = f"/v1/explorer/accounts/{quote(canonical, safe='')}/qr"
+        if canonical_auth is None:
+            response = self._request(
+                "GET",
+                path,
+                headers={"Accept": "application/json"},
+            )
+        else:
+            response = self._account_request(
+                "GET",
+                path,
+                canonical_auth=canonical_auth,
+                headers={"Accept": "application/json"},
+                context="explorer account QR",
+            )
         self._expect_status(response, {200})
         payload = self._maybe_json(response)
         if payload is None:
