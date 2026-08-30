@@ -258,12 +258,9 @@ pub mod isi {
     }
     use super::*;
     use crate::{
-        governance::{
-            draw::derive_parliament_bodies,
-            timed_ovn::{
+        governance::timed_ovn::{
                 TIMED_OVN_BALLOT_RECORD_BYTES_V1, TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
                 TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
-            },
         },
         smartcontracts::{
             code::fetch_bound_contract_record,
@@ -2044,41 +2041,6 @@ pub mod isi {
             record.declines_used = 0;
         }
     }
-    fn ensure_citizen_available(
-        record: &mut crate::state::CitizenshipRecord,
-        epoch: u64,
-        current_height: u64,
-    ) -> Result<(), Error> {
-        reset_citizen_epoch(record, epoch);
-        if record.cooldown_until > current_height {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "citizen is in cooldown for the requested epoch".into(),
-            ));
-        }
-        Ok(())
-    }
-    fn assign_citizen_seat(
-        record: &mut crate::state::CitizenshipRecord,
-        epoch: u64,
-        current_height: u64,
-        cfg: &iroha_config::parameters::actual::CitizenServiceDiscipline,
-    ) -> Result<(), Error> {
-        reset_citizen_epoch(record, epoch);
-        if cfg.max_seats_per_epoch > 0 && record.seats_in_epoch >= cfg.max_seats_per_epoch {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "citizen seat limit reached for epoch".into(),
-            ));
-        }
-        if record.cooldown_until > current_height {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "citizen is in cooldown for the requested epoch".into(),
-            ));
-        }
-        record.seats_in_epoch = record.seats_in_epoch.saturating_add(1);
-        let cooldown = current_height.saturating_add(cfg.seat_cooldown_blocks);
-        record.cooldown_until = record.cooldown_until.max(cooldown);
-        Ok(())
-    }
     fn slash_citizenship_bond(
         owner: &AccountId,
         record: &mut crate::state::CitizenshipRecord,
@@ -2133,45 +2095,6 @@ pub mod isi {
         gov.citizenship_bond_amount
             .try_mul_decimal(&Numeric::from(multiplier))
             .expect("bounded governance bond multiplier must remain representable")
-    }
-    fn latest_governance_entropy_seed(
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<[u8; 32], Error> {
-        let pulse = crate::beacon::verified_latest_global_threshold_beacon_pulse_v1(
-            &state_transaction.world,
-            &state_transaction.network_id,
-            state_transaction.block_height().saturating_sub(1),
-        )
-        .map_err(|_| {
-            InstructionExecutionError::InvariantViolation(
-                "governance sortition requires finalized beacon entropy from an authenticated global pulse"
-                    .into(),
-            )
-        })?;
-        Ok(crate::beacon::global_threshold_beacon_governance_seed_v1(
-            &pulse,
-            state_transaction.block_height(),
-        ))
-    }
-    fn derive_epoch_parliament_beacon(
-        epoch: u64,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<[u8; 32], Error> {
-        let entropy = latest_governance_entropy_seed(state_transaction)?;
-        let mut input = Vec::with_capacity(
-            b"iroha:gov:epoch-beacon:v1|".len()
-                + state_transaction.network_id.as_bytes().len()
-                + core::mem::size_of::<u64>()
-                + entropy.len(),
-        );
-        input.extend_from_slice(b"iroha:gov:epoch-beacon:v1|");
-        input.extend_from_slice(state_transaction.network_id.as_bytes());
-        input.extend_from_slice(&epoch.to_le_bytes());
-        input.extend_from_slice(&entropy);
-        let digest = Blake2b512::digest(input);
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest[..32]);
-        Ok(out)
     }
     fn lock_voting_bond(
         ballot_amount: &Quantity,
@@ -6166,82 +6089,6 @@ pub mod isi {
         }
         Ok(())
     }
-    fn process_council_members(
-        members: &[AccountId],
-        epoch: u64,
-        required_bond: &Quantity,
-        citizen_cfg: &iroha_config::parameters::actual::CitizenServiceDiscipline,
-        current_height: u64,
-        world: &mut WorldTransaction<'_, '_>,
-        updated_citizens: &mut BTreeMap<AccountId, crate::state::CitizenshipRecord>,
-    ) -> Result<(), Error> {
-        for account_id in members {
-            let Some(mut record) = world.citizens.get(account_id).cloned() else {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council members must be registered citizens".into(),
-                ));
-            };
-            if &record.amount < required_bond {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council members must meet the citizenship bond floor for the role".into(),
-                ));
-            }
-            assign_citizen_seat(&mut record, epoch, current_height, citizen_cfg)?;
-            updated_citizens.insert(account_id.clone(), record);
-        }
-        Ok(())
-    }
-    fn process_council_alternates(
-        alternates: &[AccountId],
-        epoch: u64,
-        required_bond: &Quantity,
-        current_height: u64,
-        world: &mut WorldTransaction<'_, '_>,
-        updated_citizens: &mut BTreeMap<AccountId, crate::state::CitizenshipRecord>,
-    ) -> Result<(), Error> {
-        for account_id in alternates {
-            let Some(mut record) = world.citizens.get(account_id).cloned() else {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council alternates must be registered citizens".into(),
-                ));
-            };
-            if &record.amount < required_bond {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council alternates must meet the citizenship bond floor for the role".into(),
-                ));
-            }
-            ensure_citizen_available(&mut record, epoch, current_height)?;
-            updated_citizens.entry(account_id.clone()).or_insert(record);
-        }
-        Ok(())
-    }
-    fn ensure_unique_council_roster(
-        members: &[AccountId],
-        alternates: &[AccountId],
-    ) -> Result<(), Error> {
-        let mut members_seen = BTreeSet::new();
-        for member in members {
-            if !members_seen.insert(member) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council roster contains duplicate member".into(),
-                ));
-            }
-        }
-        let mut alternates_seen = BTreeSet::new();
-        for alternate in alternates {
-            if members_seen.contains(alternate) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council roster account cannot be both member and alternate".into(),
-                ));
-            }
-            if !alternates_seen.insert(alternate) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "council roster contains duplicate alternate".into(),
-                ));
-            }
-        }
-        Ok(())
-    }
     fn permission_targets_trigger(permission: &Permission, trigger_id: &TriggerId) -> bool {
         iroha_executor_data_model::permission::trigger::CanUnregisterTrigger::try_from(permission)
             .is_ok_and(|token| &token.trigger == trigger_id)
@@ -10021,125 +9868,6 @@ pub mod isi {
         }
     }
 
-    // Persist council membership for an epoch.
-    impl Execute for gov::PersistCouncilForEpoch {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let required: Permission = CanManageParliament.into();
-            if !has_exact_permission(&state_transaction.world, authority, &required) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageParliament".into(),
-                ));
-            }
-            let required_bond =
-                required_citizenship_bond_for_role(&state_transaction.gov, "council");
-            ensure_unique_council_roster(&self.members, &self.alternates)?;
-            if let Some(existing) = state_transaction.world.council.get(&self.epoch) {
-                if existing.epoch != self.epoch {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "persisted council epoch differs from its state key".into(),
-                    ));
-                }
-                if existing.members != self.members || existing.alternates != self.alternates {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "council roster is immutable once persisted for an epoch".into(),
-                    ));
-                }
-                if state_transaction
-                    .world
-                    .parliament_bodies
-                    .get(&self.epoch)
-                    .is_none()
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "persisted council is missing its parliament body rosters".into(),
-                    ));
-                }
-                return Ok(());
-            }
-            let mut updated_citizens: BTreeMap<AccountId, crate::state::CitizenshipRecord> =
-                BTreeMap::new();
-            let citizen_cfg = &state_transaction.gov.citizen_service;
-            let current_height = state_transaction._curr_block.height().get();
-            if !state_transaction.gov.citizenship_bond_amount.is_zero() {
-                process_council_members(
-                    &self.members,
-                    self.epoch,
-                    &required_bond,
-                    citizen_cfg,
-                    current_height,
-                    &mut state_transaction.world,
-                    &mut updated_citizens,
-                )?;
-                process_council_alternates(
-                    &self.alternates,
-                    self.epoch,
-                    &required_bond,
-                    current_height,
-                    &mut state_transaction.world,
-                    &mut updated_citizens,
-                )?;
-            }
-            for (account, record) in updated_citizens {
-                state_transaction.world.citizens.insert(account, record);
-            }
-            let candidate_count =
-                u32::try_from(self.members.len().saturating_add(self.alternates.len()))
-                    .unwrap_or(u32::MAX);
-            // This instruction is the privileged manual-roster path. Derivation metadata is
-            // ledger-owned so callers cannot assert that unverified cryptographic work occurred.
-            let rec = crate::state::CouncilState {
-                epoch: self.epoch,
-                members: self.members.clone(),
-                alternates: self.alternates.clone(),
-                candidate_count,
-                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
-            };
-            state_transaction
-                .world
-                .council
-                .insert(self.epoch, rec.clone());
-            // Emit event for auditability
-            let members_count = u32::try_from(self.members.len()).unwrap_or(u32::MAX);
-            let alternates_count = u32::try_from(self.alternates.len()).unwrap_or(u32::MAX);
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::CouncilPersisted(
-                    iroha_data_model::events::data::governance::GovernanceCouncilPersisted {
-                        epoch: self.epoch,
-                        members_count,
-                        alternates_count,
-                        candidates_count: candidate_count,
-                        derived_by:
-                            iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
-                    },
-                ),
-            ));
-            let beacon = derive_epoch_parliament_beacon(rec.epoch, state_transaction)?;
-            let bodies = derive_parliament_bodies(
-                &state_transaction.gov,
-                &state_transaction.network_id,
-                rec.epoch,
-                &beacon,
-                &rec,
-            );
-            state_transaction
-                .world
-                .parliament_bodies
-                .insert(rec.epoch, bodies.clone());
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::ParliamentSelected(
-                    iroha_data_model::events::data::governance::GovernanceParliamentSelected {
-                        selection_epoch: rec.epoch,
-                        bodies,
-                    },
-                ),
-            ));
-            Ok(())
-        }
-    }
     impl Execute for gov::RegisterCitizen {
         fn execute(
             self,
@@ -10230,33 +9958,9 @@ pub mod isi {
         owner: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let current_height = state_transaction._curr_block.height().get();
-        let current_epoch = current_height
-            .saturating_sub(1)
-            .saturating_div(state_transaction.gov.parliament_term_blocks.max(1));
-        let has_current_or_scheduled_service = state_transaction
-            .world
-            .council
-            .range(current_epoch..)
-            .any(|(_, council)| {
-                council.members.contains(owner) || council.alternates.contains(owner)
-            })
-            || state_transaction
-                .world
-                .parliament_bodies
-                .range(current_epoch..)
-                .any(|(_, bodies)| {
-                    bodies.rosters.values().any(|roster| {
-                        roster.members.contains(owner) || roster.alternates.contains(owner)
-                    })
-                });
-        if has_current_or_scheduled_service {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "citizenship bond cannot be released during a current or scheduled parliament service epoch"
-                    .into(),
-            ));
-        }
-
+        // Restored `council` and `parliament_bodies` rows are decode-only
+        // compatibility records. Only a canonical active attempt may retain a
+        // citizen's bond; historical caller-selected rosters must stay inert.
         if state_transaction
             .world
             .parliament_attempts
@@ -20655,7 +20359,8 @@ pub mod isi {
     mod tests {
         use super::{
             TonBreakerPriorTransitionV1, ton_breaker_anchor_matches_current_governance_v1,
-            ton_breaker_disabled_latch_transition_v1, ton_breaker_observation_allows_outbound_v1,
+            ensure_citizenship_bond_releasable, ton_breaker_disabled_latch_transition_v1,
+            ton_breaker_observation_allows_outbound_v1,
         };
         use crate::{
             governance::{
@@ -21174,11 +20879,71 @@ pub mod isi {
         }
 
         #[test]
-        fn parliament_attempt_creation_defends_exact_json_proposal_bounds() {
+        fn restored_legacy_rosters_do_not_retain_citizenship_bonds() {
+            blank_test_state_transaction!(state, block, state_transaction);
+            state_transaction.world.council.insert(
+                99,
+                crate::state::CouncilState {
+                    epoch: 99,
+                    members: vec![ALICE_ID.clone()],
+                    candidate_count: 1,
+                    ..crate::state::CouncilState::default()
+                },
+            );
+            state_transaction.world.parliament_bodies.insert(
+                99,
+                iroha_data_model::governance::types::ParliamentBodies {
+                    selection_epoch: 99,
+                    rosters: BTreeMap::from([(
+                        ParliamentBody::AgendaCouncil,
+                        iroha_data_model::governance::types::ParliamentRoster {
+                            body: ParliamentBody::AgendaCouncil,
+                            epoch: 99,
+                            members: vec![ALICE_ID.clone()],
+                            candidate_count: 1,
+                            ..iroha_data_model::governance::types::ParliamentRoster::default()
+                        },
+                    )]),
+                },
+            );
+
+            ensure_citizenship_bond_releasable(&ALICE_ID, &state_transaction)
+                .expect("decode-only legacy roster records must not retain a citizen bond");
+        }
+
+        #[test]
+        fn parliament_attempt_creation_ignores_legacy_rosters_and_defends_exact_json_bounds() {
             let state = blank_test_state();
             let header = first_test_block_header();
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
+            let legacy_council = crate::state::CouncilState {
+                epoch: 7,
+                members: vec![ALICE_ID.clone()],
+                candidate_count: 1,
+                ..crate::state::CouncilState::default()
+            };
+            let legacy_bodies = iroha_data_model::governance::types::ParliamentBodies {
+                selection_epoch: 7,
+                rosters: BTreeMap::from([(
+                    ParliamentBody::AgendaCouncil,
+                    iroha_data_model::governance::types::ParliamentRoster {
+                        body: ParliamentBody::AgendaCouncil,
+                        epoch: 7,
+                        members: vec![ALICE_ID.clone()],
+                        candidate_count: 1,
+                        ..iroha_data_model::governance::types::ParliamentRoster::default()
+                    },
+                )]),
+            };
+            state_transaction
+                .world
+                .council
+                .insert(7, legacy_council.clone());
+            state_transaction
+                .world
+                .parliament_bodies
+                .insert(7, legacy_bodies.clone());
             state_transaction.world.account_permissions.insert(
                 ALICE_ID.clone(),
                 BTreeSet::from([Permission::from(CanManageParliament)]),
@@ -21225,6 +20990,12 @@ pub mod isi {
                     .parliament_attempts
                     .get(&attempt_id)
                     .is_some()
+            );
+            assert_eq!(state_transaction.world.council.get(&7), Some(&legacy_council));
+            assert_eq!(
+                state_transaction.world.parliament_bodies.get(&7),
+                Some(&legacy_bodies),
+                "canonical attempt creation must neither consult nor rewrite compatibility rosters"
             );
 
             let retry_limit_error = gov::CreateParliamentGovernanceAttemptV1 {
@@ -26243,19 +26014,6 @@ pub mod isi {
                     .ciphertexts,
                 vec![vec![0xAA]],
                 "the complete accepted corpus must never be pruned"
-            );
-        });
-        world_test!(governance_sortition_has_no_synthetic_entropy_fallback {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let state_transaction = state_block.transaction();
-            let error = latest_governance_entropy_seed(&state_transaction)
-                .expect_err("missing finalized beacon entropy must fail closed");
-            assert_err!(
-                format!("{error:?}"),
-                "requires finalized beacon entropy",
-                "unexpected missing-beacon rejection: {error:?}"
             );
         });
         world_test!(direct_plain_and_low_level_zk_ballots_require_exact_scoped_permission {

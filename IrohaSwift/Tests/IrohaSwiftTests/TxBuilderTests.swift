@@ -1824,46 +1824,6 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(normalized.norito, swift.norito)
     }
 
-    func testPersistCouncilMatchesNativeBridge() throws {
-        try requireNativeTestCapability(
-            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-            "Native transaction encoder unavailable"
-        )
-
-        let keypair = try makeFixtureKeypair()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = PersistCouncilRequest(networkId: Self.fixtureNetworkId,
-                                            authority: authority,
-                                            epoch: 7,
-                                            members: [authority],
-                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                            ttlMs: 15)
-
-        let swift = try SwiftTransactionEncoder.encodePersistCouncil(request: request,
-                                                                     keypair: keypair,
-                                                                     creationTimeMs: Self.fixtureCreationTimeMs)
-        let membersJson = try NoritoJSON(request.members).data
-
-        guard let native = try? NoritoNativeBridge.shared.encodeGovernancePersistCouncil(
-            networkId: request.networkId,
-            authority: request.authority,
-            creationTimeMs: Self.fixtureCreationTimeMs,
-            ttlMs: request.ttlMs,
-            epoch: request.epoch,
-            membersJson: membersJson,
-            feePaymentJSON: try request.feePayment.canonicalJSONData(),
-            privateKey: keypair.privateKeyBytes
-        ) else {
-            XCTFail("Expected native bridge persist council encoding")
-            return
-        }
-
-        let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, swift.signedTransaction)
-        XCTAssertEqual(native.hash, swift.transactionHash)
-        XCTAssertEqual(normalized.norito, swift.norito)
-    }
-
     func testNativeBridgeTransferWhenAvailable() throws {
         try requireEd25519Encoder()
 

@@ -521,7 +521,6 @@ named_route_policy_test!(
                 runtime_governance::GOV_PROTECTED_GET,
                 runtime_governance::GOV_UNLOCK_STATS,
                 runtime_governance::GOV_CONTRACT_GET,
-                runtime_governance::GOV_COUNCIL_CURRENT,
                 runtime_governance::GOV_CITIZENS_COUNT,
                 runtime_governance::GOV_CITIZEN_STATUS,
             ],

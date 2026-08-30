@@ -286,10 +286,11 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .any(|tool| tool.name == "iroha.gov.unlocks.stats")
     );
+    let retired_current_council_tool = ["iroha.gov.", "council.", "current"].concat();
     assert!(
         tools
             .iter()
-            .any(|tool| tool.name == "iroha.gov.council.current")
+            .all(|tool| tool.name != retired_current_council_tool.as_str())
     );
     assert!(
         tools

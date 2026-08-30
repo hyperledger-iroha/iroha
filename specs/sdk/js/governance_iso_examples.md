@@ -253,9 +253,6 @@ interchangeable.
 ### Parliament lifecycle and automatic execution
 
 ```javascript
-const current = await torii.getGovernanceCouncilCurrent({ canonicalAuth });
-console.log(`epoch=${current.epoch} members=${current.members.length}`);
-
 const attempt = await torii.getParliamentAttemptV1(
   process.env.GOVERNANCE_ATTEMPT_ID,
   { signal: writeController.signal, canonicalAuth },

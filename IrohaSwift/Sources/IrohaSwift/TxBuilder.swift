@@ -665,29 +665,6 @@ public struct CastZkBallotRequest {
     }
 }
 
-public struct PersistCouncilRequest {
-    public let networkId: NetworkId
-    public let authority: String
-    public let epoch: UInt64
-    public let members: [String]
-    public let feePayment: FeePaymentIntent
-    public let ttlMs: UInt64?
-
-    public init(networkId: NetworkId,
-                authority: String,
-                epoch: UInt64,
-                members: [String],
-                feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) {
-        self.networkId = networkId
-        self.authority = authority
-        self.epoch = epoch
-        self.members = members
-        self.feePayment = feePayment
-        self.ttlMs = ttlMs
-    }
-}
-
 public struct SignedTransactionEnvelope: Codable, Sendable {
     public let norito: Data
     public let signedTransaction: Data
@@ -1640,20 +1617,6 @@ public final class IrohaSDK: @unchecked Sendable {
         return try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
                                                               signingKey: signingKey,
                                                               creationTimeMs: creationTimeMs)
-    }
-
-    public func buildPersistCouncil(request: PersistCouncilRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodePersistCouncil(request: request,
-                                                                keypair: keypair,
-                                                                creationTimeMs: creationTimeMs)
-    }
-
-    public func buildPersistCouncil(request: PersistCouncilRequest, signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodePersistCouncil(request: request,
-                                                                signingKey: signingKey,
-                                                                creationTimeMs: creationTimeMs)
     }
 
     /// Submit a pre-built signed transaction envelope to Torii.

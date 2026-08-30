@@ -3429,53 +3429,6 @@ test(
 );
 
 test(
-  "governance council endpoints respond",
-  {
-    timeout: 60_000,
-  },
-  async (t) => {
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    let council;
-    try {
-      council = await client.getGovernanceCouncilCurrent();
-    } catch (error) {
-      if (shouldSkipGovernanceCouncilEndpoints(error)) {
-        t.diagnostic(
-          "governance council endpoint unavailable on target node; skipping council assertions",
-        );
-        return;
-      }
-      throw error;
-    }
-
-    assert.ok(council, "council payload should be present");
-    assertNonNegativeInteger(council.epoch, "council.epoch");
-    assert.ok(Array.isArray(council.members), "council members must be an array");
-    if (council.members.length === 0) {
-      t.diagnostic("governance council returned zero members");
-    } else {
-      council.members.forEach((member, index) => {
-        assert.equal(
-          typeof member.account_id,
-          "string",
-          `council.members[${index}].account_id must be a string`,
-        );
-        assert.notEqual(
-          member.account_id.length,
-          0,
-          `council.members[${index}].account_id must not be empty`,
-        );
-      });
-    }
-
-  },
-);
-
-test(
   "governance protected namespaces endpoint responds",
   {
     timeout: 60_000,
@@ -4951,19 +4904,6 @@ function isOfflineApiUnavailableError(error) {
   return (
     /unexpected status 404/i.test(message) ||
     (/offline/i.test(message) && /disabled/i.test(message))
-  );
-}
-
-function shouldSkipGovernanceCouncilEndpoints(error) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const message = error.message ?? "";
-  return (
-    isUnexpectedNotFoundError(error) ||
-    /unexpected status 403/i.test(message) ||
-    /unexpected status 503/i.test(message) ||
-    (/council/i.test(message) && /disabled/i.test(message))
   );
 }
 

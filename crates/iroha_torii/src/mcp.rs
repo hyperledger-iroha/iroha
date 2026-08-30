@@ -794,7 +794,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_protected_namespaces_list_tool());
     tools.push(iroha_gov_protected_namespaces_update_tool());
     tools.push(iroha_gov_unlocks_stats_tool());
-    tools.push(iroha_gov_council_current_tool());
     tools.push(iroha_gov_citizens_count_tool());
     tools.push(iroha_aliases_resolve_tool());
     tools.push(iroha_aliases_resolve_index_tool());
@@ -1225,7 +1224,6 @@ fn is_audited_manual_read_tool_name(name: &str) -> bool {
             | "iroha.gov.tally.get"
             | "iroha.gov.protected_namespaces.list"
             | "iroha.gov.unlocks.stats"
-            | "iroha.gov.council.current"
             | "iroha.gov.citizens.count"
             | "iroha.nfts.chain.list"
             | "iroha.rwas.chain.list"
@@ -2266,12 +2264,6 @@ async fn handle_named_tool_call(
         }
         "iroha.gov.unlocks.stats" => {
             match dispatch_iroha_gov_unlocks_stats(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.gov.council.current" => {
-            match dispatch_iroha_gov_council_current(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4912,7 +4904,6 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_runtime_upgrades_list => "/v1/runtime/upgrades";
         dispatch_iroha_gov_protected_namespaces_list => "/v1/gov/protected-namespaces";
         dispatch_iroha_gov_unlocks_stats => "/v1/gov/unlocks/stats";
-        dispatch_iroha_gov_council_current => "/v1/gov/council/current";
         dispatch_iroha_gov_citizens_count => "/v1/gov/citizens";
         dispatch_iroha_nfts_chain_list => "/v1/nfts";
         dispatch_iroha_rwas_chain_list => "/v1/rwas";
@@ -10105,13 +10096,6 @@ fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
         "/v1/gov/unlocks/stats",
     )
 }
-fn iroha_gov_council_current_tool() -> ToolSpec {
-    simple_manual_get_tool(
-        "iroha.gov.council.current",
-        "Fetch current governance council set (`/v1/gov/council/current`).",
-        "/v1/gov/council/current",
-    )
-}
 fn iroha_gov_citizens_count_tool() -> ToolSpec {
     simple_manual_get_tool(
         "iroha.gov.citizens.count",
@@ -10603,7 +10587,6 @@ mod tests {
             iroha_runtime_upgrades_list_tool(),
             iroha_gov_protected_namespaces_list_tool(),
             iroha_gov_unlocks_stats_tool(),
-            iroha_gov_council_current_tool(),
             iroha_gov_citizens_count_tool(),
             iroha_nfts_chain_list_tool(),
             iroha_rwas_chain_list_tool(),

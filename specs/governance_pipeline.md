@@ -234,6 +234,14 @@ Michalas's July 2026 SACMAT construction obtains coercion resistance through a
 specific anamorphic-encryption voting design. Timed OVN neither implements nor
 analyzes that construction, so its publication does not support a coercion-
 resistance claim for Parliament.
+The August 2026 `somewhat deniable voting` construction instead assumes a
+trusted teller and deliberately trades away part of individual verifiability
+to obtain its stated deniability boundary. The 2026 journal version of Yin et
+al.'s scalable blockchain construction likewise proves its claims for a
+different dummy-voting and liquid-democracy protocol. Timed OVN implements
+neither construction nor threat model, so those publications strengthen the
+requirement for a protocol-specific proof rather than extending their claims to
+Parliament.
 
 “Aggregate-only” is not “winner-only” and does not make participation
 unlinkable. V1 publishes the exact Aye/Nay/Abstain counts and the accepted
@@ -354,7 +362,7 @@ separately specified, reviewed, consensus-enacted protocol revision and new
 fixtures; current lattice DKG/beacon proposals are research inputs, not
 standards or drop-in implementations.
 
-Research boundary reviewed through 2026-08-29:
+Research boundary reviewed through 2026-08-30:
 
 - Das and Ren, [*Adaptively Secure BLS Threshold Signatures from DDH and
   co-CDH*](https://eprint.iacr.org/2023/1553).
@@ -365,6 +373,16 @@ Research boundary reviewed through 2026-08-29:
 - Michalas, [*Coercion-Resistant Voting via Anamorphic
   Encryption*](https://doi.org/10.1145/3750555.3811888), ACM SACMAT 2026,
   published 8 July 2026.
+- Jia, Shi, Ye, Huang, and Peng, [*Somewhat Deniable Voting:
+  Coercion-Resistant Electronic Voting Scheme with Privacy Preservation
+  Property*](https://doi.org/10.32604/cmc.2026.084123), *Computers, Materials
+  & Continua* 89(1), published 13 August 2026. Its trusted-teller and reduced
+  individual-verifiability boundary is not the Timed OVN threat model.
+- Yin, Zhang, Nastenko, Oliynykov, and Ren, [*A Scalable Coercion-Resistant
+  Voting Scheme for Blockchain Decision-Making*](https://doi.org/10.1109/TDSC.2026.3651473),
+  *IEEE Transactions on Dependable and Secure Computing*, 2026. Its
+  construction and proof do not apply to Timed OVN without implementing and
+  analyzing that protocol.
 - IRTF, [RFC 9380: Hashing to Elliptic
   Curves](https://www.rfc-editor.org/rfc/rfc9380).
 - CFRG, [*BLS Signatures*, draft-irtf-cfrg-bls-signature-07
@@ -431,7 +449,7 @@ Research boundary reviewed through 2026-08-29:
   Practices*, CSWP
   39upd1](https://doi.org/10.6028/NIST.CSWP.39-upd1), 29 June 2026.
 
-As of 29 August 2026, the NIST Threshold Call remains in its three-round
+As of 30 August 2026, the NIST Threshold Call remains in its three-round
 preview phase; package submissions are expected in November 2026. The BBDL
 tBLS document above is a preview writeup, not a completed package, NIST
 standard, or approval of Parliament's construction.

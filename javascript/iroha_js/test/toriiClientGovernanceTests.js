@@ -97,10 +97,6 @@ export function registerToriiClientGovernanceTests({
   test("governance helpers validate options", async () => {
     const client = new ToriiClient(BASE_URL);
 
-    await assert.rejects(
-      () => client.getGovernanceCouncilCurrent("invalid"),
-      /getGovernanceCouncilCurrent options must be an object/,
-    );
     const optionTypeCases = [
       [
         "getGovernanceProposal",
@@ -2449,10 +2445,6 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         throw new Error("fetch should not be invoked for option validation");
       },
     });
-    await assert.rejects(
-      () => client.getGovernanceCouncilCurrent({ signal: undefined, extra: true }),
-      /getGovernanceCouncilCurrent options contains unsupported fields: extra/,
-    );
     const ballotPayload = {
       authority: FIXTURE_ALICE_ID,
       networkId: GOVERNANCE_NETWORK_ID,
@@ -2859,47 +2851,6 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       );
     }
     assert.equal(fetchCalls, 0);
-  });
-
-  test("getGovernanceCouncilCurrent normalizes roster payload", async () => {
-    let callCount = 0;
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => {
-        callCount += 1;
-        const payload = cloneFixture(toriiFixtures.governance.councilCurrent);
-        if (Array.isArray(payload.members) && payload.members.length >= 2) {
-          payload.members[0].account_id = FIXTURE_ALICE_ID;
-          payload.members[1].account_id = FIXTURE_BOB_ID;
-        }
-        if (Array.isArray(payload.alternates) && payload.alternates.length > 0) {
-          payload.alternates[0].account_id = FIXTURE_CAROL_ID;
-        }
-        return createResponse({
-          status: 200,
-          jsonData: payload,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    const roster = await client.getGovernanceCouncilCurrent(governanceReadOptions());
-    assert.equal(callCount, 1);
-    assert.equal(roster.epoch, 77);
-    assert.deepEqual(roster.members, [
-      { account_id: FIXTURE_ALICE_ID },
-      { account_id: FIXTURE_BOB_ID },
-    ]);
-  });
-
-  test("getGovernanceCouncilCurrent rejects non-object options", async () => {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => {
-        throw new Error("fetch should not run");
-      },
-    });
-    await assert.rejects(
-      () => client.getGovernanceCouncilCurrent("bad-options"),
-      /getGovernanceCouncilCurrent options must be an object/,
-    );
   });
 
   test("setProtectedNamespaces posts exact namespace list", async () => {

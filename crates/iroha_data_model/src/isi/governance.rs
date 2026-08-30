@@ -190,21 +190,6 @@ pub struct CastPlainBallot {
     pub direction: u8,
 }
 impl crate::seal::Instruction for CastPlainBallot {}
-/// Persist a council membership for an epoch.
-///
-/// This instruction records an explicitly administered `members` roster for `epoch` in the WSV.
-/// Selection metadata is derived by the ledger and is not accepted from the caller.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
-pub struct PersistCouncilForEpoch {
-    /// Epoch index
-    pub epoch: u64,
-    /// Council members in deterministic order
-    pub members: Vec<crate::account::AccountId>,
-    /// Alternates that can replace members who decline or are ineligible.
-    #[norito(default)]
-    pub alternates: Vec<crate::account::AccountId>,
-}
-impl crate::seal::Instruction for PersistCouncilForEpoch {}
 /// Discipline event recorded for a citizen assigned to a governance role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
@@ -372,11 +357,6 @@ impl_governance_decode_from_slice!(RestituteGovernanceLock {
     owner: AccountId,
     amount: Quantity,
     reason: String,
-});
-impl_governance_decode_from_slice!(PersistCouncilForEpoch {
-    epoch: u64,
-    members: Vec<crate::account::AccountId>,
-    alternates: Vec<crate::account::AccountId>,
 });
 impl_governance_decode_from_slice!(RecordCitizenServiceOutcome {
     owner: AccountId,
@@ -708,11 +688,6 @@ mod tests {
             amount: 50_u64.into(),
             reason: "appeal accepted".to_owned(),
         });
-        assert_slice_roundtrip(PersistCouncilForEpoch {
-            epoch: 7,
-            members: vec![account(1), account(2)],
-            alternates: vec![account(3)],
-        });
         assert_slice_roundtrip(RecordCitizenServiceOutcome {
             owner: account(1),
             epoch: 7,
@@ -758,14 +733,6 @@ mod tests {
                 amount: 1_000_u64.into(),
                 duration_blocks: 100,
                 direction: 0,
-            },
-        );
-        assert_registry_decodes(
-            &registry,
-            PersistCouncilForEpoch {
-                epoch: 7,
-                members: vec![account(1), account(2)],
-                alternates: Vec::new(),
             },
         );
         assert_registry_decodes(

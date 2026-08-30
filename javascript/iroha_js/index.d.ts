@@ -5339,18 +5339,6 @@ export interface ToriiGovernanceUnlockStats {
   last_sweep_height: number;
 }
 
-export interface ToriiGovernanceCouncilMember {
-  account_id: string;
-}
-
-export interface ToriiGovernanceCouncilCurrentResponse {
-  epoch: number;
-  members: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  alternates: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  candidate_count: number;
-  derived_by: "Sortition" | "Manual";
-}
-
 export interface ToriiProtectedNamespacesApplyResponse {
   ok: boolean;
   applied: number;
@@ -8347,12 +8335,6 @@ export interface CastPlainBallotInstructionInput {
   direction?: number | string;
 }
 
-export interface PersistCouncilForEpochInstructionInput {
-  epoch: NumericLike;
-  members: ReadonlyArray<string>;
-  alternates?: ReadonlyArray<string>;
-}
-
 export interface RegisterZkAssetInstructionInput {
   assetDefinitionId: string;
   unshieldVerifyingKey?: VerifyingKeyIdLike | null;
@@ -10452,18 +10434,6 @@ export interface CastPlainBallotTransactionInput {
   privateKeyAlgorithm?: string | null;
 }
 
-export interface PersistCouncilForEpochTransactionInput {
-  networkId: NetworkId;
-  authority: string;
-  record: PersistCouncilForEpochInstructionInput;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
 export interface RegisterZkAssetTransactionInput {
   networkId: NetworkId;
   authority: string;
@@ -12011,7 +11981,6 @@ export declare class ToriiClient {
   ): Promise<ToriiGovernanceLocksResult>;
   getGovernanceUnlockStats(options: RequiredCanonicalRequestOptions): Promise<Record<string, unknown> | null>;
   getGovernanceUnlockStatsTyped(options: RequiredCanonicalRequestOptions): Promise<ToriiGovernanceUnlockStats>;
-  getGovernanceCouncilCurrent(options: RequiredCanonicalRequestOptions): Promise<ToriiGovernanceCouncilCurrentResponse>;
   draftParliamentAttemptV1(
     proposal: ParliamentProposalV1,
     attemptSequence: number,
@@ -13512,9 +13481,6 @@ export function buildCastZkBallotTransaction(
 export function buildCastPlainBallotTransaction(
   input: CastPlainBallotTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildPersistCouncilForEpochTransaction(
-  input: PersistCouncilForEpochTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
 export function buildRegisterZkAssetTransaction(
   input: RegisterZkAssetTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
@@ -14140,10 +14106,6 @@ export function buildCastZkBallotInstruction(
 
 export function buildCastPlainBallotInstruction(
   input: CastPlainBallotInstructionInput,
-): object;
-
-export function buildPersistCouncilForEpochInstruction(
-  input: PersistCouncilForEpochInstructionInput,
 ): object;
 
 export function buildSubmitAgendaProposalInstruction(input: {

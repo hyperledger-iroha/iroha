@@ -7681,25 +7681,6 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch the current council roster (`GET /v1/gov/council/current`).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiGovernanceCouncilCurrentResponse>}
-   */
-  async getGovernanceCouncilCurrent(options) {
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
-      options,
-      "getGovernanceCouncilCurrent",
-    );
-    const response = await this._request("GET", "/v1/gov/council/current", {
-      headers: JSON_ACCEPT_HEADERS,
-      signal, canonicalAuth,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeGovernanceCouncilCurrentResponse(payload);
-  }
-
-  /**
    * Build one authenticated Parliament attempt-creation instruction draft.
    * The caller supplies the independently derived IDs that the response must
    * match before any payload is exposed for local signing.
@@ -16500,64 +16481,8 @@ function parseGovernanceUnlockStats(payload) {
   };
 }
 
-function normalizeGovernanceCouncilCurrentResponse(payload) {
-  const record = ensureRecord(payload, "governance council current response");
-  const derivedBy = normalizeCouncilDerivedBy(
-    record.derived_by ?? "Manual",
-    "governance council current response.derived_by",
-  );
-  return {
-    epoch: ToriiClient._normalizeUnsignedInteger(
-      record.epoch,
-      "governance council current response.epoch",
-      { allowZero: true },
-    ),
-    members: normalizeGovernanceCouncilMembers(
-      record.members,
-      "governance council current response.members",
-    ),
-    alternates: normalizeGovernanceCouncilMembers(
-      record.alternates ?? [],
-      "governance council current response.alternates",
-    ),
-    candidate_count: ToriiClient._normalizeUnsignedInteger(
-      record.candidate_count ?? 0,
-      "governance council current response.candidate_count",
-      { allowZero: true },
-    ),
-    derived_by: derivedBy,
-  };
-}
-
 function normalizeErrorPath(context) {
   return typeof context === "string" ? context.replace(/\s+/g, ".") : context;
-}
-
-function normalizeGovernanceCouncilMembers(value, context) {
-  if (!Array.isArray(value)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must be an array`,
-      normalizeErrorPath(context),
-    );
-  }
-  return value.map((entry, index) => {
-    const record = ensureRecord(entry, `${context}[${index}]`);
-    return {
-      account_id: ToriiClient._normalizeAccountId(
-        record.account_id,
-        `${context}[${index}].account_id`,
-      ),
-    };
-  });
-}
-
-function normalizeCouncilDerivedBy(value, context) {
-  const normalized = requireNonEmptyString(value, context);
-  if (normalized !== "Sortition" && normalized !== "Manual") {
-    throw new TypeError(`${context} must be Sortition or Manual`);
-  }
-  return normalized;
 }
 
 function normalizeProtectedNamespaceList(input) {

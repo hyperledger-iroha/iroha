@@ -2504,9 +2504,10 @@ impl GlobalBeaconPartialSignature {
         Ok(())
     }
 }
-/// Payload variants decoded by the Sumeragi v2 network envelope.
+/// First-release payload variants decoded by the Sumeragi v2 network envelope.
 ///
-/// Runtime admission rejects the retained legacy VRF variants below.
+/// The retired commit/reveal VRF variants have no wire representation here;
+/// finalized threshold-beacon partials are the sole randomness traffic.
 #[expect(
     clippy::large_enum_variant,
     reason = "consensus variants retain their canonical V1 Norito payloads inline; introducing indirection would change the signed wire representation"

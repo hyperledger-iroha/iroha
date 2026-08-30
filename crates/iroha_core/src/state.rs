@@ -4553,9 +4553,13 @@ pub struct World {
     pub(crate) governance_last_unlock_sweep_height: Cell<u64>,
     /// O(1) statistics snapshot produced by the latest unlock sweep.
     pub(crate) governance_unlock_stats: Cell<GovernanceUnlockStatsSnapshot>,
-    /// Sortition parliament membership by epoch.
+    /// Compatibility-only independent epoch councils retained for snapshot decoding.
+    ///
+    /// Canonical attempt-based Parliament never consults or writes this storage.
     pub(crate) council: Storage<u64, CouncilState>,
-    /// Multi-body parliament rosters by epoch.
+    /// Compatibility-only epoch body rosters retained for snapshot decoding.
+    ///
+    /// Canonical attempt-based Parliament retains its bodies inside `parliament_attempts`.
     pub(crate) parliament_bodies:
         Storage<u64, iroha_data_model::governance::types::ParliamentBodies>,
     /// Canonical attempt-local Parliament reducer state keyed by governance attempt id.
@@ -9845,10 +9849,7 @@ mod governance_slash_map_json {
         Ok(out)
     }
 }
-/// Deterministic council membership for an epoch.
-///
-/// Alias for [`governance::state::ParliamentTerm`] to keep historical naming used by
-/// Torii/CLI helpers.
+/// Compatibility alias for retired independent epoch-council snapshot state.
 pub type CouncilState = crate::governance::state::ParliamentTerm;
 #[derive(Debug, Clone)]
 pub(crate) struct PipelineParallelism {
@@ -13526,7 +13527,7 @@ fn bounded_global_committee_size(
     iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
         .then_some(committee_size)
 }
-fn npos_peer_prf_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
+fn threshold_beacon_seat_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
     let epoch_bytes = epoch.to_le_bytes();
     let peer_bytes = peer.encode();
     Hash::new_from_chunks(&[
@@ -13536,7 +13537,7 @@ fn npos_peer_prf_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
         peer_bytes.as_slice(),
     ])
 }
-fn select_prf_committee(
+fn select_threshold_beacon_committee(
     world: &impl WorldReadOnly,
     epoch: u64,
     seed: [u8; 32],
@@ -13547,7 +13548,7 @@ fn select_prf_committee(
     let committee_size = bounded_global_committee_size(world, candidates.len())?;
     let mut scored = candidates
         .into_iter()
-        .map(|peer| (npos_peer_prf_score(seed, epoch, &peer), peer))
+        .map(|peer| (threshold_beacon_seat_score(seed, epoch, &peer), peer))
         .collect::<Vec<_>>();
     scored.sort_by(|(left_score, left_peer), (right_score, right_peer)| {
         left_score
@@ -13649,59 +13650,6 @@ where
             }
         }
     }
-    // Build the account lookup only after widening the topology. Otherwise an
-    // eligible explicit account-to-peer binding that triggered widening is
-    // absent here, and the council path silently truncates that member.
-    let validator_peer_ids_by_account: BTreeMap<AccountId, PeerId> = world
-        .public_lane_validators()
-        .iter()
-        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| active_lane_ids.contains(&record.lane_id))
-        .filter(|(_, record)| {
-            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
-        })
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
-        .filter(|(_, record)| {
-            matches!(
-                nexus
-                    .staking
-                    .validator_mode(record.lane_id, &nexus.lane_catalog),
-                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-            )
-        })
-        .filter_map(|(_, record)| {
-            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                &record.self_stake,
-                &nexus.staking.min_validator_stake,
-            ) else {
-                return None;
-            };
-            if !meets_min {
-                return None;
-            }
-            if !present_peers.contains(&record.peer_id) {
-                return None;
-            }
-            if enforce_topology_membership && !topology_peers.contains(&record.peer_id) {
-                return None;
-            }
-            if !peer_has_live_consensus_key(world, &record.peer_id, block_height) {
-                return None;
-            }
-            Some((record.validator.clone(), record.peer_id.clone()))
-        })
-        .collect();
-    // Preferred path: council-derived roster for the epoch.
-    if let Some(c) = world.council().get(&epoch).cloned() {
-        let ids: Vec<PeerId> = c
-            .members
-            .into_iter()
-            .filter_map(|account| validator_peer_ids_by_account.get(&account).cloned())
-            .collect();
-        if let Some(committee) = select_prf_committee(world, epoch, selection_seed, ids) {
-            return Some(committee);
-        }
-    }
     let mut candidates: Vec<PeerId> = world
         .public_lane_validators()
         .iter()
@@ -13742,7 +13690,7 @@ where
     candidates.retain(|peer| peer_has_live_consensus_key(world, peer, block_height));
     candidates.sort();
     candidates.dedup();
-    select_prf_committee(world, epoch, selection_seed, candidates)
+    select_threshold_beacon_committee(world, epoch, selection_seed, candidates)
 }
 #[cfg(test)]
 impl StateView<'_> {
@@ -14578,18 +14526,18 @@ mod stake_snapshot_tests {
         );
     }
     #[test]
-    fn npos_committee_prf_score_binds_seed_epoch_and_peer() {
+    fn threshold_beacon_seat_score_binds_seed_epoch_and_peer() {
         let first = PeerId::from(crate::state::checked_keypair().public_key().clone());
         let second = PeerId::from(crate::state::checked_keypair().public_key().clone());
         let seed = [0x5A; 32];
-        let score = npos_peer_prf_score(seed, 7, &first);
-        assert_eq!(score, npos_peer_prf_score(seed, 7, &first));
-        assert_ne!(score, npos_peer_prf_score([0xA5; 32], 7, &first));
-        assert_ne!(score, npos_peer_prf_score(seed, 8, &first));
-        assert_ne!(score, npos_peer_prf_score(seed, 7, &second));
+        let score = threshold_beacon_seat_score(seed, 7, &first);
+        assert_eq!(score, threshold_beacon_seat_score(seed, 7, &first));
+        assert_ne!(score, threshold_beacon_seat_score([0xA5; 32], 7, &first));
+        assert_ne!(score, threshold_beacon_seat_score(seed, 8, &first));
+        assert_ne!(score, threshold_beacon_seat_score(seed, 7, &second));
     }
     #[test]
-    fn council_members_map_to_peer_ids_in_epoch_roster() {
+    fn legacy_council_snapshot_does_not_change_threshold_beacon_committee() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
@@ -14597,172 +14545,48 @@ mod stake_snapshot_tests {
             let nexus = state.nexus.get_mut();
             nexus.staking.min_validator_stake = 1_u64.into();
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.max_validators = NonZeroU32::new(4).expect("nonzero validator limit");
         }
-        let kp: Vec<KeyPair> = (0..4).map(|_| crate::state::checked_keypair()).collect();
+        let keypairs: Vec<KeyPair> = (0..7).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
-        for keypair in &kp {
-            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 10);
-        }
-        let members = vec![
-            DMAccountId::of(kp[1].public_key().clone()),
-            DMAccountId::of(kp[0].public_key().clone()),
-            DMAccountId::of(kp[3].public_key().clone()),
-            DMAccountId::of(kp[2].public_key().clone()),
-        ];
-        let council = CouncilState {
-            epoch: 0,
-            members,
-            candidate_count: 4,
-            ..CouncilState::default()
-        };
-        wb.council.insert(0, council);
-        wb.commit();
-        let sv = state.view();
-        let out = sv.epoch_validator_peer_ids_for_testing(0).unwrap();
-        let mut expected: Vec<_> = kp
-            .iter()
-            .map(|keypair| PeerId::from(keypair.public_key().clone()))
-            .collect();
-        expected.sort();
-        assert_eq!(out, expected);
-    }
-    #[test]
-    fn council_members_without_eligible_validator_bindings_cannot_fill_epoch_roster() {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-        }
-        let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
-        let mut world = state.world.block();
-        let mut members = Vec::with_capacity(keypairs.len());
+        let mut all_peers = Vec::with_capacity(keypairs.len());
         for keypair in &keypairs {
-            let peer = PeerId::from(keypair.public_key().clone());
-            let _ = world.peers.get_mut().push(peer.clone());
-            seed_consensus_key(&mut world, &peer, ConsensusKeyStatus::Active, 0);
-            members.push(DMAccountId::of(keypair.public_key().clone()));
+            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 10);
+            all_peers.push(PeerId::from(keypair.public_key().clone()));
         }
-        world.council.insert(
-            0,
-            CouncilState {
-                epoch: 0,
-                members,
-                candidate_count: 4,
-                ..CouncilState::default()
-            },
-        );
-        world.commit();
-        assert!(
-            state
-                .view()
-                .epoch_validator_peer_ids_for_testing(0)
-                .is_none(),
-            "council membership must not synthesize validator authority without an eligible lane binding"
-        );
-    }
-    #[test]
-    fn council_multisig_member_without_peer_binding_is_ignored_without_unwinding() {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-        }
-        let keypair = crate::state::checked_keypair();
-        let single_key_account = DMAccountId::of(keypair.public_key().clone());
-        let member =
-            iroha_data_model::account::MultisigMember::new(keypair.public_key().clone(), 1)
-                .expect("valid multisig member");
-        let policy = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
-            .expect("valid multisig policy");
-        let multisig_account = DMAccountId::new_multisig(policy);
-        let mut world = state.world.block();
-        seed_active_public_lane_validator(&mut world, &keypair, LaneId::SINGLE, 10);
-        world.council.insert(
-            0,
-            CouncilState {
-                epoch: 0,
-                members: vec![multisig_account, single_key_account],
-                candidate_count: 2,
-                ..CouncilState::default()
-            },
-        );
-        world.commit();
-        assert!(
-            state
-                .view()
-                .epoch_validator_peer_ids_for_testing(0)
-                .is_none(),
-            "ignoring the multisig member leaves an underfilled committee"
-        );
-    }
-    #[test]
-    fn council_explicit_peer_bindings_survive_topology_widening() {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-        }
-        let account_keys: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
-        let peer_keys: Vec<_> = (0..4)
-            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
-            .collect();
-        let accounts: Vec<_> = account_keys
+        wb.commit();
+
+        let baseline = state
+            .view()
+            .epoch_validator_peer_ids_for_testing(0)
+            .expect("threshold-beacon committee");
+        let legacy_members = all_peers
             .iter()
-            .map(|keypair| DMAccountId::of(keypair.public_key().clone()))
-            .collect();
-        let peers: Vec<_> = peer_keys
-            .iter()
-            .map(|keypair| PeerId::from(keypair.public_key().clone()))
-            .collect();
-        for (account, peer) in accounts.iter().zip(&peers) {
-            assert_ne!(peer.public_key(), account.expect_single_signatory());
-        }
+            .filter(|peer| !baseline.contains(peer))
+            .take(3)
+            .chain(baseline.iter().take(1))
+            .map(|peer| DMAccountId::of(peer.public_key().clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(legacy_members.len(), 4);
         let mut wb = state.world.block();
-        {
-            let world_peers = wb.peers.get_mut();
-            for peer in &peers {
-                let _ = world_peers.push(peer.clone());
-            }
-        }
-        for peer in &peers {
-            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
-        }
-        for (account, peer) in accounts.iter().cloned().zip(peers.iter().cloned()) {
-            wb.public_lane_validators.insert(
-                (LaneId::SINGLE, account.clone()),
-                active_lane_validator_record(LaneId::SINGLE, &account, peer, 10_u32),
-            );
-        }
         wb.council.insert(
             0,
             CouncilState {
                 epoch: 0,
-                members: accounts,
+                members: legacy_members,
                 candidate_count: 4,
                 ..CouncilState::default()
             },
         );
         wb.commit();
-        {
-            let mut topo_block = state.commit_topology.block();
-            topo_block.mutate_vec(|topology| *topology = vec![peers[0].clone()]);
-            topo_block.commit();
-        }
-        let sv = state.view();
-        let roster = sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
-        let mut expected = peers;
-        expected.sort();
+
+        let restored = state
+            .view()
+            .epoch_validator_peer_ids_for_testing(0)
+            .expect("threshold-beacon committee with restored legacy snapshot");
         assert_eq!(
-            roster, expected,
-            "the newly widened explicit peer binding must not be dropped from the council roster"
+            restored, baseline,
+            "decode-only legacy council bytes must not affect the NPoS committee"
         );
     }
     #[test]
@@ -21927,10 +21751,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<'block, 'world, String, GovernanceSlashLedger> {
         &mut self.governance_slashes
-    }
-    /// Test helper: get mutable access to council roster storage for direct seeding.
-    pub fn council_mut(&mut self) -> &mut StorageTransaction<'block, 'world, u64, CouncilState> {
-        &mut self.council
     }
     /// Validate and persist one canonical attempt-local Parliament reducer snapshot.
     pub(crate) fn put_parliament_attempt(
@@ -55806,43 +55626,15 @@ impl StateTransaction<'_, '_> {
         &self,
     ) -> core::result::Result<Vec<PeerId>, String> {
         let current_height = self.block_height();
-        let resolution = || {
-            let parent_height = current_height
-                .checked_sub(1)
-                .filter(|height| *height != 0)
-                .ok_or_else(|| {
-                    "threshold-key lifecycle authority has no finalized parent height".to_owned()
-                })?;
-            let parent = self
-                .kura
-                .v2_finality_artifact(parent_height)
-                .map_err(|error| {
-                    format!(
-                        "failed to authenticate threshold-key lifecycle parent finality: {error}"
-                    )
-                })?
-                .ok_or_else(|| {
-                    format!(
-                        "threshold-key lifecycle authority lacks finality at parent height {parent_height}"
-                    )
-                })?;
-            if parent.height_context.network_id != self.network_id {
-                return Err(
-                    "threshold-key lifecycle parent finality belongs to another network".to_owned(),
-                );
-            }
-            threshold_key_lifecycle_successor_roster_v1(
-                current_height,
-                &parent.height_context,
-            )
+        let parent_height = current_height
+            .checked_sub(1)
+            .filter(|height| *height != 0)
             .ok_or_else(|| {
-                "threshold-key lifecycle parent finality does not define this height's frozen roster"
-                    .to_owned()
-            })
-        };
-        match resolution() {
-            Ok(roster) => Ok(roster),
-            Err(error) => {
+                "threshold-key lifecycle authority has no finalized parent height".to_owned()
+            })?;
+        let parent = match self.kura.v2_finality_artifact(parent_height) {
+            Ok(Some(parent)) => parent,
+            Ok(None) => {
                 #[cfg(test)]
                 {
                     let fixture_roster = self.commit_topology().get().clone();
@@ -55850,9 +55642,26 @@ impl StateTransaction<'_, '_> {
                         return Ok(fixture_roster);
                     }
                 }
-                Err(error)
+                return Err(format!(
+                    "threshold-key lifecycle authority lacks finality at parent height {parent_height}"
+                ));
             }
+            Err(error) => {
+                return Err(format!(
+                    "failed to authenticate threshold-key lifecycle parent finality: {error}"
+                ));
+            }
+        };
+        if parent.height_context.network_id != self.network_id {
+            return Err(
+                "threshold-key lifecycle parent finality belongs to another network".to_owned(),
+            );
         }
+        threshold_key_lifecycle_successor_roster_v1(current_height, &parent.height_context)
+            .ok_or_else(|| {
+                "threshold-key lifecycle parent finality does not define this height's frozen roster"
+                    .to_owned()
+            })
     }
     fn ensure_private_settlement_feature_active_v1(
         &self,
@@ -57859,10 +57668,7 @@ impl StateTransaction<'_, '_> {
         let drained = core::mem::take(&mut self.world.internal_event_buf);
         let mut matches = Vec::new();
         for event in &drained {
-            let candidates = self
-                .world
-                .triggers
-                .data_trigger_candidates(event.as_ref());
+            let candidates = self.world.triggers.data_trigger_candidates(event.as_ref());
             let check_count = u64::try_from(candidates.len()).unwrap_or(u64::MAX);
             self.charge_trigger_work_gas(
                 check_count.saturating_mul(TRIGGER_FILTER_CHECK_GAS),

@@ -74,9 +74,6 @@
         {
           "wire_id": "CreateParliamentGovernanceAttemptV1",
           "payload_hex": "0XAAAAAAAA"
-        },
-        {
-          "wire_id": "PersistCouncilForEpoch"
         }
       ]
     },
@@ -129,24 +126,6 @@
         "apps",
         "system"
       ]
-    },
-    "councilCurrent": {
-      "epoch": 77,
-      "members": [
-        {
-          "account_id": "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"
-        },
-        {
-          "account_id": "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i"
-        }
-      ],
-      "alternates": [
-        {
-          "account_id": "34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg"
-        }
-      ],
-      "candidate_count": 3,
-      "derived_by": "Manual"
     }
   },
   "repo": {

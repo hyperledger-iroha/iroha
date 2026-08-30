@@ -330,11 +330,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 343;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 361;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 343;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 361;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 327;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 344;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -413,8 +413,8 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                16,
-                "governance-only V1 inventory changed without updating its explicit scope"
+                    17,
+                    "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(
                 assignment_digest(wire_ids::ALL.iter().collect()),
@@ -422,6 +422,54 @@ mod tests {
                 "complete V1 type-to-wire-ID assignments changed"
             );
         }
+    }
+    #[cfg(feature = "governance")]
+    #[test]
+    fn governance_instruction_wire_ids_are_exact_and_manual_council_stays_retired() {
+        const PERMITTED_GOVERNANCE_WIRE_IDS: &[&str] = &[
+            "iroha.instruction.v1::governance::ProposeDeployContract",
+            "iroha.instruction.v1::governance::ProposeContractLifecycleGovernance",
+            "iroha.instruction.v1::governance::ProposeContractEmergencyHold",
+            "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal",
+            "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
+            "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance",
+            "iroha.instruction.v1::governance::ProposeValidationFeePolicy",
+            "iroha.instruction.v1::governance::ProposeValidationFeePayoutLifecycle",
+            "iroha.governance.parliament.attempt.create.v1",
+            "iroha.governance.parliament.transition.submit.v1",
+            "iroha.instruction.v1::governance::CastZkBallot",
+            "iroha.instruction.v1::governance::CastPlainBallot",
+            "iroha.instruction.v1::governance::SlashGovernanceLock",
+            "iroha.instruction.v1::governance::RestituteGovernanceLock",
+            "iroha.instruction.v1::governance::RecordCitizenServiceOutcome",
+            "iroha.instruction.v1::governance::RegisterCitizen",
+            "iroha.instruction.v1::governance::UnregisterCitizen",
+        ];
+
+        let actual = wire_ids::ALL
+            .iter()
+            .filter(|entry| entry.governance_only)
+            .map(|entry| entry.wire_id)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, PERMITTED_GOVERNANCE_WIRE_IDS);
+        let retired_manual_council_wire_id = [
+            "iroha.instruction.v1::governance::",
+            "Persist",
+            "Council",
+            "For",
+            "Epoch",
+        ]
+        .concat();
+        assert!(!PERMITTED_GOVERNANCE_WIRE_IDS.contains(&retired_manual_council_wire_id.as_str()));
+
+        let registry = default();
+        assert!(!registry.contains(&retired_manual_council_wire_id));
+        assert!(
+            registry
+                .decode(&retired_manual_council_wire_id, &[])
+                .is_none(),
+            "the retired caller-selected roster wire ID must remain a tombstone"
+        );
     }
     #[test]
     #[should_panic(expected = "instruction registry key collision")]

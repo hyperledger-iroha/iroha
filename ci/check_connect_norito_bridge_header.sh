@@ -203,7 +203,6 @@ TRANSACTION_SIGNER_BASE_EXPORTS = {
     "connect_norito_encode_claim_identifier_signed_transaction",
     "connect_norito_encode_governance_cast_plain_ballot_signed_transaction",
     "connect_norito_encode_governance_cast_zk_ballot_signed_transaction",
-    "connect_norito_encode_governance_persist_council_signed_transaction",
     "connect_norito_encode_governance_propose_deploy_v1_signed_transaction",
     "connect_norito_encode_mint_signed_transaction",
     "connect_norito_encode_multisig_register_signed_transaction",

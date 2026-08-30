@@ -500,7 +500,6 @@ define_instruction_handlers! {
     dispatch_instruction::<
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1
     >,
-    dispatch_instruction::<iroha_data_model::isi::governance::PersistCouncilForEpoch>,
     dispatch_instruction::<iroha_data_model::isi::governance::RecordCitizenServiceOutcome>,
     dispatch_instruction::<iroha_data_model::isi::governance::RegisterCitizen>,
     dispatch_instruction::<iroha_data_model::isi::governance::UnregisterCitizen>,

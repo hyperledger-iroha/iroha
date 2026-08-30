@@ -473,8 +473,6 @@ pub mod uri {
     pub const GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE: &str = "/v1/gov/proposals/sccp-route-governance";
     /// Standalone referendum ballot route; never a Parliament body ballot.
     pub const GOV_BALLOT_PLAIN: &str = "/v1/gov/ballots/plain";
-    /// Governance: query the current sortition council
-    pub const GOV_COUNCIL_CURRENT: &str = "/v1/gov/council/current";
     /// Governance: query exact citizenship registry count
     pub const GOV_CITIZENS_COUNT: &str = "/v1/gov/citizens";
     /// Governance: query citizenship status for an account

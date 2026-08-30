@@ -48,7 +48,6 @@ import {
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
-  buildPersistCouncilForEpochInstruction,
   buildSubmitAgendaProposalInstruction,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
@@ -3586,23 +3585,6 @@ test("CastPlainBallot pure-JS bytes match native compact framing", () => {
     "CastPlainBallot",
   );
   assert.equal(encoded[39], 0x02);
-});
-
-test("buildPersistCouncilForEpochInstruction validates members", () => {
-  const instruction = buildPersistCouncilForEpochInstruction({
-    epoch: 10,
-    members: [ACCOUNT_ID],
-  });
-  const expected = {
-    PersistCouncilForEpoch: {
-      epoch: 10,
-      members: [ACCOUNT_ID_CANONICAL],
-      alternates: [],
-    },
-  };
-  assert.deepEqual(instruction, expected);
-  const decoded = encodeAndDecode(instruction);
-  assert.deepEqual(decoded, expected);
 });
 
 test("buildSubmitAgendaProposalInstruction wraps the supplied proposal payload", () => {

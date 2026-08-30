@@ -21492,14 +21492,6 @@ impl Client {
         let resp = self.send_account_signed_get(url)?;
         Self::decode_json_ok(resp, "Failed to get locks")
     }
-    /// GET `/v1/gov/council/current`
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn get_gov_council_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/gov/council/current");
-        let resp = self.send_account_signed_get(url)?;
-        Self::decode_json_ok(resp, "Failed to get council")
-    }
     /// GET `/v1/gov/citizens`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.

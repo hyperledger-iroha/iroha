@@ -962,8 +962,8 @@ use soranet_privacy_ingress::{
 pub use gov::{
     GovernedContractResponse, LocksGetResponse, ProposalGetResponse, ProtectedNamespacesDto,
     ReferendumGetResponse, TallyGetResponse, handle_gov_capabilities, handle_gov_citizen_draft,
-    handle_gov_citizen_status, handle_gov_contract_get, handle_gov_council_current,
-    handle_gov_get_locks, handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
+    handle_gov_citizen_status, handle_gov_contract_get, handle_gov_get_locks,
+    handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
     handle_gov_parliament_attempt_draft, handle_gov_parliament_attempt_read,
     handle_gov_parliament_tle_release_context_read, handle_gov_parliament_transition_draft,
     handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
@@ -11131,15 +11131,6 @@ async fn handler_ministry_agenda_proposal_get(
     )
     .await?;
     crate::gov::handle_ministry_agenda_proposal_get(app.state.clone(), proposal_id).await
-}
-#[cfg(feature = "app_api")]
-async fn handler_gov_council_current(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<JsonBody<crate::gov::CouncilCurrentResponse>, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/gov/council/current").await?;
-    crate::gov::handle_gov_council_current(app.state.clone()).await
 }
 #[cfg(feature = "app_api")]
 async fn handler_gov_citizen_count(
@@ -21432,12 +21423,15 @@ impl ToriiAccountReadVisibility {
     }
 
     fn into_dataspace_context(self, app: SharedAppState) -> ToriiDataspaceReadContext {
+        let caller = match self {
+            Self::Signed(account_id) => Some(account_id),
+            Self::PublicExact | Self::None => None,
+        };
+        let admitted_visibility = torii_dataspace_read_visibility(app.as_ref(), caller.as_ref());
         ToriiDataspaceReadContext {
             app,
-            caller: match self {
-                Self::Signed(account_id) => Some(account_id),
-                Self::PublicExact | Self::None => None,
-            },
+            caller,
+            admitted_visibility,
             #[cfg(test)]
             fixed_visibility: None,
         }
@@ -21454,8 +21448,42 @@ impl ToriiAccountReadVisibility {
 pub(crate) struct ToriiDataspaceReadContext {
     app: SharedAppState,
     caller: Option<AccountId>,
+    admitted_visibility: routing::DataspaceReadVisibility,
     #[cfg(test)]
     fixed_visibility: Option<routing::DataspaceReadVisibility>,
+}
+
+/// Event plus the complete authorization scope resolved before any
+/// subscriber-controlled filtering or projection.
+#[cfg(feature = "app_api")]
+struct ScopedEvent {
+    event: EventBox,
+    scope: ScopedEventScope,
+}
+
+#[cfg(feature = "app_api")]
+enum ScopedEventScope {
+    /// Block lifecycle notices are public and carry no transaction body.
+    Public,
+    /// Every named dataspace must be visible to the current reader.
+    Dataspaces(BTreeSet<DataSpaceId>),
+    /// Missing, malformed, or intrinsically global provenance is visible only
+    /// to a caller that still holds `CanReadAllLedgerData`.
+    GlobalReaderOnly,
+}
+
+#[cfg(feature = "app_api")]
+impl ScopedEvent {
+    fn into_visible(self, visibility: &routing::DataspaceReadVisibility) -> Option<EventBox> {
+        let visible = match &self.scope {
+            ScopedEventScope::Public => true,
+            ScopedEventScope::Dataspaces(dataspaces) => dataspaces
+                .iter()
+                .all(|dataspace| visibility.allows_dataspace(*dataspace)),
+            ScopedEventScope::GlobalReaderOnly => visibility.can_read_all(),
+        };
+        visible.then_some(self.event)
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -21472,11 +21500,25 @@ impl ToriiDataspaceReadContext {
         torii_dataspace_read_visibility(self.app.as_ref(), self.caller())
     }
 
+    /// Revalidate the exact principal and route scope that admitted a
+    /// long-lived stream.
+    fn authorization_is_current(&self) -> bool {
+        if let Some(caller) = self.caller() {
+            let state_view = self.app.state.view();
+            if state_view.world().accounts().get(caller).is_none() {
+                return false;
+            }
+        }
+        self.current_visibility()
+            .retains_authorized_scope(&self.admitted_visibility)
+    }
+
     #[cfg(test)]
     fn all_for_tests() -> Self {
         Self {
             app: crate::mk_app_state_for_tests(),
             caller: None,
+            admitted_visibility: routing::DataspaceReadVisibility::all_for_tests(),
             fixed_visibility: Some(routing::DataspaceReadVisibility::all_for_tests()),
         }
     }
@@ -21487,20 +21529,30 @@ impl ToriiDataspaceReadContext {
             EventBox::PipelineBatch(events) => {
                 let events = events
                     .into_iter()
-                    .filter(|event| self.pipeline_event_is_visible(kura, &visibility, event))
+                    .filter_map(|event| {
+                        Self::scope_pipeline_event(kura, event).into_visible(&visibility)
+                    })
+                    .map(|event| match event {
+                        EventBox::Pipeline(event) => event,
+                        _ => unreachable!("pipeline scoping returns one pipeline event"),
+                    })
                     .collect::<Vec<_>>();
                 (!events.is_empty()).then_some(EventBox::PipelineBatch(events))
             }
-            EventBox::Pipeline(event) => self
-                .pipeline_event_is_visible(kura, &visibility, &event)
-                .then_some(EventBox::Pipeline(event)),
-            // Data, trigger, and clock events do not yet carry committed
-            // route provenance. Only the global-reader capability may observe
-            // them until Core emits an explicit dataspace scope.
+            EventBox::Pipeline(event) => {
+                Self::scope_pipeline_event(kura, event).into_visible(&visibility)
+            }
+            // Data, trigger, and clock events do not yet carry committed route
+            // provenance. The explicit envelope therefore fails them closed
+            // to a global reader instead of guessing scope from payload data.
             other @ (EventBox::Data(_)
             | EventBox::Time(_)
             | EventBox::ExecuteTrigger(_)
-            | EventBox::TriggerCompleted(_)) => visibility.can_read_all().then_some(other),
+            | EventBox::TriggerCompleted(_)) => ScopedEvent {
+                event: other,
+                scope: ScopedEventScope::GlobalReaderOnly,
+            }
+            .into_visible(&visibility),
         }
     }
 
@@ -21508,42 +21560,59 @@ impl ToriiDataspaceReadContext {
         self.filter_event(self.app.kura.as_ref(), event)
     }
 
-    fn pipeline_event_is_visible(
-        &self,
-        kura: &Kura,
-        visibility: &routing::DataspaceReadVisibility,
-        event: &PipelineEventBox,
-    ) -> bool {
-        if visibility.can_read_all() {
-            return true;
-        }
-        match event {
-            PipelineEventBox::Block(_) => true,
+    fn scope_pipeline_event(kura: &Kura, event: PipelineEventBox) -> ScopedEvent {
+        let scope = match &event {
+            PipelineEventBox::Block(_) => ScopedEventScope::Public,
             PipelineEventBox::Transaction(transaction) => {
-                let Some(height) = transaction.block_height() else {
-                    return false;
-                };
-                let Ok(height) = usize::try_from(height.get()) else {
-                    return false;
-                };
-                let Some(height) = NonZeroUsize::new(height) else {
-                    return false;
-                };
-                let Some(block) = kura.get_block(height) else {
-                    return false;
-                };
-                (0..block.external_entrypoint_count()).any(|index| {
-                    block
-                        .external_signed_transaction_ref_at(index)
-                        .is_some_and(|candidate| {
-                            candidate.hash() == *transaction.hash()
-                                && visibility.allows_external_entrypoint(&block, index)
-                        })
-                })
+                Self::transaction_event_scope(kura, transaction)
             }
             PipelineEventBox::Warning(_)
             | PipelineEventBox::Merge(_)
-            | PipelineEventBox::Witness(_) => false,
+            | PipelineEventBox::Witness(_) => ScopedEventScope::GlobalReaderOnly,
+        };
+        ScopedEvent {
+            event: EventBox::Pipeline(event),
+            scope,
+        }
+    }
+
+    fn transaction_event_scope(
+        kura: &Kura,
+        transaction: &iroha_data_model::events::pipeline::TransactionEvent,
+    ) -> ScopedEventScope {
+        let Some(height) = transaction.block_height() else {
+            return ScopedEventScope::GlobalReaderOnly;
+        };
+        let Ok(height) = usize::try_from(height.get()) else {
+            return ScopedEventScope::GlobalReaderOnly;
+        };
+        let Some(height) = NonZeroUsize::new(height) else {
+            return ScopedEventScope::GlobalReaderOnly;
+        };
+        let Some(block) = kura.get_block(height) else {
+            return ScopedEventScope::GlobalReaderOnly;
+        };
+        let mut matched = false;
+        let mut dataspaces = BTreeSet::new();
+        for index in 0..block.external_entrypoint_count() {
+            let Some(candidate) = block.external_signed_transaction_ref_at(index) else {
+                return ScopedEventScope::GlobalReaderOnly;
+            };
+            if candidate.hash() != *transaction.hash() {
+                continue;
+            }
+            matched = true;
+            let Some(entrypoint_dataspaces) =
+                routing::DataspaceReadVisibility::external_entrypoint_dataspaces(&block, index)
+            else {
+                return ScopedEventScope::GlobalReaderOnly;
+            };
+            dataspaces.extend(entrypoint_dataspaces);
+        }
+        if !matched || dataspaces.is_empty() {
+            ScopedEventScope::GlobalReaderOnly
+        } else {
+            ScopedEventScope::Dataspaces(dataspaces)
         }
     }
 }
@@ -33985,6 +34054,7 @@ fn is_expected_ws_disconnect(error: &eyre::Report) -> bool {
         || msg.contains("broken pipe")
         || msg.contains("connection reset")
         || msg.contains("already closed")
+        || msg.contains("authorization was revoked")
 }
 #[cfg(all(test, feature = "app_api"))]
 mod ws_disconnect_classification_tests {
@@ -33996,6 +34066,9 @@ mod ws_disconnect_classification_tests {
         )));
         assert!(is_expected_ws_disconnect(&eyre::eyre!(
             "Event consumption resulted in an error: Connection is closed"
+        )));
+        assert!(is_expected_ws_disconnect(&eyre::eyre!(
+            "Event stream authorization was revoked"
         )));
     }
     #[test]
@@ -34067,7 +34140,7 @@ async fn handler_blocks_stream_ws(
         let _preauth_guard = preauth_guard;
         if let Err(error) =
             routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout, move || {
-                visibility.current_visibility().can_read_all()
+                visibility.authorization_is_current()
             })
             .await
         {
@@ -49542,7 +49615,6 @@ impl Torii {
                 GOV_UNLOCK_STATS => canonical_account_get(handler_gov_unlock_stats, app_state, 0);
                 GOV_CONTRACT_GET => canonical_account_get(handler_gov_contract_get, app_state, 0);
 
-                GOV_COUNCIL_CURRENT => canonical_account_get(handler_gov_council_current, app_state, 0);
                 GOV_CITIZENS_COUNT => canonical_account_get(handler_gov_citizen_count, app_state, 0);
                 GOV_CITIZEN_STATUS => canonical_account_get(handler_gov_citizen_status, app_state, 0);
             );

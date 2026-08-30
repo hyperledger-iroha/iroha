@@ -94,8 +94,8 @@ use iroha_data_model::{
         asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
-            CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
-            ProposeValidationFeePolicy, RegisterCitizen,
+            CastPlainBallot, CastZkBallot, ProposeDeployContract, ProposeValidationFeePolicy,
+            RegisterCitizen,
         },
         ministry::SubmitAgendaProposal,
         rwa::{
@@ -8931,27 +8931,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let instruction = RegisterCitizen { owner, amount };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-            if let Some(json::Value::Object(mut fields)) = map.remove("PersistCouncilForEpoch") {
-                let epoch = parse_u64_value(
-                    required_value(&mut fields, "epoch", "PersistCouncilForEpoch")?,
-                    "PersistCouncilForEpoch.epoch",
-                )?;
-                let members_value =
-                    required_value(&mut fields, "members", "PersistCouncilForEpoch")?;
-                let members: Vec<AccountId> =
-                    json::from_value(members_value).map_err(norito_to_napi)?;
-                let alternates_value = fields
-                    .remove("alternates")
-                    .unwrap_or_else(|| json::Value::Array(Vec::new()));
-                let alternates: Vec<AccountId> =
-                    json::from_value(alternates_value).map_err(norito_to_napi)?;
-                let persist = PersistCouncilForEpoch {
-                    epoch,
-                    members,
-                    alternates,
-                };
-                return Ok(Box::new(persist).into_instruction_box());
-            }
             if let Some(json::Value::Object(mut fields)) = map.remove("SubmitAgendaProposal") {
                 let proposal: AgendaProposalV1 = json::from_value(required_value(
                     &mut fields,
@@ -10246,30 +10225,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "FinalizeElection",
             json::to_value(finalize).map_err(norito_to_napi)?,
         ));
-    }
-    if let Some(persist) = instruction_ref
-        .as_any()
-        .downcast_ref::<PersistCouncilForEpoch>()
-    {
-        let mut inner = json::Map::new();
-        inner.insert(
-            "epoch".to_owned(),
-            json::to_value(&persist.epoch).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "members".to_owned(),
-            json::to_value(&persist.members).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "alternates".to_owned(),
-            json::to_value(&persist.alternates).map_err(norito_to_napi)?,
-        );
-        let mut outer = json::Map::new();
-        outer.insert(
-            "PersistCouncilForEpoch".to_owned(),
-            json::Value::Object(inner),
-        );
-        return Ok(json::Value::Object(outer));
     }
     if let Some(register_code) = instruction_ref
         .as_any()
@@ -12900,8 +12855,8 @@ mod tests {
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             UnregisterKaigiRelay,
             governance::{
-                CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
-                ProposeValidationFeePolicy, RegisterCitizen,
+                CastPlainBallot, CastZkBallot, ProposeDeployContract, ProposeValidationFeePolicy,
+                RegisterCitizen,
             },
             smart_contract_code::{
                 ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -16504,37 +16459,6 @@ seiyaku Privacy {
                 error.reason
             );
         }
-    }
-    #[test]
-    fn governance_persist_council_instruction_json_roundtrip() {
-        let member = sample_account("wonderland");
-        let instruction: InstructionBox = Box::new(PersistCouncilForEpoch {
-            epoch: 10,
-            members: vec![member.clone()],
-            alternates: vec![member.clone()],
-        })
-        .into_instruction_box();
-        let json_value = instruction_to_json_value(&instruction)
-            .expect("serialize PersistCouncilForEpoch instruction");
-        assert!(
-            json_value
-                .as_object()
-                .and_then(|map| map.get("PersistCouncilForEpoch"))
-                .is_some()
-        );
-        let reconstructed =
-            value_to_instruction(json_value.clone()).expect("deserialize PersistCouncilForEpoch");
-        assert_eq!(reconstructed, instruction);
-        let member_json = json_value
-            .as_object()
-            .unwrap()
-            .get("PersistCouncilForEpoch")
-            .and_then(|value| value.get("members"))
-            .and_then(|value| value.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|value| value.as_str())
-            .expect("member string present");
-        assert_eq!(member_json, account_json_literal(&member));
     }
     #[test]
     fn governance_submit_agenda_proposal_instruction_json_roundtrip() {

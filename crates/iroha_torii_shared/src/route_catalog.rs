@@ -2960,9 +2960,6 @@ pub mod runtime_governance {
         "/v1/gov/contracts/{contract_address}",
     );
 
-    /// Read the current sortition council.
-    pub const GOV_COUNCIL_CURRENT: RouteDescriptor =
-        app_signed_get("governance.council.current", "/v1/gov/council/current");
     /// Read the exact citizenship registry count.
     pub const GOV_CITIZENS_COUNT: RouteDescriptor =
         app_signed_get("governance.citizen.count", "/v1/gov/citizens");
@@ -3030,7 +3027,6 @@ pub mod runtime_governance {
         GOV_STREAM,
         GOV_UNLOCK_STATS,
         GOV_CONTRACT_GET,
-        GOV_COUNCIL_CURRENT,
         GOV_CITIZENS_COUNT,
         GOV_CITIZEN_STATUS,
     ];

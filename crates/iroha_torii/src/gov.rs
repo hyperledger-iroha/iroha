@@ -32,7 +32,6 @@ use iroha_data_model::{
         MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentNoResultKindV1, ProposalContentId,
         ProposalKind, SccpRouteGovernanceProposal,
     },
-    isi::governance::CouncilDerivationKind,
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
     smart_contract::manifest::{EntryPointKind, ManifestProvenance},
 };
@@ -614,20 +613,6 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         reason: Some("build transaction skeleton".to_string()),
         tx_instructions,
     }))
-}
-/// A single council member (account id string)
-#[derive(Debug, JsonSerialize)]
-pub struct CouncilMemberDto {
-    pub account_id: String,
-}
-/// Current council response (epoch + members)
-#[derive(Debug, JsonSerialize)]
-pub struct CouncilCurrentResponse {
-    pub epoch: u64,
-    pub members: Vec<CouncilMemberDto>,
-    pub alternates: Vec<CouncilMemberDto>,
-    pub candidate_count: usize,
-    pub derived_by: CouncilDerivationKind,
 }
 /// Citizenship status response for an account.
 #[derive(Debug, JsonSerialize)]
@@ -2738,46 +2723,6 @@ pub async fn handle_gov_ballot_plain_with_policy(
         tx_instructions,
     }))
 }
-/// GET /v1/gov/council/current — fetch the latest persisted council membership.
-///
-/// # Errors
-/// This handler never returns an error; empty councils are represented with an empty member list.
-pub async fn handle_gov_council_current(
-    state: Arc<iroha_core::state::State>,
-) -> Result<JsonBody<CouncilCurrentResponse>, crate::Error> {
-    let world = state.world_view();
-    if let Some((epoch, council)) = world.council().last_key_value() {
-        return Ok(JsonBody(CouncilCurrentResponse {
-            epoch: *epoch,
-            members: council
-                .members
-                .iter()
-                .map(|account| CouncilMemberDto {
-                    account_id: account.to_string(),
-                })
-                .collect(),
-            alternates: council
-                .alternates
-                .iter()
-                .map(|account| CouncilMemberDto {
-                    account_id: account.to_string(),
-                })
-                .collect(),
-            candidate_count: council.candidate_count as usize,
-            derived_by: council.derived_by,
-        }));
-    }
-    let height = state.committed_height() as u64;
-    let term_blocks = state.gov.parliament_term_blocks.max(1);
-    let epoch = height / term_blocks;
-    Ok(JsonBody(CouncilCurrentResponse {
-        epoch,
-        members: Vec::new(),
-        alternates: Vec::new(),
-        candidate_count: 0,
-        derived_by: CouncilDerivationKind::Manual,
-    }))
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2791,8 +2736,8 @@ mod tests {
         queue::{Queue, TransactionGuard},
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
-            CouncilState, ElectionState, GovernanceLockCustody, GovernanceLockRecord,
-            GovernanceLocksForReferendum, GovernanceProposalRecord, GovernanceProposalStatus,
+            ElectionState, GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
+            GovernanceProposalRecord, GovernanceProposalStatus,
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
             State, World,
         },
@@ -3139,18 +3084,6 @@ mod tests {
         let citizen_handler = &citizen_tail[..citizen_end];
         assert!(citizen_handler.contains("world.citizens().len()"));
         assert!(!citizen_handler.contains("citizens().iter()"));
-        let council_start = source
-            .find("pub async fn handle_gov_council_current(")
-            .expect("current council handler");
-        let council_tail = &source[council_start..];
-        let council_end = council_tail
-            .find("#[cfg(test)]\nmod tests")
-            .expect("current council handler terminator");
-        let council_handler = &council_tail[..council_end];
-        assert!(council_handler.contains("world.council().last_key_value()"));
-        assert!(!council_handler.contains("world.council().iter()"));
-        assert!(!council_handler.contains(".max_by"));
-        assert!(!council_handler.contains(".max_by_key"));
     }
     #[test]
     fn optional_ballot_direction_is_closed() {
@@ -3774,45 +3707,6 @@ seiyaku GovernedReadFixture {
             .expect("citizen count response")
             .0;
         assert_eq!(response.total, "1");
-    }
-    #[tokio::test]
-    async fn council_current_projects_latest_epoch_from_multi_epoch_history() {
-        let (state, _queue, _chain_id) = mk_basic_context();
-        let latest_member = AccountId::of(
-            checked_governance_ed25519_keypair(0xA4)
-                .public_key()
-                .clone(),
-        );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        for epoch in 0_u64..128 {
-            transaction.world.council_mut().insert(
-                epoch,
-                CouncilState {
-                    epoch,
-                    members: vec![if epoch == 127 {
-                        latest_member.clone()
-                    } else {
-                        ALICE_ID.clone()
-                    }],
-                    candidate_count: 1,
-                    ..CouncilState::default()
-                },
-            );
-        }
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit multi-epoch council history");
-        let response = handle_gov_council_current(state)
-            .await
-            .expect("current council response")
-            .0;
-        assert_eq!(response.epoch, 127);
-        assert_eq!(response.candidate_count, 1);
-        assert_eq!(response.members.len(), 1);
-        assert_eq!(response.members[0].account_id, latest_member.to_string());
     }
     #[test]
     fn serde_shapes_compile() {

@@ -1946,12 +1946,12 @@ fn long_lived_dataspace_context_rechecks_permission_revocation() {
         dataspace: restricted_dataspace,
     }
     .into();
+    grant_account_permission_for_test(&app, &caller, permission.clone());
     let context = super::ToriiAccountReadVisibility::Signed(caller.clone())
         .into_dataspace_context(app.clone());
 
-    assert!(!context.current_visibility().allows_dataspace(restricted_dataspace));
-    grant_account_permission_for_test(&app, &caller, permission.clone());
     assert!(context.current_visibility().allows_dataspace(restricted_dataspace));
+    assert!(context.authorization_is_current());
 
     let next_height = app
         .state
@@ -1980,6 +1980,10 @@ fn long_lived_dataspace_context_rechecks_permission_revocation() {
     assert!(
         !context.current_visibility().allows_dataspace(restricted_dataspace),
         "an established stream/read context must not retain a revoked grant"
+    );
+    assert!(
+        !context.authorization_is_current(),
+        "a long-lived stream must terminate after losing any admitted route"
     );
 }
 

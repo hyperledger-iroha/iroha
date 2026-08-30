@@ -22389,19 +22389,6 @@ class ToriiClient(
             expected_status=(200,),
         )
 
-    def get_governance_council_current(
-        self, *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> Optional[Any]:
-        """GET `/v1/gov/council/current`."""
-
-        return self._account_request_json(
-            "GET",
-            "/v1/gov/council/current",
-            canonical_auth=canonical_auth,
-            context="governance council current",
-            expected_status=(200,),
-        )
-
     def get_governance_contract(
         self,
         contract_address: str,

@@ -310,7 +310,6 @@ const KAIGI_WIRE_IDS = new Set([
 const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
 const CAST_ZK_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastZkBallot";
 const CAST_PLAIN_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastPlainBallot";
-const PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID = "iroha_data_model::isi::governance::PersistCouncilForEpoch";
 const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha_data_model::isi::social::ClaimTwitterFollowReward";
 const SEND_TO_TWITTER_WIRE_ID = "iroha_data_model::isi::social::SendToTwitter";
 const CANCEL_TWITTER_ESCROW_WIRE_ID = "iroha_data_model::isi::social::CancelTwitterEscrow";
@@ -352,7 +351,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]: PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
   [CAST_ZK_BALLOT_WIRE_ID]: CAST_ZK_BALLOT_WIRE_ID,
   [CAST_PLAIN_BALLOT_WIRE_ID]: CAST_PLAIN_BALLOT_WIRE_ID,
-  [PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID]: PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
   [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]: CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID,
   [SEND_TO_TWITTER_WIRE_ID]: SEND_TO_TWITTER_WIRE_ID,
   [CANCEL_TWITTER_ESCROW_WIRE_ID]: CANCEL_TWITTER_ESCROW_WIRE_ID,
@@ -2966,8 +2964,7 @@ function encodePureJsInstructionPayload(instruction) {
   if (
     instruction.ProposeDeployContract ||
     instruction.CastZkBallot ||
-    instruction.CastPlainBallot ||
-    instruction.PersistCouncilForEpoch
+    instruction.CastPlainBallot
   ) {
     return encodeGovernanceInstruction(instruction);
   }
@@ -3034,7 +3031,6 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case PROPOSE_DEPLOY_CONTRACT_WIRE_ID:
     case CAST_ZK_BALLOT_WIRE_ID:
     case CAST_PLAIN_BALLOT_WIRE_ID:
-    case PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID:
       return decodeGovernanceInstructionPayload(wireId, payload);
     case CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID:
     case SEND_TO_TWITTER_WIRE_ID:
@@ -3821,30 +3817,6 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
             "CastPlainBallot.duration_blocks",
           ),
           direction: decodeU8Value(fields.direction, "CastPlainBallot.direction"),
-        },
-      };
-    }
-    case PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID: {
-      const fields = decodeStructFields(payload, "PersistCouncilForEpoch", [
-        "epoch",
-        "members",
-        "alternates",
-      ]);
-      return {
-        PersistCouncilForEpoch: {
-          epoch: decodeU64NumberValue(fields.epoch, "PersistCouncilForEpoch.epoch"),
-          members: decodeNoritoVec(
-            fields.members,
-            (entry, index) =>
-              decodeAccountIdValue(entry, `PersistCouncilForEpoch.members[${index}]`),
-            "PersistCouncilForEpoch.members",
-          ),
-          alternates: decodeNoritoVec(
-            fields.alternates,
-            (entry, index) =>
-              decodeAccountIdValue(entry, `PersistCouncilForEpoch.alternates[${index}]`),
-            "PersistCouncilForEpoch.alternates",
-          ),
         },
       };
     }
@@ -5990,12 +5962,6 @@ function encodeGovernanceInstruction(instruction) {
       encodeCastPlainBallotPayload(instruction.CastPlainBallot),
     );
   }
-  if (isPlainObject(instruction.PersistCouncilForEpoch)) {
-    return encodeInstructionEnvelope(
-      PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
-      encodePersistCouncilForEpochPayload(instruction.PersistCouncilForEpoch),
-    );
-  }
   throw new Error(
     `Internal Norito canonicalization does not support governance instruction ${describeInstructionShape(instruction)}`,
   );
@@ -6310,18 +6276,6 @@ function encodeCastPlainBallotPayload(value) {
     [encodeQuantityValue(value.amount, "CastPlainBallot.amount")],
     [encodeU64NumberValue(value.duration_blocks, "CastPlainBallot.duration_blocks")],
     [encodeU8Value(value.direction, "CastPlainBallot.direction")],
-  ]);
-}
-
-function encodePersistCouncilForEpochPayload(value) {
-  return encodeStructValue([
-    [encodeU64NumberValue(value.epoch, "PersistCouncilForEpoch.epoch")],
-    [encodeNoritoVec(value.members ?? [], (member, index) =>
-      encodeAccountIdValue(member, `PersistCouncilForEpoch.members[${index}]`),
-    )],
-    [encodeNoritoVec(value.alternates ?? [], (member, index) =>
-      encodeAccountIdValue(member, `PersistCouncilForEpoch.alternates[${index}]`),
-    )],
   ]);
 }
 

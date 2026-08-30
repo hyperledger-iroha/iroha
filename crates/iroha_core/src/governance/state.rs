@@ -4,7 +4,10 @@ use norito::{
     NoritoDeserialize, NoritoSerialize,
     derive::{JsonDeserialize, JsonSerialize},
 };
-/// Parliament membership for a term/epoch.
+/// Compatibility state for the retired independent epoch-council subsystem.
+///
+/// It remains decodable for existing world snapshots. Canonical first-release Parliament uses
+/// attempt-local reducer state and never reads or writes this roster.
 #[derive(
     Clone,
     Debug,
@@ -24,17 +27,10 @@ pub struct ParliamentTerm {
     /// Alternates (ordered) to replace members who decline/are ineligible.
     #[norito(default)]
     pub alternates: Vec<AccountId>,
-    /// Total eligible candidates considered, or roster entries for a manual roster.
+    /// Total eligible candidates considered by the historical draw.
     #[norito(default)]
     pub candidate_count: u32,
     /// Derivation method used to compute the roster.
     #[norito(default)]
     pub derived_by: CouncilDerivationKind,
-}
-impl ParliamentTerm {
-    /// Replace a missing member with the next alternate (if present).
-    #[must_use]
-    pub fn replace_member(&mut self, missing: &AccountId) -> bool {
-        super::draw::replace_with_alternate(&mut self.members, &mut self.alternates, missing)
-    }
 }

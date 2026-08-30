@@ -56,9 +56,9 @@ mod model {
         ReferendumClosed(GovernanceReferendumClosed),
         /// A governance lock expired and was unlocked.
         LockUnlocked(GovernanceLockUnlocked),
-        /// Council membership was persisted for an epoch.
+        /// Compatibility event emitted by the retired manual epoch-council instruction.
         CouncilPersisted(GovernanceCouncilPersisted),
-        /// Parliament bodies were derived for an epoch.
+        /// Compatibility event emitted by the retired independent epoch-council subsystem.
         ParliamentSelected(GovernanceParliamentSelected),
         /// A canonical attempt was created from immutable proposal content.
         ParliamentAttemptCreated(GovernanceParliamentAttemptCreated),
@@ -328,7 +328,7 @@ mod model {
         /// Amount returned from escrow.
         pub amount: Quantity,
     }
-    /// Council persisted payload.
+    /// Compatibility payload from the retired manual epoch-council instruction.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
@@ -340,13 +340,13 @@ mod model {
         /// Number of alternates stored alongside members.
         #[norito(default)]
         pub alternates_count: u32,
-        /// Total eligible candidates considered, or roster entries for a manual roster.
+        /// Total eligible candidates considered by the historical subsystem.
         #[norito(default)]
         pub candidates_count: u32,
         /// Derivation method.
         pub derived_by: crate::isi::governance::CouncilDerivationKind,
     }
-    /// Parliament selection recorded for an epoch.
+    /// Compatibility payload from the retired independent epoch-council subsystem.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]

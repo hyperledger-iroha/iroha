@@ -97,7 +97,9 @@ impl norito::json::JsonDeserialize for VotingMode {
 pub enum CouncilDerivationKind {
     /// Derived automatically from deterministic bonded-citizen sortition.
     Sortition,
-    /// Supplied explicitly by an authorized parliament administrator.
+    /// Compatibility value for snapshots produced by the retired manual council instruction.
+    ///
+    /// No first-release instruction or Torii route can create or project a new manual roster.
     #[default]
     Manual,
 }

@@ -526,7 +526,8 @@ mod tests {
         );
     }
     #[test]
-    fn parliament_cutover_excludes_legacy_governance_mutation_routes() {
+    fn parliament_cutover_excludes_legacy_governance_surfaces() {
+        let retired_current_council_path = ["/v1/gov/", "council/", "current"].concat();
         for retired_path in [
             "/v1/gov/parliament/ballots",
             "/v1/gov/finalize",
@@ -536,9 +537,18 @@ mod tests {
                 runtime_governance::ROUTES
                     .iter()
                     .all(|route| route.path() != retired_path),
-                "retired governance mutation route remains cataloged: {retired_path}"
+                "retired governance route remains cataloged: {retired_path}"
             );
         }
+        assert!(
+            runtime_governance::ROUTES
+                .iter()
+                .all(|route| route.path() != retired_current_council_path)
+        );
+        let retired_current_council_route_id = ["governance.", "council.", "current"].concat();
+        assert!(runtime_governance::ROUTES.iter().all(|route| {
+            route.stable_route_id() != retired_current_council_route_id.as_str()
+        }));
         for active_path in [
             "/v1/gov/parliament/attempts/draft",
             "/v1/gov/parliament/attempts/{governance_attempt_id}",

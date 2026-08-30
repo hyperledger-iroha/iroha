@@ -1973,37 +1973,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((epoch, _)) = state_transaction.world.council.iter().find(|(_, term)| {
-                term.members.contains(&account_id) || term.alternates.contains(&account_id)
-            }) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is present in governance council roster state (epoch {epoch}); rotate roster first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some((epoch, _)) =
-                state_transaction
-                    .world
-                    .parliament_bodies
-                    .iter()
-                    .find(|(_, bodies)| {
-                        bodies.rosters.values().any(|roster| {
-                            roster.members.contains(&account_id)
-                                || roster.alternates.contains(&account_id)
-                        })
-                    })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is present in governance parliament roster state (epoch {epoch}); rotate roster first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
             if let Some((bundle_id, _)) = state_transaction
                 .world
                 .content_bundles

@@ -750,8 +750,6 @@ __all__ = [
     "decode_pdp_commitment_header",
     "inspect_i105_network_prefix",
     "I105NetworkPrefix",
-    "CouncilMember",
-    "CouncilCurrentStatus",
     "GovernanceLockCustody",
     "GovernanceLockRecord",
     "GovernanceLocksOverview",
@@ -4818,21 +4816,6 @@ class TriggerListPage:
             raise RuntimeError("trigger listing `total` must be numeric") from exc
         items = [TriggerRecord.from_payload(entry) for entry in items_value]
         return cls(items=items, total=total)
-
-
-@dataclass(frozen=True)
-class CouncilMember:
-    """Single council member descriptor."""
-
-    account_id: str
-
-
-@dataclass(frozen=True)
-class CouncilCurrentStatus:
-    """Snapshot returned by ``GET /v1/gov/council/current``."""
-
-    epoch: int
-    members: List[CouncilMember]
 
 
 @dataclass(frozen=True)
@@ -12660,19 +12643,6 @@ class ToriiClient(
             last_sweep_height=self._coerce_int(payload.get("last_sweep_height"), "unlock.last_sweep_height"),
         )
 
-    def get_council_current(
-        self, *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> CouncilCurrentStatus:
-        """Return the latest council roster."""
-
-        payload = self._account_json_request(
-            "GET", "/v1/gov/council/current", canonical_auth=canonical_auth, context="council current"
-        )
-        epoch = self._coerce_int(payload.get("epoch"), "council_current.epoch")
-        members_value = payload.get("members", [])
-        members = self._parse_council_members(members_value)
-        return CouncilCurrentStatus(epoch=epoch, members=members)
-
     def propose_contract_deploy(
         self,
         *,
@@ -15410,20 +15380,6 @@ class ToriiClient(
                 return None
             return int(stripped, 10)
         raise RuntimeError(f"{context} must be numeric when provided")
-
-    @staticmethod
-    def _parse_council_members(value: Any) -> List[CouncilMember]:
-        if not isinstance(value, list):
-            raise RuntimeError("council members payload must be a list")
-        members: List[CouncilMember] = []
-        for entry in value:
-            if not isinstance(entry, Mapping):
-                raise RuntimeError("council member entry must be an object")
-            account_id = entry.get("account_id")
-            if not isinstance(account_id, str) or not account_id:
-                raise RuntimeError("council member missing account_id")
-            members.append(CouncilMember(account_id=account_id))
-        return members
 
     @staticmethod
     def _parse_tx_instructions(value: Any) -> List[TransactionInstruction]:
