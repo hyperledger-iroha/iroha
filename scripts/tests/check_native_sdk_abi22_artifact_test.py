@@ -1840,6 +1840,16 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         "absolute JDK directory"
     ) in jni_lane
     assert "resolved JDK root must be an absolute canonical directory" in jni_lane
+    source_seal_start = jni_lane.index("source_seal() {")
+    source_seal_end = jni_lane.index("\n}\n", source_seal_start)
+    source_seal_lane = jni_lane[source_seal_start:source_seal_end]
+    assert (
+        'NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR"'
+        in source_seal_lane
+    )
+    assert jni_lane.index('mkdir -p "$EMPTY_NATIVE_DIR" "$CARGO_TARGET_DIR"') < (
+        jni_lane.index("source_seal snapshot")
+    )
     java_home_resolution = (
         'JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c '
         "'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "
