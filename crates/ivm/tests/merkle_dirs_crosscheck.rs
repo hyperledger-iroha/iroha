@@ -20,11 +20,11 @@ fn memory_merkle_dirs_match_path() {
     }
     vm.memory.commit();
     for &addr in &addrs {
-        let path = vm.memory.merkle_path(addr);
+        let path = vm.memory.merkle_path(addr).unwrap();
         let leaf_index = (addr / 32) as u32;
         let depth_cap = Some(16);
         // Derive compact proof two independent ways
-        let (cp_mem, _root_mem) = vm.memory.merkle_compact(addr, depth_cap);
+        let (cp_mem, _root_mem) = vm.memory.merkle_compact(addr, depth_cap).unwrap();
         let cp_from_path =
             ivm::merkle_utils::make_compact_from_path_bytes(&path, leaf_index, depth_cap);
         // Cross-check fields
@@ -46,10 +46,10 @@ fn registers_merkle_dirs_match_path() {
     vm.set_register(3, 0x0123_4567_89AB_CDEF);
     vm.set_register(7, 0xA5A5_A5A5_A5A5_A5A5);
     for &idx in &[0usize, 3, 7] {
-        let path = vm.registers.merkle_path(idx);
+        let path = vm.registers.merkle_path(idx).unwrap();
         let depth_cap = Some(16);
         // Two independent derivations of compact proof
-        let (cp_regs, _root_regs) = vm.registers.merkle_compact(idx, depth_cap);
+        let (cp_regs, _root_regs) = vm.registers.merkle_compact(idx, depth_cap).unwrap();
         let cp_from_path =
             ivm::merkle_utils::make_compact_from_path_bytes(&path, idx as u32, depth_cap);
         eprintln!(

@@ -56,7 +56,7 @@ const fn private_settlement_carrier_height_is_live_v1(
     authority_context_height: u64,
     expiry_height: u64,
 ) -> bool {
-    current_height >= authority_context_height && current_height < expiry_height
+    current_height >= authority_context_height && current_height <= expiry_height
 }
 
 fn private_settlement_carrier_within_wire_bound_v1(
@@ -265,11 +265,11 @@ mod governed_sidecar_store_config_tests {
     }
 
     #[test]
-    fn carrier_ingress_requires_room_for_the_next_block() {
+    fn carrier_ingress_accepts_exact_expiry_and_rejects_the_next_height() {
         assert!(!private_settlement_carrier_height_is_live_v1(9, 10, 20));
         assert!(private_settlement_carrier_height_is_live_v1(10, 10, 20));
         assert!(private_settlement_carrier_height_is_live_v1(19, 10, 20));
-        assert!(!private_settlement_carrier_height_is_live_v1(20, 10, 20));
+        assert!(private_settlement_carrier_height_is_live_v1(20, 10, 20));
         assert!(!private_settlement_carrier_height_is_live_v1(21, 10, 20));
     }
 

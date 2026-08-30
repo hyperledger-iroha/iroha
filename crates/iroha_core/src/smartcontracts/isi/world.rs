@@ -57,8 +57,8 @@ pub mod isi {
         governance::{
             CanEnactGovernance, CanManageConfidentialParams, CanManageConsensusKeys,
             CanManageParliament, CanManageRuntimeUpgrades, CanManageVerifyingKeys,
-            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
-            CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
+            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRestituteGovernanceLock,
+            CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         },
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
@@ -177,10 +177,6 @@ pub mod isi {
             owner: AccountId,
             reason: GovernanceSlashReason,
         },
-        CitizenshipSlash {
-            owner: AccountId,
-            slash_bps: u16,
-        },
         CitizenshipRelease {
             owner: AccountId,
         },
@@ -262,8 +258,8 @@ pub mod isi {
     use super::*;
     use crate::{
         governance::timed_ovn::{
-            TIMED_OVN_BALLOT_RECORD_BYTES_V1, TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
-            TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
+            TIMED_OVN_BALLOT_RECORD_BYTES_V1, TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1,
+            timed_ovn_parameter_hash_v1,
         },
         smartcontracts::{
             code::fetch_bound_contract_record,
@@ -1206,27 +1202,6 @@ pub mod isi {
         }
         Ok(false)
     }
-    fn protected_contract_namespaces(
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> BTreeSet<String> {
-        let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") else {
-            return BTreeSet::new();
-        };
-        let id = iroha_data_model::parameter::CustomParameterId(name);
-        let params = state_transaction.world.parameters.get();
-        params
-            .custom()
-            .get(&id)
-            .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
-            .map(|namespaces| {
-                namespaces
-                    .into_iter()
-                    .map(|namespace| namespace.trim().to_owned())
-                    .filter(|namespace| !namespace.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
     fn ensure_contract_lifecycle_authority(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
@@ -2036,68 +2011,6 @@ pub mod isi {
         let mut out = [0u8; 32];
         out.copy_from_slice(&digest[..32]);
         out
-    }
-    fn reset_citizen_epoch(record: &mut crate::state::CitizenshipRecord, epoch: u64) {
-        if record.last_epoch_seen != epoch {
-            record.last_epoch_seen = epoch;
-            record.seats_in_epoch = 0;
-            record.declines_used = 0;
-        }
-    }
-    fn slash_citizenship_bond(
-        owner: &AccountId,
-        record: &mut crate::state::CitizenshipRecord,
-        slash_bps: u16,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<Quantity, Error> {
-        if slash_bps == 0 || record.amount.is_zero() {
-            return Ok(Quantity::zero());
-        }
-        let slash_amount = record
-            .amount
-            .try_mul_decimal(&Numeric::new(u32::from(slash_bps), 4))
-            .map_err(|_| Error::from(MathError::Overflow))?;
-        let def_id = state_transaction.gov.citizenship_asset_id.clone();
-        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id.clone(),
-            state_transaction.gov.citizenship_escrow_account.clone(),
-        );
-        let receiver_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id,
-            state_transaction.gov.slash_receiver_account.clone(),
-        );
-        let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
-        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
-            slash_amount.as_numeric(),
-            spec,
-        )?;
-        let movement = VerifiedGovernanceNumericMovement::new(
-            VerifiedGovernanceNumericPurpose::CitizenshipSlash {
-                owner: owner.clone(),
-                slash_bps,
-            },
-            escrow_asset_id,
-            receiver_asset_id,
-            slash_amount.clone(),
-        );
-        crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
-            state_transaction,
-            movement,
-        )?;
-        record.amount = record
-            .amount
-            .try_sub(&slash_amount)
-            .map_err(|_| Error::from(MathError::Overflow))?;
-        Ok(slash_amount)
-    }
-    fn required_citizenship_bond_for_role(
-        gov: &iroha_config::parameters::actual::Governance,
-        role: &str,
-    ) -> Quantity {
-        let multiplier = gov.citizen_service.bond_multiplier_for_role(role).max(1);
-        gov.citizenship_bond_amount
-            .try_mul_decimal(&Numeric::from(multiplier))
-            .expect("bounded governance bond multiplier must remain representable")
     }
     fn lock_voting_bond(
         ballot_amount: &Quantity,
@@ -7192,7 +7105,17 @@ pub mod isi {
                 .account(authority)
                 .map_err(Error::from)?;
             ensure_contract_lifecycle_authority(authority, state_transaction)?;
-            let protected = protected_contract_namespaces(state_transaction);
+            let protected = crate::smartcontracts::code::protected_contract_namespaces(
+                state_transaction.world.parameters.get(),
+            )
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid protected-contract namespace policy: {error}").into(),
+                )
+            })?
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
             if protected.contains("*")
                 || protected.contains(contract_address.as_str())
                 || contract_address
@@ -9037,18 +8960,13 @@ pub mod isi {
     fn canonical_parliament_eligible_candidates_v1(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Vec<AccountId> {
-        let current_height = state_transaction.block_height();
-        let required_bond =
-            required_citizenship_bond_for_role(&state_transaction.gov, "parliament").max(
-                required_citizenship_bond_for_role(&state_transaction.gov, "council"),
-            );
+        let required_bond = &state_transaction.gov.citizenship_bond_amount;
         let mut candidates = state_transaction
             .world
             .citizens
             .iter()
             .filter_map(|(account_id, record)| {
-                (record.amount >= required_bond && record.cooldown_until <= current_height)
-                    .then(|| account_id.clone())
+                (record.amount >= *required_bond).then(|| account_id.clone())
             })
             .collect::<Vec<_>>();
         candidates.sort_unstable();
@@ -9345,35 +9263,15 @@ pub mod isi {
         Ok(count)
     }
 
-    fn validate_parliament_transition_digest_bound_v1(
-        transition: &gov::ParliamentLifecycleTransitionV1,
+    fn validate_parliament_transition_static_v1(
+        instruction: &gov::SubmitParliamentLifecycleTransitionV1,
     ) -> Result<(), Error> {
-        match transition {
-            gov::ParliamentLifecycleTransitionV1::RegisterBallotParticipant(payload) => {
-                if payload.registration_record.len() != TIMED_OVN_REGISTRATION_RECORD_BYTES_V1 {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "Parliament timed-OVN registration has a noncanonical wire width".into(),
-                    ));
-                }
-            }
-            gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(payload) => {
-                parliament_timed_ovn_corpus_count_v1(payload.ballot_records.len())?;
-                if payload.ballot_records.len()
-                    > iroha_data_model::governance::types::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1
-                    || payload
-                    .ballot_records
-                    .iter()
-                    .any(|record| record.len() != TIMED_OVN_BALLOT_RECORD_BYTES_V1)
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "Parliament timed-OVN ballot chunk is oversized or has a noncanonical wire width"
-                            .into(),
-                    ));
-                }
-            }
-            _ => {}
-        }
-        Ok(())
+        instruction.validate_static().map_err(|reason| {
+            InstructionExecutionError::InvariantViolation(
+                format!("Parliament transition is structurally invalid: {reason}").into(),
+            )
+            .into()
+        })
     }
 
     impl Execute for gov::SubmitParliamentLifecycleTransitionV1 {
@@ -9393,7 +9291,7 @@ pub mod isi {
             if parliament_transition_requires_manager_v1(transition_kind) {
                 require_parliament_manager(authority, state_transaction)?;
             }
-            validate_parliament_transition_digest_bound_v1(&self.transition)?;
+            validate_parliament_transition_static_v1(&self)?;
             let transition_digest = self.transition.digest_v1();
 
             let governance_attempt_id = self.governance_attempt_id;
@@ -10172,8 +10070,7 @@ pub mod isi {
             }
             let record = if let Some(mut record) = existing {
                 // A top-up (including a same-amount no-op) continues the
-                // original citizenship interval and must not erase service,
-                // cooldown, or discipline state.
+                // original citizenship interval.
                 record.amount = self.amount.clone();
                 record
             } else {
@@ -10210,9 +10107,7 @@ pub mod isi {
         owner: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        // Restored `council` and `parliament_bodies` rows are decode-only
-        // compatibility records. Only a canonical active attempt may retain a
-        // citizen's bond; historical caller-selected rosters must stay inert.
+        // Only canonical attempt-local reducer state may retain a citizen's bond.
         if state_transaction
             .world
             .parliament_attempts
@@ -10301,106 +10196,6 @@ pub mod isi {
                     .telemetry
                     .record_citizens_total(citizens_total);
             }
-            Ok(())
-        }
-    }
-    impl Execute for gov::RecordCitizenServiceOutcome {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            if self.role.trim().is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("role must not be blank".into()),
-                ));
-            }
-            let required: Permission = CanRecordCitizenService {
-                owner: self.owner.clone(),
-            }
-            .into();
-            ensure_exact_governance_permission(
-                authority,
-                &required,
-                "CanRecordCitizenService",
-                state_transaction,
-            )?;
-            let Some(mut record) = state_transaction.world.citizens.get(&self.owner).cloned()
-            else {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "citizen not found for service record".into(),
-                ));
-            };
-            let required_bond =
-                required_citizenship_bond_for_role(&state_transaction.gov, &self.role);
-            if record.amount < required_bond {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "citizenship bond below role requirement".into(),
-                ));
-            }
-            let citizen_cfg = state_transaction.gov.citizen_service.clone();
-            let current_height = state_transaction._curr_block.height().get();
-            reset_citizen_epoch(&mut record, self.epoch);
-            let slashed = match self.event {
-                gov::CitizenServiceEvent::Decline => {
-                    let penalty = if record.declines_used >= citizen_cfg.free_declines_per_epoch {
-                        slash_citizenship_bond(
-                            &self.owner,
-                            &mut record,
-                            citizen_cfg.decline_slash_bps,
-                            state_transaction,
-                        )?
-                    } else {
-                        Quantity::zero()
-                    };
-                    record.declines_used = record.declines_used.saturating_add(1);
-                    let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
-                    record.cooldown_until = record.cooldown_until.max(cooldown);
-                    penalty
-                }
-                gov::CitizenServiceEvent::NoShow => {
-                    record.no_show_strikes = record.no_show_strikes.saturating_add(1);
-                    let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
-                    record.cooldown_until = record.cooldown_until.max(cooldown);
-                    slash_citizenship_bond(
-                        &self.owner,
-                        &mut record,
-                        citizen_cfg.no_show_slash_bps,
-                        state_transaction,
-                    )?
-                }
-                gov::CitizenServiceEvent::Misconduct => {
-                    record.misconduct_strikes = record.misconduct_strikes.saturating_add(1);
-                    let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
-                    record.cooldown_until = record.cooldown_until.max(cooldown);
-                    slash_citizenship_bond(
-                        &self.owner,
-                        &mut record,
-                        citizen_cfg.misconduct_slash_bps,
-                        state_transaction,
-                    )?
-                }
-            };
-            state_transaction
-                .world
-                .citizens
-                .insert(self.owner.clone(), record.clone());
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::CitizenServiceRecorded(
-                    iroha_data_model::events::data::governance::GovernanceCitizenServiceRecorded {
-                        owner: self.owner.clone(),
-                        epoch: self.epoch,
-                        role: self.role.clone(),
-                        event: self.event,
-                        slashed: slashed.clone(),
-                        cooldown_until: record.cooldown_until,
-                    },
-                ),
-            ));
-            #[cfg(feature = "telemetry")]
-            state_transaction
-                .telemetry
-                .record_citizen_service_event(self.event, &slashed);
             Ok(())
         }
     }
@@ -14754,12 +14549,21 @@ pub mod isi {
         }
         if !iroha_sccp::sccp_destination_contract_supports_account_v1(authority) {
             return Err(invalid_bridge_proof(
-                "SCCP outbound sender controller is not supported by the V1 destination contracts",
+                "SCCP outbound sender controller is not supported by the V1 semantic circuit",
             ));
         }
         if transfer.recipient_codec != settlement.counterparty_account_codec {
             return Err(invalid_bridge_proof(
                 "SCCP outbound recipient codec does not match the exact external profile",
+            ));
+        }
+        if !iroha_sccp::sccp_destination_contract_accepts_recipient_v1(
+            &settlement.destination,
+            transfer.recipient_codec,
+            &transfer.recipient,
+        ) {
+            return Err(invalid_bridge_proof(
+                "SCCP outbound recipient cannot be executed by the governed V1 destination deployment",
             ));
         }
         if settlement.escrow_account_id == *authority {
@@ -21119,12 +20923,32 @@ pub mod isi {
                 .expect_err("an ordinary account must not create a Parliament attempt");
             assert!(format!("{unauthorized_create:?}").contains("CanManageParliament"));
 
+            let governance_attempt_id =
+                iroha_data_model::governance::types::GovernanceAttemptId::new([0x91; 32]);
+            let body = ParliamentBody::RulesCommittee;
+            let body_election_attempt_id =
+                BodyElectionAttemptId::derive_v1(governance_attempt_id, body, 0);
+            let request = SortitionRequestV1::try_new_canonical(
+                governance_attempt_id,
+                body_election_attempt_id,
+                body,
+                [0x92; 32],
+                1,
+                1,
+                1,
+                2,
+                BeaconSessionId::new([0x93; 32]),
+                None,
+            )
+            .expect("valid unknown-attempt sortition fixture");
             let instruction = gov::SubmitParliamentLifecycleTransitionV1 {
-                governance_attempt_id:
-                    iroha_data_model::governance::types::GovernanceAttemptId::new([0x91; 32]),
+                governance_attempt_id,
                 transition: gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
                     gov::ParliamentRegisterSortitionRequestV1 {
-                        requests: Vec::new(),
+                        requests: vec![gov::ParliamentSortitionRequestRegistrationV1 {
+                            sequence: 0,
+                            request,
+                        }],
                     },
                 ),
             };
@@ -21176,12 +21000,6 @@ pub mod isi {
                             owner: candidate,
                             amount: Quantity::zero(),
                             bonded_height: 0,
-                            seats_in_epoch: 0,
-                            last_epoch_seen: 0,
-                            cooldown_until: 0,
-                            declines_used: 0,
-                            no_show_strikes: 0,
-                            misconduct_strikes: 0,
                         },
                     );
                 }
@@ -21336,74 +21154,11 @@ pub mod isi {
         }
 
         #[test]
-        fn restored_legacy_rosters_do_not_retain_citizenship_bonds() {
+        fn parliament_attempt_creation_defends_retry_and_exact_json_bounds() {
             let state = blank_test_state();
             let header = first_test_block_header();
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
-            state_transaction.world.council.insert(
-                99,
-                crate::state::CouncilState {
-                    epoch: 99,
-                    members: vec![ALICE_ID.clone()],
-                    candidate_count: 1,
-                    ..crate::state::CouncilState::default()
-                },
-            );
-            state_transaction.world.parliament_bodies.insert(
-                99,
-                iroha_data_model::governance::types::ParliamentBodies {
-                    selection_epoch: 99,
-                    rosters: BTreeMap::from([(
-                        ParliamentBody::AgendaCouncil,
-                        iroha_data_model::governance::types::ParliamentRoster {
-                            body: ParliamentBody::AgendaCouncil,
-                            epoch: 99,
-                            members: vec![ALICE_ID.clone()],
-                            candidate_count: 1,
-                            ..iroha_data_model::governance::types::ParliamentRoster::default()
-                        },
-                    )]),
-                },
-            );
-
-            ensure_citizenship_bond_releasable(&ALICE_ID, &state_transaction)
-                .expect("decode-only legacy roster records must not retain a citizen bond");
-        }
-
-        #[test]
-        fn parliament_attempt_creation_ignores_legacy_rosters_and_defends_exact_json_bounds() {
-            let state = blank_test_state();
-            let header = first_test_block_header();
-            let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
-            let legacy_council = crate::state::CouncilState {
-                epoch: 7,
-                members: vec![ALICE_ID.clone()],
-                candidate_count: 1,
-                ..crate::state::CouncilState::default()
-            };
-            let legacy_bodies = iroha_data_model::governance::types::ParliamentBodies {
-                selection_epoch: 7,
-                rosters: BTreeMap::from([(
-                    ParliamentBody::AgendaCouncil,
-                    iroha_data_model::governance::types::ParliamentRoster {
-                        body: ParliamentBody::AgendaCouncil,
-                        epoch: 7,
-                        members: vec![ALICE_ID.clone()],
-                        candidate_count: 1,
-                        ..iroha_data_model::governance::types::ParliamentRoster::default()
-                    },
-                )]),
-            };
-            state_transaction
-                .world
-                .council
-                .insert(7, legacy_council.clone());
-            state_transaction
-                .world
-                .parliament_bodies
-                .insert(7, legacy_bodies.clone());
             state_transaction.world.account_permissions.insert(
                 ALICE_ID.clone(),
                 BTreeSet::from([Permission::from(CanManageParliament)]),
@@ -21451,16 +21206,6 @@ pub mod isi {
                     .get(&attempt_id)
                     .is_some()
             );
-            assert_eq!(
-                state_transaction.world.council.get(&7),
-                Some(&legacy_council)
-            );
-            assert_eq!(
-                state_transaction.world.parliament_bodies.get(&7),
-                Some(&legacy_bodies),
-                "canonical attempt creation must neither consult nor rewrite compatibility rosters"
-            );
-
             let retry_limit_error = gov::CreateParliamentGovernanceAttemptV1 {
                 proposal: canonical,
                 attempt_sequence: MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1,
@@ -21548,7 +21293,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut state_transaction)
                 .expect_err("a 33-record timed-OVN chunk must fail before state lookup");
             assert!(
-                format!("{oversized_error:?}").contains("chunk is oversized"),
+                format!("{oversized_error:?}").contains("count or record-width bound"),
                 "unexpected oversized-chunk rejection: {oversized_error:?}"
             );
         }
@@ -27321,17 +27066,6 @@ pub mod isi {
         });
         world_test!(scoped_governance_mutation_isis_reject_wrong_targets_without_state_changes {
             second_height_transaction!(state, block, state_transaction);
-            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
-            state_transaction
-                .gov
-                .citizen_service
-                .free_declines_per_epoch = u32::MAX;
-            let citizen =
-                crate::state::CitizenshipRecord::new(BOB_ID.clone(), Quantity::from(10_u64), 1);
-            state_transaction
-                .world
-                .citizens
-                .insert(BOB_ID.clone(), citizen.clone());
             let target_referendum = "target-referendum";
             let mut locks = crate::state::GovernanceLocksForReferendum::default();
             locks.locks.insert(
@@ -27351,9 +27085,6 @@ pub mod isi {
                 .governance_locks
                 .insert(target_referendum.to_owned(), locks);
             let wrong_target_permissions = BTreeSet::from([
-                Permission::from(CanRecordCitizenService {
-                    owner: ALICE_ID.clone(),
-                }),
                 Permission::from(CanSlashGovernanceLock {
                     referendum_id: "other-referendum".to_owned(),
                 }),
@@ -27365,12 +27096,6 @@ pub mod isi {
                 .world
                 .account_permissions
                 .insert(ALICE_ID.clone(), wrong_target_permissions);
-            let citizen_before = state_transaction
-                .world
-                .citizens
-                .get(&*BOB_ID)
-                .cloned()
-                .expect("seeded citizen");
             let lock_before = state_transaction
                 .world
                 .governance_locks
@@ -27378,14 +27103,6 @@ pub mod isi {
                 .and_then(|referendum| referendum.locks.get(&*BOB_ID))
                 .map(|record| (record.amount.clone(), record.slashed.clone()))
                 .expect("seeded governance lock");
-            let service_error = gov::RecordCitizenServiceOutcome {
-                owner: BOB_ID.clone(),
-                epoch: 2,
-                role: "observer".to_owned(),
-                event: gov::CitizenServiceEvent::Decline,
-            }
-            .expect_execute_err(&ALICE_ID, &mut state_transaction, "a service grant for another citizen must fail closed");
-            assert_err!(format!("{service_error:?}"), "exact CanRecordCitizenService target", "unexpected citizen-service target rejection: {service_error:?}");
             let slash_error = gov::SlashGovernanceLock {
                 referendum_id: target_referendum.to_owned(),
                 owner: BOB_ID.clone(),
@@ -27402,11 +27119,6 @@ pub mod isi {
             }
             .expect_execute_err(&ALICE_ID, &mut state_transaction, "a restitution grant for another referendum must fail closed");
             assert_contains!(format!("{restitution_error:?}"), "exact CanRestituteGovernanceLock target", "unexpected restitution target rejection: {restitution_error:?}");
-            assert_eq!(
-                state_transaction.world.citizens.get(&*BOB_ID),
-                Some(&citizen_before),
-                "wrong-target service recording must not mutate citizen state"
-            );
             let lock_after = state_transaction
                 .world
                 .governance_locks
@@ -28879,26 +28591,41 @@ pub mod isi {
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
             assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
         });
-        #[cfg(feature = "bls")]
         world_test!(record_sccp_message_rejects_unsupported_controllers_before_lock_or_outbox {
             sccp_recording_transaction!(state, block, stx);
-            let (settlement_asset, custody) = sccp_test_settlement_ids(&stx);
-            let custody_asset = AssetId::new(settlement_asset.clone(), custody);
-            let bls_key = KeyPair::try_from_seed(vec![0x74; 32], Algorithm::BlsNormal)
-                .expect("deterministic BLS SCCP authority fixture")
+            let (settlement_asset, _) = sccp_test_settlement_ids(&stx);
+            let ed25519_key = KeyPair::try_from_seed(vec![0x74; 32], Algorithm::Ed25519)
+                .expect("deterministic Ed25519 SCCP authority fixture")
                 .public_key()
                 .clone();
-            let unsupported_single = AccountId::new(bls_key.clone());
-            let unsupported_multisig = AccountId::new_multisig(
+            let secp256k1_key = KeyPair::try_from_seed(vec![0x75; 32], Algorithm::Secp256k1)
+                .expect("deterministic secp256k1 SCCP authority fixture")
+                .public_key()
+                .clone();
+            let unsupported_single = AccountId::new(secp256k1_key.clone());
+            let one_member_multisig = AccountId::new_multisig(
                 MultisigPolicy::new(
                     1,
-                    vec![MultisigMember::new(bls_key, 1).expect("BLS multisig member")],
+                    vec![MultisigMember::new(ed25519_key.clone(), 1)
+                        .expect("Ed25519 multisig member")],
                 )
-                .expect("valid one-member BLS policy"),
+                .expect("valid one-member Ed25519 policy"),
+            );
+            let mixed_multisig = AccountId::new_multisig(
+                MultisigPolicy::new(
+                    2,
+                    vec![
+                        MultisigMember::new(ed25519_key, 1).expect("Ed25519 multisig member"),
+                        MultisigMember::new(secp256k1_key, 1)
+                            .expect("secp256k1 multisig member"),
+                    ],
+                )
+                .expect("valid mixed-controller policy"),
             );
             for (index, (label, authority)) in [
-                ("single BLS", unsupported_single),
-                ("BLS multisig", unsupported_multisig),
+                ("single secp256k1", unsupported_single),
+                ("one-member Ed25519 multisig", one_member_multisig),
+                ("mixed Ed25519/secp256k1 multisig", mixed_multisig),
             ]
             .into_iter()
             .enumerate()
@@ -28908,8 +28635,7 @@ pub mod isi {
                 let sender_asset = AssetId::new(settlement_asset.clone(), authority.clone());
                 Mint::asset_quantity(100_u64, sender_asset.clone())
                     .expect_execute(&ALICE_ID, &mut stx, "fund unsupported SCCP authority fixture");
-                let sender_before = sccp_asset_balance(&stx, &sender_asset);
-                let custody_before = sccp_asset_balance(&stx, &custody_asset);
+                let before = sccp_outbound_mutation_snapshot(&stx, &authority);
                 let mut payload = sora_outbound_sccp_payload(
                     74 + u64::try_from(index).expect("small fixture index"),
                 );
@@ -28928,11 +28654,100 @@ pub mod isi {
                     canonical_test_sccp_payload_bytes(&payload),
                 )
                 .expect_execute_err(&authority, &mut stx, "unsupported controller must not create an unfinalizable lock");
-                assert_err!(format!("{error:?}"), "not supported by the V1 destination contracts", "unexpected {label} admission error: {error:?}");
-                assert_eq!(sccp_asset_balance(&stx, &sender_asset), sender_before);
-                assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
+                assert_err!(format!("{error:?}"), "not supported by the V1 semantic circuit", "unexpected {label} admission error: {error:?}");
+                assert_eq!(sccp_outbound_mutation_snapshot(&stx, &authority), before);
                 assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
             }
+        });
+        world_test!(record_sccp_message_rejects_ton_master_recipient_before_lock_or_outbox {
+            let (registry, route_key, observation) =
+                crate::state::ton_breaker_hydration_fixture_for_testing();
+            let mut wire = registry.to_wire();
+            wire.lanes[0].routes[0].activation =
+                iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional;
+            let route = wire.lanes[0].routes[0].clone();
+            let iroha_data_model::bridge::SccpDestinationDeploymentV1::Ton(deployment) =
+                route.destination
+            else {
+                unreachable!("TON breaker fixture must contain a TON destination")
+            };
+            let registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(wire)
+                .expect("active TON registry fixture");
+            let state = blank_test_state();
+            let header = BlockHeader::new(
+                NonZeroU64::new(8).expect("nonzero fixture height"),
+                None,
+                None,
+                None,
+                observation.masterchain.gen_utime_ms(),
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.sccp_registry = registry;
+            stx.world
+                .sccp_ton_breaker_observations
+                .insert(route_key, observation);
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let payload = iroha_sccp::SccpPayloadV1::Transfer(
+                iroha_sccp::TransferPayloadV1 {
+                    version: 1,
+                    source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                    dest_domain: iroha_sccp::SCCP_DOMAIN_TON,
+                    nonce: 76,
+                    route_revision: route.revision,
+                    asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                    asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    asset_id: route.asset_key.as_bytes().to_vec(),
+                    amount: 7,
+                    sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    sender: ALICE_ID
+                        .to_i105_for_discriminant(
+                            iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1,
+                        )
+                        .expect("canonical ALICE fixture")
+                        .into_bytes(),
+                    recipient_codec: iroha_sccp::SCCP_CODEC_TON_ACCOUNT36,
+                    recipient: iroha_sccp::canonical_sccp_ton_account36_bytes_v1(
+                        deployment.jetton_master_address,
+                    )
+                    .expect("fixture master has a canonical TON address")
+                    .to_vec(),
+                    route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+                    route_id: route.route_id.as_bytes().to_vec(),
+                },
+            );
+            let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+            let context = iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
+                iroha_data_model::bridge::SccpLaneIdV1 {
+                    source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                    target: iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
+                },
+                route
+                    .destination_binding_hash()
+                    .expect("fixture TON destination binding"),
+                route
+                    .route_configuration_hash()
+                    .expect("fixture TON route configuration"),
+            )
+            .expect("fixture outbound TON context");
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                context,
+                payload_bytes,
+                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
+            );
+            let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+            let error = instruction.expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "the TON Jetton master cannot own its own derived wallet",
+            );
+            assert_err!(
+                format!("{error:?}"),
+                "recipient cannot be executed by the governed V1 destination deployment"
+            );
+            assert_eq!(sccp_outbound_mutation_snapshot(&stx, &ALICE_ID), before);
         });
         world_test!(record_sccp_message_rejects_insufficient_balance_without_partial_lock_or_outbox {
             sccp_recording_transaction!(state, block, stx);
@@ -33198,89 +33013,6 @@ seiyaku GovernanceLifecycle {
                 "grant account-target permission to holder",
             );
             let role_id: RoleId = "ACCOUNT_SCOPE_ADMIN".parse().expect("role id parses");
-            Register::role(Role::new(role_id.clone(), ALICE_ID.clone())).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register role",
-            );
-            Grant::role_permission(permission.clone(), role_id.clone()).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "grant account-target permission to role",
-            );
-            Grant::account_role(role_id.clone(), holder_id.clone()).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "grant role to holder",
-            );
-            assert!(
-                stx.world
-                    .account_permissions
-                    .get(&holder_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "holder should have permission before unregister"
-            );
-            let role = stx.world.roles.get(&role_id).expect("role should exist");
-            assert!(
-                role.permissions().any(|perm| perm == &permission),
-                "role should include permission before unregister"
-            );
-            Unregister::domain(domain_id).expect_execute(&ALICE_ID, &mut stx, "unregister domain");
-            assert!(
-                stx.world
-                    .account_permissions
-                    .get(&holder_id)
-                    .is_some_and(|perms| perms.contains(&permission)),
-                "holder permission should remain"
-            );
-            let role = stx.world.roles.get(&role_id).expect("role should exist");
-            assert!(
-                role.permissions().any(|perm| perm == &permission),
-                "role permission should remain"
-            );
-            assert!(
-                role.permission_epochs().contains_key(&permission),
-                "permission epochs should remain"
-            );
-        }
-        #[test]
-        fn unregister_domain_preserves_citizen_service_permissions_for_surviving_accounts_and_roles()
-         {
-            let state = blank_state();
-            let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
-            state_transaction!(state, block, state_block, stx);
-            bootstrap_alice_account(&mut stx);
-            Register::domain(Domain::new(domain_id.clone())).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register cleanup domain",
-            );
-            let (target_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&target_id)).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register account in cleanup domain",
-            );
-            let owner_domain: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id parses");
-            let (holder_id, _) = gen_account_in(&owner_domain);
-            Register::account(new_account_in_domain(&holder_id)).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "register holder account",
-            );
-            let permission: Permission =
-                iroha_executor_data_model::permission::governance::CanRecordCitizenService {
-                    owner: target_id.clone(),
-                }
-                .into();
-            Grant::account_permission(permission.clone(), holder_id.clone()).expect_execute(
-                &ALICE_ID,
-                &mut stx,
-                "grant account-target permission to holder",
-            );
-            let role_id: RoleId = "CITIZEN_SERVICE_ADMIN".parse().expect("role id parses");
             Register::role(Role::new(role_id.clone(), ALICE_ID.clone())).expect_execute(
                 &ALICE_ID,
                 &mut stx,
@@ -40073,6 +39805,53 @@ seiyaku GovernanceLifecycle {
                 Some(address_at_nonce_0)
             );
             assert!(stx.world.contract_instances.get(&address_at_nonce_1).is_none());
+        });
+        world_test!(commit_contract_deployment_rejects_malformed_protected_namespace_policy {
+            blank_test_state_transaction!(state, block, stx);
+            Register::account(Account::new(ALICE_ID.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed authority");
+            grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
+            let parameter = iroha_data_model::parameter::custom::CustomParameter::new(
+                iroha_data_model::parameter::custom::CustomParameterId(
+                    crate::smartcontracts::code::PROTECTED_CONTRACT_NAMESPACES_PARAMETER
+                        .parse()
+                        .expect("parameter id"),
+                ),
+                Json::new("apps"),
+            );
+            stx.world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(parameter));
+            let contract_address = ContractAddress::derive(
+                stx.network_id(),
+                &ALICE_ID,
+                0,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
+            let error = scode::CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: contract_address.clone(),
+                code_hash: Hash::new(b"malformed protected namespace policy"),
+                contract_alias: "apps::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "malformed policy must fail closed before deployment",
+            );
+            let message = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(error),
+            );
+            assert_contains!(
+                message,
+                "invalid protected-contract namespace policy",
+                "unexpected malformed-policy error: {message}"
+            );
+            assert!(stx.world.contract_instances.get(&contract_address).is_none());
         });
         world_test!(activate_contract_instance_requires_governance_for_protected_namespace {
             blank_test_state_transaction!(state, block, stx);

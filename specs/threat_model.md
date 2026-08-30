@@ -102,7 +102,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 - Route registration isolated in builder helpers; unsupported feature combinations rejected in tests (status.md Sep 10 2025).
 - Rate limiting per account and credential; adaptive backoff for repeated failures (see `crates/iroha_torii/src`).
 - Operator endpoints can require mTLS; audit trails keyed to `AccountId`/`DomainId`.
-- Operator endpoints are gated by WebAuthn sessions with bootstrap token fallback and lockout telemetry.
+- Operator endpoints are gated by WebAuthn sessions and lockout telemetry. A dedicated operator token can bootstrap only the first WebAuthn credential; it cannot authorize operator routes, and listener API tokens are never reused for this flow.
 
 **Outstanding gaps**
 - Connection-level handshake throttling and circuit breakers are not yet implemented (**see residual risks: Pre-auth DoS controls**).

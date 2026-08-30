@@ -145,23 +145,23 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x81 | `SHA3BLOCK` | SHA-3 compression round (rs1=&state[25]*8, rs2=&block[136], rd=&out_state[25]*8) |
 | 0x82 | `POSEIDON2` | Internal 64-bit scalar proof gadget; rejects every private-tag operand and is not a Kotodama source hash |
 | 0x83 | `POSEIDON6` | Internal 64-bit scalar proof gadget over `rs1..rs1+5`; rejects every private-tag operand, reserves `rs2` as zero, and requires the input window not exceed `r255` |
-| 0x84 | `PUBKGEN` | Internal scalar multiply-by-two gadget; rejects private-tag operands and is not a public-key API |
-| 0x85 | `VALCOM` | Legacy truncated scalar commitment gadget; rejects every private-tag operand and is not the Kotodama `crypto::valcom` boundary |
-| 0x86 | `ECADD` | Elliptic curve addition |
-| 0x87 | `ECMUL_VAR` | Variable-time EC multiply |
 | 0x88 | `AESENC` | AES encryption round |
 | 0x89 | `AESDEC` | AES decryption round |
 | 0x8A | `BLAKE2S` | BLAKE2s compression (rs1=&input[64], writes first 16 bytes to rd/rd+1) |
 | 0x8B | `ED25519VERIFY` | Ed25519 signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
 | 0x8C | `ECDSAVERIFY` | ECDSA (secp256k1) signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
 | 0x8D | `DILITHIUMVERIFY` | Dilithium signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
-| 0x8E | `PAIRING` | BLS12-381 pairing check |
 | 0x8F | `ED25519BATCHVERIFY` | Ordered strict Ed25519 verification using `rs1=&NoritoBytes(Ed25519BatchRequest { entries })`; writes 1/0 to `rd` and the first failing index to `rs2`; accepts 1–512 entries and at most 512 KiB of encoded payload; gas = 500 base + 1 per payload byte + 1,000 per admitted entry |
 
-In ZK mode the inputs to either Poseidon form must have uniform visibility:
-all public or all private. A mixed public/private tuple traps with
-`PrivacyViolation`; the resulting digest is always tagged public because the
-hash operation is the explicit commitment/declassification boundary.
+In ZK mode both Poseidon forms reject any private operand. Their 64-bit results
+are internal scalar proof gadgets, not full-width source hashes or
+commitment/declassification boundaries.
+
+The slots `0x84`–`0x87` and `0x8E` are reserved and rejected in ABI V1. Earlier
+pre-release experiments truncated BLS12-381 encodings into one register and
+could not preserve a canonical point across chained operations. Full-width
+curve and commitment operations must use typed pointer/syscall or proof-envelope
+interfaces before any of these slots can be assigned semantics.
 
 Notes
 - Vector ops (`VADD*`/`VAND`/`VXOR`/`VOR`/`VROT32`, `LOAD128`/`STORE128`) are available only when the header `VECTOR` bit is set; otherwise a deterministic mode-disabled trap occurs. `SETVL` sets the logical vector length used for gas scaling and vector helpers; it does not change the physical SIMD width.

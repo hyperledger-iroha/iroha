@@ -130,10 +130,7 @@ pub(crate) fn canonical_carrier_membership_hashes(
     for entrypoint in entrypoints {
         let carrier_hash = entrypoint.hash();
         hashes.push(carrier_hash);
-        if let TransactionEntrypoint::SealedReveal(reveal) = entrypoint
-            && sealed_reveal_authenticated_at_block_start(state_block, reveal)
-        {
-            let execution_hash = reveal.signed_transaction().hash_as_entrypoint();
+        if let Some(execution_hash) = authenticated_signed_replay_alias(state_block, entrypoint) {
             if execution_hash != carrier_hash {
                 hashes.push(execution_hash);
             }
@@ -141,11 +138,31 @@ pub(crate) fn canonical_carrier_membership_hashes(
     }
     hashes
 }
-fn rejected_live_execution_fee_eligible(executable: &Executable) -> bool {
-    matches!(executable, Executable::Batch(_))
+/// Return the signed replay alias authenticated by the pre-block state, if any.
+#[must_use]
+pub(crate) fn authenticated_signed_replay_alias(
+    state_block: &StateBlock<'_>,
+    entrypoint: &TransactionEntrypoint,
+) -> Option<HashOf<TransactionEntrypoint>> {
+    let TransactionEntrypoint::SealedReveal(reveal) = entrypoint else {
+        return None;
+    };
+    sealed_reveal_authenticated_at_block_start(state_block, reveal)
+        .then(|| reveal.signed_transaction().hash_as_entrypoint())
+}
+fn rejected_live_execution_fee_eligible(
+    executable: &Executable,
+    result: &TransactionResultInner,
+) -> bool {
+    (matches!(executable, Executable::Batch(_))
         || matches!(
             crate::state::standalone_governance_ballot_instruction_v1(executable),
             Ok(Some(_))
+        ))
+        && !matches!(
+            result,
+            Err(TransactionRejectionReason::Validation(error))
+                if crate::executor::is_live_batch_overlay_limit_rejection(error)
         )
 }
 fn rejected_transaction_gas_is_accountable(gas_used: u64, result: &TransactionResultInner) -> bool {
@@ -465,12 +482,8 @@ fn sealed_reveal_authenticated_at_block_start(
     let Ok(record) = norito::decode_from_bytes::<PendingSealedTransactionCommitment>(bytes) else {
         return false;
     };
-    validate_sealed_reveal_authentication(
-        reveal,
-        &record,
-        state_block._curr_block.height().get(),
-    )
-    .is_ok()
+    validate_sealed_reveal_authentication(reveal, &record, state_block._curr_block.height().get())
+        .is_ok()
 }
 pub(crate) fn validate_sealed_commitment_stateless(
     commitment: &SignedSealedTransactionCommitment,
@@ -1374,8 +1387,9 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> bool {
         state.has_entrypoint(self.hash_as_entrypoint())
             || match self.entrypoint() {
-                TransactionEntrypoint::SealedReveal(reveal) => state
-                    .has_entrypoint(reveal.signed_transaction().hash_as_entrypoint()),
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    state.has_entrypoint(reveal.signed_transaction().hash_as_entrypoint())
+                }
                 TransactionEntrypoint::External(_)
                 | TransactionEntrypoint::SealedCommitment(_)
                 | TransactionEntrypoint::Time(_) => false,
@@ -3341,7 +3355,8 @@ impl StateBlock<'_> {
             let used = state_transaction.last_tx_gas_used;
             // Compute new total without touching `self` while `state_transaction` borrows it
             let new_total = gas_total_before.saturating_add(used);
-            if gas_limit != 0 && used > 0 && new_total > gas_limit {
+            if !crate::gas::gas_components_fit_block_limit(gas_limit, [gas_total_before, used]) {
+                let attempted_total = u128::from(gas_total_before) + u128::from(used);
                 drop(state_transaction);
                 self.account_confidential_work_v1(
                     rejected_confidential_work.0,
@@ -3353,7 +3368,7 @@ impl StateBlock<'_> {
                     hash,
                     Err(TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(format!(
-                            "block gas limit exceeded: {new_total} > {gas_limit}"
+                            "block gas limit exceeded: {attempted_total} > {gas_limit}"
                         )),
                     )),
                 );
@@ -3402,34 +3417,37 @@ impl StateBlock<'_> {
                 }
             }
             if penalty_committed
-                && let Some(signed) = signed_transaction.as_ref()
-                && rejected_live_execution_fee_eligible(signed.instructions())
                 && rejected_transaction_gas_is_accountable(rejected_gas_used, &result)
             {
-                let authority = signed.authority().clone();
-                let mut fee_tx = self.transaction();
-                if let Some(routing) = routing_decision {
-                    fee_tx.current_lane_id = Some(routing.lane_id);
-                    fee_tx.current_dataspace_id = Some(routing.dataspace_id);
-                    fee_tx.world.current_dataspace_id = Some(routing.dataspace_id);
-                }
-                fee_tx.current_entrypoint_index = entrypoint_index;
-                fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()));
-                fee_tx.current_tx_hash = Some(signed.hash());
-                let fee_result = crate::executor::charge_fees_for_rejected_live_batch(
-                    &mut fee_tx,
-                    &authority,
-                    signed,
-                    rejected_gas_used,
-                )
-                .map_err(TransactionRejectionReason::Validation);
-                match &fee_result {
-                    Ok(()) => fee_tx.apply(),
-                    Err(_) => drop(fee_tx),
-                }
                 self.gas_used_in_block = self.gas_used_in_block.saturating_add(rejected_gas_used);
-                if let Err(error) = fee_result {
-                    result = Err(error);
+                if let Some(signed) = signed_transaction.as_ref()
+                    && rejected_live_execution_fee_eligible(signed.instructions(), &result)
+                {
+                    let authority = signed.authority().clone();
+                    let mut fee_tx = self.transaction();
+                    if let Some(routing) = routing_decision {
+                        fee_tx.current_lane_id = Some(routing.lane_id);
+                        fee_tx.current_dataspace_id = Some(routing.dataspace_id);
+                        fee_tx.world.current_dataspace_id = Some(routing.dataspace_id);
+                    }
+                    fee_tx.current_entrypoint_index = entrypoint_index;
+                    fee_tx.tx_call_hash =
+                        Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()));
+                    fee_tx.current_tx_hash = Some(signed.hash());
+                    let fee_result = crate::executor::charge_fees_for_rejected_live_batch(
+                        &mut fee_tx,
+                        &authority,
+                        signed,
+                        rejected_gas_used,
+                    )
+                    .map_err(TransactionRejectionReason::Validation);
+                    match &fee_result {
+                        Ok(()) => fee_tx.apply(),
+                        Err(_) => drop(fee_tx),
+                    }
+                    if let Err(error) = fee_result {
+                        result = Err(error);
+                    }
                 }
             }
         }
@@ -3847,17 +3865,15 @@ impl StateBlock<'_> {
         }
         // Protected namespaces admission (governance gating)
         if let Some(contract_address) = deploy_target {
-            // Read protected namespaces from on-chain custom parameter `gov_protected_namespaces`
-            let mut protected: Vec<String> = Vec::new();
-            if let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") {
-                let id = iroha_data_model::parameter::CustomParameterId(name);
-                let params = state_transaction.world.parameters.get();
-                if let Some(custom) = params.custom().get(&id)
-                    && let Ok(v) = custom.payload().try_into_any_norito::<Vec<String>>()
-                {
-                    protected = v;
-                }
-            }
+            let protected = crate::smartcontracts::code::protected_contract_namespaces(
+                state_transaction.world.parameters.get(),
+            )
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+                    "invalid protected-contract namespace policy: {error}"
+                )))
+            })?
+            .unwrap_or_default();
             if !protected.is_empty() {
                 // Require an enacted proposal matching the governed contract address and hashes.
                 let want_code = hex::encode(<[u8; 32]>::from(code_hash));
@@ -7464,6 +7480,70 @@ pub mod tests {
         let view = state.view();
         let result = accepted.into_checked(&view);
         assert!(matches!(result, Err((_, TransactionAlreadyCommitted))));
+    }
+    #[test]
+    fn checked_sealed_reveal_rejects_only_a_committed_replay_alias() {
+        let (authority, keypair) = gen_account_in("sealed-queue-replay-alias");
+        let signed = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed queue alias".into())])
+        .sign(keypair.private_key());
+        let deadline = 9;
+        let first_salt = [0x41; 32];
+        let second_salt = [0x42; 32];
+        let first = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            compute_sealed_transaction_commitment(
+                &test_network_id(),
+                &signed,
+                first_salt,
+                deadline,
+            ),
+            signed.clone(),
+            first_salt,
+        ));
+        let second = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            compute_sealed_transaction_commitment(
+                &test_network_id(),
+                &signed,
+                second_salt,
+                deadline,
+            ),
+            signed.clone(),
+            second_salt,
+        ));
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(second.clone()));
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut first_membership = state.transactions.block();
+        first_membership.insert_block_with_single_tx(first.hash(), nonzero!(1_usize));
+        first_membership
+            .commit()
+            .expect("commit outer-only reveal identity");
+
+        let pending_checked = accepted
+            .clone()
+            .into_checked(&state.view())
+            .expect("a different carrier remains pending while the signed alias is uncommitted");
+        assert!(!pending_checked.is_in_blockchain(&state.view()));
+
+        let mut second_membership = state.transactions.block();
+        second_membership
+            .insert_block_with_single_tx(signed.hash_as_entrypoint(), nonzero!(2_usize));
+        second_membership
+            .commit()
+            .expect("commit authenticated signed replay alias");
+
+        assert!(pending_checked.is_in_blockchain(&state.view()));
+        assert!(matches!(
+            accepted.into_checked(&state.view()),
+            Err((_, TransactionAlreadyCommitted))
+        ));
     }
     #[test]
     fn accepted_transaction_caches_hashes_and_encoded_length() {
@@ -12418,7 +12498,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn sealed_reveal_commits_carrier_and_signed_replay_identities() {
+    fn sealed_reveal_replay_validation_checks_carrier_and_signed_alias() {
         let (authority, keypair) = gen_account_in("sealed-replay-identities");
         let signed = TransactionBuilder::new(
             test_network_id(),
@@ -12437,11 +12517,91 @@ pub mod tests {
             salt,
         ));
 
-        let identities = canonical_carrier_membership_hashes(core::slice::from_ref(&reveal));
+        let identities = canonical_replay_alias_hashes(core::slice::from_ref(&reveal));
 
         assert_eq!(identities.len(), 2);
         assert!(identities.contains(&reveal.hash()));
         assert!(identities.contains(&signed.hash_as_entrypoint()));
+    }
+    #[test]
+    fn sealed_reveal_membership_requires_exact_preblock_authentication() {
+        let (authority, keypair) = gen_account_in("sealed-membership-authentication");
+        let signed = TransactionBuilder::new(
+            test_network_id(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed membership".to_owned())])
+        .sign(keypair.private_key());
+        let salt = [0x31; 32];
+        let wrong_salt = [0x32; 32];
+        let deadline = 9;
+        let commitment =
+            compute_sealed_transaction_commitment(&test_network_id(), &signed, salt, deadline);
+        let exact = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment,
+            signed.clone(),
+            salt,
+        ));
+        let wrong = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment,
+            signed.clone(),
+            wrong_salt,
+        ));
+        let missing = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            Hash::new(b"missing sealed commitment"),
+            signed.clone(),
+            salt,
+        ));
+        let record = PendingSealedTransactionCommitment {
+            payload: SealedTransactionCommitmentPayload {
+                network_id: test_network_id(),
+                authority,
+                commitment,
+                reveal_after_height: 2,
+                reveal_deadline_height: deadline,
+                nonce: None,
+            },
+            commit_height: 1,
+            commit_index: 0,
+        };
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut world = state.world.block();
+            world.smart_contract_state.insert(
+                sealed_commitment_state_key(&commitment),
+                norito::to_bytes(&record).expect("encode pending sealed commitment"),
+            );
+            world.commit();
+        }
+
+        let early_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let early =
+            canonical_carrier_membership_hashes(&early_block, core::slice::from_ref(&exact));
+        assert_eq!(early, vec![exact.hash()]);
+        drop(early_block);
+
+        let open_block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let missing_identities =
+            canonical_carrier_membership_hashes(&open_block, core::slice::from_ref(&missing));
+        assert_eq!(missing_identities, vec![missing.hash()]);
+        let wrong_identities =
+            canonical_carrier_membership_hashes(&open_block, core::slice::from_ref(&wrong));
+        assert_eq!(wrong_identities, vec![wrong.hash()]);
+        let exact_identities =
+            canonical_carrier_membership_hashes(&open_block, core::slice::from_ref(&exact));
+        assert_eq!(exact_identities.len(), 2);
+        assert!(exact_identities.contains(&exact.hash()));
+        assert!(exact_identities.contains(&signed.hash_as_entrypoint()));
+        drop(open_block);
+
+        let late_block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let late = canonical_carrier_membership_hashes(&late_block, core::slice::from_ref(&exact));
+        assert_eq!(late, vec![exact.hash()]);
     }
     #[test]
     fn rejected_confidential_work_consumes_the_next_overlay_block_budget() {

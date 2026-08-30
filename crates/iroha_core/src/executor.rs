@@ -2852,6 +2852,11 @@ pub(crate) struct ContractInvocationOutcome {
     /// Trigger-local NFT sequence after successful guest execution.
     pub(crate) next_nft_sequence: Option<u64>,
 }
+#[derive(Clone, Copy, Debug)]
+enum LiveGasAccounting {
+    Initialize,
+    RetainAccumulated,
+}
 impl ContractCallExecutionContext {
     pub(crate) fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
         let contract_address = self.contract_address.clone()?;
@@ -4268,70 +4273,11 @@ pub(crate) fn validate_transaction_fee_admission(
     .map_err(nexus_fee_admission_error_to_validation_fail)?;
     Ok(())
 }
-/// Charge gas and Nexus fees for a transaction that was applied via overlay execution paths.
-///
-/// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
-/// fee-accounting behavior that `execute_transaction` performs for each committed transaction.
-pub(crate) fn charge_fees_for_applied_overlay(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
+fn applied_overlay_base_gas(
     transaction: &SignedTransaction,
     overlay: &crate::pipeline::overlay::TxOverlay,
-) -> Result<(), ValidationFail> {
-    // Genesis transactions are bootstrap operations and must remain fee-free.
-    if is_initial_genesis_context(state_transaction) {
-        return Ok(());
-    }
-    let tx_bytes_len = to_bytes(transaction.payload())
-        .map(|bytes| bytes.len())
-        .map_err(|err| {
-            ValidationFail::InternalError(format!(
-                "failed to encode transaction payload for fee metering: {err}"
-            ))
-        })?;
-    let fee_sponsor = transaction
-        .fee_payment_intent()
-        .sponsor_program()
-        .map(|(program_id, _)| program_id.clone());
-    let skip_nexus_fee = fee_exempt_transaction(
-        &state_transaction.world,
-        &state_transaction.nexus,
-        transaction,
-        state_transaction.block_unix_timestamp_ms(),
-    );
-    // Admission captured the governed gas policy before business effects were applied.
-    // Keep that immutable snapshot for settlement so this transaction cannot alter its
-    // own fee asset, rate, or destination account through the overlay.
-    let gas_asset_opt = transaction
-        .fee_payment_intent()
-        .charge_limits()
-        .iter()
-        .find(|limit| limit.kind == FeeChargeKind::PipelineGas)
-        .map(|limit| limit.asset_definition_id.canonical_address());
-    let gas_limit_md = transaction_gas_limit(transaction);
-    let pipeline_gas = &state_transaction.pipeline.gas;
-    let pipeline_gas_bound = fee_bound_for_admission(transaction)
-        .map_err(nexus_fee_admission_error_to_validation_fail)?
-        .2;
-    if !skip_nexus_fee
-        && pipeline_gas_component_enabled(&state_transaction.nexus, &state_transaction.pipeline)
-        && pipeline_gas_bound > 0
-    {
-        let Some(ref gas_asset_id_str) = gas_asset_opt else {
-            return Err(ValidationFail::NotPermitted(
-                "missing pipeline gas charge limit in fee payment intent".to_owned(),
-            ));
-        };
-        if !pipeline_gas
-            .accepted_assets
-            .iter()
-            .any(|a| a == gas_asset_id_str)
-        {
-            return Err(ValidationFail::NotPermitted(format!(
-                "gas asset `{gas_asset_id_str}` is not accepted by node policy"
-            )));
-        }
-    }
+) -> Result<(u64, usize), ValidationFail> {
+    let gas_limit = transaction_gas_limit(transaction);
     let (gas_used, instruction_count, require_gas_limit) = match transaction.instructions() {
         Executable::ContractCall(_) | Executable::Ivm(_) => (
             overlay.ivm_gas_used().ok_or_else(|| {
@@ -4363,20 +4309,142 @@ pub(crate) fn charge_fees_for_applied_overlay(
             ));
         }
     };
-    if require_gas_limit && gas_limit_md.is_none() {
+    if require_gas_limit && gas_limit.is_none() {
         return Err(ValidationFail::NotPermitted(
             "missing gas limit in fee payment intent".to_owned(),
         ));
     }
-    if let Some(limit) = gas_limit_md
+    if let Some(limit) = gas_limit
         && gas_used > limit
     {
         return Err(ValidationFail::NotPermitted(format!(
             "out of gas: used {gas_used} > limit {limit}"
         )));
     }
-    state_transaction.last_tx_gas_used = gas_used;
+    Ok((gas_used, instruction_count))
+}
+
+/// Reserve an overlay transaction's deterministic base gas before applying its effects.
+///
+/// Trigger work executed by an overlay is metered relative to this reservation, so neither a
+/// nested callback nor a later transaction can execute past the shared block limit.
+pub(crate) fn precharge_gas_for_applied_overlay(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    transaction: &SignedTransaction,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+) -> Result<(), ValidationFail> {
+    if is_initial_genesis_context(state_transaction) {
+        return Ok(());
+    }
+    if state_transaction.last_tx_gas_used != 0 {
+        return Err(ValidationFail::InternalError(
+            "overlay base gas must be reserved before transaction effects".to_owned(),
+        ));
+    }
+    let (gas_used, _) = applied_overlay_base_gas(transaction, overlay)?;
     Executor::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
+    state_transaction.last_tx_gas_used = gas_used;
+    Ok(())
+}
+
+/// Charge gas and Nexus fees for a transaction that was applied via overlay execution paths.
+///
+/// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
+/// fee-accounting behavior that `execute_transaction` performs for each committed transaction.
+pub(crate) fn charge_fees_for_applied_overlay(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+) -> Result<(), ValidationFail> {
+    charge_fees_for_applied_overlay_inner(state_transaction, authority, transaction, overlay, false)
+}
+
+/// Settle an overlay whose base gas was reserved before its effects were applied.
+pub(crate) fn charge_fees_for_precharged_overlay(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+) -> Result<(), ValidationFail> {
+    charge_fees_for_applied_overlay_inner(state_transaction, authority, transaction, overlay, true)
+}
+
+fn charge_fees_for_applied_overlay_inner(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    transaction: &SignedTransaction,
+    overlay: &crate::pipeline::overlay::TxOverlay,
+    gas_was_precharged: bool,
+) -> Result<(), ValidationFail> {
+    // Genesis transactions are bootstrap operations and must remain fee-free.
+    if is_initial_genesis_context(state_transaction) {
+        return Ok(());
+    }
+    let tx_bytes_len = to_bytes(transaction.payload())
+        .map(|bytes| bytes.len())
+        .map_err(|err| {
+            ValidationFail::InternalError(format!(
+                "failed to encode transaction payload for fee metering: {err}"
+            ))
+        })?;
+    let fee_sponsor = transaction
+        .fee_payment_intent()
+        .sponsor_program()
+        .map(|(program_id, _)| program_id.clone());
+    let skip_nexus_fee = fee_exempt_transaction(
+        &state_transaction.world,
+        &state_transaction.nexus,
+        transaction,
+        state_transaction.block_unix_timestamp_ms(),
+    );
+    // Admission captured the governed gas policy before business effects were applied.
+    // Keep that immutable snapshot for settlement so this transaction cannot alter its
+    // own fee asset, rate, or destination account through the overlay.
+    let gas_asset_opt = transaction
+        .fee_payment_intent()
+        .charge_limits()
+        .iter()
+        .find(|limit| limit.kind == FeeChargeKind::PipelineGas)
+        .map(|limit| limit.asset_definition_id.canonical_address());
+    let pipeline_gas = &state_transaction.pipeline.gas;
+    let pipeline_gas_bound = fee_bound_for_admission(transaction)
+        .map_err(nexus_fee_admission_error_to_validation_fail)?
+        .2;
+    if !skip_nexus_fee
+        && pipeline_gas_component_enabled(&state_transaction.nexus, &state_transaction.pipeline)
+        && pipeline_gas_bound > 0
+    {
+        let Some(ref gas_asset_id_str) = gas_asset_opt else {
+            return Err(ValidationFail::NotPermitted(
+                "missing pipeline gas charge limit in fee payment intent".to_owned(),
+            ));
+        };
+        if !pipeline_gas
+            .accepted_assets
+            .iter()
+            .any(|a| a == gas_asset_id_str)
+        {
+            return Err(ValidationFail::NotPermitted(format!(
+                "gas asset `{gas_asset_id_str}` is not accepted by node policy"
+            )));
+        }
+    }
+    let (gas_used, instruction_count) = applied_overlay_base_gas(transaction, overlay)?;
+    if gas_was_precharged {
+        if state_transaction.last_tx_gas_used < gas_used {
+            return Err(ValidationFail::InternalError(
+                "overlay fee settlement lost its reserved base gas".to_owned(),
+            ));
+        }
+    } else {
+        state_transaction.last_tx_gas_used =
+            state_transaction.last_tx_gas_used.saturating_add(gas_used);
+    }
+    Executor::enforce_transaction_gas_fits_block(
+        state_transaction,
+        state_transaction.last_tx_gas_used,
+    )?;
     let tx_hash = transaction.hash();
     let settlement_source_id = {
         let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
@@ -4491,12 +4559,24 @@ pub(crate) fn charge_fees_for_rejected_live_batch(
         gas_asset_opt,
         fee_sponsor,
         skip_nexus_fee,
+        LiveGasAccounting::Initialize,
     )
 }
 fn live_batch_overlay_byte_size(instructions: &[InstructionBox]) -> u64 {
     instructions.iter().fold(0_u64, |total, instruction| {
         total.saturating_add(u64::try_from(instruction.encode().len()).unwrap_or(u64::MAX))
     })
+}
+fn live_batch_contract_execution_limit(
+    signed_gas_limit: Option<u64>,
+    direct_gas_used: u64,
+    block_remaining_at_start: u64,
+    accountable_gas_used: u64,
+) -> u64 {
+    signed_gas_limit
+        .unwrap_or(u64::MAX)
+        .saturating_sub(direct_gas_used)
+        .min(block_remaining_at_start.saturating_sub(accountable_gas_used))
 }
 fn enforce_live_batch_overlay_limits(
     max_instructions: usize,
@@ -4515,6 +4595,16 @@ fn enforce_live_batch_overlay_limits(
         )));
     }
     Ok(())
+}
+/// Return whether live execution rejected only because its retained overlay crossed a configured
+/// preparation limit.
+pub(crate) fn is_live_batch_overlay_limit_rejection(error: &ValidationFail) -> bool {
+    matches!(
+        error,
+        ValidationFail::NotPermitted(message)
+            if message.starts_with("overlay exceeds max instructions: ")
+                || message.starts_with("overlay exceeds max bytes: ")
+    )
 }
 fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
     const MULTISIG_SIGNATORY_NAMESPACE: &str = "MULTISIG_SIGNATORY";
@@ -4554,16 +4644,12 @@ impl Executor {
         state_transaction: &StateTransaction<'_, '_>,
         gas_used: u64,
     ) -> Result<(), ValidationFail> {
-        if gas_used == 0 || state_transaction.gas_limit_per_block == 0 {
-            return Ok(());
-        }
-        let total = state_transaction
-            .gas_used_in_block_so_far
-            .saturating_add(gas_used);
-        if total > state_transaction.gas_limit_per_block {
+        let limit = state_transaction.gas_limit_per_block;
+        let used_in_block = state_transaction.gas_used_in_block_so_far;
+        if !crate::gas::gas_components_fit_block_limit(limit, [used_in_block, gas_used]) {
+            let total = u128::from(used_in_block) + u128::from(gas_used);
             return Err(ValidationFail::NotPermitted(format!(
-                "block gas limit exceeded: {total} > {}",
-                state_transaction.gas_limit_per_block
+                "block gas limit exceeded: {total} > {limit}"
             )));
         }
         Ok(())
@@ -5913,15 +5999,34 @@ impl Executor {
         transaction: &SignedTransaction,
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
-        gas_used: u64,
+        direct_gas_used: u64,
         instruction_count: usize,
         tx_bytes_len: usize,
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<FeeSponsorProgramId>,
         skip_nexus_fee: bool,
+        gas_accounting: LiveGasAccounting,
     ) -> Result<(), ValidationFail> {
-        state_transaction.last_tx_gas_used = gas_used;
-        Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
+        let accountable_gas_used = match gas_accounting {
+            LiveGasAccounting::Initialize => {
+                if state_transaction.last_tx_gas_used != 0 {
+                    return Err(ValidationFail::InternalError(
+                        "fresh live fee settlement started with accumulated gas".to_owned(),
+                    ));
+                }
+                state_transaction.last_tx_gas_used = direct_gas_used;
+                direct_gas_used
+            }
+            LiveGasAccounting::RetainAccumulated => {
+                if state_transaction.last_tx_gas_used < direct_gas_used {
+                    return Err(ValidationFail::InternalError(
+                        "live fee settlement lost staged direct gas".to_owned(),
+                    ));
+                }
+                state_transaction.last_tx_gas_used
+            }
+        };
+        Self::enforce_transaction_gas_fits_block(state_transaction, accountable_gas_used)?;
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
             &state_transaction.nexus.fees,
@@ -5935,7 +6040,7 @@ impl Executor {
                 tx_hash.clone(),
                 settlement_source_id,
                 &gas_asset_id_str,
-                gas_used,
+                direct_gas_used,
                 fee_sponsor.as_ref(),
             )?;
         }
@@ -5948,7 +6053,7 @@ impl Executor {
                 fee_sponsor,
                 tx_bytes_len,
                 instruction_count,
-                gas_used,
+                direct_gas_used,
             )?;
         }
         Ok(())
@@ -6452,6 +6557,7 @@ impl Executor {
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
+                    LiveGasAccounting::RetainAccumulated,
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::Batch(items)) => {
@@ -6504,7 +6610,6 @@ impl Executor {
                         state_transaction.gas_limit_per_block
                     )));
                 }
-                let available_total = gas_limit.unwrap_or(u64::MAX).min(block_remaining);
                 let mut gas_used = explicit_gas;
                 let max_overlay_instructions = state_transaction.pipeline.overlay_max_instructions;
                 let max_overlay_bytes = state_transaction.pipeline.overlay_max_bytes;
@@ -6532,7 +6637,12 @@ impl Executor {
                             self.execute_instruction(state_transaction, authority, instruction)?;
                         }
                         ExecutableBatchItem::ContractCall(call) => {
-                            let remaining = available_total.saturating_sub(gas_used);
+                            let remaining = live_batch_contract_execution_limit(
+                                gas_limit,
+                                gas_used,
+                                block_remaining,
+                                state_transaction.last_tx_gas_used,
+                            );
                             let outcome = self.execute_contract_invocation(
                                 state_transaction,
                                 authority,
@@ -6554,10 +6664,6 @@ impl Executor {
                                 overlay_instruction_count,
                                 overlay_byte_size,
                             ) {
-                                // Overlay caps are preparation limits for ordinary executables.
-                                // Preserve that no-fee rejection behavior even though live batches
-                                // discover contract-emitted instructions during execution.
-                                state_transaction.last_tx_gas_used = 0;
                                 return Err(error);
                             }
                         }
@@ -6575,6 +6681,7 @@ impl Executor {
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
+                    LiveGasAccounting::RetainAccumulated,
                 )
             }
             (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
@@ -8731,10 +8838,6 @@ fn initial_permission_capability_root_authority(
             let _ = decode!(executor_permission::governance::CanSubmitGovernanceBallot);
             false
         }
-        "CanRecordCitizenService" => {
-            let _ = decode!(executor_permission::governance::CanRecordCitizenService);
-            false
-        }
         "CanSlashGovernanceLock" => {
             let _ = decode!(executor_permission::governance::CanSlashGovernanceLock);
             false
@@ -9440,7 +9543,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::CastPlainBallot,
         iroha_data_model::isi::governance::SlashGovernanceLock,
         iroha_data_model::isi::governance::RestituteGovernanceLock,
-        iroha_data_model::isi::governance::RecordCitizenServiceOutcome,
         iroha_data_model::isi::ministry::SubmitAgendaProposal,
         iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
         iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
@@ -10502,7 +10604,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanSubmitGovernanceBallot",
     "CanEnactGovernance",
     "CanManageParliament",
-    "CanRecordCitizenService",
     "CanSlashGovernanceLock",
     "CanRestituteGovernanceLock",
     "CanBindSorafsAlias",
@@ -11119,6 +11220,128 @@ mod tests {
         ));
         assert_eq!(instructions_gas, expected_gas);
         assert_eq!(batch_gas, expected_gas);
+    }
+    #[test]
+    fn successful_live_batch_settlement_retains_nested_execute_trigger_ivm_gas() {
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let state = state_after_genesis(World::with([], [account], []));
+        let trigger_id: TriggerId = "live_batch_ivm_gas".parse().expect("trigger id");
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::Ivm(IvmBytecode::from_compiled(program)),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .expect("valid generic IVM trigger action"),
+        );
+        let mut setup_block =
+            state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        {
+            let mut setup_tx = setup_block.transaction();
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut setup_tx)
+                .expect("register generic IVM trigger");
+            setup_tx.apply();
+        }
+        setup_block
+            .commit_world_overlay_for_testing()
+            .expect("commit trigger fixture");
+
+        let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0));
+        let nested_ivm_gas = {
+            let mut baseline_tx = block.transaction();
+            baseline_tx
+                .execute_called_trigger(
+                    &trigger_id,
+                    &ExecuteTriggerEvent {
+                        trigger_id: trigger_id.clone(),
+                        authority: ALICE_ID.clone(),
+                        args: Json::default(),
+                    },
+                )
+                .expect("baseline generic IVM trigger execution");
+            baseline_tx.last_tx_gas_used
+        };
+        assert!(nested_ivm_gas > 0, "generic IVM trigger must consume gas");
+        let execute_trigger = InstructionBox::from(ExecuteTrigger::new(trigger_id.clone()));
+        let direct_gas = isi_gas::meter_instructions(core::slice::from_ref(&execute_trigger));
+        let transaction = TransactionBuilder::new(
+            *state.network_id_ref(),
+            ALICE_ID.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(execute_trigger)].into(),
+        ))
+        .sign(ALICE_KEYPAIR.private_key());
+        let mut state_tx = block.transaction();
+        super::Executor::Initial
+            .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
+            .expect("live batch executes its generic IVM trigger");
+        assert_eq!(
+            state_tx.last_tx_gas_used,
+            direct_gas.saturating_add(nested_ivm_gas),
+            "fee settlement must retain nested trigger VM gas"
+        );
+    }
+    #[test]
+    fn rejected_live_batch_retains_nested_execute_trigger_gas() {
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let state = state_after_genesis(World::with([], [account], []));
+        let trigger_id: TriggerId = "rejected_live_batch_gas".parse().expect("trigger id");
+        let trigger_body = vec![
+            InstructionBox::from(Log::new(Level::INFO, "meter rejected trigger".to_owned())),
+            InstructionBox::from(Unregister::domain(
+                DomainId::try_new("missing", "universal").expect("missing domain id"),
+            )),
+        ];
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                trigger_body.clone(),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            )
+            .expect("valid failing trigger action"),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_tx = block.transaction();
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut state_tx)
+            .expect("register failing trigger");
+        let execute_trigger = InstructionBox::from(ExecuteTrigger::new(trigger_id));
+        let direct_gas = isi_gas::meter_instructions(core::slice::from_ref(&execute_trigger));
+        let nested_gas = isi_gas::meter_instructions(&trigger_body);
+        let transaction = TransactionBuilder::new(
+            *state.network_id_ref(),
+            ALICE_ID.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(execute_trigger)].into(),
+        ))
+        .sign(ALICE_KEYPAIR.private_key());
+        super::Executor::Initial
+            .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
+            .expect_err("failing trigger rejects its enclosing live batch");
+        assert_eq!(
+            state_tx.last_tx_gas_used,
+            direct_gas.saturating_add(nested_gas),
+            "rejected live execution must retain authored and nested trigger gas"
+        );
     }
     fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
         let total = world
@@ -11984,8 +12207,8 @@ mod tests {
         use iroha_data_model::governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash};
         use iroha_data_model::isi::governance as gov;
         use iroha_executor_data_model::permission::governance::{
-            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
-            CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
+            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRestituteGovernanceLock,
+            CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         };
         let authority = checked_account_id();
         let citizen_target = checked_account_id();
@@ -12064,17 +12287,6 @@ mod tests {
                 "CanRestituteGovernanceLock",
                 "restitution amount must be > 0",
             ),
-            (
-                gov::RecordCitizenServiceOutcome {
-                    owner: citizen_target.clone(),
-                    epoch: 1,
-                    role: "observer".to_owned(),
-                    event: gov::CitizenServiceEvent::Decline,
-                }
-                .into(),
-                "CanRecordCitizenService",
-                "citizen not found for service record",
-            ),
         ];
         for (instruction, _, _) in &probes {
             assert!(
@@ -12103,9 +12315,6 @@ mod tests {
                 }),
                 Permission::from(CanRestituteGovernanceLock {
                     referendum_id: "other-governance-scope".to_owned(),
-                }),
-                Permission::from(CanRecordCitizenService {
-                    owner: authority.clone(),
                 }),
             ]),
         );
@@ -12180,9 +12389,6 @@ mod tests {
                     referendum_id: referendum_id.clone(),
                 }),
                 Permission::from(CanRestituteGovernanceLock { referendum_id }),
-                Permission::from(CanRecordCitizenService {
-                    owner: citizen_target,
-                }),
             ]),
         );
         for (instruction, permission_name, downstream_error) in probes {
@@ -12461,11 +12667,6 @@ mod tests {
                 referendum_id: "grant-policy-referendum".to_owned(),
             }
             .into();
-        let record_service_permission: Permission =
-            executor_permission::governance::CanRecordCitizenService {
-                owner: adjacent_owner.clone(),
-            }
-            .into();
         let slash_permission: Permission =
             executor_permission::governance::CanSlashGovernanceLock {
                 referendum_id: "grant-policy-referendum".to_owned(),
@@ -12506,7 +12707,6 @@ mod tests {
                 contract_proposal_permission.clone(),
                 runtime_proposal_permission.clone(),
                 ballot_permission.clone(),
-                record_service_permission.clone(),
                 slash_permission.clone(),
                 restitute_permission.clone(),
             ]),
@@ -12890,11 +13090,10 @@ mod tests {
                 false,
             ),
             ("CanSubmitGovernanceBallot", ballot_permission, false),
-            ("CanRecordCitizenService", record_service_permission, false),
             ("CanSlashGovernanceLock", slash_permission, false),
             ("CanRestituteGovernanceLock", restitute_permission, false),
         ];
-        assert_eq!(cases.len(), 48, "update this table for every scoped arm");
+        assert_eq!(cases.len(), 47, "update this table for every scoped arm");
         assert_eq!(
             cases
                 .iter()
@@ -12908,7 +13107,6 @@ mod tests {
             "CanProposeContractDeployment",
             "CanProposeRuntimeUpgrade",
             "CanSubmitGovernanceBallot",
-            "CanRecordCitizenService",
             "CanSlashGovernanceLock",
             "CanRestituteGovernanceLock",
         ] {
@@ -19630,6 +19828,24 @@ seiyaku GuardedValueRebound {
         );
     }
     #[test]
+    fn mixed_batch_next_contract_reserves_accountable_nested_block_gas() {
+        assert_eq!(
+            super::live_batch_contract_execution_limit(Some(100), 20, 80, 70),
+            10,
+            "nested trigger/host work must reduce the next contract's block allowance"
+        );
+        assert_eq!(
+            super::live_batch_contract_execution_limit(Some(30), 20, 80, 25),
+            10,
+            "the signature-bound direct-gas allowance remains independently enforced"
+        );
+        assert_eq!(
+            super::live_batch_contract_execution_limit(None, 20, u64::MAX, 25),
+            u64::MAX - 25,
+            "an unlimited block still accounts already-retained work"
+        );
+    }
+    #[test]
     fn mixed_batch_observes_ordered_permission_state_and_rolls_back_on_failure() {
         let (program, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
@@ -19790,6 +20006,11 @@ seiyaku OrderedBatchGuard {
             matches!(instruction_cap_error, ValidationFail::NotPermitted(ref message)
                 if message == "overlay exceeds max instructions: 2 > 1"),
             "unexpected mixed-batch instruction-cap error: {instruction_cap_error}"
+        );
+        assert!(
+            instruction_capped_state_tx.last_tx_gas_used
+                > isi_gas::meter_instructions(&explicit_instructions[..1]),
+            "overlay-cap rejection must retain the completed contract attempt"
         );
         drop(instruction_capped_state_tx);
         let explicit_overlay_bytes =

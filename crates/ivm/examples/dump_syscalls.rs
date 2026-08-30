@@ -8,8 +8,9 @@ fn dump(src: &str) {
         .expect("compile");
     let parsed = ProgramMetadata::parse(&code).expect("parse meta");
     let bytes = &code[parsed.code_offset..];
-    let mut mem = Memory::new(bytes.len() as u64);
-    mem.load_code(bytes);
+    let mut mem = Memory::new();
+    mem.load_code(bytes)
+        .expect("example program fits code region");
     println!("code_len={}, off={}", code.len(), parsed.code_offset);
     let mut count = 0;
     let mut pc = 0u64;

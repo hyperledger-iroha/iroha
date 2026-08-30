@@ -2403,18 +2403,6 @@ test(
 );
 
 test(
-  "SoraFS public integration client does not use the operator-only legacy payload fetch",
-  {
-    timeout: 90_000,
-  },
-  async (t) => {
-    t.diagnostic(
-      "legacy /v1/sorafs/storage/fetch coverage moved to operator-authenticated canaries; public SDK integration must not send unsigned diagnostic reads",
-    );
-  },
-);
-
-test(
   "SoraFS PoR status/export endpoints respond (optional)",
   {
     timeout: 90_000,

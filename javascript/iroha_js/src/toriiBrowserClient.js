@@ -2453,7 +2453,7 @@ export class ToriiBrowserClient {
     return normalizeContractDeploymentStateResponse(response, body);
   }
 
-  /** Read exact account state; caller-supplied canonical signing headers are preserved. */
+  /** Read exact account state, using the configured canonical signer when present. */
   getAccount(accountId, options = {}) {
     const opts = requireObject(options, "getAccount options");
     return this._json(
@@ -2461,6 +2461,7 @@ export class ToriiBrowserClient {
       `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}`,
       {
         headers: opts.headers,
+        dataspaceVisible: true,
         signal: signalFrom(opts),
         successStatuses: opts.successStatuses ?? [200],
       },
@@ -2552,6 +2553,7 @@ export class ToriiBrowserClient {
         scope: opts.scope,
         count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
+      dataspaceVisible: true,
       signal: signalFrom(opts),
     }).then((payload) =>
       normalizeQuantityPage(payload, "account assets response", ["quantity"]),
@@ -2567,6 +2569,7 @@ export class ToriiBrowserClient {
       `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/permissions`,
       {
         params: normalizeCountedListParams(opts, context),
+        dataspaceVisible: true,
         signal: signalFrom(opts),
       },
     );
@@ -2587,6 +2590,7 @@ export class ToriiBrowserClient {
             `${context}.assetId`,
           ),
         },
+        dataspaceVisible: true,
         signal: signalFrom(opts),
       },
     );

@@ -335,6 +335,26 @@ def test_public_torii_cors_matches_runtime_policy_and_browser_sdk_headers() -> N
     assert "retry-after" in MODULE.PUBLIC_TORII_CORS_EXPOSED_HEADERS
 
 
+def test_public_edge_is_the_only_trusted_torii_forwarding_hop() -> None:
+    torii = MODULE._load_toml(TAIRA_CONFIG_PATH)["torii"]
+
+    assert torii["transport"]["trusted_proxy_cidrs"] == ["127.0.0.1/32"]
+    assert "127.0.0.1/32" in torii["preauth_allow_cidrs"]
+
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+    rendered = MODULE.render_edge_nginx_conf(validators)
+    assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in rendered
+    assert "proxy_set_header X-Real-IP $remote_addr;" in rendered
+
+
 def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> None:
     validators = [
         MODULE.EdgeValidator(

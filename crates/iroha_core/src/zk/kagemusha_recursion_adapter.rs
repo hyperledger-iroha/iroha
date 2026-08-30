@@ -3160,7 +3160,7 @@ fn catch_kagemusha_native_verifier_panic<T>(
     label: &str,
     verify: impl FnOnce() -> T,
 ) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(verify))
+    crate::panic_hook::catch_unwind_suppressed(verify)
         .map_err(|_| format!("Kagemusha V4 {label} rejected an invalid native verifier relation"))
 }
 /// Fully verify and terminally decide a degree-parameterized V4 Eq proof.
@@ -4212,9 +4212,9 @@ fn configured_kagemusha_eq_constraint_system_v4(
     use halo2_proofs::plonk::{Circuit as _, ConstraintSystem};
     validate_kagemusha_circuit_params_v4(circuit_params)?;
     let mut cs = ConstraintSystem::<Fp>::default();
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         KagemushaStepEqCircuitV4::configure_with_params(&mut cs, circuit_params.clone())
-    }))
+    })
     .map_err(|_| "Kagemusha V4 Eq verifier-key configuration panicked".to_owned())?;
     Ok(cs)
 }
@@ -4224,9 +4224,9 @@ fn configured_kagemusha_ep_constraint_system_v4(
     use halo2_proofs::plonk::{Circuit as _, ConstraintSystem};
     validate_kagemusha_circuit_params_v4(circuit_params)?;
     let mut cs = ConstraintSystem::<Fq>::default();
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         KagemushaStepEpCircuitV4::configure_with_params(&mut cs, circuit_params.clone())
-    }))
+    })
     .map_err(|_| "Kagemusha V4 Ep verifier-key configuration panicked".to_owned())?;
     Ok(cs)
 }
@@ -4236,12 +4236,12 @@ fn configured_kagemusha_eq_bootstrap_constraint_system_v5(
     use halo2_proofs::plonk::{Circuit as _, ConstraintSystem};
     validate_kagemusha_circuit_params_v4(circuit_params)?;
     let mut cs = ConstraintSystem::<Fp>::default();
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         KagemushaStepEqProtocolBootstrapCircuitV5::configure_with_params(
             &mut cs,
             circuit_params.clone(),
         )
-    }))
+    })
     .map_err(|_| "Kagemusha V5 Eq bootstrap configuration panicked".to_owned())?;
     Ok(cs)
 }
@@ -4251,12 +4251,12 @@ fn configured_kagemusha_ep_bootstrap_constraint_system_v5(
     use halo2_proofs::plonk::{Circuit as _, ConstraintSystem};
     validate_kagemusha_circuit_params_v4(circuit_params)?;
     let mut cs = ConstraintSystem::<Fq>::default();
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    crate::panic_hook::catch_unwind_suppressed(|| {
         KagemushaStepEpProtocolBootstrapCircuitV5::configure_with_params(
             &mut cs,
             circuit_params.clone(),
         )
-    }))
+    })
     .map_err(|_| "Kagemusha V5 Ep bootstrap configuration panicked".to_owned())?;
     Ok(cs)
 }
@@ -4813,12 +4813,10 @@ where
             KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4
         ));
     }
-    let params = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ParamsIPA::<C>::new(expected_k)
-    }))
-    .map_err(|_| format!("Kagemusha V4 {role} canonical ParamsIPA derivation panicked"))?;
+    let params = crate::panic_hook::catch_unwind_suppressed(|| ParamsIPA::<C>::new(expected_k))
+        .map_err(|_| format!("Kagemusha V4 {role} canonical ParamsIPA derivation panicked"))?;
     let mut writer = KagemushaSha256WriterV4::default();
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| params.write(&mut writer)))
+    crate::panic_hook::catch_unwind_suppressed(|| params.write(&mut writer))
         .map_err(|_| format!("Kagemusha V4 {role} canonical ParamsIPA serialization panicked"))?
         .map_err(|error| {
             format!("failed to serialize Kagemusha V4 {role} canonical parameters: {error}")
@@ -4841,11 +4839,11 @@ where
 {
     use halo2_proofs::SerdeFormat;
     let mut writer = KagemushaSha256WriterV4::default();
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        key.write(&mut writer, SerdeFormat::Processed)
-    }))
-    .map_err(|_| format!("Kagemusha V4 {role} verifier-key serialization panicked"))?
-    .map_err(|error| format!("failed to serialize Kagemusha V4 {role} verifier key: {error}"))?;
+    crate::panic_hook::catch_unwind_suppressed(|| key.write(&mut writer, SerdeFormat::Processed))
+        .map_err(|_| format!("Kagemusha V4 {role} verifier-key serialization panicked"))?
+        .map_err(|error| {
+            format!("failed to serialize Kagemusha V4 {role} verifier key: {error}")
+        })?;
     Ok(writer.0.finalize().into())
 }
 pub(crate) struct KagemushaLoadedVerifyingKeyV4<C: CurveAffine> {
@@ -4900,22 +4898,22 @@ pub(crate) fn load_kagemusha_eq_verifying_key_from_source_v4(
                     header.payload_size_bytes,
                 );
                 #[cfg(feature = "circuit-params")]
-                let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let key = crate::panic_hook::catch_unwind_suppressed(|| {
                     VerifyingKey::read::<_, KagemushaStepEqCircuitV4>(
                         &mut digesting,
                         SerdeFormat::Processed,
                         circuit_params.clone(),
                     )
-                }))
+                })
                 .map_err(|_| "Kagemusha V4 Eq verifier-key reader panicked".to_owned())?
                 .map_err(|error| format!("failed to parse Kagemusha V4 Eq verifier key: {error}"))?;
                 #[cfg(not(feature = "circuit-params"))]
-                let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let key = crate::panic_hook::catch_unwind_suppressed(|| {
                     VerifyingKey::read::<_, KagemushaStepEqCircuitV4>(
                         &mut digesting,
                         SerdeFormat::Processed,
                     )
-                }))
+                })
                 .map_err(|_| "Kagemusha V4 Eq verifier-key reader panicked".to_owned())?
                 .map_err(|error| format!("failed to parse Kagemusha V4 Eq verifier key: {error}"))?;
                 let (processed_sha256, commitment) = digesting.finish();
@@ -4965,22 +4963,22 @@ pub(crate) fn load_kagemusha_ep_verifying_key_from_source_v4(
                     header.payload_size_bytes,
                 );
                 #[cfg(feature = "circuit-params")]
-                let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let key = crate::panic_hook::catch_unwind_suppressed(|| {
                     VerifyingKey::read::<_, KagemushaStepEpCircuitV4>(
                         &mut digesting,
                         SerdeFormat::Processed,
                         circuit_params.clone(),
                     )
-                }))
+                })
                 .map_err(|_| "Kagemusha V4 Ep verifier-key reader panicked".to_owned())?
                 .map_err(|error| format!("failed to parse Kagemusha V4 Ep verifier key: {error}"))?;
                 #[cfg(not(feature = "circuit-params"))]
-                let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let key = crate::panic_hook::catch_unwind_suppressed(|| {
                     VerifyingKey::read::<_, KagemushaStepEpCircuitV4>(
                         &mut digesting,
                         SerdeFormat::Processed,
                     )
-                }))
+                })
                 .map_err(|_| "Kagemusha V4 Ep verifier-key reader panicked".to_owned())?
                 .map_err(|error| format!("failed to parse Kagemusha V4 Ep verifier key: {error}"))?;
                 let (processed_sha256, commitment) = digesting.finish();
@@ -5720,22 +5718,22 @@ fn load_kagemusha_eq_proving_key_from_qualified_source_v4(
         KagemushaPastaCycleArtifactKindV4::ProvingKey,
         |mut reader, _header| {
             #[cfg(feature = "circuit-params")]
-            let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let key = crate::panic_hook::catch_unwind_suppressed(|| {
                 ProvingKey::read::<_, KagemushaStepEqCircuitV4>(
                     &mut reader,
                     SerdeFormat::Processed,
                     circuit_params.clone(),
                 )
-            }))
+            })
             .map_err(|_| "Kagemusha V4 Eq proving-key reader panicked".to_owned())?
             .map_err(|error| format!("failed to parse Kagemusha V4 Eq proving key: {error}"))?;
             #[cfg(not(feature = "circuit-params"))]
-            let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let key = crate::panic_hook::catch_unwind_suppressed(|| {
                 ProvingKey::read::<_, KagemushaStepEqCircuitV4>(
                     &mut reader,
                     SerdeFormat::Processed,
                 )
-            }))
+            })
             .map_err(|_| "Kagemusha V4 Eq proving-key reader panicked".to_owned())?
             .map_err(|error| format!("failed to parse Kagemusha V4 Eq proving key: {error}"))?;
             Ok(key)
@@ -5769,22 +5767,22 @@ fn load_kagemusha_ep_proving_key_from_qualified_source_v4(
         KagemushaPastaCycleArtifactKindV4::ProvingKey,
         |mut reader, _header| {
             #[cfg(feature = "circuit-params")]
-            let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let key = crate::panic_hook::catch_unwind_suppressed(|| {
                 ProvingKey::read::<_, KagemushaStepEpCircuitV4>(
                     &mut reader,
                     SerdeFormat::Processed,
                     circuit_params.clone(),
                 )
-            }))
+            })
             .map_err(|_| "Kagemusha V4 Ep proving-key reader panicked".to_owned())?
             .map_err(|error| format!("failed to parse Kagemusha V4 Ep proving key: {error}"))?;
             #[cfg(not(feature = "circuit-params"))]
-            let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let key = crate::panic_hook::catch_unwind_suppressed(|| {
                 ProvingKey::read::<_, KagemushaStepEpCircuitV4>(
                     &mut reader,
                     SerdeFormat::Processed,
                 )
-            }))
+            })
             .map_err(|_| "Kagemusha V4 Ep proving-key reader panicked".to_owned())?
             .map_err(|error| format!("failed to parse Kagemusha V4 Ep proving key: {error}"))?;
             Ok(key)
@@ -6460,21 +6458,21 @@ fn parse_kagemusha_eq_pk_spool_v5(
         .seek(std::io::SeekFrom::Start(0))
         .map_err(|error| format!("failed to rewind Kagemusha V5 Eq PK: {error}"))?;
     #[cfg(feature = "circuit-params")]
-    let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let key = crate::panic_hook::catch_unwind_suppressed(|| {
         ProvingKey::read::<_, KagemushaStepEqCircuitV4>(
             &mut reader,
             SerdeFormat::Processed,
             circuit_params,
         )
-    }))
+    })
     .map_err(|_| "Kagemusha V5 Eq proving-key reader panicked".to_owned())?
     .map_err(|error| format!("failed to stream-parse Kagemusha V5 Eq PK: {error}"))?;
     #[cfg(not(feature = "circuit-params"))]
     let key = {
         let _ = circuit_params;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::panic_hook::catch_unwind_suppressed(|| {
             ProvingKey::read::<_, KagemushaStepEqCircuitV4>(&mut reader, SerdeFormat::Processed)
-        }))
+        })
         .map_err(|_| "Kagemusha V5 Eq proving-key reader panicked".to_owned())?
         .map_err(|error| format!("failed to stream-parse Kagemusha V5 Eq PK: {error}"))?
     };
@@ -6497,21 +6495,21 @@ fn parse_kagemusha_ep_pk_spool_v5(
         .seek(std::io::SeekFrom::Start(0))
         .map_err(|error| format!("failed to rewind Kagemusha V5 Ep PK: {error}"))?;
     #[cfg(feature = "circuit-params")]
-    let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let key = crate::panic_hook::catch_unwind_suppressed(|| {
         ProvingKey::read::<_, KagemushaStepEpCircuitV4>(
             &mut reader,
             SerdeFormat::Processed,
             circuit_params,
         )
-    }))
+    })
     .map_err(|_| "Kagemusha V5 Ep proving-key reader panicked".to_owned())?
     .map_err(|error| format!("failed to stream-parse Kagemusha V5 Ep PK: {error}"))?;
     #[cfg(not(feature = "circuit-params"))]
     let key = {
         let _ = circuit_params;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::panic_hook::catch_unwind_suppressed(|| {
             ProvingKey::read::<_, KagemushaStepEpCircuitV4>(&mut reader, SerdeFormat::Processed)
-        }))
+        })
         .map_err(|_| "Kagemusha V5 Ep proving-key reader panicked".to_owned())?
         .map_err(|error| format!("failed to stream-parse Kagemusha V5 Ep PK: {error}"))?
     };

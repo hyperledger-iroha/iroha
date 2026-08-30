@@ -11801,32 +11801,10 @@ impl Compiler {
                             push_word(&mut code, word);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::Pubkgen { dest, src } => {
-                            uses_zk = true;
-                            let (rd, spilled, imm) = dst_reg(dest);
-                            let rs = src_reg(src, scratch1, &mut code)?;
-                            let word = encoding::wide::encode_rr(
-                                instruction::wide::crypto::PUBKGEN,
-                                rd,
-                                rs,
-                                0,
+                        Instr::Pubkgen { .. } | Instr::Valcom { .. } => {
+                            return Err(
+                                "retired scalar cryptography reached bytecode emission".to_owned()
                             );
-                            push_word(&mut code, word);
-                            spill_back(dest, rd, spilled, imm, &mut code)?;
-                        }
-                        Instr::Valcom { dest, value, blind } => {
-                            uses_zk = true;
-                            let (rd, spilled, imm) = dst_reg(dest);
-                            let rs1 = src_reg(value, scratch1, &mut code)?;
-                            let rs2 = src_reg(blind, scratch2, &mut code)?;
-                            let word = encoding::wide::encode_rr(
-                                instruction::wide::crypto::VALCOM,
-                                rd,
-                                rs1,
-                                rs2,
-                            );
-                            push_word(&mut code, word);
-                            spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::PrivateNumericValcom { dest, value, blind } => {
                             uses_zk = true;

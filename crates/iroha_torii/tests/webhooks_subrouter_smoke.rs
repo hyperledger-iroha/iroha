@@ -28,7 +28,15 @@ async fn webhooks_endpoints_exposed_by_default() {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let chain_id = cfg.common.chain.clone();
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura.clone(),
+        query,
+        chain_id.clone(),
+        network_id,
+    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -39,8 +47,8 @@ async fn webhooks_endpoints_exposed_by_default() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
-        iroha_data_model::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        chain_id,
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -115,7 +123,15 @@ async fn webhooks_endpoints_hidden_when_disabled() {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let chain_id = cfg.common.chain.clone();
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura.clone(),
+        query,
+        chain_id.clone(),
+        network_id,
+    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -126,8 +142,8 @@ async fn webhooks_endpoints_hidden_when_disabled() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
-        iroha_data_model::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        chain_id,
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,

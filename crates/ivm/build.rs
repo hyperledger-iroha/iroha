@@ -44,7 +44,6 @@ fn main() {
     if let Err(err) = generate_iso20022_schema() {
         panic!("ivm ISO 20022 schema generation failed: {err}");
     }
-    dump_dep_env();
 }
 struct IsoField {
     pattern: String,
@@ -661,22 +660,6 @@ fn validate_ptx_bytes(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
-}
-fn dump_dep_env() {
-    let mut report = String::new();
-    for (key, value) in env::vars() {
-        if key.starts_with("DEP_") {
-            report.push_str(&key);
-            report.push('=');
-            report.push_str(&value);
-            report.push('\n');
-        }
-    }
-    if let Some(out_dir) = env::var_os("OUT_DIR") {
-        let mut path = PathBuf::from(out_dir);
-        path.push("dep_env.txt");
-        let _ = fs::write(path, report);
-    }
 }
 fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
     if target_os != "linux" || explicit_cxx_configured() {

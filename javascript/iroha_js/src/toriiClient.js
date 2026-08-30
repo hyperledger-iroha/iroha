@@ -1076,6 +1076,12 @@ const ASSET_ID_LIST_OPTION_KEYS = new Set([
   ...ITERABLE_LIST_OPTION_KEYS,
   "assetId",
 ]);
+const ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS = new Set([
+  "limit",
+  "offset",
+  "signal",
+  "canonicalAuth",
+]);
 const CONTRACT_ACTIVITY_LIST_OPTION_KEYS = new Set([
   ...ITERABLE_LIST_OPTION_KEYS,
   "authority",
@@ -1463,6 +1469,7 @@ export function decodePdpCommitmentHeader(headers) {
  * @property {"bounded" | "exact"} [countMode]
  * @property {"bounded" | "exact"} [count_mode]
  * @property {AbortSignal} [signal]
+ * @property {CanonicalRequestAuth | null} [canonicalAuth]
  * @property {string} [assetId]
  * @property {number} [certificateExpiresBeforeMs]
  * @property {number} [certificateExpiresAfterMs]
@@ -2373,7 +2380,9 @@ export class ToriiClient {
       optionContext,
       ASSET_ID_LIST_OPTION_KEYS,
     );
-    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
+      ? this._canonicalRequestAuth
+      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...listOptions } = normalizedOptions;
     const params = ToriiClient._encodeIterableListParams(
       listOptions,
@@ -2463,6 +2472,7 @@ export class ToriiClient {
       options,
       normalizeAccountTransactionListResponse,
       ASSET_ID_LIST_OPTION_KEYS,
+      this._canonicalRequestAuth,
     );
   }
 
@@ -2727,16 +2737,21 @@ export class ToriiClient {
    * List effective permission tokens for an account, including grants inherited from assigned roles
    * (`GET /v1/accounts/{accountId}/permissions`).
    * @param {string} accountId
-   * @param {{limit?: number, offset?: number, signal?: AbortSignal}} [options]
+   * @param {{limit?: number, offset?: number, signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth | null}} [options]
    * @returns {Promise<{items: Array<{name: string, payload: unknown}>, total: number}>}
    */
   async listAccountPermissions(accountId, options = {}) {
     const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const encodedId = encodeURIComponent(normalizedId);
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    const normalizedOptions = normalizeIterableListOptions(
       options,
       "listAccountPermissions",
+      ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS,
     );
+    const canonicalAuth = normalizedOptions.canonicalAuth === undefined
+      ? this._canonicalRequestAuth
+      : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
+    const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
     const params = ToriiClient._encodePaginationParams(rest);
     const response = await this._request(
       "GET",
@@ -2745,6 +2760,7 @@ export class ToriiClient {
         headers: JSON_ACCEPT_HEADERS,
         params: params ?? undefined,
         signal,
+        canonicalAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -5068,77 +5084,6 @@ export class ToriiClient {
       options,
     );
     return normalizeSorafsPinRegisterResponse(payload);
-  }
-
-  /**
-   * Fetch a payload range from SoraFS storage (`POST /v1/sorafs/storage/fetch`).
-   * @param {{
-   *   manifestIdHex: string;
-   *   offset: number | string | bigint;
-   *   length: number | string | bigint;
-   *   providerIdHex?: string | Buffer | ArrayBuffer | ArrayBufferView | null;
-   *   signal?: AbortSignal;
-   * }} input
-   * @returns {Promise<SorafsFetchResponse>}
-   */
-  async fetchSorafsPayloadRange(input) {
-    const record = ensureRecord(input ?? {}, "fetchSorafsPayloadRange input");
-    const operatorSigningContext = resolveOperatorSigningContext(
-      this._operatorSigningContext,
-      "fetchSorafsPayloadRange operatorSigningContext",
-    );
-    if (operatorSigningContext === null) {
-      throw new TypeError(
-        "fetchSorafsPayloadRange requires ToriiClient options.operatorSigningContext",
-      );
-    }
-    const manifestId =
-      record.manifest_id_hex ??
-      record.manifestIdHex ??
-      record.manifestId ??
-      record.manifest;
-    const manifestIdHex = normalizeHex32String(
-      manifestId,
-      "fetchSorafsPayloadRange.manifestIdHex",
-    );
-    const offset = ToriiClient._normalizeUnsignedInteger(
-      record.offset,
-      "fetchSorafsPayloadRange.offset",
-      { allowZero: true },
-    );
-    const length = ToriiClient._normalizeUnsignedInteger(
-      record.length,
-      "fetchSorafsPayloadRange.length",
-      { allowZero: false },
-    );
-    const providerId =
-      record.provider_id_hex ??
-      record.providerIdHex ??
-      record.providerId ??
-      null;
-    const body = {
-      manifest_id_hex: manifestIdHex,
-      offset,
-      length,
-    };
-    if (providerId !== undefined && providerId !== null) {
-      body.provider_id_hex = normalizeHex32String(
-        providerId,
-        "fetchSorafsPayloadRange.providerIdHex",
-      );
-    }
-    const response = await this._request("POST", "/v1/sorafs/storage/fetch", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(body),
-      signal: record.signal,
-      operatorSigningContext,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sorafs storage fetch endpoint returned no payload");
-    }
-    return normalizeSorafsFetchResponse(payload);
   }
 
   /**
@@ -8709,7 +8654,17 @@ export class ToriiClient {
       options,
       "streamSumeragiStatus",
     );
-    return this._streamSse("/v1/sumeragi/status/sse", { lastEventId, signal });
+    const operatorSigningContext = requireOperatorSigningContext(
+      this._operatorSigningContext,
+      "streamSumeragiStatus",
+    );
+    return this._streamSse("/v1/sumeragi/status/sse", {
+      lastEventId,
+      signal,
+      operatorSigningContext,
+      disableRetries: true,
+      redirect: "error",
+    });
   }
 
   /**
@@ -10036,8 +9991,13 @@ export class ToriiClient {
         canonicalAuth,
       },
     );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+      "governance contract response",
+      { signal },
+    );
     return normalizeGovernanceContractResponse(payload);
   }
 
@@ -11814,6 +11774,7 @@ export class ToriiClient {
       signal,
       retryProfile: "streaming",
       canonicalAuth: options.canonicalAuth,
+      operatorSigningContext: options.operatorSigningContext,
       disableRetries: options.disableRetries === true,
       redirect: options.redirect,
     };
@@ -14229,7 +14190,7 @@ function normalizeUint64DecimalString(value, name, options = {}) {
   return integer.toString(10);
 }
 
-function normalizeGovernanceUint64Integer(value, name) {
+function normalizeGovernanceUint64Integer(value, name, options = {}) {
   let integer;
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value) || value < 0) {
@@ -14242,27 +14203,21 @@ function normalizeGovernanceUint64Integer(value, name) {
     integer = BigInt(value);
   } else if (typeof value === "bigint") {
     integer = value;
-  } else if (typeof value === "string") {
-    const canonical = requireExactNonEmptyString(value, name);
-    if (!/^(?:0|[1-9][0-9]*)$/u.test(canonical)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        `${name} must be a canonical unsigned 64-bit integer`,
-        name,
-      );
-    }
-    integer = BigInt(canonical);
   } else {
     throw createValidationError(
       ValidationErrorCode.INVALID_NUMERIC,
-      `${name} must be a lossless unsigned 64-bit integer`,
+      `${name} must be an unsigned 64-bit JSON integer token`,
       name,
     );
   }
-  if (integer < 0n || integer > MAX_UINT64_BIGINT) {
+  if (
+    integer < 0n
+    || (options.allowZero === false && integer === 0n)
+    || integer > MAX_UINT64_BIGINT
+  ) {
     throw createValidationError(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} must be at most ${MAX_UINT64_BIGINT.toString(10)}`,
+      `${name} must be ${options.allowZero === false ? "positive and " : ""}at most ${MAX_UINT64_BIGINT.toString(10)}`,
       name,
     );
   }
@@ -24337,7 +24292,7 @@ function normalizeGovernanceContractLifecycle(value, context) {
             record.active_code_hash_hex,
             `${context}.active_code_hash_hex`,
           ),
-    revision: requireExactJsonUnsignedInteger(record.revision, `${context}.revision`, {
+    revision: normalizeGovernanceUint64Integer(record.revision, `${context}.revision`, {
       allowZero: false,
     }),
     emergency_hold:
@@ -24372,12 +24327,12 @@ function normalizeGovernanceContractEmergencyHold(value, context) {
     ],
     context,
   );
-  const imposedAtHeight = requireExactJsonUnsignedInteger(
+  const imposedAtHeight = normalizeGovernanceUint64Integer(
     record.imposed_at_height,
     `${context}.imposed_at_height`,
     { allowZero: false },
   );
-  const expiresAtHeight = requireExactJsonUnsignedInteger(
+  const expiresAtHeight = normalizeGovernanceUint64Integer(
     record.expires_at_height,
     `${context}.expires_at_height`,
     { allowZero: false },
@@ -29940,30 +29895,6 @@ function normalizePipelineTxSnapshot(payload, context = "pipeline recovery tx") 
     ),
     reads: normalizeStringArray(record.reads ?? [], `${context}.reads`),
     writes: normalizeStringArray(record.writes ?? [], `${context}.writes`),
-  };
-}
-
-function normalizeSorafsFetchResponse(payload, context = "sorafs fetch response") {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    manifest_id_hex: normalizeHex32String(
-      record.manifest_id_hex ?? "",
-      `${context}.manifest_id_hex`,
-    ),
-    offset: ToriiClient._normalizeUnsignedInteger(
-      record.offset,
-      `${context}.offset`,
-      { allowZero: true },
-    ),
-    length: ToriiClient._normalizeUnsignedInteger(
-      record.length,
-      `${context}.length`,
-      { allowZero: true },
-    ),
-    data_b64: normalizeRequiredBase64Payload(
-      record.data_b64,
-      `${context}.data_b64`,
-    ),
   };
 }
 

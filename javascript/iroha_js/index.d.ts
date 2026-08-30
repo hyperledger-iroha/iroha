@@ -1617,7 +1617,7 @@ export interface CanonicalRequestAuth {
 
 export interface PermissionedIterableOptions {
   requirePermissions?: boolean;
-  canonicalAuth?: CanonicalRequestAuth;
+  canonicalAuth?: CanonicalRequestAuth | null;
 }
 
 export type ToriiCountMode = "bounded" | "exact";
@@ -3037,6 +3037,7 @@ export interface AccountPermissionsListOptions {
   limit?: NumericLike;
   offset?: NumericLike;
   signal?: AbortSignal;
+  canonicalAuth?: CanonicalRequestAuth | null;
 }
 
 /** An effective permission, including grants inherited from assigned roles. */
@@ -5255,8 +5256,8 @@ export interface ToriiGovernanceContractEmergencyHold {
   proposal_content_id_hex: string;
   governance_attempt_id_hex: string;
   reason: string;
-  imposed_at_height: number;
-  expires_at_height: number;
+  imposed_at_height: ToriiU64;
+  expires_at_height: ToriiU64;
 }
 
 export interface ToriiGovernanceContractLifecycle {
@@ -5269,7 +5270,7 @@ export interface ToriiGovernanceContractLifecycle {
   pending_owner: string | null;
   parliament_delegated: boolean;
   active_code_hash_hex: string | null;
-  revision: number;
+  revision: ToriiU64;
   emergency_hold: ToriiGovernanceContractEmergencyHold | null;
 }
 
@@ -6073,9 +6074,9 @@ export interface ToriiGovernanceZkBallotProofRequest {
 }
 
 export interface ToriiGovernanceBallotResponse
-  extends ToriiGovernanceDraftResponse {
-  accepted: boolean;
-  reason: string | null;
+{
+  drafted: true;
+  tx_instructions: readonly [ToriiGovernanceProposalInstructionDraftV1];
 }
 
 export interface ToriiTriggerUpsertRequest {
@@ -9046,13 +9047,6 @@ export interface ContractCodeBytesRecord {
   code_b64: string;
 }
 
-export interface SorafsFetchResponse {
-  manifest_id_hex: string;
-  offset: number;
-  length: number;
-  data_b64: string;
-}
-
 export interface SorafsStorageStateResponse {
   bytes_used: number;
   bytes_capacity: number;
@@ -11712,13 +11706,6 @@ export declare class ToriiClient {
     signedTransaction: VersionedSignedTransactionV1,
     options?: { signal?: AbortSignal },
   ): Promise<SorafsPinRegisterResponse>;
-  fetchSorafsPayloadRange(input: {
-    manifestIdHex: string;
-    offset: number | string | bigint;
-    length: number | string | bigint;
-    providerIdHex?: string | Buffer | ArrayBuffer | ArrayBufferView | null;
-    signal?: AbortSignal;
-  }): Promise<SorafsFetchResponse>;
   getSorafsStorageState(options?: {
     signal?: AbortSignal;
   }): Promise<SorafsStorageStateResponse>;

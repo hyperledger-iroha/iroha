@@ -1093,13 +1093,11 @@ mod tests {
     use super::*;
     use axum::routing::{get, post};
     use iroha_config::parameters::actual::{
-        OperatorTokenFallback, OperatorTokenSource, OperatorWebAuthnAlgorithm,
-        OperatorWebAuthnConfig, ToriiOperatorAuth,
+        OperatorWebAuthnAlgorithm, OperatorWebAuthnConfig, ToriiOperatorAuth,
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use std::{
-        collections::HashSet,
         sync::{Arc, Barrier},
         thread,
     };
@@ -1144,14 +1142,12 @@ mod tests {
             ),
         )
     }
-    fn legacy_token_operator_auth(
+    fn bootstrap_token_operator_auth(
         token: &str,
         data_dir: &std::path::Path,
     ) -> crate::operator_auth::OperatorAuth {
         let mut config = ToriiOperatorAuth::default();
         config.enabled = true;
-        config.token_fallback = OperatorTokenFallback::Always;
-        config.token_source = OperatorTokenSource::OperatorTokens;
         config.tokens = vec![token.to_owned()];
         config.rate_per_minute = None;
         config.burst = None;
@@ -1169,11 +1165,10 @@ mod tests {
         });
         crate::operator_auth::OperatorAuth::new(
             config,
-            Arc::new(HashSet::new()),
             data_dir.to_path_buf(),
             crate::routing::MaybeTelemetry::disabled(),
         )
-        .expect("valid legacy operator-auth fixture")
+        .expect("valid bootstrap operator-auth fixture")
     }
     fn operator_signatures_with_capacity(
         key_pair: &KeyPair,
@@ -2397,21 +2392,21 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn operator_middleware_requires_signature_even_when_legacy_token_is_valid() {
+    async fn operator_middleware_requires_signature_even_when_bootstrap_token_is_valid() {
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         assert!(app.operator_signatures.is_enabled());
         assert!(!app.operator_auth.is_enabled());
         let tempdir = tempfile::tempdir().expect("operator auth tempdir");
-        let operator_auth = legacy_token_operator_auth("legacy-token", tempdir.path());
+        let operator_auth = bootstrap_token_operator_auth("bootstrap-token", tempdir.path());
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-iroha-operator-token",
-            HeaderValue::from_static("legacy-token"),
+            HeaderValue::from_static("bootstrap-token"),
         );
         operator_auth
-            .authorize_operator_endpoint(&headers, None)
+            .authorize_bootstrap(&headers, None, "register_options")
             .await
-            .expect("fixture token is valid for legacy operator auth");
+            .expect("fixture token is valid for first-credential bootstrap");
         let node_public_key = app.da_receipt_signer.public_key().clone();
         let network_id = *app.state.network_id_ref();
         let telemetry = app.telemetry.clone();

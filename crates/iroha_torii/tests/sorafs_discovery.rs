@@ -2386,7 +2386,7 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
     );
 }
 #[tokio::test]
-async fn retired_storage_ingest_is_not_mounted_and_local_inventory_requires_authentication() {
+async fn retired_storage_ingest_and_fetch_are_not_mounted_and_inventory_requires_authentication() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
@@ -2440,7 +2440,7 @@ async fn retired_storage_ingest_is_not_mounted_and_local_inventory_requires_auth
         )
         .await
         .expect("unsigned malformed storage fetch response");
-    assert_eq!(fetch_response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(fetch_response.status(), StatusCode::NOT_FOUND);
 }
 fn pin_register_http_request(body: Vec<u8>, content_type: &'static str) -> Request<Body> {
     let mut request = Request::builder()

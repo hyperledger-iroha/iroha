@@ -28,7 +28,7 @@ CASE_SHA256 = {
     "node_local_core_and_pipeline_reads_require_exact_operator_signatures":
         "1be9e913b3646104ef62b4b9bb29de11ddaf7ab407288baaa8250cdee7c6d899",
     "sorafs_inventory_and_storage_reads_declare_fail_closed_admission":
-        "9d1dbf5de2fc56b3cd81f372123322b9dd4ba2589cbdc34225879af582eac2f3",
+        "fbf41bff1530fb54baa7196b8a867223541129659d1ec7b0fc2ed41c0aad773b",
     "soracloud_commands_require_exact_account_authentication_and_honest_effects":
         "91ee004a2a315253c8ed2dfcfa937d8b98e871a3f77a1621205871b006d9b8b3",
     "soracloud_sensitive_reads_require_exact_account_authentication":

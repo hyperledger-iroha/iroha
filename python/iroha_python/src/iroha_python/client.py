@@ -140,8 +140,8 @@ from iroha_torii_client.governance_proposals import (
     GovernanceMusubiActionKind,
     GovernanceProposalContractEmergencyHold,
     GovernanceProposalContractLifecycleGovernance,
-    GovernanceProposalGlobalDataTriggerPermissionGovernance,
     GovernanceProposalDeployContract,
+    GovernanceProposalGlobalDataTriggerPermissionGovernance,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
     GovernanceProposalLifecycleStatus,
@@ -5607,12 +5607,16 @@ class GovernanceContractEmergencyHoldRecord:
                 raise TypeError(f"{context}.{name} must be exact lowercase 32-byte hex")
             return value
 
-        imposed = _normalize_positive_int(
-            payload.get("imposed_at_height"), f"{context}.imposed_at_height"
+        imposed = _require_u64(
+            payload.get("imposed_at_height"),
+            f"{context}.imposed_at_height",
         )
-        expires = _normalize_positive_int(
-            payload.get("expires_at_height"), f"{context}.expires_at_height"
+        expires = _require_u64(
+            payload.get("expires_at_height"),
+            f"{context}.expires_at_height",
         )
+        if imposed == 0:
+            raise ValueError(f"{context}.imposed_at_height must be positive")
         if expires <= imposed:
             raise ValueError(f"{context}.expires_at_height must follow imposed_at_height")
         return cls(
@@ -5660,7 +5664,7 @@ class GovernanceContractLifecycleRecord:
         }
         if set(payload) != expected:
             raise TypeError(f"{context} must contain exactly the first-release lifecycle fields")
-        version = _normalize_positive_int(payload.get("version"), f"{context}.version")
+        version = _require_u64(payload.get("version"), f"{context}.version")
         if version != 1:
             raise ValueError(f"{context}.version must be exactly 1")
 
@@ -5675,7 +5679,9 @@ class GovernanceContractLifecycleRecord:
         origin = _require_exact_non_empty_string(payload.get("origin"), f"{context}.origin")
         if origin not in {"direct", "parliament"}:
             raise ValueError(f"{context}.origin must be direct or parliament")
-        revision = _normalize_positive_int(payload.get("revision"), f"{context}.revision")
+        revision = _require_u64(payload.get("revision"), f"{context}.revision")
+        if revision == 0:
+            raise ValueError(f"{context}.revision must be positive")
         parliament_delegated = payload.get("parliament_delegated")
         if not isinstance(parliament_delegated, bool):
             raise TypeError(f"{context}.parliament_delegated must be a boolean")
@@ -14645,17 +14651,17 @@ class ToriiClient(
     # Explorer APIs
     # -------------------------
 
-    def _get_explorer_response(
+    def _get_dataspace_visible_response(
         self,
         path: str,
         *,
         params: Optional[Mapping[str, Any]] = None,
     ) -> requests.Response:
-        """Issue one optionally account-signed Explorer GET.
+        """Issue one optionally account-signed dataspace-visible GET.
 
         A configured canonical signer is bound after Requests prepares the final
-        path and query. Without one, Explorer's public projection remains an
-        ordinary anonymous request.
+        path and query. Without one, public dataspaces remain available through
+        the ordinary anonymous request path.
         """
 
         canonical_auth = self._canonical_request_auth
@@ -14675,6 +14681,21 @@ class ToriiClient(
             allow_retry=canonical_auth is None,
             allow_redirects=canonical_auth is None,
         )
+
+    def _get_explorer_response(
+        self,
+        path: str,
+        *,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> requests.Response:
+        """Issue one optionally account-signed Explorer GET.
+
+        A configured canonical signer is bound after Requests prepares the final
+        path and query. Without one, Explorer's public projection remains an
+        ordinary anonymous request.
+        """
+
+        return self._get_dataspace_visible_response(path, params=params)
 
     def get_explorer_metrics(self) -> Optional[Any]:
         """Fetch `/v1/explorer/metrics`. Returns `None` when telemetry is gated."""
@@ -17349,12 +17370,12 @@ class ToriiClient(
         asset_id_value = _normalize_optional_string(asset_id, "list_account_assets.asset_id")
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
-        return self.request_json(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets",
             params=params or None,
-            expected_status=(200,),
         )
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     def list_account_assets_typed(
         self,
@@ -17399,12 +17420,12 @@ class ToriiClient(
         )
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
-        return self.request_json(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(canonical_account_id, safe='')}/transactions",
             params=params or None,
-            expected_status=(200,),
         )
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     def list_account_transactions_typed(
         self,
@@ -19467,8 +19488,7 @@ class ToriiClient(
         """Fetch an account by exact id, returning ``None`` when it is absent."""
 
         literal = _require_non_empty_string(account_id, "account_id")
-        response = self._request(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(literal, safe='')}",
         )
         if response.status_code == 404:
@@ -19517,8 +19537,7 @@ class ToriiClient(
         asset_id_value = _normalize_optional_string(asset_id, "find_account_assets.asset_id")
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
-        response = self._request(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(literal, safe='')}/assets",
             params=params or None,
         )
@@ -21298,12 +21317,12 @@ class ToriiClient(
 
         canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
         params = self._pagination_params(limit=limit, offset=offset)
-        return self.request_json(
-            "GET",
+        response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(canonical_account_id, safe='')}/permissions",
             params=params or None,
-            expected_status=(200,),
         )
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     def list_account_permissions_typed(
         self,
@@ -22689,13 +22708,26 @@ class ToriiClient(
         self,
         *,
         timeout: Optional[float] = None,
-        max_retries: int = 3,
+        max_retries: int = 0,
         backoff_base: float = 0.5,
         on_event: Optional[Callable[..., None]] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
-        """Stream `/v1/sumeragi/status/sse` live consensus metrics."""
+        """Stream one operator-authenticated Sumeragi status subscription.
+
+        Operator request authentication is one-shot, so redirects and
+        automatic reconnects are forbidden. Call this method again to create a
+        fresh signed subscription after a disconnect.
+        """
+
+        if max_retries != 0:
+            raise ValueError("stream_sumeragi_status max_retries must be zero")
+        operator_context = self.operator_signing_context
+        if operator_context is None:
+            raise ValueError(
+                "stream_sumeragi_status requires immutable operator_signing_context"
+            )
 
         def _handle(event: SseEvent) -> None:
             if on_event is None:
@@ -22707,9 +22739,14 @@ class ToriiClient(
 
         iterator = self._stream_sse(
             "/v1/sumeragi/status/sse",
+            headers=_OperatorRequestHeaderPlan(
+                {"Accept": "text/event-stream"},
+                operator_context,
+            ),
             timeout=timeout,
-            max_retries=max_retries,
+            max_retries=0,
             backoff_base=backoff_base,
+            allow_redirects=False,
             decode_json=decode_json,
             on_event=_handle if on_event is not None else None,
         )

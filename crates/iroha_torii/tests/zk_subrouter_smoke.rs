@@ -33,9 +33,9 @@ fn request_with_headers(
     }
     builder.body(axum::body::Body::from(body.to_vec())).unwrap()
 }
-fn assert_query_validation_message(body: &[u8], expected_message: &str) {
+fn assert_error_message(body: &[u8], expected_code: &str, expected_message: &str) {
     let envelope: ErrorEnvelope = norito::decode_from_bytes(body).expect("error envelope payload");
-    assert_eq!(envelope.code(), "query_validation_failed");
+    assert_eq!(envelope.code(), expected_code);
     assert!(
         envelope.message().contains(expected_message),
         "unexpected error envelope: {envelope:?}"
@@ -45,6 +45,7 @@ fn assert_query_validation_message(body: &[u8], expected_message: &str) {
 #[allow(clippy::too_many_lines)]
 async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
     let _guard = attachments_smoke_lock();
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     // Minimal Torii setup (no telemetry requirement for these endpoints)
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let account_id = AccountId::new(cfg.common.key_pair.public_key().clone());
@@ -93,11 +94,16 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn zk_attachments_endpoints_hidden_when_disabled() {
+async fn zk_attachments_endpoints_report_unavailable_when_disabled() {
     let _guard = attachments_smoke_lock();
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = false;
-    let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
+    let account_id = AccountId::new(cfg.common.key_pair.public_key().clone());
+    let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
+        .build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
+    let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
     let app = torii.router();
     for request in [
         fixtures::get_request(&("/v1/zk/attachments")),
@@ -109,14 +115,16 @@ async fn zk_attachments_endpoints_hidden_when_disabled() {
             .body(axum::body::Body::empty())
             .unwrap(),
     ] {
+        let request = fixtures::app_signed_request(&account_id, &cfg.common.key_pair, request, &[]);
         let resp = fixtures::request(&app, request).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests() {
     let _guard = attachments_smoke_lock();
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = true;
     let account_id = AccountId::new(cfg.common.key_pair.public_key().clone());
@@ -208,7 +216,11 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
     .unwrap();
     assert_eq!(replay_resp.status(), StatusCode::FORBIDDEN);
     let replay_body = replay_resp.into_body().collect().await.unwrap().to_bytes();
-    assert_query_validation_message(&replay_body, "nonce already used");
+    assert_error_message(
+        &replay_body,
+        "query_validation_failed",
+        "nonce already used",
+    );
     let get_request = fixtures::app_signed_request(
         &account_id,
         &cfg.common.key_pair,
@@ -256,6 +268,7 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
 #[allow(clippy::too_many_lines)]
 async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
     let _guard = attachments_smoke_lock();
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = true;
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
@@ -270,8 +283,12 @@ async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
             .unwrap(),
     ] {
         let response = fixtures::request(&app, request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        assert_query_validation_message(&body, "signed account headers are required");
+        assert_error_message(
+            &body,
+            "canonical_authentication_required",
+            "canonical account request authentication is required",
+        );
     }
 }

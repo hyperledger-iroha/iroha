@@ -315,6 +315,7 @@ fn canonical_terminal_merge_execution_from_durable_source_for_test(
         autonomous_epoch: payload.epoch,
         autonomous_payload_hash: payload.payload_hash,
         entrypoint_hashes: input.entrypoint_hashes,
+        authenticated_signed_replay_aliases: vec![None; input.entrypoints.len()],
         entrypoints: input.entrypoints,
         reservation_keys: input
             .reservation_keys

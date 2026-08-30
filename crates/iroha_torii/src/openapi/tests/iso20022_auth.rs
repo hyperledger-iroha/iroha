@@ -123,7 +123,18 @@ fn iso20022_openapi_documents_party_scope_durable_admission_and_signed_xml() {
         "/v1/iso20022/sese025",
         "/v1/iso20022/colr012",
     ] {
-        let responses = openapi_operation(&document, path, "post")["responses"]
+        let operation = openapi_operation(&document, path, "post");
+        let request_content = operation["requestBody"]["content"]
+            .as_object()
+            .expect("ISO XML request content");
+        assert_eq!(request_content.len(), 1, "{path}");
+        assert_eq!(
+            request_content["application/xml"]["schema"]["$ref"].as_str(),
+            Some("#/components/schemas/XmlText"),
+            "{path}"
+        );
+        assert!(!request_content.contains_key("application/json"), "{path}");
+        let responses = operation["responses"]
             .as_object()
             .expect("ISO submission responses");
         assert!(responses.contains_key("202"), "{path}");

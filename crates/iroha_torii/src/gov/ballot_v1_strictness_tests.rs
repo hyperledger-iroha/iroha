@@ -32,20 +32,17 @@ async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
         }))
         .unwrap(),
     );
-    let res = super::handle_gov_ballot_zk_v1(
+    let error = super::handle_gov_ballot_zk_v1(
         state,
         &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
     .await
-    .expect("handler ok");
-    let body = res.0;
-    assert!(!body.ok);
-    assert!(!body.accepted);
+    .expect_err("alias key must fail the ballot draft");
     assert_eq!(
-        body.reason.as_deref(),
-        Some("public inputs must use root_hint (unsupported key rootHintHex)")
+        conversion_message(error),
+        "public inputs must use root_hint (unsupported key rootHintHex)"
     );
 }
 #[tokio::test]
@@ -67,20 +64,17 @@ async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
         nullifier: None,
     };
     let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-    let res = super::handle_gov_ballot_zk_v1(
+    let error = super::handle_gov_ballot_zk_v1(
         state,
         &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
     .await
-    .expect("handler ok");
-    let body = res.0;
-    assert!(!body.ok);
-    assert!(!body.accepted);
+    .expect_err("noncanonical owner must fail the ballot draft");
     assert_eq!(
-        body.reason.as_deref(),
-        Some("owner must use canonical I105 account id form")
+        conversion_message(error),
+        "owner must use canonical I105 account id form"
     );
 }
 #[tokio::test]
@@ -101,21 +95,15 @@ async fn ballot_zk_v1_rejects_owner_hint_different_from_authority() {
         nullifier: None,
     };
     let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-    let response = super::handle_gov_ballot_zk_v1(
+    let error = super::handle_gov_ballot_zk_v1(
         state,
         &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
     .await
-    .expect("handler response");
-    assert!(!response.0.ok);
-    assert!(!response.0.accepted);
-    assert_eq!(
-        response.0.reason.as_deref(),
-        Some("owner must equal authority")
-    );
-    assert!(response.0.tx_instructions.is_empty());
+    .expect_err("foreign owner must fail the ballot draft");
+    assert_eq!(conversion_message(error), "owner must equal authority");
 }
 #[tokio::test]
 async fn zk_v1_handlers_reject_noncanonical_direction() {
@@ -138,18 +126,17 @@ async fn zk_v1_handlers_reject_noncanonical_direction() {
         nullifier: None,
     };
     let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-    let response = super::handle_gov_ballot_zk_v1(
+    let error = super::handle_gov_ballot_zk_v1(
         state.clone(),
         &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
     .await
-    .expect("handler response");
-    assert!(!response.0.accepted);
+    .expect_err("noncanonical direction must fail the ballot draft");
     assert_eq!(
-        response.0.reason.as_deref(),
-        Some("direction must be Aye, Nay, or Abstain")
+        conversion_message(error),
+        "direction must be Aye, Nay, or Abstain"
     );
     let dto = super::ZkBallotV1BallotProofDto {
         authority: ACCOUNT_AUTHORITY.to_string(),
@@ -167,18 +154,17 @@ async fn zk_v1_handlers_reject_noncanonical_direction() {
         },
     };
     let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-    let response = super::handle_gov_ballot_zk_v1_ballotproof(
+    let error = super::handle_gov_ballot_zk_v1_ballotproof(
         state,
         &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
     .await
-    .expect("handler response");
-    assert!(!response.0.accepted);
+    .expect_err("noncanonical direction must fail the ballot-proof draft");
     assert_eq!(
-        response.0.reason.as_deref(),
-        Some("direction must be Aye, Nay, or Abstain")
+        conversion_message(error),
+        "direction must be Aye, Nay, or Abstain"
     );
 }
 #[tokio::test]
@@ -203,25 +189,16 @@ async fn zk_v1_handlers_reject_non_token_backends_after_exact_network_admission(
         };
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-        let response = super::handle_gov_ballot_zk_v1(
+        let error = super::handle_gov_ballot_zk_v1(
             state.clone(),
             &authenticated,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
-        .expect("backend rejection must follow exact-network admission");
-        assert!(!response.0.accepted, "backend `{backend:?}`");
+        .expect_err("backend rejection must follow exact-network admission");
         assert!(
-            response.0.tx_instructions.is_empty(),
-            "backend `{backend:?}`"
-        );
-        assert!(
-            response
-                .0
-                .reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("backend")),
+            conversion_message(error).contains("backend"),
             "backend `{backend:?}`"
         );
         let dto = super::ZkBallotV1BallotProofDto {
@@ -241,25 +218,16 @@ async fn zk_v1_handlers_reject_non_token_backends_after_exact_network_admission(
         };
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
-        let response = super::handle_gov_ballot_zk_v1_ballotproof(
+        let error = super::handle_gov_ballot_zk_v1_ballotproof(
             state.clone(),
             &authenticated,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
-        .expect("backend rejection must follow exact-network admission");
-        assert!(!response.0.accepted, "backend `{backend:?}`");
+        .expect_err("backend rejection must follow exact-network admission");
         assert!(
-            response.0.tx_instructions.is_empty(),
-            "backend `{backend:?}`"
-        );
-        assert!(
-            response
-                .0
-                .reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("backend")),
+            conversion_message(error).contains("backend"),
             "backend `{backend:?}`"
         );
     }
@@ -325,13 +293,12 @@ async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
     let b = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&b).unwrap();
     assert_eq!(
-        v.get("ok").and_then(norito::json::Value::as_bool),
+        v.get("drafted").and_then(norito::json::Value::as_bool),
         Some(true)
     );
-    assert_eq!(
-        v.get("accepted").and_then(norito::json::Value::as_bool),
-        Some(true)
-    );
+    assert!(v.get("ok").is_none());
+    assert!(v.get("accepted").is_none());
+    assert!(v.get("reason").is_none());
     assert!(
         v.get("tx_instructions")
             .and_then(|x| x.as_array())
@@ -377,19 +344,16 @@ async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
         }))
         .unwrap(),
     );
-    let res = super::handle_gov_ballot_zk_v1_ballotproof(
+    let error = super::handle_gov_ballot_zk_v1_ballotproof(
         state,
         &authenticated,
         MaybeTelemetry::disabled(),
         crate::NoritoJsonWithBytes { value: dto, raw },
     )
     .await
-    .expect("handler ok");
-    let body = res.0;
-    assert!(!body.ok);
-    assert!(!body.accepted);
+    .expect_err("alias key must fail the ballot-proof draft");
     assert_eq!(
-        body.reason.as_deref(),
-        Some("public inputs must use root_hint (unsupported key rootHintHex)")
+        conversion_message(error),
+        "public inputs must use root_hint (unsupported key rootHintHex)"
     );
 }

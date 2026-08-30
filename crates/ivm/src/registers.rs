@@ -10,6 +10,7 @@
 //! longer use a dedicated register file – instead groups of the general
 //! registers are interpreted as vectors.  This module implements that design.
 use crate::zk::{RegEvent, with_reg_logger};
+use crate::{VMError, parallel::REGISTER_COUNT};
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
@@ -102,7 +103,9 @@ impl Registers {
         self.record_usage(idx);
         let val = self.gpr[idx];
         with_reg_logger(|log| {
-            let (root, path) = self.merkle_root_and_path(idx);
+            let (root, path) = self
+                .merkle_root_and_path(idx)
+                .expect("register access already validated the index");
             log.record(RegEvent::Read {
                 index: idx,
                 value: val,
@@ -129,7 +132,9 @@ impl Registers {
                     );
                     self.dirty.store(false, Ordering::Release);
                 }
-                let (root, path) = self.merkle_root_and_path(idx);
+                let (root, path) = self
+                    .merkle_root_and_path(idx)
+                    .expect("register access already validated the index");
                 log.record(RegEvent::Write {
                     index: idx,
                     value,
@@ -162,7 +167,9 @@ impl Registers {
                         .update_hashed_leaf_sha256(idx, register_leaf_digest(self.gpr[idx], value));
                     self.dirty.store(false, Ordering::Release);
                 }
-                let (root, path) = self.merkle_root_and_path(idx);
+                let (root, path) = self
+                    .merkle_root_and_path(idx)
+                    .expect("register access already validated the index");
                 log.record(RegEvent::Write {
                     index: idx,
                     value: self.gpr[idx],
@@ -185,7 +192,9 @@ impl Registers {
             return;
         }
         with_reg_logger(|log| {
-            let (root, path) = self.merkle_root_and_path(idx);
+            let (root, path) = self
+                .merkle_root_and_path(idx)
+                .expect("register access already validated the index");
             log.record(RegEvent::Write {
                 index: idx,
                 value: self.gpr[idx],
@@ -235,49 +244,61 @@ impl Registers {
             .expect("tree has at least one leaf")
     }
     /// Merkle authentication path for register `idx`.
+    ///
+    /// # Errors
+    /// Returns [`VMError::RegisterOutOfBounds`] when `idx` is not a register index.
     #[inline]
-    pub fn merkle_path(&self, idx: usize) -> Vec<[u8; 32]> {
+    pub fn merkle_path(&self, idx: usize) -> Result<Vec<[u8; 32]>, VMError> {
+        let leaf_index = register_leaf_index(idx)?;
         let proof = self
             .ensure_built_and_lock()
-            .get_proof(idx as u32)
-            .expect("valid index");
-        proof
+            .get_proof(leaf_index)
+            .expect("validated register index exists in the fixed register tree");
+        Ok(proof
             .into_audit_path()
             .into_iter()
             .map(|opt| opt.map(|h| *h.as_ref()).unwrap_or([0u8; 32]))
-            .collect()
+            .collect())
     }
     /// Combined helper: return both the typed Merkle root and authentication
     /// path for `idx`. Performs at most one rebuild and borrows the tree once.
+    ///
+    /// # Errors
+    /// Returns [`VMError::RegisterOutOfBounds`] when `idx` is not a register index.
     #[inline]
     pub fn merkle_root_and_path(
         &self,
         idx: usize,
-    ) -> (HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>) {
+    ) -> Result<(HashOf<MerkleTree<[u8; 32]>>, Vec<[u8; 32]>), VMError> {
+        let leaf_index = register_leaf_index(idx)?;
         let tree = self.ensure_built_and_lock();
         let root = tree.root().expect("tree has at least one leaf");
         let path = tree
-            .get_proof(idx as u32)
-            .expect("valid index")
+            .get_proof(leaf_index)
+            .expect("validated register index exists in the fixed register tree")
             .into_audit_path()
             .into_iter()
             .map(|opt| opt.map(|h| *h.as_ref()).unwrap_or([0u8; 32]))
             .collect();
-        (root, path)
+        Ok((root, path))
     }
     /// Build a compact Merkle proof for the register at `idx`.
     ///
     /// Without truncation the returned root is the full register-tree root.
     /// When `depth_cap` truncates the path, the returned root commits only to
     /// that path fragment and is not a membership commitment.
+    ///
+    /// # Errors
+    /// Returns [`VMError::RegisterOutOfBounds`] when `idx` is not a register index.
     #[inline]
     pub fn merkle_compact(
         &self,
         idx: usize,
         depth_cap: Option<usize>,
-    ) -> (CompactMerkleProof<[u8; 32]>, HashOf<MerkleTree<[u8; 32]>>) {
-        let (root, path) = self.merkle_root_and_path(idx);
-        let proof = crate::merkle_utils::make_compact_from_path_bytes(&path, idx as u32, depth_cap);
+    ) -> Result<(CompactMerkleProof<[u8; 32]>, HashOf<MerkleTree<[u8; 32]>>), VMError> {
+        let leaf_index = register_leaf_index(idx)?;
+        let (root, path) = self.merkle_root_and_path(idx)?;
+        let proof = crate::merkle_utils::make_compact_from_path_bytes(&path, leaf_index, depth_cap);
         let leaf_digest = register_leaf_digest(self.gpr[idx], self.tags[idx]);
         let leaf_hash = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_digest));
         let siblings = proof.siblings().to_vec();
@@ -291,7 +312,7 @@ impl Registers {
         } else {
             root
         };
-        (proof, adj_root)
+        Ok((proof, adj_root))
     }
     #[inline]
     fn ensure_built_and_lock(&self) -> parking_lot::MutexGuard<'_, MerkleTree<[u8; 32]>> {
@@ -397,6 +418,13 @@ fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
     bytes[0] = if tag { 1 } else { 0 };
     bytes[1..].copy_from_slice(&value.to_le_bytes());
     Sha256::digest(bytes).into()
+}
+#[inline]
+fn register_leaf_index(idx: usize) -> Result<u32, VMError> {
+    if idx >= REGISTER_COUNT {
+        return Err(VMError::RegisterOutOfBounds);
+    }
+    u32::try_from(idx).map_err(|_| VMError::RegisterOutOfBounds)
 }
 fn register_leaf_digests(gpr: &[u64; 256], tags: &[bool; 256]) -> Vec<[u8; 32]> {
     gpr.iter()
@@ -504,6 +532,37 @@ mod tests {
         assert_logged_event_matches(&log.events[0], &after_set);
         assert_logged_event_matches(&log.events[1], &after_tag);
         assert_eq!(regs.merkle_root(), after_tag.0);
+    }
+    #[test]
+    fn merkle_proof_apis_reject_out_of_range_indices_without_aliasing() {
+        let regs = Registers::new();
+
+        assert!(regs.merkle_path(REGISTER_COUNT - 1).is_ok());
+        assert!(regs.merkle_root_and_path(REGISTER_COUNT - 1).is_ok());
+        assert!(regs.merkle_compact(REGISTER_COUNT - 1, None).is_ok());
+
+        let mut invalid = vec![REGISTER_COUNT, usize::MAX];
+        #[cfg(target_pointer_width = "64")]
+        invalid.push((u64::from(u32::MAX) + 1) as usize);
+
+        for idx in invalid {
+            assert!(matches!(
+                regs.merkle_path(idx),
+                Err(VMError::RegisterOutOfBounds)
+            ));
+            assert!(matches!(
+                regs.merkle_root_and_path(idx),
+                Err(VMError::RegisterOutOfBounds)
+            ));
+            assert!(matches!(
+                regs.merkle_compact(idx, None),
+                Err(VMError::RegisterOutOfBounds)
+            ));
+            assert!(matches!(
+                crate::merkle_utils::registers_compact_bundle(&regs, idx, None),
+                Err(VMError::RegisterOutOfBounds)
+            ));
+        }
     }
 
     fn canonical_root_and_path(

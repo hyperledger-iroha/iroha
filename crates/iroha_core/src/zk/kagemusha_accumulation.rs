@@ -92,7 +92,7 @@ type EpTranscript<S> = PoseidonTranscript<
     POSEIDON_PARTIAL_ROUNDS,
 >;
 fn catch_native_verifier_panic<T>(label: &str, verify: impl FnOnce() -> T) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(verify))
+    crate::panic_hook::catch_unwind_suppressed(verify)
         .map_err(|_| format!("Kagemusha V4 {label} rejected an invalid native verifier relation"))
 }
 /// Degree-parameterized field-neutral IPA accumulator.
@@ -606,6 +606,19 @@ pub fn verify_and_decide_ep_accumulation_v4(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recoverable_native_verifier_panic_suppresses_shutdown_hook_scope() {
+        assert!(!crate::panic_hook::is_suppressed());
+        let error = catch_native_verifier_panic("injected verifier", || {
+            assert!(crate::panic_hook::is_suppressed());
+            panic!("injected recoverable verifier panic");
+        })
+        .expect_err("verifier panic must become a typed rejection");
+
+        assert!(error.contains("rejected an invalid native verifier relation"));
+        assert!(!crate::panic_hook::is_suppressed());
+    }
     use ff::Field as _;
     use halo2_proofs::{
         halo2curves::group::Group as _,

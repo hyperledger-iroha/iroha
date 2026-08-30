@@ -44,8 +44,6 @@ mod load_code;
 mod manifest_roundtrip;
 #[path = "../memory.rs"]
 mod memory;
-#[path = "../memory_circuit.rs"]
-mod memory_circuit;
 #[path = "../memory_commit.rs"]
 mod memory_commit;
 #[path = "../memory_compact_helper.rs"]
@@ -56,18 +54,12 @@ mod memory_log;
 mod memory_merkle;
 #[path = "../memory_merkle_combined.rs"]
 mod memory_merkle_combined;
-#[path = "../merkle_circuit.rs"]
-mod merkle_circuit;
 #[path = "../merkle_cross.rs"]
 mod merkle_cross;
 #[path = "../merkle_crosscrate.rs"]
 mod merkle_crosscrate;
-#[path = "../merkle_dirs.rs"]
-mod merkle_dirs;
 #[path = "../merkle_dirs_crosscheck.rs"]
 mod merkle_dirs_crosscheck;
-#[path = "../merkle_super_hash.rs"]
-mod merkle_super_hash;
 #[path = "../merkle_unification.rs"]
 mod merkle_unification;
 #[path = "../metadata.rs"]

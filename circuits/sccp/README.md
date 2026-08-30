@@ -11,12 +11,13 @@ tree. It does not add a Rust dependency and must not update any `Cargo.lock`.
 
 ## Security boundary
 
-This source revision is **not production-admissible**. The production checker
-contains a source-level fail-closed constant; changing JSON, supplying a key,
-or passing a command-line option cannot bypass it. The remaining implementation,
-resource, ceremony, audit, and destination-verification blockers are enumerated
-in `manifests/semantic-coverage-final-v1.json`. Structural hashes are not
-treated as substitutes for exact Norito bytes or BLS pairing verification.
+This source revision is **not production-admissible**. The remaining
+implementation, resource, ceremony, audit, and destination-verification blockers
+are enumerated in `manifests/semantic-coverage-final-v1.json`. That manifest is
+informational and cannot issue a release verdict. Only the repository's signed
+Rust/Python production corridor may authenticate actual artifacts and declare a
+release admissible; structural hashes are not substitutes for exact bytes,
+trusted signatures, or BLS pairing verification.
 
 No command generates a trusted setup, accepts a caller-selected verification
 key, or emits an accepting smoke verifier. `emit-kat` only emits deterministic
@@ -64,12 +65,6 @@ GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -mod=vendor ./...
 GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go build -mod=vendor ./cmd/sccp-circuits
 ```
 
-The expected production-readiness result for this revision is failure:
-
-```sh
-go run ./cmd/sccp-circuits check-production
-```
-
 The fixed catalogue and one KAT can be inspected without key material:
 
 ```sh
@@ -91,9 +86,9 @@ the SPDX SBOM and every vendored file before building. The output directory
 must not already exist.
 
 Run the builder twice from the same signed clean commit and compare both
-`sccp-circuits.sha256` files. The external final-V1 release closure additionally
-requires the complete independently signed source, toolchain, ceremony, key,
-KAT, verifier, prover, and audit inventory.
+`sccp-circuits.sha256` files. The canonical signed production corridor
+additionally requires the complete independently authenticated source,
+toolchain, ceremony, key, KAT, verifier, prover, and audit inventory.
 
 ## Ceremony policy
 

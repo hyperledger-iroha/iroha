@@ -1,5 +1,5 @@
 //! Utilities for working with Merkle proofs emitted by the VM.
-use crate::{Memory, Registers};
+use crate::{Memory, Registers, VMError};
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleError, MerkleProof};
 use norito::codec::{Decode, Encode};
 use sha2::Digest as _;
@@ -157,12 +157,15 @@ impl CompactProofBundle {
 }
 // Norito encoding/decoding derives are used so bundles can be passed via INPUT/OUTPUT.
 /// Build a `CompactProofBundle` for a memory address using the in‑process compact builder.
+///
+/// # Errors
+/// Returns [`VMError::MemoryOutOfBounds`] unless `addr` names an exact byte in the memory image.
 pub fn memory_compact_bundle(
     mem: &mut Memory,
     addr: u64,
     depth_cap: Option<usize>,
-) -> CompactProofBundle {
-    let (cp, root) = mem.merkle_compact(addr, depth_cap);
+) -> Result<CompactProofBundle, VMError> {
+    let (cp, root) = mem.merkle_compact(addr, depth_cap)?;
     if crate::dev_env::debug_compact_enabled() {
         eprintln!(
             "[mem-compact] addr=0x{addr:08x} depth={} dirs=0x{:08x}",
@@ -177,30 +180,33 @@ pub fn memory_compact_bundle(
         .map(|opt| opt.map(|h| *h.as_ref()).unwrap_or([0u8; 32]))
         .collect();
     let root_bytes = *root.as_ref();
-    CompactProofBundle {
+    Ok(CompactProofBundle {
         depth: cp.depth(),
         dirs: cp.dirs(),
         siblings,
         root: root_bytes,
-    }
+    })
 }
-/// Build a `CompactProofBundle` for a register index using the in‑process compact builder.
+/// Build a `CompactProofBundle` for a register index using the in-process compact builder.
+///
+/// # Errors
+/// Returns [`VMError::RegisterOutOfBounds`] when `idx` is not a register index.
 pub fn registers_compact_bundle(
     regs: &Registers,
     idx: usize,
     depth_cap: Option<usize>,
-) -> CompactProofBundle {
-    let (cp, root) = regs.merkle_compact(idx, depth_cap);
+) -> Result<CompactProofBundle, VMError> {
+    let (cp, root) = regs.merkle_compact(idx, depth_cap)?;
     let siblings: Vec<[u8; 32]> = cp
         .siblings()
         .iter()
         .map(|opt| opt.map(|h| *h.as_ref()).unwrap_or([0u8; 32]))
         .collect();
     let root_bytes = *root.as_ref();
-    CompactProofBundle {
+    Ok(CompactProofBundle {
         depth: cp.depth(),
         dirs: cp.dirs(),
         siblings,
         root: root_bytes,
-    }
+    })
 }

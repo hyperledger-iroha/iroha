@@ -3306,48 +3306,6 @@ pub mod isi {
                     RetainedNumericAssetMovementPurpose::GovernanceRestitution(binding),
                 )
             }
-            VerifiedGovernanceNumericPurpose::CitizenshipSlash { owner, slash_bps } => {
-                let record = state_transaction
-                    .world
-                    .citizens
-                    .get(&owner)
-                    .ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "citizenship slash capability has no retained citizenship record"
-                                .into(),
-                        )
-                    })?;
-                let expected_source = AssetId::new(
-                    state_transaction.gov.citizenship_asset_id.clone(),
-                    state_transaction.gov.citizenship_escrow_account.clone(),
-                );
-                let expected_destination = AssetId::new(
-                    state_transaction.gov.citizenship_asset_id.clone(),
-                    state_transaction.gov.slash_receiver_account.clone(),
-                );
-                let expected_amount = record
-                    .amount
-                    .try_mul_decimal(&Numeric::new(u32::from(slash_bps), 4))
-                    .map_err(|_| MathError::Overflow)?;
-                if source_id != expected_source
-                    || destination_id != expected_destination
-                    || amount != expected_amount
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "citizenship slash capability does not match its retained bond".into(),
-                    ));
-                }
-                let binding = canonical_numeric_movement_binding(&(
-                    owner.clone(),
-                    slash_bps,
-                    amount.clone(),
-                    record.amount.clone(),
-                ))?;
-                (
-                    owner,
-                    RetainedNumericAssetMovementPurpose::GovernanceSlash(binding),
-                )
-            }
             VerifiedGovernanceNumericPurpose::CitizenshipRelease { owner } => {
                 let record = state_transaction
                     .world

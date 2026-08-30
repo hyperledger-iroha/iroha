@@ -13,7 +13,7 @@ use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_data_model::soracloud::SoraRouteVisibilityV1;
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Map, Value};
-use std::net::SocketAddr;
+use std::{collections::HashSet, net::SocketAddr};
 pub(crate) const APP_API_BINDING_CONFIG_NAME: &str = "torii/app_api_binding";
 pub(crate) const APP_API_MANIFEST_SCHEMA_VERSION_V1: u16 = 1;
 const ADAPTER_CONTRACT_VIEW_BATCH_V1: &str = "contract.view_batch.v1";
@@ -42,12 +42,11 @@ const API_MANIFEST_FILE_NAMES: &[&str] = &[
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ToriiAppApiRouteV1 {
     pub method: String,
     pub path: String,
     pub adapter: String,
-    #[norito(default)]
-    pub cache_ttl_ms: Option<u64>,
 }
 #[derive(
     crate::json_macros::JsonDeserialize,
@@ -57,6 +56,7 @@ pub(crate) struct ToriiAppApiRouteV1 {
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ToriiAppApiManifestV1 {
     pub schema_version: u16,
     pub app_id: String,
@@ -67,6 +67,7 @@ pub(crate) struct ToriiAppApiManifestV1 {
     pub routes: Vec<ToriiAppApiRouteV1>,
 }
 #[derive(crate::json_macros::JsonDeserialize, Debug, Clone)]
+#[norito(deny_unknown_fields)]
 struct ToriiAppApiBindingV1 {
     pub schema_version: u16,
     pub app_id: String,
@@ -116,21 +117,24 @@ fn normalize_dispatch_path(path: &str) -> Option<String> {
 fn is_supported_method(method: &str) -> bool {
     method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("POST")
 }
+fn adapter_method(adapter: &str) -> Option<&'static str> {
+    match adapter {
+        ADAPTER_CONTRACT_VIEW_BATCH_V1 => Some("POST"),
+        ADAPTER_SWAPS_FILLS_V1
+        | ADAPTER_SWAPS_CANDLES_V1
+        | ADAPTER_TRADER_ACTIVITY_V1
+        | ADAPTER_TRADER_ACCOUNT_V1
+        | ADAPTER_INTENTS_V1
+        | ADAPTER_VAULT_POSITIONS_V1
+        | ADAPTER_OPERATORS_STATUS_V1
+        | ADAPTER_MARGIN_HEALTH_V1
+        | ADAPTER_RWA_LOTS_V1
+        | ADAPTER_DLMM_HOOKS_V1 => Some("GET"),
+        _ => None,
+    }
+}
 fn adapter_is_supported(adapter: &str) -> bool {
-    matches!(
-        adapter,
-        ADAPTER_CONTRACT_VIEW_BATCH_V1
-            | ADAPTER_SWAPS_FILLS_V1
-            | ADAPTER_SWAPS_CANDLES_V1
-            | ADAPTER_TRADER_ACTIVITY_V1
-            | ADAPTER_TRADER_ACCOUNT_V1
-            | ADAPTER_INTENTS_V1
-            | ADAPTER_VAULT_POSITIONS_V1
-            | ADAPTER_OPERATORS_STATUS_V1
-            | ADAPTER_MARGIN_HEALTH_V1
-            | ADAPTER_RWA_LOTS_V1
-            | ADAPTER_DLMM_HOOKS_V1
-    )
+    adapter_method(adapter).is_some()
 }
 fn adapter_is_dataspace_visible_read(adapter: &str) -> bool {
     matches!(
@@ -147,24 +151,46 @@ fn adapter_is_dataspace_visible_read(adapter: &str) -> bool {
             | ADAPTER_DLMM_HOOKS_V1
     )
 }
-fn validate_route(route: &ToriiAppApiRouteV1) -> Result<(), Response> {
+fn validate_route(route: &ToriiAppApiRouteV1) -> Result<(&'static str, String), Response> {
     if !is_supported_method(&route.method) {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
             format!("unsupported app API route method `{}`", route.method),
         ));
     }
-    if normalize_route_path(&route.path).is_none() {
+    let Some(canonical_path) = normalize_route_path(&route.path) else {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
             format!("invalid app API route path `{}`", route.path),
         ));
-    }
-    if !adapter_is_supported(&route.adapter) {
+    };
+    let Some(expected_method) = adapter_method(&route.adapter) else {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
             format!("unsupported app API adapter `{}`", route.adapter),
         ));
+    };
+    if !route.method.eq_ignore_ascii_case(expected_method) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "app API adapter `{}` requires method `{expected_method}`, not `{}`",
+                route.adapter, route.method
+            ),
+        ));
+    }
+    Ok((expected_method, canonical_path))
+}
+fn validate_routes(routes: &[ToriiAppApiRouteV1]) -> Result<(), Response> {
+    let mut canonical_routes = HashSet::with_capacity(routes.len());
+    for route in routes {
+        let key = validate_route(route)?;
+        if !canonical_routes.insert(key.clone()) {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("duplicate app API route `{} {}`", key.0, key.1),
+            ));
+        }
     }
     Ok(())
 }
@@ -215,9 +241,7 @@ fn validate_manifest(
             "app API manifest must define at least one route",
         ));
     }
-    for route in &manifest.routes {
-        validate_route(route)?;
-    }
+    validate_routes(&manifest.routes)?;
     Ok(())
 }
 fn validate_binding(binding: &ToriiAppApiBindingV1) -> Result<(), Response> {
@@ -242,9 +266,7 @@ fn validate_binding(binding: &ToriiAppApiBindingV1) -> Result<(), Response> {
             "app API binding must define routes or content_cid",
         ));
     }
-    for route in &binding.routes {
-        validate_route(route)?;
-    }
+    validate_routes(&binding.routes)?;
     Ok(())
 }
 fn binding_to_manifest(binding: &ToriiAppApiBindingV1) -> ToriiAppApiManifestV1 {
@@ -308,10 +330,6 @@ fn route_to_json(route: &ToriiAppApiRouteV1) -> Value {
     object.insert("method".into(), Value::from(route.method.clone()));
     object.insert("path".into(), Value::from(route.path.clone()));
     object.insert("adapter".into(), Value::from(route.adapter.clone()));
-    object.insert(
-        "cache_ttl_ms".into(),
-        route.cache_ttl_ms.map_or(Value::Null, Value::from),
-    );
     Value::Object(object)
 }
 fn manifest_to_json(manifest: &ToriiAppApiManifestV1) -> Value {
@@ -977,6 +995,15 @@ pub(crate) async fn handle_post_app_api_active_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn route(method: &str, path: &str, adapter: &str) -> ToriiAppApiRouteV1 {
+        ToriiAppApiRouteV1 {
+            method: method.to_owned(),
+            path: path.to_owned(),
+            adapter: adapter.to_owned(),
+        }
+    }
+
     #[test]
     fn normalize_route_path_accepts_relative_and_absolute_paths() {
         assert_eq!(
@@ -990,14 +1017,97 @@ mod tests {
         assert_eq!(normalize_route_path(""), None);
         assert_eq!(normalize_route_path("/v1//broken"), None);
     }
+
+    #[test]
+    fn route_validation_rejects_dispatcher_method_mismatches() {
+        let get_view = route(
+            "GET",
+            "/v1/contracts/view/batch",
+            ADAPTER_CONTRACT_VIEW_BATCH_V1,
+        );
+        let post_rollup = route(
+            "POST",
+            "/v1/contracts/rollups/swaps/fills",
+            ADAPTER_SWAPS_FILLS_V1,
+        );
+        assert_eq!(
+            validate_route(&get_view).unwrap_err().status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            validate_route(&post_rollup).unwrap_err().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        assert!(
+            validate_route(&route(
+                "POST",
+                "/v1/contracts/view/batch",
+                ADAPTER_CONTRACT_VIEW_BATCH_V1,
+            ))
+            .is_ok()
+        );
+        assert!(
+            validate_route(&route(
+                "GET",
+                "/v1/contracts/rollups/swaps/fills",
+                ADAPTER_SWAPS_FILLS_V1,
+            ))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn manifest_validation_rejects_canonical_duplicate_routes() {
+        let manifest = ToriiAppApiManifestV1 {
+            schema_version: APP_API_MANIFEST_SCHEMA_VERSION_V1,
+            app_id: "soraswap".to_owned(),
+            content_cid: None,
+            manifest_digest_hex: None,
+            routes: vec![
+                route("GET", "v1/contracts/rollups/swaps", ADAPTER_SWAPS_FILLS_V1),
+                route(
+                    "get",
+                    "/v1/contracts/rollups/swaps",
+                    ADAPTER_SWAPS_CANDLES_V1,
+                ),
+            ],
+        };
+
+        assert_eq!(
+            validate_manifest(&manifest, None, None)
+                .unwrap_err()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn manifest_schema_rejects_unknown_route_fields() {
+        let encoded = r#"{
+            "schema_version": 1,
+            "app_id": "soraswap",
+            "routes": [{
+                "method": "GET",
+                "path": "/v1/contracts/rollups/swaps/fills",
+                "adapter": "contract.rollups.swaps_fills.v1",
+                "cache_ttl_ms": 60000
+            }]
+        }"#;
+
+        assert!(
+            json::from_str::<ToriiAppApiManifestV1>(encoded).is_err(),
+            "the first-release manifest schema must reject undeclared fields",
+        );
+    }
+
     #[test]
     fn find_matching_route_requires_method_path_and_adapter() {
-        let routes = vec![ToriiAppApiRouteV1 {
-            method: "GET".to_owned(),
-            path: "/v1/contracts/rollups/swaps/fills".to_owned(),
-            adapter: ADAPTER_SWAPS_FILLS_V1.to_owned(),
-            cache_ttl_ms: None,
-        }];
+        let routes = vec![route(
+            "GET",
+            "/v1/contracts/rollups/swaps/fills",
+            ADAPTER_SWAPS_FILLS_V1,
+        )];
         assert!(
             find_matching_route(&routes, &Method::GET, "/v1/contracts/rollups/swaps/fills")
                 .is_some()
@@ -1013,7 +1123,6 @@ mod tests {
             method: "GET".to_owned(),
             path: "/v1/contracts/rollups/swaps/fills".to_owned(),
             adapter: ADAPTER_SWAPS_FILLS_V1.to_owned(),
-            cache_ttl_ms: Some(60_000),
         };
         let mut response = StatusCode::BAD_REQUEST.into_response();
         response.headers_mut().insert(
@@ -1032,7 +1141,6 @@ mod tests {
             method: "POST".to_owned(),
             path: "/v1/contracts/view/batch".to_owned(),
             adapter: ADAPTER_CONTRACT_VIEW_BATCH_V1.to_owned(),
-            cache_ttl_ms: None,
         };
         let mut response = StatusCode::OK.into_response();
         response.headers_mut().insert(

@@ -767,13 +767,6 @@ pub mod isi {
         {
             return account_subject_matches(permission.debited_asset.account(), account_id);
         }
-        if let Ok(permission) =
-            iroha_executor_data_model::permission::governance::CanRecordCitizenService::try_from(
-                permission,
-            )
-        {
-            return account_subject_matches(&permission.owner, account_id);
-        }
         false
     }
     pub(crate) fn remove_account_associated_permissions(
@@ -7393,73 +7386,6 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("grant permission to holder");
         let role_id: RoleId = "ACCOUNT_CLEANUP".parse().expect("role id");
-        Register::role(Role::new(role_id.clone(), holder_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register role");
-        Grant::role_permission(permission.clone(), role_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("grant permission to role");
-        assert!(
-            tx.world
-                .account_permissions
-                .get(&holder_id)
-                .is_some_and(|perms| perms.contains(&permission)),
-            "holder should have permission before unregister"
-        );
-        let role = tx.world.roles.get(&role_id).expect("role should exist");
-        assert!(
-            role.permissions().any(|perm| perm == &permission),
-            "role should include permission before unregister"
-        );
-        Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("unregister account");
-        assert!(
-            !tx.world
-                .account_permissions
-                .get(&holder_id)
-                .is_some_and(|perms| perms.contains(&permission)),
-            "holder permission should be removed"
-        );
-        let role = tx.world.roles.get(&role_id).expect("role should exist");
-        assert!(
-            !role.permissions().any(|perm| perm == &permission),
-            "role permission should be removed"
-        );
-        assert!(
-            !role.permission_epochs().contains_key(&permission),
-            "permission epochs should be pruned"
-        );
-    }
-    #[test]
-    fn unregister_account_removes_citizen_service_permissions_from_accounts_and_roles() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-        let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
-        seed_domain(&mut state, &holder_domain, &authority);
-        let keypair = checked_keypair();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let holder_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register target account");
-        Register::account(NewAccount::new(holder_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register holder account");
-        let permission: Permission =
-            iroha_executor_data_model::permission::governance::CanRecordCitizenService {
-                owner: account_id.clone(),
-            }
-            .into();
-        Grant::account_permission(permission.clone(), holder_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("grant permission to holder");
-        let role_id: RoleId = "CITIZEN_SERVICE_CLEANUP".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), holder_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register role");

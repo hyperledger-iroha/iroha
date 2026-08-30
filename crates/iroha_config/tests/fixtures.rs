@@ -9,9 +9,9 @@ use iroha_config::parameters::{
     actual::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
         LaneProfile, NexusFeeSettlementMode, NexusStorage, NoritoRpcStage, OperatorAuthLockout,
-        OperatorTokenFallback, OperatorTokenSource, OracleChangeThresholds, OracleEconomics,
-        OracleGovernance, OracleTwitterBinding, Queue, Root as Config, SoranetVpn, Streaming,
-        StreamingSync, ToriiMcpProfile, ToriiOperatorAuth, TransactionGossiper,
+        OracleChangeThresholds, OracleEconomics, OracleGovernance, OracleTwitterBinding, Queue,
+        Root as Config, SoranetVpn, Streaming, StreamingSync, ToriiMcpProfile, ToriiOperatorAuth,
+        TransactionGossiper,
     },
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
@@ -238,6 +238,9 @@ fn portable_production_capabilities_default_to_enabled() {
     assert!(!config.torii.mcp.expose_operator_routes);
     assert!(!config.torii.cors.enabled);
     assert!(!config.torii.push.enabled);
+    assert!(config.sorafs_gateway.enforce_capabilities);
+    assert_eq!(config.sorafs_storage.metering_smoothing.gib_hours_alpha, Some(0.2));
+    assert_eq!(config.sorafs_storage.metering_smoothing.por_success_alpha, Some(0.2));
 }
 #[test]
 fn ivm_banner_override_applies() {

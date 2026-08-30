@@ -15,9 +15,9 @@ eligible-citizen snapshot in its `SortitionRequestV1`; that request is committed
 before a strictly future finalized threshold-beacon pulse. The first consumed
 pulse covers all initially required bodies as one simultaneous draw batch.
 Roster sealing follows authenticated invitation responses. Reads never derive a
-missing roster from assets, compatibility-only roster snapshots, module names,
-or another attempt. Restored legacy roster records are inert and have no public
-projection.
+missing roster from assets, module names, configuration, or another attempt.
+The first-release state schema contains no standing council or detached
+Parliament-roster snapshot; the attempt reducer is the sole roster authority.
 Every governance lock likewise carries its immutable asset, escrow, and slash
 custody binding; missing-custody JSON/Norito records are rejected and runtime
 configuration is never used to reconstruct retained lock custody.
@@ -816,7 +816,6 @@ RBAC
     - Global data-trigger permission proposals: a registered bonded citizen
     - Standalone ballots: `CanSubmitGovernanceBallot{ referendum_id }`
     - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
-    - Citizen service outcomes: `CanRecordCitizenService{ owner }`
     - Remaining managed Parliament and standalone ZK-election transitions:
       `CanManageParliament`
 - Scoped governance capabilities are bootstrapped by genesis and thereafter

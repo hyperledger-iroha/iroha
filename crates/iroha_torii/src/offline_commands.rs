@@ -2440,6 +2440,7 @@ mod tests {
             autonomous_epoch: 1,
             autonomous_payload_hash: Hash::new(b"offline-status-merge-payload"),
             entrypoint_hashes,
+            authenticated_signed_replay_aliases: vec![None],
             entrypoints: vec![entrypoint],
             reservation_keys: vec![vec![0x01]],
             routing_plans: vec![vec![0x02]],

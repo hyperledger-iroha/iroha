@@ -13584,7 +13584,7 @@ fn try_generate_router_openapi() -> Result<Option<Vec<u8>>, Box<dyn Error>> {
     runtime.block_on(generate_router_openapi_async())
 }
 async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-    const OPENAPI_ENDPOINT_CANDIDATES: &[&str] = &["/openapi.json", "/openapi"];
+    const OPENAPI_ENDPOINT_CANDIDATES: &[&str] = &["/openapi.json"];
     let _data_dir = TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     let mut tokens = vec!["Test-Token".to_owned()];

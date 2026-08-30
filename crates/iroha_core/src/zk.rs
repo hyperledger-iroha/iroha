@@ -13,13 +13,15 @@
 //! verifying-key registry ISIs; consensus-critical state and policies live in
 //! `smartcontracts::isi` and related modules.
 //
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-use std::collections::{BTreeMap, btree_map::Entry};
 #[cfg(any(
     feature = "zk-halo2",
     feature = "zk-halo2-ipa",
     feature = "zk-preverify"
 ))]
+use std::collections::BTreeMap;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+use std::collections::btree_map::Entry;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use std::sync::Arc;
 #[cfg(any(
     feature = "zk-halo2",
@@ -103,8 +105,6 @@ use halo2_proofs::poly::commitment::Params as _;
 ))]
 use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
-#[cfg(feature = "zk-preverify")]
-use ivm::halo2::VMExecutionCircuit;
 #[cfg(feature = "zk-halo2")]
 use kaigi_zk::{
     KAIGI_ROSTER_BACKEND, KAIGI_USAGE_BACKEND, KaigiRosterJoinCircuit, KaigiUsageCommitmentCircuit,
@@ -112,8 +112,6 @@ use kaigi_zk::{
 #[cfg(feature = "zk-halo2-ipa")]
 use norito::codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
-#[cfg(feature = "zk-preverify")]
-use tokio::sync::mpsc;
 #[cfg(feature = "zk-halo2-ipa")]
 const HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION: u16 = 1;
 #[cfg(feature = "zk-halo2-ipa")]
@@ -4196,13 +4194,13 @@ pub struct DedupCache {
 #[cfg(feature = "zk-preverify")]
 const TRACE_DIGEST_BACKEND: &str = "zk-trace/digest";
 #[cfg(feature = "zk-preverify")]
-static TRACE_PROOF_QUEUE: OnceLock<Mutex<BTreeMap<u64, Vec<PipelineProofSnapshot>>>> =
+static TRACE_DIGEST_QUEUE: OnceLock<Mutex<BTreeMap<u64, Vec<PipelineProofSnapshot>>>> =
     OnceLock::new();
 #[cfg(feature = "zk-preverify")]
-fn trace_proof_queue() -> &'static Mutex<BTreeMap<u64, Vec<PipelineProofSnapshot>>> {
-    TRACE_PROOF_QUEUE.get_or_init(|| Mutex::new(BTreeMap::new()))
+fn trace_digest_queue() -> &'static Mutex<BTreeMap<u64, Vec<PipelineProofSnapshot>>> {
+    TRACE_DIGEST_QUEUE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
-/// Construct a trace-proof snapshot representing a verified IVM trace digest.
+/// Construct diagnostic metadata representing a verified IVM trace digest.
 #[cfg(feature = "zk-preverify")]
 pub fn make_trace_digest_artifact(
     code_hash: [u8; 32],
@@ -4221,100 +4219,27 @@ pub fn make_trace_digest_artifact(
         tx_hash: tx_hash_bytes,
     }
 }
+/// Record a verified trace-digest artifact for a block height.
 #[cfg(feature = "zk-preverify")]
-const TRACE_QUEUE_MAX_SPINS: usize = 20;
-#[cfg(feature = "zk-preverify")]
-const TRACE_QUEUE_SLEEP_MS: u64 = 10;
-#[cfg(feature = "zk-preverify")]
-/// Captured trace metadata awaiting background validation and future proof generation.
-#[derive(Clone)]
-pub struct TraceForProving {
-    digest: [u8; 32],
-    program: Arc<[u8]>,
-    trace: Vec<ivm::zk::RegisterState>,
-    constraints: Vec<ivm::zk::Constraint>,
-    code_hash: [u8; 32],
-    tx_hash: Option<[u8; 32]>,
-}
-#[cfg(feature = "zk-preverify")]
-impl TraceForProving {
-    /// Construct a proving job from a verified ZK lane task.
-    pub fn from_task(task: &crate::pipeline::zk_lane::ZkTask, digest: [u8; 32]) -> Self {
-        Self {
-            digest,
-            program: Arc::clone(&task.program),
-            trace: task.trace.clone(),
-            constraints: task.constraints.clone(),
-            code_hash: task.code_hash,
-            tx_hash: task.tx_hash.as_ref().map(|hash| {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(hash.as_ref());
-                arr
-            }),
-        }
-    }
-    fn validate(&self) -> Result<(), String> {
-        VMExecutionCircuit::new(self.program.as_ref(), &self.trace, &self.constraints)
-            .verify()
-            .map_err(|err| err.to_string())
-    }
-}
-#[cfg(feature = "zk-preverify")]
-static TRACE_PROVING_QUEUE: OnceLock<Mutex<BTreeMap<u64, Vec<TraceForProving>>>> = OnceLock::new();
-#[cfg(feature = "zk-preverify")]
-fn trace_proving_queue() -> &'static Mutex<BTreeMap<u64, Vec<TraceForProving>>> {
-    TRACE_PROVING_QUEUE.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-#[cfg(feature = "zk-preverify")]
-/// Persist a trace-validation job until the background lane receives the matching block header.
-pub fn queue_trace_for_proving(height: u64, job: TraceForProving) {
-    let mut guard = trace_proving_queue()
+pub fn queue_trace_digest(height: u64, artifact: PipelineProofSnapshot) {
+    let mut guard = trace_digest_queue()
         .lock()
-        .expect("trace proving queue poisoned");
-    guard.entry(height).or_default().push(job);
-}
-#[cfg(feature = "zk-preverify")]
-fn try_take_traces_for_height(height: u64) -> Option<Vec<TraceForProving>> {
-    let mut guard = trace_proving_queue()
-        .lock()
-        .expect("trace proving queue poisoned");
-    guard.remove(&height)
-}
-#[cfg(feature = "zk-preverify")]
-/// Attempt to drain all proving jobs queued for `height`, waiting briefly for in-flight verifiers.
-pub fn collect_traces_for_proving(height: u64) -> Vec<TraceForProving> {
-    for attempt in 0..TRACE_QUEUE_MAX_SPINS {
-        if let Some(entries) = try_take_traces_for_height(height) {
-            return entries;
-        }
-        if attempt + 1 == TRACE_QUEUE_MAX_SPINS {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(TRACE_QUEUE_SLEEP_MS));
-    }
-    Vec::new()
-}
-/// Record a verified trace proof artifact for a block height.
-#[cfg(feature = "zk-preverify")]
-pub fn queue_trace_proof(height: u64, artifact: PipelineProofSnapshot) {
-    let mut guard = trace_proof_queue()
-        .lock()
-        .expect("trace proof queue poisoned");
+        .expect("trace digest queue poisoned");
     guard.entry(height).or_default().push(artifact);
 }
-/// Drain all queued trace proof artifacts for the given block height.
+/// Drain all queued trace-digest artifacts for the given block height.
 #[cfg(feature = "zk-preverify")]
-pub fn collect_trace_proofs_for_height(height: u64) -> Vec<PipelineProofSnapshot> {
+pub fn collect_trace_digests_for_height(height: u64) -> Vec<PipelineProofSnapshot> {
     const MAX_SPINS: usize = 20;
     const SLEEP_MS: u64 = 10;
     for attempt in 0..MAX_SPINS {
-        if let Some(proofs) = {
-            let mut guard = trace_proof_queue()
+        if let Some(digests) = {
+            let mut guard = trace_digest_queue()
                 .lock()
-                .expect("trace proof queue poisoned");
+                .expect("trace digest queue poisoned");
             guard.remove(&height)
         } {
-            return proofs;
+            return digests;
         }
         if attempt + 1 == MAX_SPINS {
             break;
@@ -4323,94 +4248,14 @@ pub fn collect_trace_proofs_for_height(height: u64) -> Vec<PipelineProofSnapshot
     }
     Vec::new()
 }
-/// Clear the trace proof queue (test helper).
+/// Clear the trace-digest queue (test helper).
 #[cfg(all(test, feature = "zk-preverify"))]
-pub(crate) fn reset_trace_proof_state_for_tests() {
-    if let Some(lock) = TRACE_PROOF_QUEUE.get() {
-        let mut guard = lock.lock().expect("trace proof queue poisoned");
+pub(crate) fn reset_trace_digest_state_for_tests() {
+    if let Some(lock) = TRACE_DIGEST_QUEUE.get() {
+        let mut guard = lock.lock().expect("trace digest queue poisoned");
         guard.clear();
     }
 }
-#[cfg(all(test, feature = "zk-preverify"))]
-pub(crate) fn reset_trace_proving_state_for_tests() {
-    if let Some(lock) = TRACE_PROVING_QUEUE.get() {
-        let mut guard = lock.lock().expect("trace proving queue poisoned");
-        guard.clear();
-    }
-}
-#[cfg(feature = "zk-preverify")]
-static ZK_SENDER: OnceLock<mpsc::Sender<iroha_data_model::block::BlockHeader>> = OnceLock::new();
-/// Start the background ZK trace lane that revalidates queued traces.
-#[cfg(feature = "zk-preverify")]
-pub fn start_lane() {
-    if ZK_SENDER.get().is_some() {
-        return;
-    }
-    let (tx, mut rx) = mpsc::channel::<iroha_data_model::block::BlockHeader>(128);
-    let _ = ZK_SENDER.set(tx);
-    tokio::spawn(async move {
-        while let Some(header) = rx.recv().await {
-            let height = header.height().get();
-            let entries = {
-                let mut attempt = 0usize;
-                loop {
-                    if let Some(entries) = try_take_traces_for_height(height) {
-                        break entries;
-                    }
-                    if attempt >= TRACE_QUEUE_MAX_SPINS {
-                        break Vec::new();
-                    }
-                    attempt += 1;
-                    tokio::time::sleep(Duration::from_millis(TRACE_QUEUE_SLEEP_MS)).await;
-                }
-            };
-            if entries.is_empty() {
-                iroha_logger::debug!(height, "zk_lane: no verified traces queued for block");
-                continue;
-            }
-            for entry in entries {
-                match entry.validate() {
-                    Ok(()) => {
-                        let digest = entry.digest;
-                        let trace_len = entry.trace.len();
-                        let constraint_len = entry.constraints.len();
-                        let code_hash_hex = hex::encode(entry.code_hash);
-                        let tx_hash_hex = entry
-                            .tx_hash
-                            .map(|bytes| hex::encode(bytes))
-                            .unwrap_or_else(|| "none".to_string());
-                        iroha_logger::info!(
-                            height,
-                            %code_hash_hex,
-                            %tx_hash_hex,
-                            digest = %hex::encode(digest),
-                            trace_len,
-                            constraint_len,
-                            "zk_lane: validated queued block trace"
-                        );
-                    }
-                    Err(err) => {
-                        iroha_logger::warn!(
-                            height,
-                            error = err,
-                            "zk_lane: failed to revalidate queued block trace"
-                        );
-                    }
-                }
-            }
-        }
-    });
-}
-/// Enqueue a block header for background proving. No-op if the lane is not started.
-#[cfg(feature = "zk-preverify")]
-pub fn enqueue_block_for_proving(header: &iroha_data_model::block::BlockHeader) {
-    if let Some(tx) = ZK_SENDER.get() {
-        let _ = tx.try_send(header.clone());
-    }
-}
-// Future work (zk-lane): implement real proving over IVM traces and attach proofs to
-// blocks non-consensus-critically. Configuration knobs and end-to-end tests for the
-// native verifiers will ship alongside that feature.
 impl DedupCache {
     /// Create a new empty cache.
     pub fn new() -> Self {

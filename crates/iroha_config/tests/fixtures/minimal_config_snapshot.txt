@@ -457,8 +457,6 @@ Root {
                 "127.0.0.1/32",
                 "::1/128",
             ],
-            token_fallback: Bootstrap,
-            token_source: OperatorTokens,
             tokens: [],
             rate_per_minute: Some(
                 30,
@@ -796,8 +794,12 @@ Root {
                 ],
             },
             metering_smoothing: SorafsMeteringSmoothing {
-                gib_hours_alpha: None,
-                por_success_alpha: None,
+                gib_hours_alpha: Some(
+                    0.2,
+                ),
+                por_success_alpha: Some(
+                    0.2,
+                ),
             },
             stream_tokens: SorafsTokenConfig {
                 enabled: false,
@@ -978,7 +980,7 @@ Root {
         sorafs_gateway: SorafsGateway {
             require_manifest_envelope: true,
             enforce_admission: true,
-            enforce_capabilities: false,
+            enforce_capabilities: true,
             salt_schedule_dir: None,
             site_bindings: SorafsGatewaySiteBindings {
                 path: None,
@@ -2594,15 +2596,6 @@ Root {
             require_slsa: false,
             trusted_signers: {},
             signature_threshold: 0,
-        },
-        citizen_service: CitizenServiceDiscipline {
-            seat_cooldown_blocks: 0,
-            max_seats_per_epoch: 4294967295,
-            free_declines_per_epoch: 4294967295,
-            decline_slash_bps: 0,
-            no_show_slash_bps: 0,
-            misconduct_slash_bps: 0,
-            role_bond_multipliers: {},
         },
         viral_incentives: ViralIncentives {
             incentive_pool_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,

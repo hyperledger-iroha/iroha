@@ -1598,9 +1598,11 @@ impl DrandHttpRandomnessProvider {
         };
         let state_path = self.state_path.clone();
         let persisted = next.clone();
-        tokio::task::spawn_blocking(move || store_secure_state(&state_path, &persisted, "drand"))
-            .await
-            .map_err(|error| RandomnessError::Persistence(error.to_string()))??;
+        crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+            move || store_secure_state(&state_path, &persisted, "drand"),
+        ))
+        .await
+        .map_err(|error| RandomnessError::Persistence(error.to_string()))??;
         let mut state = self.state.lock();
         *state = Some(next);
         Ok(())

@@ -44,9 +44,10 @@ public sealed partial class SccpExactTests
         {
             Assert.Equal(tag is >= 0x40 and <= 0x44, Enum.IsDefined((SccpNetworkV1)tag));
         }
-        Assert.False(Enum.IsDefined((SccpCodecV1)3));
         Assert.False(Enum.IsDefined((SccpCodecV1)4));
+        Assert.False(Enum.IsDefined((SccpCodecV1)5));
         Assert.False(Enum.IsDefined((SccpCodecV1)6));
+        Assert.False(Enum.IsDefined((SccpCodecV1)7));
         Assert.Equal(new[] { SccpPayloadKindV1.Transfer }, Enum.GetValues<SccpPayloadKindV1>());
         foreach (var alias in new[]
         {
@@ -1345,9 +1346,9 @@ public sealed partial class SccpExactTests
         Assert.Throws<ArgumentException>(() => SccpMessageBundleV1.Parse(Json(selector)));
         foreach (var (field, invalid) in new (string, object)[]
         {
-            ("sender_codec", 2),
-            ("recipient_codec", 5),
-            ("asset_home_domain", 4),
+            ("sender_codec", 1),
+            ("recipient_codec", 2),
+            ("asset_home_domain", 5),
             ("amount", "340282366920938463463374607431768211456"),
         })
         {
@@ -1371,6 +1372,15 @@ public sealed partial class SccpExactTests
         }));
         Assert.Equal(new[] { 9UL, 8UL }, recent.Items.Select(static item => item.Height));
         Assert.Equal(new SccpRecentCursor(8, 0), recent.Next);
+        var tron = RecentItem(9, MessageId);
+        tron["target_profile"] = "tron-mainnet";
+        tron["target_domain"] = 3;
+        tron["route_id"] = "taira_tron_xor";
+        tron["payload_projection"] = TransferProjection(3);
+        Assert.Single(SccpRecentMessages.Parse(Json(new Dictionary<string, object?>
+        {
+            ["items"] = new[] { tron },
+        })).Items);
         var sameHeight = SccpRecentMessages.Parse(Json(new Dictionary<string, object?>
         {
             ["items"] = new[]
@@ -1609,6 +1619,14 @@ public sealed partial class SccpExactTests
         var text = Encoding.UTF8.GetString(valid);
         Assert.True(SccpBridgeSubmitResponse.Parse(Encoding.UTF8.GetBytes(
             text.Replace("bridge/sccp/native/bsc-parlia-v1", "evm-groth16-bn254-v1", StringComparison.Ordinal))).Submitted);
+        foreach (var backend in new[] { "tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1" })
+        {
+            var tron = Encoding.UTF8.GetBytes(text
+                .Replace("bridge/sccp/native/bsc-parlia-v1", backend, StringComparison.Ordinal)
+                .Replace("\"counterparty_domain\":2", "\"counterparty_domain\":3", StringComparison.Ordinal)
+                .Replace("\"counterparty_chain\":\"bsc-mainnet\"", "\"counterparty_chain\":\"tron-mainnet\"", StringComparison.Ordinal));
+            Assert.True(SccpBridgeSubmitResponse.Parse(tron).Submitted);
+        }
         Assert.Throws<ArgumentException>(() => SccpBridgeSubmitResponse.Parse(Encoding.UTF8.GetBytes(
             text.Replace("bridge/sccp/native/bsc-parlia-v1", "bridge/caller-chosen", StringComparison.Ordinal))));
         foreach (var retired in new[]
@@ -2455,14 +2473,14 @@ public sealed partial class SccpExactTests
         ["nonce"] = "7",
         ["route_revision"] = 1,
         ["asset_home_domain"] = 0,
-        ["asset_id_codec"] = 1,
+        ["asset_id_codec"] = 0,
         ["asset_id"] = "0x786f72",
         ["amount"] = "1000",
-        ["sender_codec"] = 1,
+        ["sender_codec"] = 0,
         ["sender"] = "0x616c696365407461697261",
-        ["recipient_codec"] = 2,
+        ["recipient_codec"] = 1,
         ["recipient"] = "0x" + new string('1', 40),
-        ["route_id_codec"] = 1,
+        ["route_id_codec"] = 0,
         ["route_id"] = "0x74616972615f6273635f786f72",
     };
 
@@ -2473,7 +2491,7 @@ public sealed partial class SccpExactTests
             1 => "taira_eth_xor",
             2 => "taira_bsc_xor",
             4 => "taira_ton_xor",
-            5 => "taira_tron_xor",
+            3 => "taira_tron_xor",
             _ => throw new ArgumentOutOfRangeException(nameof(destinationDomain)),
         };
         Dictionary<string, object?> recipient = destinationDomain switch
@@ -2486,7 +2504,7 @@ public sealed partial class SccpExactTests
                     ["account"] = "0x" + new string('1', 64),
                 },
             },
-            5 => new()
+            3 => new()
             {
                 ["TronAddress21"] = new Dictionary<string, object?>
                 {

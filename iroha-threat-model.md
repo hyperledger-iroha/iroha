@@ -230,7 +230,7 @@ For this repo + clarified deployment context (internet-exposed public chain; ope
 |---|---|---|
 | `crates/iroha_torii/src/lib.rs` | Router construction, middleware ordering, operator route groups, tx/query handlers, auth/rate-limit decisions, and app API wiring (webhooks/attachments) | TM-001, TM-002, TM-003, TM-004, TM-005, TM-006 |
 | `crates/iroha_torii/src/operator_signatures.rs` | Allowlisted operator signatures, exact canonical transcript, freshness checks, and replay admission | TM-001, TM-004, TM-009 |
-| `crates/iroha_torii/src/operator_auth.rs` | Legacy/session policy and header-based mTLS checks; important for understanding ingress trust assumptions | TM-005 |
+| `crates/iroha_torii/src/operator_auth.rs` | First-credential bootstrap, WebAuthn session policy, and header-based mTLS checks; important for understanding ingress trust assumptions | TM-005 |
 | `crates/iroha_torii/src/routing.rs` | `/v1/configuration` handlers delegate to Kiso without additional auth; large surface area of handlers | TM-001, TM-003 |
 | `crates/iroha_config/src/client_api.rs` | Defines `ConfigUpdateDTO` capabilities (network ACLs, transport changes, handshake updates) | TM-001, TM-009 |
 | `crates/iroha_config/src/parameters/defaults.rs` | Default posture for API tokens/operator auth/Norito-RPC stage; attachment defaults | TM-003, TM-006, TM-008 |

@@ -155,6 +155,30 @@ impl From<ActualConfidentialGas> for ConfidentialGasSchedule {
         }
     }
 }
+
+/// Return whether every gas component fits within the shared block limit.
+///
+/// Components are subtracted from the remaining budget in order so arithmetic
+/// overflow cannot turn an over-limit sum into an accepted saturated value. A
+/// zero block limit retains the existing meaning of an unlimited budget.
+#[must_use]
+pub(crate) fn gas_components_fit_block_limit(
+    block_limit: u64,
+    components: impl IntoIterator<Item = u64>,
+) -> bool {
+    if block_limit == 0 {
+        return true;
+    }
+    let mut remaining = block_limit;
+    for gas in components {
+        if gas > remaining {
+            return false;
+        }
+        remaining -= gas;
+    }
+    true
+}
+
 /// Install the confidential verification gas schedule at a consensus policy boundary.
 pub(crate) fn configure_confidential_gas(schedule: ConfidentialGasSchedule) {
     #[cfg(test)]
@@ -703,6 +727,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_gas_component_fit_is_overflow_safe() {
+        assert!(gas_components_fit_block_limit(0, [u64::MAX, 1]));
+        assert!(gas_components_fit_block_limit(u64::MAX, [u64::MAX]));
+        assert!(!gas_components_fit_block_limit(u64::MAX, [u64::MAX, 1]));
+        assert!(!gas_components_fit_block_limit(u64::MAX, [u64::MAX - 1, 2]));
+        assert!(gas_components_fit_block_limit(10, [3, 7]));
+        assert!(!gas_components_fit_block_limit(10, [3, 8]));
+    }
     use crate::{
         kura::Kura, query::store::LiveQueryStore, state::State,
         zk::test_utils::halo2_fixture_envelope,

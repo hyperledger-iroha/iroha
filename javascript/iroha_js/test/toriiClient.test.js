@@ -5560,46 +5560,6 @@ test("_iterateOffsetIterable enforces item-key whitelists", async () => {
   );
 });
 
-test("fetchSorafsPayloadRange normalizes request and response payloads", async () => {
-  let captured = null;
-  const manifestHex = "c".repeat(64);
-  const providerBytes = Buffer.alloc(32, 0xaa);
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        manifest_id_hex: manifestHex,
-        offset: 4,
-        length: 2,
-        data_b64: Buffer.from([9, 9]).toString("base64"),
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.fetchSorafsPayloadRange({
-    manifestIdHex: manifestHex,
-    offset: 4,
-    length: 2,
-    providerIdHex: providerBytes,
-  });
-  assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/storage/fetch`);
-  assert.ok(captured?.init?.headers?.["X-Iroha-Operator-Public-Key"]);
-  assert.ok(captured?.init?.headers?.["X-Iroha-Operator-Signature"]);
-  const body = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(body.manifest_id_hex, manifestHex);
-  assert.equal(body.offset, 4);
-  assert.equal(body.length, 2);
-  assert.equal(body.provider_id_hex, providerBytes.toString("hex"));
-  assert.deepEqual(result, {
-    manifest_id_hex: manifestHex,
-    offset: 4,
-    length: 2,
-    data_b64: Buffer.from([9, 9]).toString("base64"),
-  });
-});
-
 test("getSorafsStorageState returns typed fields", async () => {
   const snapshot = {
     bytes_used: 10,
@@ -5637,10 +5597,6 @@ test("SoraFS local storage diagnostics require operator signing context", async 
       throw new Error("fetch should not run without operator authentication");
     },
   });
-  await assert.rejects(
-    () => client.fetchSorafsPayloadRange({}),
-    /fetchSorafsPayloadRange requires ToriiClient options\.operatorSigningContext/,
-  );
   await assert.rejects(
     () => client.getSorafsStorageState(),
     /getSorafsStorageState requires ToriiClient options\.operatorSigningContext/,
@@ -18217,11 +18173,12 @@ test("streamEvents retries SSE handshake using streaming profile", async () => {
   assert.equal(attempts, 2);
 });
 
-test("streamSumeragiStatus streams SSE without filters", async () => {
-  let requestHeaders;
+test("streamSumeragiStatus signs each one-shot SSE subscription", async () => {
+  const requests = [];
   const fetchImpl = async (url, init) => {
-    requestHeaders = init.headers;
+    requests.push(init);
     assert.equal(url, `${BASE_URL}/v1/sumeragi/status/sse`);
+    assert.equal(init.redirect, "error");
     return createSseResponse([
       "event: sumeragi.status\n",
       'data: {"view":2}\n',
@@ -18241,7 +18198,34 @@ test("streamSumeragiStatus streams SSE without filters", async () => {
   });
   const next = await iterator.next();
   assert.equal(next.done, true);
-  assert.equal(requestHeaders.Accept, "text/event-stream");
+  const secondIterator = client.streamSumeragiStatus();
+  await secondIterator.next();
+  await secondIterator.next();
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.headers.Accept, "text/event-stream");
+    assert.ok(request.headers["X-Iroha-Operator-Public-Key"]);
+    assert.ok(request.headers["X-Iroha-Operator-Signature"]);
+  }
+  assert.notEqual(
+    requests[0].headers["X-Iroha-Operator-Nonce"],
+    requests[1].headers["X-Iroha-Operator-Nonce"],
+  );
+});
+
+test("streamSumeragiStatus rejects a missing operator signer before fetch", () => {
+  let calls = 0;
+  const client = new SourceToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("fetch must not run");
+    },
+  });
+  assert.throws(
+    () => client.streamSumeragiStatus(),
+    /requires an immutable OperatorSigningContext/u,
+  );
+  assert.equal(calls, 0);
 });
 
 test("streamEvents rejects unsupported filter types", () => {
@@ -25665,6 +25649,90 @@ test("getGovernanceContract mirrors response handling", async () => {
   assert.equal(result.contract_address, "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw");
   assert.equal(result.dataspace, "universal");
   assert.equal(result.code_hash_hex, "1".repeat(64));
+});
+
+test("getGovernanceContract preserves u64 lifecycle tokens and rejects lossy wire values", async () => {
+  const contractAddress =
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  const lifecycleWire = ({
+    revision = "18446744073709551615",
+    imposedAtHeight = "18446744073709551614",
+    expiresAtHeight = "18446744073709551615",
+  } = {}) => JSON.stringify({
+    found: true,
+    contract_address: contractAddress,
+    contract_subject_account: FIXTURE_ALICE_ID,
+    dataspace: "universal",
+    active: true,
+    lifecycle: {
+      version: 1,
+      origin: "direct",
+      origin_account: FIXTURE_ALICE_ID,
+      origin_proposal_content_id_hex: null,
+      origin_governance_attempt_id_hex: null,
+      owner: FIXTURE_ALICE_ID,
+      pending_owner: null,
+      parliament_delegated: false,
+      active_code_hash_hex: "1".repeat(64),
+      revision: "__REVISION__",
+      emergency_hold: {
+        incident_digest_hex: "4".repeat(64),
+        proposal_content_id_hex: "5".repeat(64),
+        governance_attempt_id_hex: "6".repeat(64),
+        reason: "containment",
+        imposed_at_height: "__IMPOSED__",
+        expires_at_height: "__EXPIRES__",
+      },
+    },
+    emergency_hold_active: true,
+    code_hash_hex: "1".repeat(64),
+    abi_hash_hex: "2".repeat(64),
+    public_entrypoints: ["ping"],
+  })
+    .replace('"__REVISION__"', revision)
+    .replace('"__IMPOSED__"', imposedAtHeight)
+    .replace('"__EXPIRES__"', expiresAtHeight);
+  const clientForWire = (body) => new ToriiClient(BASE_URL, {
+    fetchImpl: async () => new Response(body, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  const result = await clientForWire(lifecycleWire()).getGovernanceContract(
+    contractAddress,
+    canonicalReadOptions(),
+  );
+  assert.equal(result.lifecycle.revision, 18446744073709551615n);
+  assert.equal(result.lifecycle.emergency_hold.imposed_at_height, 18446744073709551614n);
+  assert.equal(result.lifecycle.emergency_hold.expires_at_height, 18446744073709551615n);
+
+  for (const token of ['"1"', "true", "1.5", "18446744073709551616"]) {
+    await assert.rejects(
+      () => clientForWire(lifecycleWire({ revision: token })).getGovernanceContract(
+        contractAddress,
+        canonicalReadOptions(),
+      ),
+      /integer|unsigned 64-bit|at most/u,
+      `revision token ${token}`,
+    );
+  }
+  const duplicate = lifecycleWire({ revision: "1" }).replace(
+    '"revision":1',
+    '"revision":1,"revision":2',
+  );
+  await assert.rejects(
+    () => clientForWire(duplicate).getGovernanceContract(
+      contractAddress,
+      canonicalReadOptions(),
+    ),
+    /duplicate object key/u,
+  );
+
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  assert.match(declarations, /revision: ToriiU64;/u);
+  assert.match(declarations, /imposed_at_height: ToriiU64;/u);
+  assert.match(declarations, /expires_at_height: ToriiU64;/u);
 });
 
 test("getGovernanceContract rejects coercible, non-canonical, or unexpected fields", async () => {

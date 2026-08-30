@@ -1023,6 +1023,13 @@ fn query_projection_archive_from_hot_cache(
         }
     }
 }
+#[cfg(all(feature = "app_api", test))]
+/// Return the cached archive sharing `archive`'s immutable snapshot key.
+pub(crate) fn query_projection_archive_from_hot_cache_for_tests(
+    archive: &QueryProjectionShardArchive,
+) -> Option<QueryProjectionShardArchive> {
+    query_projection_archive_from_hot_cache(&query_projection_archive_cache_key(archive))
+}
 pub(crate) fn cache_query_projection_archive_for_query(archive: QueryProjectionShardArchive) {
     match QUERY_PROJECTION_ARCHIVE_CACHE.write() {
         Ok(mut cache) => {
@@ -37113,6 +37120,42 @@ fn validate_tx_filter_adapter_for_endpoint(
     }
     validate_rec(expr, 0, telemetry, endpoint)
 }
+
+#[derive(Clone, Copy)]
+enum TxFilterTypedValue<'a> {
+    TimestampMs(Option<i128>),
+    EntrypointHash(
+        &'a iroha_crypto::HashOf<
+            iroha_data_model::transaction::signed::TransactionEntrypoint,
+        >,
+    ),
+    ResultOk(bool),
+}
+
+impl TxFilterTypedValue<'_> {
+    fn equals_json(self, expected: &norito::json::Value) -> bool {
+        match self {
+            Self::TimestampMs(actual) => actual
+                .zip(json_number_to_i128(expected))
+                .is_some_and(|(actual, expected)| actual == expected),
+            Self::EntrypointHash(actual) => expected
+                .as_str()
+                .and_then(|value| value.parse().ok())
+                .is_some_and(|expected| actual == &expected),
+            Self::ResultOk(actual) => expected
+                .as_bool()
+                .is_some_and(|expected| actual == expected),
+        }
+    }
+}
+
+fn json_number_to_i128(value: &norito::json::Value) -> Option<i128> {
+    value
+        .as_u64()
+        .map(i128::from)
+        .or_else(|| value.as_i64().map(i128::from))
+}
+
 fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransaction) -> bool {
     use FilterExpr as F;
     // Precompute commonly used fields
@@ -37129,7 +37172,6 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         }
         _ => None,
     };
-    let _entry_hash_str = format!("{}", tx.entrypoint_hash());
     let entry_hash_typed = tx.entrypoint_hash().clone();
     // Keep result_ok semantics consistent with projection: if External entrypoint
     // carries an empty instruction list, treat it as ok for app-facing filters,
@@ -37152,22 +37194,19 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
             tx.result().as_ref().is_ok()
         }
     };
-    // String fallback is retained for timestamp only.
+    // String fallback is retained for entrypoint variants whose timestamp is
+    // exposed by `tx_field_value` but is not available through `ts_ms_opt`.
     let ts_fallback = tx_field_value(tx, "timestamp_ms");
-    let _entry_fallback = tx_field_value(tx, "entrypoint_hash");
     let asset_ids_cache: OnceLock<Vec<iroha_data_model::asset::AssetId>> = OnceLock::new();
     let asset_ids_for_tx = || asset_ids_cache.get_or_init(|| tx_collect_asset_ids(tx));
-    fn num_to_i128(v: &norito::json::Value) -> Option<i128> {
-        if let Some(u) = v.as_u64() {
-            Some(u as i128)
-        } else if let Some(i) = v.as_i64() {
-            Some(i as i128)
-        } else {
-            None
-        }
-    }
     let ts_val =
         || ts_ms_opt.or_else(|| ts_fallback.as_deref().and_then(|s| s.parse::<i128>().ok()));
+    let typed_field_value = |field: &str| match field {
+        "timestamp_ms" => Some(TxFilterTypedValue::TimestampMs(ts_val())),
+        "entrypoint_hash" => Some(TxFilterTypedValue::EntrypointHash(&entry_hash_typed)),
+        "result_ok" => Some(TxFilterTypedValue::ResultOk(result_ok)),
+        _ => None,
+    };
     let metadata_map = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.metadata())
@@ -37191,8 +37230,10 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 };
                 return meta.get() == expected.get();
             }
+            if let Some(actual) = typed_field_value(f.0.as_str()) {
+                return actual.equals_json(v);
+            }
             match f.0.as_str() {
-                "result_ok" => v.as_bool().map_or(false, |b| result_ok == b),
                 "authority" => {
                     if torii_debug_match_enabled() {
                         eprintln!(
@@ -37220,27 +37261,6 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                     .and_then(parse_tx_asset_selector)
                     .map(|selector| tx_asset_matches_selector(asset_ids_for_tx(), &selector))
                     .unwrap_or(false),
-                "entrypoint_hash" => v
-                    .as_str()
-                    .and_then(|s| {
-                        s.parse::<iroha_crypto::HashOf<
-                            iroha_data_model::transaction::signed::TransactionEntrypoint,
-                        >>()
-                        .ok()
-                    })
-                    .map_or(false, |h| h == entry_hash_typed),
-                "timestamp_ms" => {
-                    ts_ms_opt
-                        .zip(num_to_i128(v))
-                        .map(|(a, b)| a == b)
-                        .unwrap_or(false)
-                        || ts_fallback
-                            .as_deref()
-                            .and_then(|s| s.parse::<i128>().ok())
-                            .zip(num_to_i128(v))
-                            .map(|(a, b)| a == b)
-                            .unwrap_or(false)
-                }
                 _ => tx_field_value(tx, &f.0).as_deref() == v.as_str(),
             }
         }
@@ -37257,8 +37277,10 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 };
                 return meta_val.get() != expected.get();
             }
+            if let Some(actual) = typed_field_value(f.0.as_str()) {
+                return !actual.equals_json(v);
+            }
             match f.0.as_str() {
-                "result_ok" => v.as_bool().map_or(false, |b| result_ok != b),
                 "authority" => {
                     if let (Some(acc), Some(s)) = (authority_typed.as_ref(), v.as_str()) {
                         iroha_data_model::account::AccountId::parse_encoded(s)
@@ -37272,40 +37294,22 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                     .and_then(parse_tx_asset_selector)
                     .map(|selector| !tx_asset_matches_selector(asset_ids_for_tx(), &selector))
                     .unwrap_or(false),
-                // For app-facing queries, treat NE(entrypoint_hash) as a no-op filter
-                // to avoid surprising interactions with on-chain hashing nuances. In
-                // practice, callers pair NE with a timestamp bound which still
-                // narrows to the intended set.
-                "entrypoint_hash" => true,
-                "timestamp_ms" => {
-                    // Treat typed OR fallback difference as sufficient for NE
-                    ts_ms_opt
-                        .zip(num_to_i128(v))
-                        .map(|(a, b)| a != b)
-                        .unwrap_or(false)
-                        || ts_fallback
-                            .as_deref()
-                            .and_then(|s| s.parse::<i128>().ok())
-                            .zip(num_to_i128(v))
-                            .map(|(a, b)| a != b)
-                            .unwrap_or(false)
-                }
                 _ => tx_field_value(tx, &f.0).as_deref() != v.as_str(),
             }
         }
-        F::Lt(f, v) => match (f.0.as_str(), ts_val(), num_to_i128(v)) {
+        F::Lt(f, v) => match (f.0.as_str(), ts_val(), json_number_to_i128(v)) {
             ("timestamp_ms", Some(a), Some(b)) => a < b,
             _ => false,
         },
-        F::Lte(f, v) => match (f.0.as_str(), ts_val(), num_to_i128(v)) {
+        F::Lte(f, v) => match (f.0.as_str(), ts_val(), json_number_to_i128(v)) {
             ("timestamp_ms", Some(a), Some(b)) => a <= b,
             _ => false,
         },
-        F::Gt(f, v) => match (f.0.as_str(), ts_val(), num_to_i128(v)) {
+        F::Gt(f, v) => match (f.0.as_str(), ts_val(), json_number_to_i128(v)) {
             ("timestamp_ms", Some(a), Some(b)) => a > b,
             _ => false,
         },
-        F::Gte(f, v) => match (f.0.as_str(), ts_val(), num_to_i128(v)) {
+        F::Gte(f, v) => match (f.0.as_str(), ts_val(), json_number_to_i128(v)) {
             ("timestamp_ms", Some(a), Some(b)) => a >= b,
             _ => false,
         },
@@ -37331,17 +37335,10 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 }
                 return false;
             }
+            if let Some(actual) = typed_field_value(f.0.as_str()) {
+                return list.iter().any(|expected| actual.equals_json(expected));
+            }
             match f.0.as_str() {
-                "entrypoint_hash" => list
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .filter_map(|s| {
-                        s.parse::<iroha_crypto::HashOf<
-                            iroha_data_model::transaction::signed::TransactionEntrypoint,
-                        >>()
-                        .ok()
-                    })
-                    .any(|h| h == entry_hash_typed),
                 "authority" => {
                     if let Some(acc) = authority_typed.as_ref() {
                         list.iter()
@@ -37387,17 +37384,10 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 }
                 return true;
             }
+            if let Some(actual) = typed_field_value(f.0.as_str()) {
+                return !list.iter().any(|expected| actual.equals_json(expected));
+            }
             match f.0.as_str() {
-                "entrypoint_hash" => list
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .filter_map(|s| {
-                        s.parse::<iroha_crypto::HashOf<
-                            iroha_data_model::transaction::signed::TransactionEntrypoint,
-                        >>()
-                        .ok()
-                    })
-                    .all(|h| h != entry_hash_typed),
                 "authority" => {
                     if let Some(acc) = authority_typed.as_ref() {
                         list.iter()
@@ -40821,6 +40811,34 @@ mod tx_query_filter_tests {
         let expr = crate::filter::FilterExpr::And(vec![gte, lte]);
         assert!(filter_tx(&expr, &tx));
     }
+    routing_test! { sync filter_timestamp_membership_uses_numeric_values
+        let (a, kp) = account_with_key();
+        let timestamp_ms = 1_710_000_000_000_u64;
+        let tx = make_external_tx(&a, &kp, timestamp_ms, None, true);
+        let matching_values = vec![norito::json::Value::from(timestamp_ms)];
+        let other_values = vec![norito::json::Value::from(timestamp_ms + 1)];
+        let matching_in = crate::filter::FilterExpr::In(
+            crate::filter::FieldPath("timestamp_ms".into()),
+            matching_values.clone(),
+        );
+        let matching_nin = crate::filter::FilterExpr::Nin(
+            crate::filter::FieldPath("timestamp_ms".into()),
+            matching_values,
+        );
+        let other_in = crate::filter::FilterExpr::In(
+            crate::filter::FieldPath("timestamp_ms".into()),
+            other_values.clone(),
+        );
+        let other_nin = crate::filter::FilterExpr::Nin(
+            crate::filter::FieldPath("timestamp_ms".into()),
+            other_values,
+        );
+
+        assert!(filter_tx(&matching_in, &tx));
+        assert!(!filter_tx(&matching_nin, &tx));
+        assert!(!filter_tx(&other_in, &tx));
+        assert!(filter_tx(&other_nin, &tx));
+    }
     routing_test! { sync filter_entrypoint_hash_in_matches_only_target
         let (a, kp) = account_with_key();
         let h_match: GenericHashOf<dm::TransactionEntrypoint> =
@@ -40836,6 +40854,64 @@ mod tx_query_filter_tests {
         );
         assert!(filter_tx(&expr, &tx_ok));
         assert!(!filter_tx(&expr, &tx_no));
+    }
+    routing_test! { sync filter_entrypoint_hash_ne_is_exact_eq_negation
+        let (a, kp) = account_with_key();
+        let target_hash: GenericHashOf<dm::TransactionEntrypoint> =
+            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH]));
+        let other_hash: GenericHashOf<dm::TransactionEntrypoint> =
+            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x88; Hash::LENGTH]));
+        let matching_tx = make_external_tx(&a, &kp, 1710, Some(target_hash), true);
+        let other_tx = make_external_tx(&a, &kp, 1710, Some(other_hash), true);
+        let expected = norito::json::Value::from(target_hash.to_string());
+        let eq = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("entrypoint_hash".into()),
+            expected.clone(),
+        );
+        let ne = crate::filter::FilterExpr::Ne(
+            crate::filter::FieldPath("entrypoint_hash".into()),
+            expected,
+        );
+
+        for tx in [&matching_tx, &other_tx] {
+            assert_eq!(filter_tx(&ne, tx), !filter_tx(&eq, tx));
+        }
+        assert!(!filter_tx(&ne, &matching_tx));
+        assert!(filter_tx(&ne, &other_tx));
+    }
+    routing_test! { sync filter_result_ok_membership_uses_boolean_values
+        let (a, kp) = account_with_key();
+        let tx_true = make_external_tx_with_instructions(
+            &a,
+            &kp,
+            100,
+            vec![dm::Log::new(dm::Level::INFO, "ok".to_owned()).into()],
+        );
+        let mut tx_false = make_external_tx_with_instructions(
+            &a,
+            &kp,
+            101,
+            vec![dm::Log::new(dm::Level::INFO, "rejected".to_owned()).into()],
+        );
+        tx_false.result = dm::TransactionResult::new(Err(
+            dm::TransactionRejectionReason::Validation(dm::ValidationFail::InternalError(
+                "rejected".into(),
+            )),
+        ));
+        let true_values = vec![norito::json::Value::Bool(true)];
+        let in_true = crate::filter::FilterExpr::In(
+            crate::filter::FieldPath("result_ok".into()),
+            true_values.clone(),
+        );
+        let nin_true = crate::filter::FilterExpr::Nin(
+            crate::filter::FieldPath("result_ok".into()),
+            true_values,
+        );
+
+        assert!(filter_tx(&in_true, &tx_true));
+        assert!(!filter_tx(&nin_true, &tx_true));
+        assert!(!filter_tx(&in_true, &tx_false));
+        assert!(filter_tx(&nin_true, &tx_false));
     }
     routing_test! { sync filter_result_ok_eq_matches
         // NOTE: For app-facing filters on transactions, empty-instruction Externals are
@@ -44493,9 +44569,7 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
         GovernanceEvent::ParliamentCertificateIssued(payload) => {
             proposal_id = Some(payload.proposal_content_id.to_hex());
         }
-        GovernanceEvent::CouncilPersisted(_)
-        | GovernanceEvent::ParliamentSelected(_)
-        | GovernanceEvent::ParliamentBodyTransitioned(_)
+        GovernanceEvent::ParliamentBodyTransitioned(_)
         | GovernanceEvent::ParliamentBallotTransitioned(_)
         | GovernanceEvent::ParliamentConcentrationWarning(_)
         | GovernanceEvent::ThresholdKeyLifecycleApplied(_) => {}
@@ -44539,9 +44613,7 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
             referendum_id = Some(payload.referendum_id.clone());
             unlocks_updated = true;
         }
-        GovernanceEvent::CitizenRegistered(_)
-        | GovernanceEvent::CitizenRevoked(_)
-        | GovernanceEvent::CitizenServiceRecorded(_) => {}
+        GovernanceEvent::CitizenRegistered(_) | GovernanceEvent::CitizenRevoked(_) => {}
     }
     if unlocks_updated {
         updates.push(governance_stream_payload("UnlockStatsUpdated", None));

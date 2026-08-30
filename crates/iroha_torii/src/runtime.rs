@@ -552,9 +552,11 @@ pub async fn handle_node_query_projection_checkpoint_publish_with_app(
     let emitted_at_unix = request.emitted_at_unix.unwrap_or_else(current_unix_seconds);
     let uploads = build_query_projection_uploaded_archives(state.as_ref(), request.shards)?;
     validate_projection_checkpoint_shard_set(state.as_ref(), &uploads)?;
-    for upload in &uploads {
-        crate::routing::cache_query_projection_archive_for_query(upload.archive.clone());
-    }
+    // A rejected publication must not replace an archive used by the current checkpoint.
+    let archives_to_cache = uploads
+        .iter()
+        .map(|upload| upload.archive.clone())
+        .collect::<Vec<_>>();
     let checkpoint = state
         .publish_query_projection_checkpoint_from_archives(
             emitted_at_unix,
@@ -567,6 +569,9 @@ pub async fn handle_node_query_projection_checkpoint_publish_with_app(
             }),
         )
         .map_err(projection_checkpoint_plan_error)?;
+    for archive in archives_to_cache {
+        crate::routing::cache_query_projection_archive_for_query(archive);
+    }
     Ok(node_projection_checkpoint_response(checkpoint))
 }
 fn node_projection_checkpoint_response(
@@ -2502,6 +2507,104 @@ mod tests {
                 hex::encode(persisted_shard.blob_hash.as_bytes())
             );
         }
+    }
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn failed_projection_checkpoint_publish_does_not_overwrite_cached_archive() {
+        use iroha_data_model::Registrable;
+        use iroha_data_model::prelude::{
+            Account, Asset, AssetDefinition, AssetDefinitionId, AssetId, Domain, DomainId,
+        };
+        use iroha_primitives::numeric::Quantity;
+
+        let authority_id = checked_projection_account(0x90);
+        let alice_id = checked_projection_account(0x91);
+        let domain_id = DomainId::try_new("projection-publish-cache", "universal").expect("domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "cache-token".parse().expect("name"),
+        );
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "cache-token".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority_id);
+        let world = iroha_core::state::World::with_assets(
+            [Domain::new(domain_id).build(&authority_id)],
+            [
+                Account::new(authority_id.clone()).build(&authority_id),
+                Account::new(alice_id.clone()).build(&authority_id),
+            ],
+            [definition],
+            [Asset::new(
+                AssetId::new(definition_id.clone(), alice_id),
+                Quantity::from(1_u32),
+            )],
+            [],
+        );
+        let state = std::sync::Arc::new(State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let definition_id = definition_id.to_string();
+        let published_request = projection_checkpoint_request_for_state(
+            &state,
+            1_714_001_400,
+            1_714_001_401,
+            0x51,
+            0x61,
+        );
+        let published_archives = build_query_projection_uploaded_archives(
+            state.as_ref(),
+            published_request.shards.clone(),
+        )
+        .expect("build published archives");
+        let published_archive = published_archives
+            .into_iter()
+            .find(|upload| {
+                upload.archive.resource == QueryProjectionResourceKind::AssetHolders
+                    && upload.archive.asset_definition_id.as_deref() == Some(definition_id.as_str())
+            })
+            .expect("asset-holder archive")
+            .archive;
+
+        handle_node_query_projection_checkpoint_publish(state.clone(), published_request)
+            .await
+            .expect("publish initial checkpoint");
+        assert_eq!(
+            crate::routing::query_projection_archive_from_hot_cache_for_tests(&published_archive),
+            Some(published_archive.clone())
+        );
+
+        let mut rejected_request = projection_checkpoint_request_for_state(
+            &state,
+            1_714_001_500,
+            1_714_001_501,
+            0x71,
+            0x81,
+        );
+        let duplicate = rejected_request
+            .shards
+            .iter()
+            .find(|shard| {
+                shard.resource == "asset_holders"
+                    && shard.asset_definition_id.as_deref() == Some(definition_id.as_str())
+            })
+            .expect("asset-holder shard reference")
+            .clone();
+        rejected_request.shards.push(duplicate);
+        let error = handle_node_query_projection_checkpoint_publish(state, rejected_request)
+            .await
+            .expect_err("duplicate checkpoint shard must fail");
+        assert!(error.to_string().contains("duplicate"));
+        assert_eq!(
+            crate::routing::query_projection_archive_from_hot_cache_for_tests(&published_archive),
+            Some(published_archive),
+            "a rejected publication must leave the previously published cache entry intact"
+        );
     }
     #[cfg(feature = "app_api")]
     #[test]

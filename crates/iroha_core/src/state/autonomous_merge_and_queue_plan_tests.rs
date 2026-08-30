@@ -1610,6 +1610,187 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
     );
 }
 #[test]
+fn queue_plan_signed_alias_terminal_evidence_is_exact_and_fail_closed() {
+    let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let tag = 0x6D;
+    let direct_entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
+    let TransactionEntrypoint::External(direct_transaction) = &direct_entrypoint else {
+        unreachable!("QueuePlan fixture entrypoint is External")
+    };
+    let (direct_binding, direct_certificate) =
+        queue_plan_admission_certificate_for_entrypoint_state_test(
+            &state,
+            routing_plan.clone(),
+            &validator_keypairs,
+            queue_plan_authority_height_for_state_test(&state),
+            tag,
+            &direct_entrypoint,
+        );
+    let salt = [0xD7; 32];
+    let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
+        state.network_id_ref(),
+        direct_transaction,
+        salt,
+        128,
+    );
+    let sealed_entrypoint = TransactionEntrypoint::SealedReveal(
+        iroha_data_model::transaction::signed::SealedTransactionReveal::new(
+            commitment,
+            direct_transaction.clone(),
+            salt,
+        ),
+    );
+    let sealed_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        &state.network_id,
+        &sealed_entrypoint,
+        &routing_plan,
+        direct_binding.admission_context.clone(),
+        direct_binding.enqueue_timestamp_ms.saturating_add(1),
+    )
+    .expect("sealed sibling QueuePlan binding");
+    seed_exact_queue_plan_admission_state_for_test(&state, &direct_certificate);
+    seed_pending_queue_plan_binding_state_for_test(&state, &sealed_binding);
+
+    let sealed_obligation = State::queue_plan_pending_obligation_from_binding(&sealed_binding)
+        .expect("sealed sibling obligation");
+    let sealed_obligation_key = State::queue_plan_pending_obligation_marker_key(
+        sealed_binding.network_id_digest,
+        sealed_binding.entrypoint_hash,
+    )
+    .expect("sealed sibling obligation key");
+    let sealed_alias =
+        State::queue_plan_pending_signed_alias_member_from_obligation(&sealed_obligation)
+            .expect("sealed sibling signed alias");
+    let sealed_pending_alias_key =
+        State::queue_plan_pending_signed_alias_member_marker_key(&sealed_alias)
+            .expect("sealed sibling alias key");
+    let sealed_terminal =
+        State::queue_plan_terminal_signed_alias_member_from_obligation(&sealed_obligation)
+            .expect("sealed sibling terminal evidence");
+    let sealed_terminal_key = State::queue_plan_signed_alias_terminal_marker_key(&sealed_terminal)
+        .expect("sealed sibling terminal key");
+    let sealed_route_member = State::queue_plan_pending_route_member_from_obligation(
+        &sealed_obligation,
+        sealed_obligation.routes[0],
+    )
+    .expect("sealed sibling route member");
+    let sealed_route_member_key = State::queue_plan_pending_route_member_marker_key(
+        sealed_route_member.route,
+        sealed_route_member.member_identity,
+    )
+    .expect("sealed sibling route-member key");
+    let sealed_registry_key =
+        State::queue_plan_admission_registry_marker_key(&sealed_binding.registry_key())
+            .expect("sealed sibling registry key");
+
+    let mut block = empty_global_block_after(Some(&parent));
+    block.set_external_entrypoints(vec![direct_entrypoint]);
+    let block_height = NonZeroUsize::new(
+        usize::try_from(block.header().height().get()).expect("fixture height fits usize"),
+    )
+    .expect("fixture height is non-zero");
+    let mut state_block = state.block(block.header());
+    state_block
+        .stage_canonical_carrier_membership(
+            crate::tx::canonical_carrier_membership_hashes(
+                &state_block,
+                block.external_entrypoints_slice(),
+            ),
+            block_height,
+        )
+        .expect("stage direct signed membership");
+    state_block
+        .resolve_queue_plan_pending_obligations_from_block(&block)
+        .expect("direct commit reconciles the distinct sealed sibling");
+
+    assert!(
+        state_block
+            .world
+            .smart_contract_state
+            .get(&sealed_obligation_key)
+            .is_none(),
+        "signed-alias resolution must delete the potentially large full obligation"
+    );
+    assert!(
+        state_block
+            .world
+            .smart_contract_state
+            .get(&sealed_pending_alias_key)
+            .is_none(),
+        "terminalization must remove the signed-first pending reverse index"
+    );
+    assert!(
+        state_block
+            .world
+            .smart_contract_state
+            .get(&sealed_route_member_key)
+            .is_none(),
+        "terminalization must release exact route capacity"
+    );
+    assert_eq!(
+        State::queue_plan_binding_application_evidence_in_view(&state_block, &sealed_binding,)
+            .expect("exact terminal evidence"),
+        QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias,
+    );
+
+    let terminal_payload = state_block
+        .world
+        .smart_contract_state
+        .get(&sealed_terminal_key)
+        .cloned()
+        .expect("compact outer-key terminal marker remains");
+    state_block
+        .world
+        .smart_contract_state
+        .insert(sealed_terminal_key.clone(), vec![0x00]);
+    assert!(
+        State::queue_plan_binding_application_evidence_in_view(&state_block, &sealed_binding,)
+            .is_err(),
+        "tampered compact terminal evidence must fail closed"
+    );
+    state_block
+        .world
+        .smart_contract_state
+        .insert(sealed_terminal_key.clone(), terminal_payload.clone());
+    state_block
+        .world
+        .smart_contract_state
+        .remove(sealed_terminal_key.clone());
+    assert!(
+        State::queue_plan_binding_application_evidence_in_view(&state_block, &sealed_binding,)
+            .is_err(),
+        "missing signed-alias evidence must fail closed"
+    );
+    state_block
+        .world
+        .smart_contract_state
+        .insert(sealed_terminal_key, terminal_payload);
+
+    let registry_payload = state_block
+        .world
+        .smart_contract_state
+        .get(&sealed_registry_key)
+        .cloned()
+        .expect("terminal registry owner remains");
+    state_block
+        .world
+        .smart_contract_state
+        .remove(sealed_registry_key.clone());
+    assert!(
+        State::queue_plan_binding_application_evidence_in_view(&state_block, &sealed_binding,)
+            .is_err(),
+        "missing registry ownership must fail closed"
+    );
+    state_block
+        .world
+        .smart_contract_state
+        .insert(sealed_registry_key, registry_payload);
+}
+#[test]
 fn queue_plan_native_pending_obligations_count_all_unique_routes_and_block_drain() {
     let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
     let participant_lane = LaneId::new(1);
@@ -1895,6 +2076,16 @@ fn queue_plan_same_route_roles_share_one_pending_route_counter() {
     let members =
         State::queue_plan_pending_route_members_from_storage(world.smart_contract_state(), route)
             .expect("same-route exact member roster");
+    let prevalidated_routes = State::prevalidate_queue_plan_pending_route_rosters(
+        world.smart_contract_state(),
+        [route, route, route],
+    )
+    .expect("deduplicate route roster prevalidation");
+    assert_eq!(
+        prevalidated_routes,
+        BTreeSet::from([route]),
+        "one reconciliation pass must prevalidate each distinct route only once"
+    );
     assert_eq!(
         members.len(),
         1,
@@ -1922,6 +2113,67 @@ fn queue_plan_same_route_roles_share_one_pending_route_counter() {
         route.lane_incarnation,
     ));
 }
+
+#[test]
+fn queue_plan_route_roster_rejects_member_projected_from_another_binding() {
+    let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        queue_plan_authority_height_for_state_test(&state),
+        0x6D,
+    );
+    let obligation = queue_plan_pending_obligation_for_test(&state, &certificate);
+    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
+    let route = obligation.routes[0];
+    let alternate_binding_hash = Hash::new(b"alternate route-member binding");
+    assert_ne!(alternate_binding_hash, obligation.binding_hash);
+    let alternate_member_identity = State::queue_plan_pending_route_member_identity_from_claim(
+        obligation.network_id_digest,
+        obligation.entrypoint_hash.clone(),
+        alternate_binding_hash,
+        route,
+    )
+    .expect("derive self-consistent alternate member identity");
+    let alternate_member = QueuePlanPendingRouteMemberV1 {
+        version: QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1,
+        route,
+        network_id_digest: obligation.network_id_digest,
+        entrypoint_hash: obligation.entrypoint_hash.clone(),
+        binding_hash: alternate_binding_hash,
+        member_identity: alternate_member_identity,
+    };
+    let alternate_key =
+        State::queue_plan_pending_route_member_marker_key(route, alternate_member_identity)
+            .expect("alternate route-member key");
+    let alternate_payload =
+        State::queue_plan_pending_route_member_marker_payload(&alternate_member)
+            .expect("canonical alternate route-member payload");
+    {
+        let mut world = state.world.block();
+        world
+            .smart_contract_state
+            .insert(alternate_key.clone(), alternate_payload.clone());
+        world.commit();
+    }
+    let world = state.world.view();
+    assert!(
+        State::queue_plan_pending_route_members_from_storage(world.smart_contract_state(), route,)
+            .is_err(),
+        "a canonical route member must still match the exact obligation projection"
+    );
+    assert_eq!(
+        world.smart_contract_state().get(&alternate_key),
+        Some(&alternate_payload),
+        "failed roster validation must preserve the forged marker for diagnosis"
+    );
+}
+
 #[test]
 fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() {
     #[derive(Clone, Copy)]

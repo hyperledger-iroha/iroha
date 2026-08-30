@@ -596,6 +596,7 @@ fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> Mer
         autonomous_epoch: 0,
         autonomous_payload_hash: Hash::new(b"kura-index-refresh-payload"),
         entrypoint_hashes,
+        authenticated_signed_replay_aliases: vec![None],
         entrypoints: vec![entrypoint],
         reservation_keys: vec![vec![1]],
         routing_plans: vec![vec![2]],

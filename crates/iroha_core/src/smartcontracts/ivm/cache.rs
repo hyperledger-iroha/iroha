@@ -1254,7 +1254,8 @@ mod tests {
             let mut poisoned = cache
                 .checkout_generic_runtime(&summary, GAS_LIMIT, GOVERNED_HEAP_LIMIT)
                 .expect("initial generic runtime");
-            poisoned.memory = ivm::Memory::new_with_stack_limit(0, ivm::Memory::STACK_ALIGNMENT);
+            poisoned.memory = ivm::Memory::new_with_stack_limit(ivm::Memory::STACK_ALIGNMENT)
+                .expect("minimum ABI V1 stack geometry is valid");
         }
         let replacement_allocation = {
             let mut replacement = cache
@@ -1438,7 +1439,8 @@ mod tests {
             let mut runtime = cache
                 .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
                 .expect("cold runtime");
-            runtime.memory = ivm::Memory::new_with_stack_limit(0, ivm::Memory::STACK_ALIGNMENT);
+            runtime.memory = ivm::Memory::new_with_stack_limit(ivm::Memory::STACK_ALIGNMENT)
+                .expect("minimum ABI V1 stack geometry is valid");
         }
         let after_mismatch = cache.stats();
         assert_eq!(after_mismatch.runtime_misses, 1);

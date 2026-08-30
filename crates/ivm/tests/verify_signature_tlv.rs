@@ -41,7 +41,7 @@ fn aliased_signature_operand_vm(opcode: u8, payload_len: usize, gas: u64) -> IVM
         vm.set_register(register, Memory::INPUT_START);
     }
     let (_, code) = direct_signature_program(opcode);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm
 }
 fn ed25519_test_key(tag: u8) -> ed25519_dalek::SigningKey {
@@ -98,7 +98,7 @@ fn direct_signature_opcodes_reject_unknown_tlv_version_without_byte_surcharge() 
         for register in 1..=3 {
             vm.set_register(register, Memory::INPUT_START);
         }
-        vm.memory.load_code(&code);
+        vm.memory.load_code(&code).unwrap();
 
         vm.run()
             .expect("a header-rejected envelope must consume only the opcode base");
@@ -515,7 +515,7 @@ fn opcode_verify_ed25519_rejects_all_zero_signature_material() {
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&halt);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(3), 0);
 }
@@ -555,7 +555,7 @@ fn opcode_verify_ed25519_rejects_malformed_public_key_material() {
         let mut code = Vec::new();
         code.extend_from_slice(&word.to_le_bytes());
         code.extend_from_slice(&halt);
-        vm.memory.load_code(&code);
+        vm.memory.load_code(&code).unwrap();
         vm.run().unwrap();
         assert_eq!(vm.register(3), 0, "{label} public key must reject");
     }
@@ -592,7 +592,7 @@ fn opcode_verify_ed25519_rejects_malformed_signature_r() {
         let mut code = Vec::new();
         code.extend_from_slice(&word.to_le_bytes());
         code.extend_from_slice(&halt);
-        vm.memory.load_code(&code);
+        vm.memory.load_code(&code).unwrap();
         vm.run().unwrap();
         assert_eq!(vm.register(3), 0, "{label} signature R must reject");
     }
@@ -627,7 +627,7 @@ fn opcode_verify_ed25519_via_tlv() {
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&halt);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(3), 1);
 }
@@ -660,7 +660,7 @@ fn opcode_verify_ed25519_batch_reports_all_zero_signature_index() {
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&halt);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(6), 0, "batch should fail");
     assert_eq!(vm.register(2), 1, "all-zero entry flagged as failing");
@@ -705,7 +705,7 @@ fn opcode_verify_ed25519_batch_reports_malformed_signature_r_index() {
         let mut code = Vec::new();
         code.extend_from_slice(&word.to_le_bytes());
         code.extend_from_slice(&halt);
-        vm.memory.load_code(&code);
+        vm.memory.load_code(&code).unwrap();
         vm.run().unwrap();
         assert_eq!(vm.register(6), 0, "{label} batch should fail");
         assert_eq!(vm.register(2), 1, "{label} R entry flagged as failing");
@@ -740,7 +740,7 @@ fn opcode_verify_ed25519_batch_via_tlv_success() {
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&halt);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(5), 1, "batch should verify");
     assert_eq!(vm.register(2), 0, "failure index cleared on success");
@@ -776,7 +776,7 @@ fn opcode_verify_ed25519_batch_via_tlv_reports_failure_index() {
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&halt);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(6), 0, "batch should fail");
     assert_eq!(vm.register(2), 1, "second entry flagged as failing");
@@ -865,7 +865,7 @@ fn opcode_verify_secp256k1_via_tlv() {
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&halt);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(3), 1);
 }
@@ -919,7 +919,7 @@ fn opcode_verify_dilithium_rejects_all_zero_signature_material() {
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&halt);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(3), 0);
 }
@@ -953,7 +953,7 @@ fn opcode_verify_dilithium_rejects_all_zero_public_key_material() {
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&halt);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(3), 0);
 }
@@ -987,7 +987,7 @@ fn opcode_verify_dilithium_via_tlv() {
     let mut code = Vec::new();
     code.extend_from_slice(&word.to_le_bytes());
     code.extend_from_slice(&halt);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.run().unwrap();
     assert_eq!(vm.register(3), 1);
 }

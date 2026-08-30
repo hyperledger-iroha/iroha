@@ -187,8 +187,7 @@ fn every_catalog_optional_canonical_auth_tool_publishes_a_strict_optional_envelo
         ) else {
             continue;
         };
-        if descriptor.authentication() == AuthenticationPolicy::OptionalCanonicalAccountSignature
-        {
+        if descriptor.authentication() == AuthenticationPolicy::OptionalCanonicalAccountSignature {
             covered += 1;
             validate_optional_canonical_auth_tool_schema(tool).unwrap_or_else(|error| {
                 panic!(
@@ -204,7 +203,10 @@ fn every_catalog_optional_canonical_auth_tool_publishes_a_strict_optional_envelo
             );
         }
     }
-    assert!(covered > 0, "optional canonical-auth projection is non-empty");
+    assert!(
+        covered > 0,
+        "optional canonical-auth projection is non-empty"
+    );
 }
 #[test]
 fn every_catalog_operator_auth_tool_publishes_a_strict_required_tuple() {
@@ -232,6 +234,41 @@ fn every_catalog_operator_auth_tool_publishes_a_strict_required_tuple() {
         }
     }
     assert!(covered > 0, "operator-auth catalog projection is non-empty");
+}
+#[test]
+fn every_catalog_tool_descriptor_publishes_exact_route_auth_metadata() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    let mut covered = 0_usize;
+    for tool in &tools {
+        let Some(descriptor) = catalog_descriptor_for_method_path(
+            CATALOG_PROJECTION_GROUPS,
+            &tool.method,
+            tool.path_template.as_str(),
+        ) else {
+            continue;
+        };
+        covered += 1;
+        let published = tool.descriptor();
+        assert_eq!(
+            published["_meta"]["iroha/routeAuth"],
+            norito::json!({
+                "schemaVersion": (descriptor.auth_metadata_schema_version()),
+                "stableRouteId": (descriptor.stable_route_id()),
+                "authentication": (descriptor.authentication().as_str()),
+                "admission": (descriptor.admission().as_str())
+            }),
+            "{} {} route-auth metadata",
+            tool.method,
+            tool.path_template
+        );
+    }
+    assert!(
+        covered > 0,
+        "catalog-backed MCP tool projection is non-empty"
+    );
 }
 #[test]
 fn canonical_target_headers_require_one_complete_unambiguous_proof() {
@@ -2145,9 +2182,55 @@ fn generic_request_body_rejects_dual_representations() {
         "body": { "reviewed": true },
         "body_base64": "ZXhlY3V0ZWQ="
     });
-    let error = build_request_body(arguments.as_object().expect("object"))
+    let error = build_request_body(arguments.as_object().expect("object"), None)
         .expect_err("dual body representations must not pick a hidden winner");
     assert!(error.contains("mutually exclusive"));
+}
+
+#[test]
+fn generic_xml_request_body_uses_exact_text_bytes_and_media_type() {
+    let xml = "<Document><MsgId>exact</MsgId></Document>";
+    let arguments = norito::json!({ "body": xml });
+    let (body, content_type) = build_request_body(
+        arguments.as_object().expect("object"),
+        Some("application/xml"),
+    )
+    .expect("XML body");
+
+    assert_eq!(body, xml.as_bytes());
+    assert_eq!(content_type, Some("application/xml"));
+}
+
+#[test]
+fn generated_iso_tool_advertises_raw_xml_as_its_default_media_type() {
+    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    cfg.profile = ToriiMcpProfile::Operator;
+    cfg.expose_operator_routes = true;
+    let tools = build_tool_specs(&cfg);
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name == "torii.post_v1_iso20022_pacs008")
+        .expect("OpenAPI-derived pacs.008 tool");
+    let properties = tool
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("tool properties");
+
+    assert_eq!(
+        properties
+            .get("content_type")
+            .and_then(|schema| schema.get("const"))
+            .and_then(Value::as_str),
+        Some("application/xml")
+    );
+    assert_eq!(
+        properties
+            .get("body")
+            .and_then(|schema| schema.get("type"))
+            .and_then(Value::as_str),
+        Some("string")
+    );
 }
 #[test]
 fn initialize_requires_the_standard_client_shape() {

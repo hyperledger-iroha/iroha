@@ -252,8 +252,13 @@ const NATIVE_AMX_PARTICIPANT_FRONTIER_MARKER_PREFIX: &str = "native_amx_particip
 const QUEUE_PLAN_ADMISSION_REGISTRY_MARKER_PREFIX: &str = "queue_plan_admission_v2_";
 const QUEUE_PLAN_PENDING_OBLIGATION_MARKER_PREFIX: &str = "queue_plan_pending_obligation_v1_";
 const QUEUE_PLAN_PENDING_ROUTE_MEMBER_MARKER_PREFIX: &str = "queue_plan_pending_route_member_v1_";
+const QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_MARKER_PREFIX: &str =
+    "queue_plan_pending_signed_alias_member_v1_";
+const QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_MARKER_PREFIX: &str = "queue_plan_signed_alias_terminal_v1_";
 const QUEUE_PLAN_PENDING_OBLIGATION_VERSION_V1: u16 = 1;
 const QUEUE_PLAN_PENDING_ROUTE_MEMBER_VERSION_V1: u16 = 1;
+const QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_VERSION_V1: u16 = 1;
+const QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_VERSION_V1: u16 = 1;
 const QUEUE_PLAN_PENDING_ROUTE_MEMBER_DOMAIN_V1: &[u8] =
     b"iroha:queue-plan:pending-route-member:v1\0";
 // One bounded admission certificate supplies the embedded binding. A second
@@ -265,6 +270,9 @@ const MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES: usize = 1024;
 // the same consensus ceiling for an exact route roster gives deterministic
 // backpressure and bounds every route-prefix scan.
 const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize = MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK;
+// A signed payload can have distinct sealed carriers, but reconciliation must
+// never turn that fan-out into an unbounded consensus-state scan.
+const MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS: usize = MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK;
 /// Maximum canonical drain-state bytes stored in one lane metadata value.
 const MAX_AUTOSCALE_DRAIN_STATE_BYTES: usize = 32 * 1024;
 /// Maximum canonical pinned-committee bytes stored in one lane metadata value.
@@ -1317,8 +1325,6 @@ macro_rules! with_world_overlay_fields {
             governance_slashes,
             governance_last_unlock_sweep_height,
             governance_unlock_stats,
-            council,
-            parliament_bodies,
             parliament_attempts,
             tle_key_sessions,
             tle_key_session_rosters,
@@ -2143,6 +2149,36 @@ struct QueuePlanPendingRouteMemberV1 {
     binding_hash: Hash,
     member_identity: [u8; Hash::LENGTH],
 }
+/// Exact signed-replay membership for one pending QueuePlan carrier.
+///
+/// The key is ordered by network, signed payload, then outer entrypoint, so a
+/// committed signed identity can find every distinct pending carrier with one
+/// protocol-bounded prefix scan.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct QueuePlanPendingSignedAliasMemberV1 {
+    version: u16,
+    network_id_digest: Hash,
+    signed_transaction_hash: HashOf<SignedTransaction>,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    binding_hash: Hash,
+}
+/// Compact outer-key evidence that a distinct committed signed identity made
+/// one QueuePlan carrier replay-terminal.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct QueuePlanSignedAliasTerminalV1 {
+    version: u16,
+    network_id_digest: Hash,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: HashOf<SignedTransaction>,
+    binding_hash: Hash,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueuePlanPendingRouteMemberState {
+    AllPresent,
+    AllAbsent,
+}
 /// Mutable QueuePlan marker storage used by both block overlays and their
 /// nested failure-atomic transactions.
 trait QueuePlanMarkerStorage: StorageReadOnly<StatePath, Vec<u8>> {
@@ -2821,6 +2857,24 @@ enum QueuePlanAdmissionApplicationState {
     PendingStale,
     /// Canonical transaction membership proves global application.
     Applied,
+}
+/// Exact read-only disposition of one immutable QueuePlan binding.
+///
+/// Callers that release replay-owned queue state must require the exact expected
+/// direct or signed-alias disposition; `Absent` and pending states are never
+/// terminal evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueuePlanBindingApplicationEvidence {
+    /// No registry, obligation, alias, or exact route marker exists.
+    Absent,
+    /// The exact obligation and every route member remain live.
+    Pending,
+    /// The exact obligation is coherent but its route incarnation is stale.
+    PendingStale,
+    /// The outer entrypoint committed and exact resolution removed its markers.
+    AppliedDirect,
+    /// A distinct committed signed identity terminally resolved this carrier.
+    AppliedViaSignedAlias,
 }
 /// Durable disposition of one authenticated pending QueuePlan certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4553,15 +4607,6 @@ pub struct World {
     pub(crate) governance_last_unlock_sweep_height: Cell<u64>,
     /// O(1) statistics snapshot produced by the latest unlock sweep.
     pub(crate) governance_unlock_stats: Cell<GovernanceUnlockStatsSnapshot>,
-    /// Compatibility-only independent epoch councils retained for snapshot decoding.
-    ///
-    /// Canonical attempt-based Parliament never consults or writes this storage.
-    pub(crate) council: Storage<u64, CouncilState>,
-    /// Compatibility-only epoch body rosters retained for snapshot decoding.
-    ///
-    /// Canonical attempt-based Parliament retains its bodies inside `parliament_attempts`.
-    pub(crate) parliament_bodies:
-        Storage<u64, iroha_data_model::governance::types::ParliamentBodies>,
     /// Canonical attempt-local Parliament reducer state keyed by governance attempt id.
     pub(crate) parliament_attempts:
         Storage<iroha_data_model::governance::types::GovernanceAttemptId, ParliamentAttemptStateV1>,
@@ -5316,11 +5361,6 @@ pub struct WorldBlock<'world> {
     pub(crate) governance_last_unlock_sweep_height: CellBlock<'world, u64>,
     /// O(1) statistics snapshot produced by the latest unlock sweep.
     pub(crate) governance_unlock_stats: CellBlock<'world, GovernanceUnlockStatsSnapshot>,
-    /// Sortition parliament membership by epoch
-    pub(crate) council: StorageBlock<'world, u64, CouncilState>,
-    /// Multi-body parliament rosters by epoch.
-    pub(crate) parliament_bodies:
-        StorageBlock<'world, u64, iroha_data_model::governance::types::ParliamentBodies>,
     /// Canonical attempt-local Parliament reducer state.
     pub(crate) parliament_attempts: StorageBlock<
         'world,
@@ -5528,8 +5568,6 @@ impl WorldBlock<'_> {
         collect_reverts!(self.governance_referenda, GovernanceReferendum);
         collect_reverts!(self.governance_locks, GovernanceLock);
         collect_reverts!(self.governance_slashes, GovernanceSlash);
-        collect_reverts!(self.council, Council);
-        collect_reverts!(self.parliament_bodies, ParliamentBodies);
         collect_reverts!(self.parliament_attempts, ParliamentAttempt);
         collect_reverts!(self.tle_key_sessions, TleKeySession);
         collect_reverts!(self.tle_key_session_rosters, TleKeySessionRoster);
@@ -5633,8 +5671,6 @@ impl WorldBlock<'_> {
         collect_payload!(self.governance_referenda, GovernanceReferendum);
         collect_payload!(self.governance_locks, GovernanceLock);
         collect_payload!(self.governance_slashes, GovernanceSlash);
-        collect_payload!(self.council, Council);
-        collect_payload!(self.parliament_bodies, ParliamentBodies);
         collect_payload!(self.parliament_attempts, ParliamentAttempt);
         collect_payload!(self.tle_key_sessions, TleKeySession);
         collect_payload!(self.tle_key_session_rosters, TleKeySessionRoster);
@@ -5910,8 +5946,6 @@ impl WorldBlock<'_> {
             governance_lock_expiry_index,
             validation_fee_proposal_index,
             governance_slashes,
-            council,
-            parliament_bodies,
             parliament_attempts,
             tle_key_sessions,
             tle_key_session_rosters,
@@ -6724,13 +6758,6 @@ pub struct WorldTransaction<'block, 'world> {
     /// O(1) statistics snapshot produced by the latest unlock sweep.
     pub(crate) governance_unlock_stats:
         CellTransaction<'block, 'world, GovernanceUnlockStatsSnapshot>,
-    pub(crate) council: StorageTransaction<'block, 'world, u64, CouncilState>,
-    pub(crate) parliament_bodies: StorageTransaction<
-        'block,
-        'world,
-        u64,
-        iroha_data_model::governance::types::ParliamentBodies,
-    >,
     pub(crate) parliament_attempts: StorageTransaction<
         'block,
         'world,
@@ -8713,10 +8740,6 @@ pub struct WorldView<'world> {
     pub(crate) governance_last_unlock_sweep_height: CellView<'world, u64>,
     /// O(1) statistics snapshot produced by the latest unlock sweep.
     pub(crate) governance_unlock_stats: CellView<'world, GovernanceUnlockStatsSnapshot>,
-    pub(crate) council: StorageView<'world, u64, CouncilState>,
-    /// Multi-body parliament rosters by epoch.
-    pub(crate) parliament_bodies:
-        StorageView<'world, u64, iroha_data_model::governance::types::ParliamentBodies>,
     /// Canonical attempt-local Parliament reducer state.
     pub(crate) parliament_attempts: StorageView<
         'world,
@@ -9705,24 +9728,6 @@ pub struct CitizenshipRecord {
     /// Block height at which the bond was recorded.
     #[norito(default)]
     pub bonded_height: u64,
-    /// Seats filled in the most recent epoch (resets when `last_epoch_seen` changes).
-    #[norito(default)]
-    pub seats_in_epoch: u32,
-    /// Epoch index when `seats_in_epoch` was last updated.
-    #[norito(default)]
-    pub last_epoch_seen: u64,
-    /// Height until which the citizen is on cooldown (ineligible for new seats).
-    #[norito(default)]
-    pub cooldown_until: u64,
-    /// Declines consumed in the current epoch (penalties start after the free budget).
-    #[norito(default)]
-    pub declines_used: u32,
-    /// Accumulated no-show events for audit/telemetry.
-    #[norito(default)]
-    pub no_show_strikes: u32,
-    /// Accumulated misconduct events for audit/telemetry.
-    #[norito(default)]
-    pub misconduct_strikes: u32,
 }
 impl CitizenshipRecord {
     /// Construct a new citizenship record with zeroed service-tracking fields.
@@ -9736,12 +9741,6 @@ impl CitizenshipRecord {
             owner,
             amount,
             bonded_height,
-            seats_in_epoch: 0,
-            last_epoch_seen: 0,
-            cooldown_until: 0,
-            declines_used: 0,
-            no_show_strikes: 0,
-            misconduct_strikes: 0,
         }
     }
 }
@@ -9853,8 +9852,6 @@ mod governance_slash_map_json {
         Ok(out)
     }
 }
-/// Compatibility alias for retired independent epoch-council snapshot state.
-pub type CouncilState = crate::governance::state::ParliamentTerm;
 #[derive(Debug, Clone)]
 pub(crate) struct PipelineParallelism {
     workers: usize,
@@ -14643,59 +14640,6 @@ mod stake_snapshot_tests {
         assert_ne!(score, threshold_beacon_seat_score(seed, 7, &second));
     }
     #[test]
-    fn legacy_council_snapshot_does_not_change_threshold_beacon_committee() {
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
-            nexus.staking.max_validators = NonZeroU32::new(4).expect("nonzero validator limit");
-        }
-        let keypairs: Vec<KeyPair> = (0..7).map(|_| crate::state::checked_keypair()).collect();
-        let mut wb = state.world.block();
-        let mut all_peers = Vec::with_capacity(keypairs.len());
-        for keypair in &keypairs {
-            seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 10);
-            all_peers.push(PeerId::from(keypair.public_key().clone()));
-        }
-        wb.commit();
-
-        let baseline = state
-            .view()
-            .epoch_validator_peer_ids_for_testing(0)
-            .expect("threshold-beacon committee");
-        let legacy_members = all_peers
-            .iter()
-            .filter(|peer| !baseline.contains(peer))
-            .take(3)
-            .chain(baseline.iter().take(1))
-            .map(|peer| DMAccountId::of(peer.public_key().clone()))
-            .collect::<Vec<_>>();
-        assert_eq!(legacy_members.len(), 4);
-        let mut wb = state.world.block();
-        wb.council.insert(
-            0,
-            CouncilState {
-                epoch: 0,
-                members: legacy_members,
-                candidate_count: 4,
-                ..CouncilState::default()
-            },
-        );
-        wb.commit();
-
-        let restored = state
-            .view()
-            .epoch_validator_peer_ids_for_testing(0)
-            .expect("threshold-beacon committee with restored legacy snapshot");
-        assert_eq!(
-            restored, baseline,
-            "decode-only legacy council bytes must not affect the NPoS committee"
-        );
-    }
-    #[test]
     fn public_lane_snapshot_filters_ineligible_validators() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -17126,8 +17070,6 @@ impl World {
             governance_slashes: Storage::default(),
             governance_last_unlock_sweep_height: Cell::default(),
             governance_unlock_stats: Cell::default(),
-            council: Storage::default(),
-            parliament_bodies: Storage::default(),
             parliament_attempts: Storage::default(),
             ..Self::new()
         };
@@ -19029,10 +18971,6 @@ macro_rules! world_ro_accessors {
             ref governance_unlock_stats: GovernanceUnlockStatsSnapshot;
             /// Governance referenda by id (read-only).
             storage governance_referenda: String => GovernanceReferendumRecord;
-            /// Sortition council state by epoch (read-only).
-            storage council: u64 => CouncilState;
-            /// Parliament multi-body rosters by epoch (read-only).
-            storage parliament_bodies: u64 => iroha_data_model::governance::types::ParliamentBodies;
             /// Canonical attempt-local Parliament reducer state (read-only).
             storage parliament_attempts:
                 iroha_data_model::governance::types::GovernanceAttemptId =>
@@ -20590,8 +20528,6 @@ impl<'world> WorldBlock<'world> {
             governance_slashes,
             governance_last_unlock_sweep_height,
             governance_unlock_stats,
-            council,
-            parliament_bodies,
             parliament_attempts,
             parliament_timed_ovn_resource_reservations,
             tle_key_sessions,
@@ -20758,8 +20694,6 @@ impl<'world> WorldBlock<'world> {
         governance_slashes.commit();
         governance_last_unlock_sweep_height.commit();
         governance_unlock_stats.commit();
-        council.commit();
-        parliament_bodies.commit();
         parliament_attempts.commit();
         parliament_timed_ovn_resource_reservations.commit();
         tle_key_sessions.commit();
@@ -22768,8 +22702,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             governance_slashes,
             governance_last_unlock_sweep_height,
             governance_unlock_stats,
-            council,
-            parliament_bodies,
             parliament_attempts,
             parliament_timed_ovn_resource_reservations,
             tle_key_sessions,
@@ -22986,8 +22918,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         governance_slashes.apply();
         governance_last_unlock_sweep_height.apply();
         governance_unlock_stats.apply();
-        council.apply();
-        parliament_bodies.apply();
         parliament_attempts.apply();
         parliament_timed_ovn_resource_reservations.apply();
         tle_key_sessions.apply();
@@ -25961,7 +25891,6 @@ impl State {
                     .collect(),
                 runtime_upgrade_provenance:
                     iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
-                citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
                 sorafs_pin_fee_asset_id:
@@ -28960,13 +28889,29 @@ impl State {
                 "entrypoint membership carrier does not match the full merge entry".to_owned(),
             ));
         }
-        let hashes = batch
-            .lanes
-            .iter()
-            .flat_map(|execution| {
-                crate::tx::canonical_replay_alias_hashes(&execution.entrypoints)
-            })
-            .collect::<Vec<_>>();
+        // The certified execution transcript preserves the pre-carrier authentication
+        // decision. Recovery must use that durable evidence instead of reclassifying a
+        // reveal from post-state after its pending commitment may have been consumed.
+        let mut hashes = Vec::new();
+        for execution in &batch.lanes {
+            if execution.authenticated_signed_replay_aliases.len() != execution.entrypoints.len() {
+                return Err(MergeLedgerCommitError::ExecutionStatePublication(
+                    "merge execution replay-alias transcript length mismatch".to_owned(),
+                ));
+            }
+            for (entrypoint, authenticated_alias) in execution
+                .entrypoints
+                .iter()
+                .zip(&execution.authenticated_signed_replay_aliases)
+            {
+                hashes.push(entrypoint.hash());
+                if let Some(alias) = authenticated_alias {
+                    hashes.push(HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                        *alias,
+                    ));
+                }
+            }
+        }
         let height = NonZeroUsize::new(usize::try_from(carrier.block_height).map_err(|_| {
             MergeLedgerCommitError::ExecutionStatePublication(
                 "merge carrier height does not fit the entrypoint membership index".to_owned(),
@@ -30563,6 +30508,7 @@ impl State {
         let mut seen_entrypoints = BTreeSet::new();
         let mut seen_reservations = BTreeSet::new();
         let mut pending_obligations = Vec::new();
+        let mut authenticated_signed_replay_identities = BTreeSet::new();
         let mut executions = Vec::with_capacity(sources.len());
         for source in sources {
             crate::kura::Kura::validate_certified_lane_block_artifact(&source.certified).map_err(
@@ -30756,6 +30702,48 @@ impl State {
                 .collect::<Vec<_>>();
             let fastpq_transcripts =
                 state_block.take_merge_lane_fastpq_transcripts(&source.input.entrypoints)?;
+            let authenticated_signed_replay_aliases = source
+                .input
+                .entrypoints
+                .iter()
+                .map(|entrypoint| {
+                    crate::tx::authenticated_signed_replay_alias(state_block, entrypoint)
+                        .map(Hash::from)
+                })
+                .collect::<Vec<_>>();
+            for (entrypoint, authenticated_alias) in source
+                .input
+                .entrypoints
+                .iter()
+                .zip(&authenticated_signed_replay_aliases)
+            {
+                if let TransactionEntrypoint::External(transaction) = entrypoint {
+                    if authenticated_alias.is_some() {
+                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                            "direct merge transaction carries a sealed replay-alias transcript"
+                                .to_owned(),
+                        ));
+                    }
+                    authenticated_signed_replay_identities.insert(transaction.hash());
+                    continue;
+                }
+                let Some(authenticated_alias) = authenticated_alias else {
+                    continue;
+                };
+                let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(entrypoint)
+                    .ok_or_else(|| {
+                        MergeLedgerCommitError::ExecutionBatchInvalid(
+                            "authenticated merge replay alias has no signed transaction".to_owned(),
+                        )
+                    })?;
+                if Hash::from(signed_transaction_hash) != *authenticated_alias {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "authenticated merge replay alias differs from its signed transaction"
+                            .to_owned(),
+                    ));
+                }
+                authenticated_signed_replay_identities.insert(signed_transaction_hash);
+            }
             state_block.stage_merge_carrier_entrypoints(
                 crate::tx::canonical_carrier_membership_hashes(
                     state_block,
@@ -30798,6 +30786,7 @@ impl State {
                 autonomous_payload_hash: source_payload_hash,
                 entrypoint_hashes: source.input.entrypoint_hashes,
                 entrypoints: source.input.entrypoints,
+                authenticated_signed_replay_aliases,
                 reservation_keys: source
                     .input
                     .reservation_keys
@@ -30832,7 +30821,10 @@ impl State {
             execution.settlement_commitment = commitment;
             executions.push(execution);
         }
-        state_block.resolve_required_queue_plan_pending_obligations(pending_obligations)?;
+        state_block.resolve_required_queue_plan_pending_obligations(
+            pending_obligations,
+            authenticated_signed_replay_identities,
+        )?;
         state_block.stage_merge_execution_nexus_fee_settlement(&executions)?;
         Ok(executions)
     }
@@ -34984,6 +34976,176 @@ impl State {
             }
         }
     }
+    /// Return exact application evidence for one immutable QueuePlan binding.
+    ///
+    /// Unlike a pending-binding lookup, this API does not conflate an absent
+    /// owner with replay-terminal application. Signed-alias terminal evidence
+    /// requires the exact compact terminal alias marker, committed signed
+    /// membership, and removal of the full obligation and every exact route
+    /// member.
+    pub(crate) fn queue_plan_binding_application_evidence_in_view(
+        state: &impl StateReadOnlyWithTransactions,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+    ) -> Result<QueuePlanBindingApplicationEvidence, String> {
+        binding.validate_structure()?;
+        let expected_network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(state.network_id());
+        if binding.network_id_digest != expected_network_id_digest {
+            return Err(
+                "QueuePlan application-evidence binding belongs to another network".to_owned(),
+            );
+        }
+        let expected = Self::queue_plan_pending_obligation_from_binding(binding)
+            .map_err(|error| error.to_string())?;
+        let registry_key = Self::queue_plan_admission_registry_marker_key(&binding.registry_key())
+            .map_err(|error| error.to_string())?;
+        let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+            binding.network_id_digest,
+            binding.entrypoint_hash,
+        )
+        .map_err(|error| error.to_string())?;
+        let storage = state.world().smart_contract_state();
+        let exact_route_members_absent = || -> Result<bool, MergeLedgerCommitError> {
+            for route in &expected.routes {
+                let member =
+                    Self::queue_plan_pending_route_member_from_obligation(&expected, *route)?;
+                let member_key = Self::queue_plan_pending_route_member_marker_key(
+                    *route,
+                    member.member_identity,
+                )?;
+                if storage.get(&member_key).is_some() {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        };
+        let pending_alias = Self::queue_plan_pending_signed_alias_member_from_obligation(&expected);
+        let terminal_alias =
+            Self::queue_plan_terminal_signed_alias_member_from_obligation(&expected);
+        let pending_alias_key = pending_alias
+            .as_ref()
+            .map(Self::queue_plan_pending_signed_alias_member_marker_key)
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let terminal_alias_key = terminal_alias
+            .as_ref()
+            .map(Self::queue_plan_signed_alias_terminal_marker_key)
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let Some(registry_payload) = storage.get(&registry_key) else {
+            if storage.get(&obligation_key).is_some()
+                || pending_alias_key
+                    .as_ref()
+                    .is_some_and(|key| storage.get(key).is_some())
+                || terminal_alias_key
+                    .as_ref()
+                    .is_some_and(|key| storage.get(key).is_some())
+                || !exact_route_members_absent().map_err(|error| error.to_string())?
+            {
+                return Err(
+                    "QueuePlan application evidence has markers without a registry owner"
+                        .to_owned(),
+                );
+            }
+            return Ok(QueuePlanBindingApplicationEvidence::Absent);
+        };
+        let registry = Self::decode_exact_queue_plan_admission_registry_marker(
+            &registry_key,
+            registry_payload,
+        )
+        .map_err(|error| error.to_string())?;
+        if registry != binding.registry_value() {
+            return Err(
+                "QueuePlan application-evidence registry binds another immutable claim".to_owned(),
+            );
+        }
+        let outer_committed = state.has_entrypoint(binding.entrypoint_hash);
+        let signed_committed =
+            Self::queue_plan_signed_identity_committed(state, binding.signed_transaction_hash);
+        let Some(obligation_payload) = storage.get(&obligation_key) else {
+            if !exact_route_members_absent().map_err(|error| error.to_string())? {
+                return Err("QueuePlan applied owner retains an exact route member".to_owned());
+            }
+            let stored_pending_alias = pending_alias_key
+                .as_ref()
+                .and_then(|key| storage.get(key).map(|payload| (key, payload)))
+                .map(|(key, payload)| {
+                    Self::decode_exact_queue_plan_pending_signed_alias_member_marker(key, payload)
+                        .map_err(|error| error.to_string())
+                })
+                .transpose()?;
+            let stored_terminal_alias = terminal_alias_key
+                .as_ref()
+                .and_then(|key| storage.get(key).map(|payload| (key, payload)))
+                .map(|(key, payload)| {
+                    Self::decode_exact_queue_plan_signed_alias_terminal_marker(key, payload)
+                        .map_err(|error| error.to_string())
+                })
+                .transpose()?;
+            if outer_committed {
+                return if stored_pending_alias.is_none() && stored_terminal_alias.is_none() {
+                    Ok(QueuePlanBindingApplicationEvidence::AppliedDirect)
+                } else {
+                    Err("QueuePlan directly applied owner retains a signed-alias marker".to_owned())
+                };
+            }
+            if stored_pending_alias.is_some() {
+                return Err(
+                    "QueuePlan compact terminal state retains its pending reverse index".to_owned(),
+                );
+            }
+            return match (stored_terminal_alias, terminal_alias, signed_committed) {
+                (Some(stored), Some(expected_terminal), true) if stored == expected_terminal => {
+                    Ok(QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias)
+                }
+                (Some(_), _, _) => {
+                    Err("QueuePlan compact terminal alias marker is forged or premature".to_owned())
+                }
+                (None, _, _) => {
+                    Err("QueuePlan registry owner has no application evidence".to_owned())
+                }
+            };
+        };
+        let obligation = Self::decode_exact_queue_plan_pending_obligation_marker(
+            &obligation_key,
+            obligation_payload,
+        )
+        .map_err(|error| error.to_string())?;
+        if obligation != expected {
+            return Err(
+                "QueuePlan application-evidence obligation conflicts with its binding".to_owned(),
+            );
+        }
+        Self::require_queue_plan_pending_signed_alias_member_marker(storage, &obligation)
+            .map_err(|error| error.to_string())?;
+        let route_state =
+            Self::queue_plan_pending_exact_route_member_state_in_storage(storage, &obligation)
+                .map_err(|error| error.to_string())?;
+        if outer_committed {
+            return Err(
+                "QueuePlan retained obligation survived committed outer membership".to_owned(),
+            );
+        }
+        match (route_state, signed_committed) {
+            (QueuePlanPendingRouteMemberState::AllPresent, false)
+                if Self::queue_plan_pending_obligation_matches_active_lifecycle(
+                    state,
+                    &obligation,
+                ) =>
+            {
+                Ok(QueuePlanBindingApplicationEvidence::Pending)
+            }
+            (QueuePlanPendingRouteMemberState::AllPresent, false) => {
+                Ok(QueuePlanBindingApplicationEvidence::PendingStale)
+            }
+            (QueuePlanPendingRouteMemberState::AllPresent, true) => {
+                Err("QueuePlan pending obligation survived committed signed membership".to_owned())
+            }
+            (QueuePlanPendingRouteMemberState::AllAbsent, _) => {
+                Err("QueuePlan retained obligation lost every exact route member".to_owned())
+            }
+        }
+    }
     /// Compare one structurally valid, exact-network-bound QueuePlan admission binding
     /// with its immutable WSV registry projection.
     ///
@@ -35078,6 +35240,11 @@ impl State {
                     .to_owned(),
             );
         }
+        Self::require_queue_plan_pending_signed_alias_member_marker(
+            state.world().smart_contract_state(),
+            &obligation,
+        )
+        .map_err(|error| error.to_string())?;
         for route in &obligation.routes {
             Self::require_queue_plan_pending_route_member_marker(
                 state.world().smart_contract_state(),
@@ -35103,7 +35270,13 @@ impl State {
         }
         Ok(Some(binding.clone()))
     }
-    fn queue_plan_admission_registry_match_in_view(
+    /// Compare a binding hash with the coherent registry projection without
+    /// requiring its owner to remain pending.
+    ///
+    /// Terminal Queue reconciliation uses this after proving exact committed
+    /// replay membership; ordinary admission must use the stricter public
+    /// pending-owner boundary instead.
+    pub(crate) fn queue_plan_admission_registry_match_in_view(
         state_view: &impl StateReadOnlyWithTransactions,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         expected_binding_hash: Hash,
@@ -35678,6 +35851,69 @@ impl State {
         }
         Ok((key, marker))
     }
+    fn queue_plan_pending_exact_route_member_state_in_storage(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> Result<QueuePlanPendingRouteMemberState, MergeLedgerCommitError> {
+        let prevalidated_routes = Self::prevalidate_queue_plan_pending_route_rosters(
+            storage,
+            obligation.routes.iter().copied(),
+        )?;
+        Self::queue_plan_pending_exact_route_member_state_after_roster_prevalidation(
+            storage,
+            obligation,
+            &prevalidated_routes,
+        )
+    }
+    fn queue_plan_pending_exact_route_member_state_after_roster_prevalidation(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        obligation: &QueuePlanPendingObligationV1,
+        prevalidated_routes: &BTreeSet<QueuePlanPendingObligationRouteV1>,
+    ) -> Result<QueuePlanPendingRouteMemberState, MergeLedgerCommitError> {
+        let mut present = 0usize;
+        for route in &obligation.routes {
+            if !prevalidated_routes.contains(route) {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan route roster for lane `{}` dataspace `{}` was not prevalidated",
+                    route.lane_id.as_u32(),
+                    route.dataspace_id.as_u64(),
+                )));
+            }
+            let expected =
+                Self::queue_plan_pending_route_member_from_obligation(obligation, *route)?;
+            let key =
+                Self::queue_plan_pending_route_member_marker_key(*route, expected.member_identity)?;
+            let Some(payload) = storage.get(&key) else {
+                continue;
+            };
+            let marker = Self::decode_exact_queue_plan_pending_route_member_marker(&key, payload)?;
+            if marker != expected {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{key}` binds another obligation"
+                )));
+            }
+            present = present.saturating_add(1);
+        }
+        if present == obligation.routes.len() {
+            Ok(QueuePlanPendingRouteMemberState::AllPresent)
+        } else if present == 0 {
+            Ok(QueuePlanPendingRouteMemberState::AllAbsent)
+        } else {
+            Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending obligation has a partial exact route-member set".to_owned(),
+            ))
+        }
+    }
+    fn prevalidate_queue_plan_pending_route_rosters(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        routes: impl IntoIterator<Item = QueuePlanPendingObligationRouteV1>,
+    ) -> Result<BTreeSet<QueuePlanPendingObligationRouteV1>, MergeLedgerCommitError> {
+        let distinct_routes = routes.into_iter().collect::<BTreeSet<_>>();
+        for route in &distinct_routes {
+            Self::queue_plan_pending_route_members_from_storage(storage, *route)?;
+        }
+        Ok(distinct_routes)
+    }
     fn queue_plan_pending_route_members_from_storage(
         storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
         route: QueuePlanPendingObligationRouteV1,
@@ -35714,12 +35950,345 @@ impl State {
                 marker.network_id_digest,
                 marker.entrypoint_hash.clone(),
             )?;
-            if storage.get(&obligation_key).is_none() {
-                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+            let obligation_payload = storage.get(&obligation_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                     "QueuePlan pending-route member marker `{key}` has no exact obligation `{obligation_key}`"
+                ))
+            })?;
+            let obligation = Self::decode_exact_queue_plan_pending_obligation_marker(
+                &obligation_key,
+                obligation_payload,
+            )?;
+            let expected =
+                Self::queue_plan_pending_route_member_from_obligation(&obligation, route)?;
+            if marker != expected {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending-route member marker `{key}` conflicts with its exact obligation `{obligation_key}`"
                 )));
             }
             members.push((key.clone(), marker));
+        }
+        Ok(members)
+    }
+    fn queue_plan_pending_signed_alias_member_from_obligation(
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> Option<QueuePlanPendingSignedAliasMemberV1> {
+        obligation
+            .signed_transaction_hash
+            .map(
+                |signed_transaction_hash| QueuePlanPendingSignedAliasMemberV1 {
+                    version: QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_VERSION_V1,
+                    network_id_digest: obligation.network_id_digest,
+                    signed_transaction_hash,
+                    entrypoint_hash: obligation.entrypoint_hash.clone(),
+                    binding_hash: obligation.binding_hash,
+                },
+            )
+    }
+    fn queue_plan_terminal_signed_alias_member_from_obligation(
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> Option<QueuePlanSignedAliasTerminalV1> {
+        obligation
+            .signed_transaction_hash
+            .map(|signed_transaction_hash| QueuePlanSignedAliasTerminalV1 {
+                version: QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_VERSION_V1,
+                network_id_digest: obligation.network_id_digest,
+                entrypoint_hash: obligation.entrypoint_hash.clone(),
+                signed_transaction_hash,
+                binding_hash: obligation.binding_hash,
+            })
+    }
+    fn queue_plan_pending_signed_alias_member_marker_prefix(
+        network_id_digest: Hash,
+        signed_transaction_hash: HashOf<SignedTransaction>,
+    ) -> Result<(String, StatePath), MergeLedgerCommitError> {
+        if network_id_digest.as_ref().iter().all(|byte| *byte == 0)
+            || signed_transaction_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending signed-alias prefix contains a zero identity".to_owned(),
+            ));
+        }
+        let literal = format!(
+            "{QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_MARKER_PREFIX}{}_{}_",
+            hex::encode(network_id_digest.as_ref()),
+            hex::encode(signed_transaction_hash.as_ref()),
+        );
+        let start = literal.parse().map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending signed-alias prefix cannot be represented in WSV".to_owned(),
+            )
+        })?;
+        Ok((literal, start))
+    }
+    fn queue_plan_pending_signed_alias_member_marker_key(
+        marker: &QueuePlanPendingSignedAliasMemberV1,
+    ) -> Result<StatePath, MergeLedgerCommitError> {
+        if marker.version != QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_VERSION_V1
+            || marker
+                .network_id_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker
+                .signed_transaction_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker
+                .entrypoint_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker.binding_hash.as_ref().iter().all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending signed-alias member is malformed".to_owned(),
+            ));
+        }
+        format!(
+            "{QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_MARKER_PREFIX}{}_{}_{}",
+            hex::encode(marker.network_id_digest.as_ref()),
+            hex::encode(marker.signed_transaction_hash.as_ref()),
+            hex::encode(marker.entrypoint_hash.as_ref()),
+        )
+        .parse()
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending signed-alias member key cannot be represented in WSV".to_owned(),
+            )
+        })
+    }
+    fn queue_plan_pending_signed_alias_member_marker_payload(
+        marker: &QueuePlanPendingSignedAliasMemberV1,
+    ) -> Result<Vec<u8>, MergeLedgerCommitError> {
+        let _ = Self::queue_plan_pending_signed_alias_member_marker_key(marker)?;
+        let payload = norito::to_bytes(marker).map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending signed-alias member cannot be encoded: {error}"
+            ))
+        })?;
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan pending signed-alias member is empty or oversized".to_owned(),
+            ));
+        }
+        Ok(payload)
+    }
+    fn decode_exact_queue_plan_pending_signed_alias_member_marker(
+        key: &StatePath,
+        payload: &[u8],
+    ) -> Result<QueuePlanPendingSignedAliasMemberV1, MergeLedgerCommitError> {
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending signed-alias member `{key}` is empty or oversized"
+            )));
+        }
+        let marker = norito::decode_from_bytes::<QueuePlanPendingSignedAliasMemberV1>(payload)
+            .map_err(|_| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending signed-alias member `{key}` is not exact canonical Norito"
+                ))
+            })?;
+        let canonical = Self::queue_plan_pending_signed_alias_member_marker_payload(&marker)?;
+        let expected_key = Self::queue_plan_pending_signed_alias_member_marker_key(&marker)?;
+        if canonical.as_slice() != payload || &expected_key != key {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending signed-alias member `{key}` is not canonical"
+            )));
+        }
+        Ok(marker)
+    }
+    fn queue_plan_signed_alias_terminal_marker_key(
+        marker: &QueuePlanSignedAliasTerminalV1,
+    ) -> Result<StatePath, MergeLedgerCommitError> {
+        if marker.version != QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_VERSION_V1
+            || marker
+                .network_id_digest
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker
+                .entrypoint_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker
+                .signed_transaction_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || marker.binding_hash.as_ref().iter().all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan signed-alias terminal marker is malformed".to_owned(),
+            ));
+        }
+        Self::queue_plan_signed_alias_terminal_marker_key_from_claim(
+            marker.network_id_digest,
+            marker.entrypoint_hash.clone(),
+        )
+    }
+    fn queue_plan_signed_alias_terminal_marker_key_from_claim(
+        network_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<StatePath, MergeLedgerCommitError> {
+        if network_id_digest.as_ref().iter().all(|byte| *byte == 0)
+            || entrypoint_hash.as_ref().iter().all(|byte| *byte == 0)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan signed-alias terminal key contains a zero identity".to_owned(),
+            ));
+        }
+        format!(
+            "{QUEUE_PLAN_SIGNED_ALIAS_TERMINAL_MARKER_PREFIX}{}_{}",
+            hex::encode(network_id_digest.as_ref()),
+            hex::encode(entrypoint_hash.as_ref()),
+        )
+        .parse()
+        .map_err(|_| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan signed-alias terminal key cannot be represented in WSV".to_owned(),
+            )
+        })
+    }
+    fn queue_plan_signed_alias_terminal_marker_payload(
+        marker: &QueuePlanSignedAliasTerminalV1,
+    ) -> Result<Vec<u8>, MergeLedgerCommitError> {
+        let _ = Self::queue_plan_signed_alias_terminal_marker_key(marker)?;
+        let payload = norito::to_bytes(marker).map_err(|error| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias terminal marker cannot be encoded: {error}"
+            ))
+        })?;
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan signed-alias terminal marker is empty or oversized".to_owned(),
+            ));
+        }
+        Ok(payload)
+    }
+    fn decode_exact_queue_plan_signed_alias_terminal_marker(
+        key: &StatePath,
+        payload: &[u8],
+    ) -> Result<QueuePlanSignedAliasTerminalV1, MergeLedgerCommitError> {
+        if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias terminal marker `{key}` is empty or oversized"
+            )));
+        }
+        let marker =
+            norito::decode_from_bytes::<QueuePlanSignedAliasTerminalV1>(payload).map_err(|_| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan signed-alias terminal marker `{key}` is not exact canonical Norito"
+                ))
+            })?;
+        let canonical = Self::queue_plan_signed_alias_terminal_marker_payload(&marker)?;
+        let expected_key = Self::queue_plan_signed_alias_terminal_marker_key(&marker)?;
+        if canonical.as_slice() != payload || &expected_key != key {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias terminal marker `{key}` is not canonical"
+            )));
+        }
+        Ok(marker)
+    }
+    fn require_queue_plan_pending_signed_alias_member_marker(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        obligation: &QueuePlanPendingObligationV1,
+    ) -> Result<Option<StatePath>, MergeLedgerCommitError> {
+        let Some(expected) =
+            Self::queue_plan_pending_signed_alias_member_from_obligation(obligation)
+        else {
+            return Ok(None);
+        };
+        let key = Self::queue_plan_pending_signed_alias_member_marker_key(&expected)?;
+        let payload = storage.get(&key).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending obligation lacks exact signed-alias member `{key}`"
+            ))
+        })?;
+        let current =
+            Self::decode_exact_queue_plan_pending_signed_alias_member_marker(&key, payload)?;
+        if current != expected {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan pending signed-alias member `{key}` binds another obligation"
+            )));
+        }
+        Ok(Some(key))
+    }
+    fn queue_plan_pending_signed_alias_members_from_storage(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        network_id_digest: Hash,
+        signed_transaction_hash: HashOf<SignedTransaction>,
+    ) -> Result<Vec<QueuePlanPendingSignedAliasMemberV1>, MergeLedgerCommitError> {
+        let (prefix, start) = Self::queue_plan_pending_signed_alias_member_marker_prefix(
+            network_id_digest,
+            signed_transaction_hash,
+        )?;
+        let mut members = Vec::new();
+        for (key, payload) in storage.range(start..) {
+            if !key.as_ref().starts_with(&prefix) {
+                break;
+            }
+            if members.len() == MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending signed-alias roster `{prefix}` exceeds its consensus bound"
+                )));
+            }
+            let marker =
+                Self::decode_exact_queue_plan_pending_signed_alias_member_marker(key, payload)?;
+            if marker.network_id_digest != network_id_digest
+                || marker.signed_transaction_hash != signed_transaction_hash
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending signed-alias member `{key}` binds another roster"
+                )));
+            }
+            let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+                marker.network_id_digest,
+                marker.entrypoint_hash.clone(),
+            )?;
+            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
+                network_id_digest: marker.network_id_digest,
+                entrypoint_hash: marker.entrypoint_hash.clone(),
+            };
+            let registry_marker_key =
+                Self::queue_plan_admission_registry_marker_key(&registry_key)?;
+            let registry_payload = storage.get(&registry_marker_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending signed-alias member `{key}` has no registry owner"
+                ))
+            })?;
+            let registry = Self::decode_exact_queue_plan_admission_registry_marker(
+                &registry_marker_key,
+                registry_payload,
+            )?;
+            if registry.binding_hash != marker.binding_hash {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending signed-alias member `{key}` conflicts with its registry owner"
+                )));
+            }
+            let obligation_payload = storage.get(&obligation_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending signed-alias member `{key}` has no exact obligation `{obligation_key}`"
+                ))
+            })?;
+            let obligation = Self::decode_exact_queue_plan_pending_obligation_marker(
+                &obligation_key,
+                obligation_payload,
+            )?;
+            if Self::queue_plan_pending_signed_alias_member_from_obligation(&obligation).as_ref()
+                != Some(&marker)
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending signed-alias member `{key}` conflicts with its obligation"
+                )));
+            }
+            members.push(marker);
         }
         Ok(members)
     }
@@ -35738,26 +36307,6 @@ impl State {
             )
         })
     }
-    fn validate_queue_plan_pending_obligation_route_member(
-        world: &impl WorldReadOnly,
-        obligation: &QueuePlanPendingObligationV1,
-        route: QueuePlanPendingObligationRouteV1,
-    ) -> Result<(), MergeLedgerCommitError> {
-        Self::validate_queue_plan_pending_obligation_route_member_in_storage(
-            world.smart_contract_state(),
-            obligation,
-            route,
-        )
-    }
-    fn validate_queue_plan_pending_obligation_route_member_in_storage(
-        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
-        obligation: &QueuePlanPendingObligationV1,
-        route: QueuePlanPendingObligationRouteV1,
-    ) -> Result<(), MergeLedgerCommitError> {
-        Self::queue_plan_pending_route_members_from_storage(storage, route)?;
-        Self::require_queue_plan_pending_route_member_marker(storage, obligation, route)?;
-        Ok(())
-    }
     fn queue_plan_pending_obligation_matches_active_lifecycle(
         state: &impl StateReadOnly,
         obligation: &QueuePlanPendingObligationV1,
@@ -35774,6 +36323,16 @@ impl State {
                     == Some(route.lane_incarnation)
         })
     }
+    fn queue_plan_signed_identity_committed(
+        state: &impl StateReadOnlyWithTransactions,
+        signed_transaction_hash: Option<HashOf<SignedTransaction>>,
+    ) -> bool {
+        signed_transaction_hash.is_some_and(|hash| {
+            state.has_entrypoint(HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                Hash::from(hash),
+            ))
+        })
+    }
     fn queue_plan_registry_owner_application_state_in_view(
         state: &impl StateReadOnlyWithTransactions,
         network_id_digest: Hash,
@@ -35784,7 +36343,11 @@ impl State {
             network_id_digest,
             entrypoint_hash.clone(),
         )?;
-        let committed = state.has_entrypoint(entrypoint_hash);
+        let terminal_key = Self::queue_plan_signed_alias_terminal_marker_key_from_claim(
+            network_id_digest,
+            entrypoint_hash.clone(),
+        )?;
+        let outer_committed = state.has_entrypoint(entrypoint_hash.clone());
         match state.world().smart_contract_state().get(&key) {
             Some(payload) => {
                 let obligation =
@@ -35797,29 +36360,116 @@ impl State {
                         "QueuePlan registry owner conflicts with pending obligation `{key}`"
                     )));
                 }
-                for route in &obligation.routes {
-                    Self::validate_queue_plan_pending_obligation_route_member(
-                        state.world(),
-                        &obligation,
-                        *route,
-                    )?;
+                if state
+                    .world()
+                    .smart_contract_state()
+                    .get(&terminal_key)
+                    .is_some()
+                {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan pending obligation `{key}` conflicts with terminal marker `{terminal_key}`"
+                    )));
                 }
-                if committed {
+                Self::require_queue_plan_pending_signed_alias_member_marker(
+                    state.world().smart_contract_state(),
+                    &obligation,
+                )?;
+                let route_state = Self::queue_plan_pending_exact_route_member_state_in_storage(
+                    state.world().smart_contract_state(),
+                    &obligation,
+                )?;
+                if outer_committed {
                     return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                         "QueuePlan pending obligation `{key}` survived canonical transaction membership"
                     )));
                 }
-                if Self::queue_plan_pending_obligation_matches_active_lifecycle(state, &obligation)
-                {
-                    Ok(QueuePlanAdmissionApplicationState::Pending)
-                } else {
-                    Ok(QueuePlanAdmissionApplicationState::PendingStale)
+                let signed_committed = Self::queue_plan_signed_identity_committed(
+                    state,
+                    obligation.signed_transaction_hash,
+                );
+                match (route_state, signed_committed) {
+                    (QueuePlanPendingRouteMemberState::AllPresent, false)
+                        if Self::queue_plan_pending_obligation_matches_active_lifecycle(
+                            state,
+                            &obligation,
+                        ) =>
+                    {
+                        Ok(QueuePlanAdmissionApplicationState::Pending)
+                    }
+                    (QueuePlanPendingRouteMemberState::AllPresent, false) => {
+                        Ok(QueuePlanAdmissionApplicationState::PendingStale)
+                    }
+                    (QueuePlanPendingRouteMemberState::AllPresent, true) => {
+                        Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "QueuePlan pending obligation `{key}` survived committed signed replay membership"
+                        )))
+                    }
+                    (QueuePlanPendingRouteMemberState::AllAbsent, _) => {
+                        Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "QueuePlan retained obligation `{key}` lost every exact route member"
+                        )))
+                    }
                 }
             }
-            None if committed => Ok(QueuePlanAdmissionApplicationState::Applied),
-            None => Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                "QueuePlan registry owner `{key}` has neither a pending obligation nor canonical transaction membership"
-            ))),
+            None => {
+                let terminal = state
+                    .world()
+                    .smart_contract_state()
+                    .get(&terminal_key)
+                    .map(|payload| {
+                        Self::decode_exact_queue_plan_signed_alias_terminal_marker(
+                            &terminal_key,
+                            payload,
+                        )
+                    })
+                    .transpose()?;
+                if outer_committed {
+                    return if terminal.is_none() {
+                        Ok(QueuePlanAdmissionApplicationState::Applied)
+                    } else {
+                        Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "QueuePlan directly applied registry owner retains terminal marker `{terminal_key}`"
+                        )))
+                    };
+                }
+                if let Some(terminal) = terminal {
+                    let pending_alias = QueuePlanPendingSignedAliasMemberV1 {
+                        version: QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBER_VERSION_V1,
+                        network_id_digest: terminal.network_id_digest,
+                        signed_transaction_hash: terminal.signed_transaction_hash,
+                        entrypoint_hash: terminal.entrypoint_hash.clone(),
+                        binding_hash: terminal.binding_hash,
+                    };
+                    let pending_alias_key =
+                        Self::queue_plan_pending_signed_alias_member_marker_key(&pending_alias)?;
+                    if state
+                        .world()
+                        .smart_contract_state()
+                        .get(&pending_alias_key)
+                        .is_some()
+                    {
+                        return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "QueuePlan terminal marker `{terminal_key}` retains pending reverse index `{pending_alias_key}`"
+                        )));
+                    }
+                    if terminal.network_id_digest == network_id_digest
+                        && terminal.entrypoint_hash == entrypoint_hash
+                        && terminal.binding_hash == registry_binding_hash
+                        && Self::queue_plan_signed_identity_committed(
+                            state,
+                            Some(terminal.signed_transaction_hash),
+                        )
+                    {
+                        return Ok(QueuePlanAdmissionApplicationState::Applied);
+                    }
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan terminal marker `{terminal_key}` conflicts with registry ownership or committed membership"
+                    )));
+                }
+                Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan registry owner `{key}` has neither a pending obligation nor canonical transaction membership"
+                )))
+            }
         }
     }
     fn queue_plan_admission_application_state(
@@ -35834,19 +36484,23 @@ impl State {
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
         expected: QueuePlanPendingObligationV1,
     ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
-        let committed = state.has_entrypoint(binding.entrypoint_hash);
+        let outer_committed = state.has_entrypoint(binding.entrypoint_hash);
+        let signed_committed =
+            Self::queue_plan_signed_identity_committed(state, binding.signed_transaction_hash);
         let active = Self::queue_plan_pending_obligation_matches_active_lifecycle(state, &expected);
         Self::queue_plan_binding_application_state_in_storage(
             state.world().smart_contract_state(),
             expected,
-            committed,
+            outer_committed,
+            signed_committed,
             active,
         )
     }
     fn queue_plan_binding_application_state_in_storage(
         storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
         expected: QueuePlanPendingObligationV1,
-        committed: bool,
+        outer_committed: bool,
+        signed_committed: bool,
         active: bool,
     ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
         let key = Self::queue_plan_pending_obligation_marker_key(
@@ -35862,26 +36516,109 @@ impl State {
                         "QueuePlan pending-obligation marker `{key}` conflicts with its immutable admission"
                     )));
                 }
-                for route in &current.routes {
-                    Self::validate_queue_plan_pending_obligation_route_member_in_storage(
-                        storage, &current, *route,
-                    )?;
-                }
-                if committed {
+                Self::require_queue_plan_pending_signed_alias_member_marker(storage, &current)?;
+                let route_state = Self::queue_plan_pending_exact_route_member_state_in_storage(
+                    storage, &current,
+                )?;
+                if outer_committed {
                     return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                         "QueuePlan pending-obligation marker `{key}` survived canonical transaction membership"
                     )));
                 }
-                if active {
-                    Ok(QueuePlanAdmissionApplicationState::Pending)
-                } else {
-                    Ok(QueuePlanAdmissionApplicationState::PendingStale)
+                match (route_state, signed_committed) {
+                    (QueuePlanPendingRouteMemberState::AllPresent, false) if active => {
+                        Ok(QueuePlanAdmissionApplicationState::Pending)
+                    }
+                    (QueuePlanPendingRouteMemberState::AllPresent, false) => {
+                        Ok(QueuePlanAdmissionApplicationState::PendingStale)
+                    }
+                    (QueuePlanPendingRouteMemberState::AllPresent, true) => {
+                        Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "QueuePlan pending-obligation marker `{key}` survived committed signed replay membership"
+                        )))
+                    }
+                    (QueuePlanPendingRouteMemberState::AllAbsent, _) => {
+                        Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "QueuePlan retained obligation marker `{key}` lost every exact route member"
+                        )))
+                    }
                 }
             }
-            None if committed => Ok(QueuePlanAdmissionApplicationState::Applied),
-            None => Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                "QueuePlan admission `{key}` has neither a pending obligation nor canonical transaction membership"
-            ))),
+            None => {
+                for route in &expected.routes {
+                    let member =
+                        Self::queue_plan_pending_route_member_from_obligation(&expected, *route)?;
+                    let member_key = Self::queue_plan_pending_route_member_marker_key(
+                        *route,
+                        member.member_identity,
+                    )?;
+                    if storage.get(&member_key).is_some() {
+                        return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "QueuePlan applied admission `{key}` retains exact route member `{member_key}`"
+                        )));
+                    }
+                }
+                let pending_alias =
+                    Self::queue_plan_pending_signed_alias_member_from_obligation(&expected);
+                let terminal_alias =
+                    Self::queue_plan_terminal_signed_alias_member_from_obligation(&expected);
+                let stored_pending_alias = pending_alias
+                    .as_ref()
+                    .map(|alias| {
+                        let alias_key =
+                            Self::queue_plan_pending_signed_alias_member_marker_key(alias)?;
+                        storage
+                            .get(&alias_key)
+                            .map(|payload| {
+                                Self::decode_exact_queue_plan_pending_signed_alias_member_marker(
+                                    &alias_key, payload,
+                                )
+                            })
+                            .transpose()
+                    })
+                    .transpose()?
+                    .flatten();
+                let stored_terminal_alias = terminal_alias
+                    .as_ref()
+                    .map(|terminal| {
+                        let terminal_key =
+                            Self::queue_plan_signed_alias_terminal_marker_key(terminal)?;
+                        storage
+                            .get(&terminal_key)
+                            .map(|payload| {
+                                Self::decode_exact_queue_plan_signed_alias_terminal_marker(
+                                    &terminal_key,
+                                    payload,
+                                )
+                            })
+                            .transpose()
+                    })
+                    .transpose()?
+                    .flatten();
+                if outer_committed {
+                    return if stored_pending_alias.is_none() && stored_terminal_alias.is_none() {
+                        Ok(QueuePlanAdmissionApplicationState::Applied)
+                    } else {
+                        Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                            "QueuePlan directly applied admission `{key}` retains a signed-alias marker"
+                        )))
+                    };
+                }
+                if stored_pending_alias.is_some() {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan terminal admission `{key}` retains its pending reverse index"
+                    )));
+                }
+                if signed_committed
+                    && stored_terminal_alias.as_ref() == terminal_alias.as_ref()
+                    && terminal_alias.is_some()
+                {
+                    return Ok(QueuePlanAdmissionApplicationState::Applied);
+                }
+                Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan admission `{key}` has no exact application evidence"
+                )))
+            }
         }
     }
     #[cfg(test)]
@@ -35960,14 +36697,62 @@ impl State {
                     "QueuePlan pending-obligation key has a conflicting owner: `{obligation_key}`"
                 )));
             }
-            for route in &current.routes {
-                Self::validate_queue_plan_pending_obligation_route_member_in_storage(
-                    storage, &current, *route,
-                )?;
+            Self::require_queue_plan_pending_signed_alias_member_marker(storage, &current)?;
+            if let Some(terminal) =
+                Self::queue_plan_terminal_signed_alias_member_from_obligation(&current)
+            {
+                let terminal_key = Self::queue_plan_signed_alias_terminal_marker_key(&terminal)?;
+                if storage.get(&terminal_key).is_some() {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan pending obligation conflicts with terminal marker `{terminal_key}`"
+                    )));
+                }
+            }
+            if Self::queue_plan_pending_exact_route_member_state_in_storage(storage, &current)?
+                != QueuePlanPendingRouteMemberState::AllPresent
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan terminal pending obligation cannot be staged again: `{obligation_key}`"
+                )));
             }
             return Ok(());
         }
         let obligation_payload = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;
+        if let Some(terminal) =
+            Self::queue_plan_terminal_signed_alias_member_from_obligation(&obligation)
+        {
+            let terminal_key = Self::queue_plan_signed_alias_terminal_marker_key(&terminal)?;
+            if storage.get(&terminal_key).is_some() {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan admission is already terminal at `{terminal_key}`"
+                )));
+            }
+        }
+        let alias_update = if let Some(alias_member) =
+            Self::queue_plan_pending_signed_alias_member_from_obligation(&obligation)
+        {
+            let members = Self::queue_plan_pending_signed_alias_members_from_storage(
+                storage,
+                alias_member.network_id_digest,
+                alias_member.signed_transaction_hash,
+            )?;
+            if members.len() == MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "QueuePlan pending signed-alias roster is full".to_owned(),
+                ));
+            }
+            let key = Self::queue_plan_pending_signed_alias_member_marker_key(&alias_member)?;
+            if storage.get(&key).is_some() {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending signed-alias member `{key}` exists without its obligation"
+                )));
+            }
+            let payload =
+                Self::queue_plan_pending_signed_alias_member_marker_payload(&alias_member)?;
+            Some((key, payload))
+        } else {
+            None
+        };
         let mut route_updates = Vec::with_capacity(obligation.routes.len());
         for route in &obligation.routes {
             let members = Self::queue_plan_pending_route_members_from_storage(storage, *route)?;
@@ -35992,6 +36777,9 @@ impl State {
             route_updates.push((member_key, member_payload));
         }
         storage.insert_queue_plan_marker(obligation_key, obligation_payload);
+        if let Some((alias_key, alias_payload)) = alias_update {
+            storage.insert_queue_plan_marker(alias_key, alias_payload);
+        }
         for (member_key, member_payload) in route_updates {
             storage.insert_queue_plan_marker(member_key, member_payload);
         }
@@ -36001,6 +36789,39 @@ impl State {
         storage: &mut impl QueuePlanMarkerStorage,
         network_id_digest: Hash,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+            network_id_digest,
+            entrypoint_hash.clone(),
+        )?;
+        let Some(obligation_payload) = storage.get(&obligation_key) else {
+            return Self::resolve_queue_plan_pending_obligation_after_roster_prevalidation(
+                storage,
+                network_id_digest,
+                entrypoint_hash,
+                &BTreeSet::new(),
+            );
+        };
+        let obligation = Self::decode_exact_queue_plan_pending_obligation_marker(
+            &obligation_key,
+            obligation_payload,
+        )?;
+        let prevalidated_routes = Self::prevalidate_queue_plan_pending_route_rosters(
+            storage,
+            obligation.routes.iter().copied(),
+        )?;
+        Self::resolve_queue_plan_pending_obligation_after_roster_prevalidation(
+            storage,
+            network_id_digest,
+            entrypoint_hash,
+            &prevalidated_routes,
+        )
+    }
+    fn resolve_queue_plan_pending_obligation_after_roster_prevalidation(
+        storage: &mut impl QueuePlanMarkerStorage,
+        network_id_digest: Hash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        prevalidated_routes: &BTreeSet<QueuePlanPendingObligationRouteV1>,
     ) -> Result<bool, MergeLedgerCommitError> {
         let obligation_key = Self::queue_plan_pending_obligation_marker_key(
             network_id_digest,
@@ -36053,18 +36874,138 @@ impl State {
                 "QueuePlan pending obligation conflicts with registry owner `{registry_marker_key}`"
             )));
         }
+        let alias_key =
+            Self::require_queue_plan_pending_signed_alias_member_marker(storage, &obligation)?;
+        if let Some(terminal) =
+            Self::queue_plan_terminal_signed_alias_member_from_obligation(&obligation)
+        {
+            let terminal_key = Self::queue_plan_signed_alias_terminal_marker_key(&terminal)?;
+            if storage.get(&terminal_key).is_some() {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan exact resolution conflicts with terminal marker `{terminal_key}`"
+                )));
+            }
+        }
+        if Self::queue_plan_pending_exact_route_member_state_after_roster_prevalidation(
+            storage,
+            &obligation,
+            prevalidated_routes,
+        )? != QueuePlanPendingRouteMemberState::AllPresent
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan exact resolution found terminal route state for `{obligation_key}`"
+            )));
+        }
         let mut member_keys = Vec::with_capacity(obligation.routes.len());
         for route in &obligation.routes {
-            Self::queue_plan_pending_route_members_from_storage(storage, *route)?;
-            let (member_key, _) =
-                Self::require_queue_plan_pending_route_member_marker(storage, &obligation, *route)?;
-            member_keys.push(member_key);
+            let member =
+                Self::queue_plan_pending_route_member_from_obligation(&obligation, *route)?;
+            member_keys.push(Self::queue_plan_pending_route_member_marker_key(
+                *route,
+                member.member_identity,
+            )?);
         }
         storage.remove_queue_plan_marker(obligation_key);
+        if let Some(alias_key) = alias_key {
+            storage.remove_queue_plan_marker(alias_key);
+        }
         for member_key in member_keys {
             storage.remove_queue_plan_marker(member_key);
         }
         Ok(true)
+    }
+    fn resolve_queue_plan_pending_obligation_by_signed_alias_in_storage(
+        storage: &mut impl QueuePlanMarkerStorage,
+        member: &QueuePlanPendingSignedAliasMemberV1,
+        prevalidated_routes: &BTreeSet<QueuePlanPendingObligationRouteV1>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let alias_key = Self::queue_plan_pending_signed_alias_member_marker_key(member)?;
+        let alias_payload = storage.get(&alias_key).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias reconciliation lost member `{alias_key}`"
+            ))
+        })?;
+        let current_alias = Self::decode_exact_queue_plan_pending_signed_alias_member_marker(
+            &alias_key,
+            alias_payload,
+        )?;
+        if &current_alias != member {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias reconciliation member changed at `{alias_key}`"
+            )));
+        }
+        let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+            member.network_id_digest,
+            member.entrypoint_hash.clone(),
+        )?;
+        let obligation_payload = storage.get(&obligation_key).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias reconciliation lost obligation `{obligation_key}`"
+            ))
+        })?;
+        let obligation = Self::decode_exact_queue_plan_pending_obligation_marker(
+            &obligation_key,
+            obligation_payload,
+        )?;
+        if Self::queue_plan_pending_signed_alias_member_from_obligation(&obligation).as_ref()
+            != Some(member)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias reconciliation conflicts with obligation `{obligation_key}`"
+            )));
+        }
+        Self::require_queue_plan_pending_signed_alias_member_marker(storage, &obligation)?;
+        if Self::queue_plan_pending_exact_route_member_state_after_roster_prevalidation(
+            storage,
+            &obligation,
+            prevalidated_routes,
+        )? != QueuePlanPendingRouteMemberState::AllPresent
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias reconciliation found incomplete routes for `{obligation_key}`"
+            )));
+        }
+        let member_keys = obligation
+            .routes
+            .iter()
+            .map(|route| {
+                let member =
+                    Self::queue_plan_pending_route_member_from_obligation(&obligation, *route)?;
+                Self::queue_plan_pending_route_member_marker_key(*route, member.member_identity)
+            })
+            .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
+        let terminal_member = Self::queue_plan_terminal_signed_alias_member_from_obligation(
+            &obligation,
+        )
+        .ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionMarkerConflict(
+                "QueuePlan signed-alias reconciliation obligation has no signed identity"
+                    .to_owned(),
+            )
+        })?;
+        if terminal_member.entrypoint_hash != member.entrypoint_hash
+            || terminal_member.signed_transaction_hash != member.signed_transaction_hash
+            || terminal_member.binding_hash != member.binding_hash
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias terminal projection conflicts at `{alias_key}`"
+            )));
+        }
+        let terminal_key = Self::queue_plan_signed_alias_terminal_marker_key(&terminal_member)?;
+        if storage.get(&terminal_key).is_some() {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                "QueuePlan signed-alias terminal marker already exists at `{terminal_key}`"
+            )));
+        }
+        let terminal_payload =
+            Self::queue_plan_signed_alias_terminal_marker_payload(&terminal_member)?;
+        storage.remove_queue_plan_marker(obligation_key);
+        storage.remove_queue_plan_marker(alias_key);
+        for member_key in member_keys {
+            storage.remove_queue_plan_marker(member_key);
+        }
+        storage.insert_queue_plan_marker(terminal_key, terminal_payload);
+        Ok(())
     }
     fn nexus_fee_receipt_marker_key(
         source_id: &[u8; 32],
@@ -37692,6 +38633,8 @@ impl State {
             }
             if execution.entrypoints.len() != descriptor.accepted_candidate_indices.len()
                 || execution.entrypoint_hashes != descriptor.accepted_transaction_hashes
+                || execution.authenticated_signed_replay_aliases.len()
+                    != execution.entrypoints.len()
                 || execution.results.len() != execution.entrypoints.len()
                 || execution.result_hashes.len() != execution.results.len()
                 || execution.reservation_keys.len() != execution.entrypoints.len()
@@ -37729,6 +38672,36 @@ impl State {
                     ));
                 }
             }
+            for ((entrypoint, result), authenticated_alias) in execution
+                .entrypoints
+                .iter()
+                .zip(&execution.results)
+                .zip(&execution.authenticated_signed_replay_aliases)
+            {
+                let exact_signed_alias = match entrypoint {
+                    TransactionEntrypoint::SealedReveal(reveal) => {
+                        Some(Hash::from(reveal.signed_transaction().hash_as_entrypoint()))
+                    }
+                    TransactionEntrypoint::External(_)
+                    | TransactionEntrypoint::SealedCommitment(_)
+                    | TransactionEntrypoint::Time(_) => None,
+                };
+                if authenticated_alias.is_some() && *authenticated_alias != exact_signed_alias {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "authenticated sealed-reveal replay alias is malformed or attached to a non-reveal entrypoint"
+                            .to_owned(),
+                    ));
+                }
+                if matches!(entrypoint, TransactionEntrypoint::SealedReveal(_))
+                    && result.0.is_ok()
+                    && authenticated_alias.is_none()
+                {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "successful sealed reveal omits its authenticated signed replay alias"
+                            .to_owned(),
+                    ));
+                }
+            }
             let execution_entrypoints = execution
                 .entrypoints
                 .iter()
@@ -37763,8 +38736,7 @@ impl State {
                     ));
                 }
             }
-            for entrypoint_hash in
-                crate::tx::canonical_replay_alias_hashes(&execution.entrypoints)
+            for entrypoint_hash in crate::tx::canonical_replay_alias_hashes(&execution.entrypoints)
             {
                 if !seen_committed_entrypoints.insert(entrypoint_hash) {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -44113,6 +45085,16 @@ fn validate_sccp_outbound_payload_for_retained_route(
                 .to_owned(),
         );
     }
+    if !iroha_sccp::sccp_destination_contract_accepts_recipient_v1(
+        &route.destination,
+        transfer.recipient_codec,
+        &transfer.recipient,
+    ) {
+        return Err(
+            "SCCP outbound replay recipient cannot be executed by its retained destination deployment"
+                .to_owned(),
+        );
+    }
     Ok(())
 }
 fn validate_sccp_inbound_anchor_high_water_index(
@@ -46683,12 +47665,39 @@ impl<'state> StateBlock<'state> {
             })
             .collect()
     }
+    fn declared_merge_carrier_entrypoints(&self) -> HashSet<HashOf<TransactionEntrypoint>> {
+        let mut declared = HashSet::new();
+        for execution in self
+            .staged_merge_entry
+            .as_ref()
+            .and_then(|entry| entry.execution_batch.as_ref())
+            .into_iter()
+            .flat_map(|batch| &batch.lanes)
+        {
+            for (entrypoint, authenticated_alias) in execution
+                .entrypoints
+                .iter()
+                .zip(&execution.authenticated_signed_replay_aliases)
+            {
+                declared.insert(entrypoint.hash());
+                if let Some(alias) = authenticated_alias {
+                    declared.insert(HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                        *alias,
+                    ));
+                }
+            }
+        }
+        declared
+    }
     fn validate_merge_carrier_entrypoint_binding(&self) -> Result<(), MergeLedgerCommitError> {
-        if self.merge_carrier_entrypoints == self.expected_merge_carrier_entrypoints() {
+        let expected = self.expected_merge_carrier_entrypoints();
+        if self.merge_carrier_entrypoints == expected
+            && self.declared_merge_carrier_entrypoints() == expected
+        {
             return Ok(());
         }
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-            "canonical carrier membership differs from its certified merge execution batch"
+            "canonical carrier membership or its authenticated replay-alias transcript differs from the certified merge execution batch"
                 .to_owned(),
         ))
     }
@@ -47266,16 +48275,27 @@ impl<'state> StateBlock<'state> {
             .into_iter()
             .map(|admission| {
                 let obligation = State::queue_plan_pending_obligation_from_admission(&admission)?;
-                let committed = self.has_entrypoint(admission.certificate.binding.entrypoint_hash);
+                let outer_committed =
+                    self.has_entrypoint(admission.certificate.binding.entrypoint_hash);
+                let signed_committed = State::queue_plan_signed_identity_committed(
+                    self,
+                    admission.certificate.binding.signed_transaction_hash,
+                );
                 let active = State::queue_plan_pending_obligation_matches_active_lifecycle(
                     self,
                     &obligation,
                 );
-                Ok((admission, obligation, committed, active))
+                Ok((
+                    admission,
+                    obligation,
+                    outer_committed,
+                    signed_committed,
+                    active,
+                ))
             })
             .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
         let mut markers = self.world.smart_contract_state.transaction();
-        for (admission, obligation, committed, active) in admissions {
+        for (admission, obligation, outer_committed, signed_committed, active) in admissions {
             let key = State::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
             let payload =
                 State::queue_plan_admission_registry_marker_payload(&admission.registry_value)?;
@@ -47290,13 +48310,17 @@ impl<'state> StateBlock<'state> {
                     )));
                 }
                 State::queue_plan_binding_application_state_in_storage(
-                    &markers, obligation, committed, active,
+                    &markers,
+                    obligation,
+                    outer_committed,
+                    signed_committed,
+                    active,
                 )?;
                 continue;
             }
-            if committed {
+            if outer_committed || signed_committed {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "queue-plan admission registry key `{key}` was absent after its transaction committed"
+                    "queue-plan admission registry key `{key}` was absent after its outer or signed identity committed"
                 )));
             }
             markers.insert_queue_plan_marker(key, payload);
@@ -47308,10 +48332,84 @@ impl<'state> StateBlock<'state> {
     fn resolve_required_queue_plan_pending_obligations(
         &mut self,
         pending_obligations: impl IntoIterator<Item = (HashOf<TransactionEntrypoint>, Hash)>,
+        committed_signed_identities: impl IntoIterator<Item = HashOf<SignedTransaction>>,
     ) -> Result<(), MergeLedgerCommitError> {
         let network_id_digest =
             crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
+        let pending_obligations = pending_obligations.into_iter().collect::<Vec<_>>();
+        let exact_entrypoints = pending_obligations
+            .iter()
+            .map(|(entrypoint_hash, _)| entrypoint_hash.clone())
+            .collect::<BTreeSet<_>>();
+        let committed_signed_identities = committed_signed_identities
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let committed_signed_entrypoints = committed_signed_identities
+            .iter()
+            .map(|hash| HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::from(*hash)))
+            .collect::<BTreeSet<_>>();
         let mut markers = self.world.smart_contract_state.transaction();
+        let alias_members = committed_signed_identities
+            .into_iter()
+            .map(|signed_transaction_hash| {
+                State::queue_plan_pending_signed_alias_members_from_storage(
+                    &markers,
+                    network_id_digest,
+                    signed_transaction_hash,
+                )
+            })
+            .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
+        // Validate every affected route roster exactly once before the first
+        // mutation. Subsequent resolutions remove only exact, authenticated
+        // member keys from this prevalidated snapshot, avoiding an
+        // alias-member × route × roster rescan at consensus policy bounds.
+        let mut affected_routes = BTreeSet::new();
+        for (entrypoint_hash, expected_binding_hash) in &pending_obligations {
+            let obligation_key = State::queue_plan_pending_obligation_marker_key(
+                network_id_digest,
+                entrypoint_hash.clone(),
+            )?;
+            let obligation_payload = markers.get(&obligation_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "autonomous QueuePlan entrypoint has no pending obligation: `{obligation_key}`"
+                ))
+            })?;
+            let obligation = State::decode_exact_queue_plan_pending_obligation_marker(
+                &obligation_key,
+                obligation_payload,
+            )?;
+            if obligation.binding_hash != *expected_binding_hash {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "autonomous QueuePlan entrypoint conflicts with pending obligation `{obligation_key}`"
+                )));
+            }
+            affected_routes.extend(obligation.routes.iter().copied());
+        }
+        for member in alias_members.iter().flatten() {
+            let obligation_key = State::queue_plan_pending_obligation_marker_key(
+                member.network_id_digest,
+                member.entrypoint_hash.clone(),
+            )?;
+            let obligation_payload = markers.get(&obligation_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan signed-alias member lost obligation `{obligation_key}` before route prevalidation"
+                ))
+            })?;
+            let obligation = State::decode_exact_queue_plan_pending_obligation_marker(
+                &obligation_key,
+                obligation_payload,
+            )?;
+            if State::queue_plan_pending_signed_alias_member_from_obligation(&obligation).as_ref()
+                != Some(member)
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan signed-alias member conflicts with obligation `{obligation_key}` before route prevalidation"
+                )));
+            }
+            affected_routes.extend(obligation.routes.iter().copied());
+        }
+        let prevalidated_routes =
+            State::prevalidate_queue_plan_pending_route_rosters(&markers, affected_routes)?;
         for (entrypoint_hash, expected_binding_hash) in pending_obligations {
             let key = State::queue_plan_pending_obligation_marker_key(
                 network_id_digest,
@@ -47329,15 +48427,39 @@ impl<'state> StateBlock<'state> {
                     "autonomous QueuePlan entrypoint conflicts with pending obligation `{key}`"
                 )));
             }
-            if !State::resolve_queue_plan_pending_obligation_in_storage(
+            if !State::resolve_queue_plan_pending_obligation_after_roster_prevalidation(
                 &mut markers,
                 network_id_digest,
                 entrypoint_hash,
+                &prevalidated_routes,
             )? {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                     "autonomous QueuePlan pending obligation disappeared before resolution: `{key}`"
                 )));
             }
+        }
+        for member in alias_members.into_iter().flatten() {
+            if exact_entrypoints.contains(&member.entrypoint_hash) {
+                continue;
+            }
+            if committed_signed_entrypoints.contains(&member.entrypoint_hash) {
+                if !State::resolve_queue_plan_pending_obligation_after_roster_prevalidation(
+                    &mut markers,
+                    network_id_digest,
+                    member.entrypoint_hash.clone(),
+                    &prevalidated_routes,
+                )? {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "QueuePlan direct replay identity lost its exact obligation".to_owned(),
+                    ));
+                }
+                continue;
+            }
+            State::resolve_queue_plan_pending_obligation_by_signed_alias_in_storage(
+                &mut markers,
+                &member,
+                &prevalidated_routes,
+            )?;
         }
         markers.apply();
         Ok(())
@@ -47428,7 +48550,22 @@ impl<'state> StateBlock<'state> {
         let required = self.required_queue_plan_pending_obligations_for_entrypoints(
             block.external_entrypoints_cloned(),
         )?;
-        self.resolve_required_queue_plan_pending_obligations(required)
+        let committed_signed_identities = block
+            .external_entrypoints_cloned()
+            .filter_map(|entrypoint| match &entrypoint {
+                TransactionEntrypoint::External(transaction) => Some(transaction.hash()),
+                TransactionEntrypoint::SealedReveal(reveal)
+                    if crate::tx::authenticated_signed_replay_alias(self, &entrypoint)
+                        .is_some() =>
+                {
+                    Some(reveal.signed_transaction().hash())
+                }
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::SealedReveal(_)
+                | TransactionEntrypoint::Time(_) => None,
+            })
+            .collect::<BTreeSet<_>>();
+        self.resolve_required_queue_plan_pending_obligations(required, committed_signed_identities)
     }
     fn stage_merge_execution_markers(
         &mut self,
@@ -54173,6 +55310,33 @@ mod tiered_snapshot_diff_tests {
         replace_complete_sccp_outbound_history(&mut world, other_lane_key, message, descriptor);
         assert_rejected(world, "cross-lane route", "belongs to another exact lane");
     }
+    #[test]
+    fn retained_sccp_outbound_payload_rejects_ton_master_recipient() {
+        let exact = iroha_sccp::sccp_exact_ton_outbound_test_fixture_v1();
+        let mut payload = exact.bundle.payload.clone();
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
+        let iroha_data_model::bridge::SccpDestinationDeploymentV1::Ton(deployment) =
+            &exact.route.destination
+        else {
+            unreachable!("exact TON fixture must contain a TON deployment")
+        };
+        transfer.recipient =
+            iroha_sccp::canonical_sccp_ton_account36_bytes_v1(deployment.jetton_master_address)
+                .expect("fixture master has a canonical TON address")
+                .to_vec();
+        let projection = crate::bridge::ValidatedSccpOutboundMessageProjectionV1 {
+            commitment_index: 0,
+            context: exact.bundle.commitment.context,
+            payload,
+            commitment: exact.bundle.commitment,
+        };
+        let error = validate_sccp_outbound_payload_for_retained_route(&projection, &exact.route)
+            .expect_err("the retained TON master recipient must fail hydration validation");
+        assert!(
+            error.contains("recipient cannot be executed"),
+            "unexpected retained-recipient error: {error}"
+        );
+    }
     fn insert_complete_sccp_outbound_record(
         world: &mut World,
         key: SccpOutboundMessageKeyV1,
@@ -57973,11 +59137,13 @@ impl StateTransaction<'_, '_> {
         } else {
             self.gas_limit_per_block
         };
-        let total = self
-            .gas_used_in_block_so_far
-            .saturating_add(self.last_tx_gas_used)
-            .saturating_add(gas);
-        if total > limit {
+        if !crate::gas::gas_components_fit_block_limit(
+            limit,
+            [self.gas_used_in_block_so_far, self.last_tx_gas_used, gas],
+        ) {
+            let total = u128::from(self.gas_used_in_block_so_far)
+                + u128::from(self.last_tx_gas_used)
+                + u128::from(gas);
             return Err(ValidationFail::NotPermitted(format!(
                 "{operation} exceed the shared block gas budget: {total} > {limit}"
             ))

@@ -1859,6 +1859,7 @@ fn merge_entry_with_reservations(
         autonomous_epoch: context.epoch,
         autonomous_payload_hash: payload.payload_hash,
         entrypoint_hashes,
+        authenticated_signed_replay_aliases: vec![None; entrypoints.len()],
         entrypoints,
         reservation_keys,
         routing_plans,

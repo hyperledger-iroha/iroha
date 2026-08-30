@@ -865,8 +865,21 @@ async fn serve_torii_http(
         }
     }
     drop(listener);
-    while let Some(completion) = connections.join_next().await {
-        observe_torii_connection_completion(completion)?;
+    let drain = async {
+        while let Some(completion) = connections.join_next().await {
+            observe_torii_connection_completion(completion)?;
+        }
+        Ok::<(), std::io::Error>(())
+    };
+    match tokio::time::timeout(config.write_timeout, drain).await {
+        Ok(result) => result?,
+        Err(_) => {
+            iroha_logger::warn!(
+                timeout_ms = config.write_timeout.as_millis(),
+                "Torii graceful connection drain timed out; aborting remaining connections"
+            );
+            connections.shutdown().await;
+        }
     }
     Ok(())
 }
@@ -16539,7 +16552,7 @@ async fn handler_gov_ballot_zk_v1(
     crate::utils::extractors::JsonOnly(value): crate::utils::extractors::JsonOnly<
         norito::json::Value,
     >,
-) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
+) -> Result<JsonBody<crate::gov::BallotDraftResponse>, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(
         &app,
@@ -16583,7 +16596,7 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
     crate::utils::extractors::JsonOnly(value): crate::utils::extractors::JsonOnly<
         norito::json::Value,
     >,
-) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
+) -> Result<JsonBody<crate::gov::BallotDraftResponse>, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(
         &app,
@@ -16626,7 +16639,7 @@ async fn handler_gov_ballot_plain(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::PlainBallotDto>,
-) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
+) -> Result<JsonBody<crate::gov::BallotDraftResponse>, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(
         &app,
@@ -47767,6 +47780,10 @@ macro_rules! catalog_route_policy {
         catalog_get($handler)
             .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
     };
+    (optional_canonical_signature_post($handler:path)) => {
+        catalog_post($handler)
+            .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
+    };
     (canonical_signature_post($handler:path)) => {
         catalog_post($handler)
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
@@ -47811,6 +47828,11 @@ macro_rules! catalog_route_policy {
         catalog_post($handler)
             .layer(DefaultBodyLimit::max($limit))
             .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature)
+    };
+    (limited_optional_canonical_signature_post($handler:path, $limit:expr)) => {
+        catalog_post($handler)
+            .layer(DefaultBodyLimit::max($limit))
+            .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature)
     };
     (limited_canonical_signed_post($handler:path, $limit:expr)) => {
         catalog_post($handler)
@@ -48337,7 +48359,7 @@ impl Torii {
                 builder, sumeragi;
                 STATUS => operator_get(handler_sumeragi_status, app_state);
                 DIAGNOSTICS => operator_get(handler_sumeragi_diagnostics, app_state);
-                STATUS_SSE => protocol_handshake_get(handler_sumeragi_status_sse);
+                STATUS_SSE => operator_get(handler_sumeragi_status_sse, app_state);
                 LEADER => operator_get(handler_sumeragi_leader, app_state);
                 BLS_KEYS => operator_get(handler_sumeragi_bls_keys, app_state);
                 QC => operator_get(handler_sumeragi_qc, app_state);
@@ -48399,9 +48421,9 @@ impl Torii {
             SETUP_PLAN => limited_canonical_signature_post(handler_alias_setup_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             LEASE_RENEW_PLAN => limited_canonical_signature_post(handler_alias_lease_renew_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             AUTO_RENEW_PLAN => limited_canonical_signature_post(handler_alias_auto_renew_plan, EXACT_ALIAS_READ_MAX_BODY_BYTES);
-            RESOLVE => limited_public_post(handler_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);
-            RESOLVE_INDEX => limited_public_post(handler_alias_resolve_index, EXACT_ALIAS_READ_MAX_BODY_BYTES);
-            BY_ACCOUNT => limited_public_post(handler_public_alias_lookup_by_account, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            RESOLVE => limited_optional_canonical_signature_post(handler_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            RESOLVE_INDEX => limited_optional_canonical_signature_post(handler_alias_resolve_index, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            BY_ACCOUNT => limited_optional_canonical_signature_post(handler_public_alias_lookup_by_account, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             RETAIL_RECIPIENT_LOOKUP => limited_canonical_signature_post(handler_retail_recipient_lookup, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             RETAIL_RECIPIENT_ROUTE => limited_canonical_signature_post(handler_retail_recipient_route, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             ASSET_RESOLVE => public_post(handler_asset_alias_resolve);
@@ -48455,7 +48477,6 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, diagnostic;
             OPENAPI_JSON => public_get(handler_openapi);
-            OPENAPI => public_get(handler_openapi);
         );
     }
     #[allow(clippy::unused_self)]
@@ -48895,7 +48916,7 @@ impl Torii {
             TRANSACTION_STATUS => public_get(handler_pipeline_transaction_status);
             TRANSACTION_DETAILS => canonical_signed_post(handler_pipeline_transaction_details);
             PREFLIGHT => operator_get(handler_pipeline_preflight, app_state);
-            TRIGGER_COMPLETIONS => public_get(handler_trigger_completions);
+            TRIGGER_COMPLETIONS => operator_get(handler_trigger_completions, app_state);
             RECOVERY => operator_get(handler_pipeline_recovery, app_state);
             RECOVERY_FASTPQ_PROOFS => operator_get(handler_pipeline_recovery_fastpq_proofs, app_state);
         );
@@ -49026,7 +49047,7 @@ impl Torii {
             API_CID_BY_CID_GET => public_get(app_api::handle_get_app_api_cid_manifest);
             API_CID_BY_CID_BY_PATH_GET => public_get(app_api::handle_get_app_api_cid_path);
             API_CID_BY_CID_BY_PATH_POST => canonical_account_post(app_api::handle_post_app_api_cid_path, app_state, transaction_max_content_len);
-            ACCOUNTS_BY_ACCOUNT_ID_GET => public_get(handler_account_get);
+            ACCOUNTS_BY_ACCOUNT_ID_GET => optional_canonical_signature_get(handler_account_get);
             INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET => public_get(handler_internal_account_get);
             INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET => public_get(handler_internal_account_transaction_get);
             INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => public_get(handler_internal_account_asset_get);
@@ -49048,14 +49069,14 @@ impl Torii {
             CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET => optional_canonical_signature_get(handler_contracts_rollups_margin_health_get);
             CONTRACTS_ROLLUPS_RWA_LOTS_GET => optional_canonical_signature_get(handler_contracts_rollups_rwa_lots_get);
             CONTRACTS_ROLLUPS_DLMM_HOOKS_GET => optional_canonical_signature_get(handler_contracts_rollups_dlmm_hooks_get);
-            ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => public_get(handler_account_assets);
+            ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => optional_canonical_signature_get(handler_account_assets);
         );
         mount_account_assets_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
-            ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => public_get(handler_account_permissions);
-            ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => public_get(handler_account_transactions_get);
-            ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => public_get(handler_account_history_get);
+            ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => optional_canonical_signature_get(handler_account_permissions);
+            ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => optional_canonical_signature_get(handler_account_transactions_get);
+            ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => optional_canonical_signature_get(handler_account_history_get);
         );
         mount_signed_proof_query(builder);
         mount_catalog_route_rows!(
@@ -49538,7 +49559,6 @@ impl Torii {
             STORAGE_STATE => limited_operator_get(sorafs::api::handle_get_sorafs_storage_state, sorafs_operator_state, sorafs_body_limit);
             STORAGE_MANIFEST => limited_public_get(sorafs::api::handle_get_sorafs_storage_manifest, sorafs_body_limit);
             STORAGE_PLAN => limited_public_get(sorafs::api::handle_get_sorafs_storage_plan, sorafs_body_limit);
-            STORAGE_FETCH => limited_operator_post(sorafs::api::handle_post_sorafs_storage_fetch, sorafs_operator_state, sorafs_body_limit);
         );
         let stream_token_app_state = builder.state().clone();
         builder.route(
@@ -49690,7 +49710,7 @@ impl Torii {
                 GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ => canonical_account_get(handler_gov_parliament_timed_ovn_casting_context_read, app_state, 0);
                 GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF => canonical_account_post(handler_gov_parliament_timed_ovn_casting_proof, app_state, runtime_governance_body_limit);
                 GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ => canonical_account_get(handler_gov_parliament_tle_release_context_read, app_state, 0);
-                GOV_PARLIAMENT_TLE_PARTIAL_RELEASE => canonical_account_post(handler_gov_parliament_tle_partial_release, app_state, 0);
+                GOV_PARLIAMENT_TLE_PARTIAL_RELEASE => canonical_account_post(handler_gov_parliament_tle_partial_release, app_state, 1);
                 GOV_PARLIAMENT_TRANSITION_DRAFT => canonical_account_post(handler_gov_parliament_transition_draft, app_state, runtime_governance_body_limit);
                 VALIDATION_FEE_CURRENT_POLICY_PROOF => canonical_account_post(validation_fee_api::handler_current_policy_proof, app_state, runtime_governance_body_limit);
                 VALIDATION_FEE_HIJIRI_QUOTE => canonical_account_post(validation_fee_api::handler_hijiri_quote, app_state, iroha_torii_shared::validation_fee_api::VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES_V1);
@@ -50388,7 +50408,6 @@ impl Torii {
         let operator_auth = Arc::new(
             operator_auth::OperatorAuth::new(
                 config.operator_auth.clone(),
-                api_tokens_set.clone(),
                 config.data_dir.clone(),
                 telemetry.clone(),
             )
@@ -52637,7 +52656,7 @@ impl Torii {
             .change_context(Error::FailedExit)
     }
 }
-/// GET /openapi(.json) — expose OpenAPI descriptor subject to Torii access policy.
+/// GET /openapi.json — expose the OpenAPI descriptor subject to Torii access policy.
 async fn handler_openapi(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,

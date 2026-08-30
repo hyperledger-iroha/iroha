@@ -14,7 +14,8 @@ use iroha_data_model::{
     isi::smart_contract_code::{
         ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
-    prelude::ValidationFail,
+    parameter::{CustomParameterId, Parameters},
+    prelude::{Name, ValidationFail},
     smart_contract::manifest::{ContractManifest, EntryPointKind},
     smart_contract::{
         ContractAddress, ContractAlias, ContractLifecycleControlV1, ContractLifecycleOwnerV1,
@@ -22,7 +23,7 @@ use iroha_data_model::{
     state_path::StatePath,
 };
 use mv::storage::StorageReadOnly;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 /// Consensus-persisted, irreversible subject identity for one contract address.
 ///
@@ -278,6 +279,81 @@ pub enum RegistryError {
     /// Bytecode image is not a valid self-describing IVM contract artifact.
     #[error("invalid contract bytecode: {0}")]
     InvalidCode(String),
+}
+/// Canonical custom-parameter name for the first-release contract namespace policy.
+pub const PROTECTED_CONTRACT_NAMESPACES_PARAMETER: &str = "gov_protected_namespaces";
+/// Error returned when the persisted protected-contract namespace policy is malformed.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ProtectedContractNamespacesError {
+    /// The parameter payload is not the canonical array-of-strings shape.
+    #[error("`{PROTECTED_CONTRACT_NAMESPACES_PARAMETER}` must be an array of strings")]
+    InvalidPayload,
+    /// One namespace is not an exact non-empty ASCII token.
+    #[error(
+        "`{PROTECTED_CONTRACT_NAMESPACES_PARAMETER}` namespaces[{index}] must be a non-empty ASCII token without whitespace or control characters"
+    )]
+    InvalidNamespace {
+        /// Zero-based position of the malformed namespace.
+        index: usize,
+    },
+    /// Namespace entries must be unique so the policy has one canonical representation.
+    #[error("`{PROTECTED_CONTRACT_NAMESPACES_PARAMETER}` contains duplicate namespace `{namespace}`")]
+    DuplicateNamespace {
+        /// Repeated namespace token.
+        namespace: String,
+    },
+}
+/// Validate the canonical first-release protected-contract namespace list.
+///
+/// # Errors
+///
+/// Returns [`ProtectedContractNamespacesError`] for malformed or duplicate tokens.
+pub fn validate_protected_contract_namespaces(
+    namespaces: &[String],
+) -> Result<(), ProtectedContractNamespacesError> {
+    let mut seen = BTreeSet::new();
+    for (index, namespace) in namespaces.iter().enumerate() {
+        if namespace.is_empty()
+            || !namespace.is_ascii()
+            || namespace
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control())
+        {
+            return Err(ProtectedContractNamespacesError::InvalidNamespace { index });
+        }
+        if !seen.insert(namespace.as_str()) {
+            return Err(ProtectedContractNamespacesError::DuplicateNamespace {
+                namespace: namespace.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+/// Decode the persisted protected-contract namespace policy.
+///
+/// `Ok(None)` means the parameter is absent. A present parameter is always decoded and validated;
+/// callers must propagate an error rather than interpreting malformed state as an empty policy.
+///
+/// # Errors
+///
+/// Returns [`ProtectedContractNamespacesError`] when a present payload is not canonical.
+pub fn protected_contract_namespaces(
+    parameters: &Parameters,
+) -> Result<Option<Vec<String>>, ProtectedContractNamespacesError> {
+    let id = CustomParameterId::new(
+        PROTECTED_CONTRACT_NAMESPACES_PARAMETER
+            .parse::<Name>()
+            .expect("protected-contract namespace parameter name must remain valid"),
+    );
+    let Some(custom) = parameters.custom().get(&id) else {
+        return Ok(None);
+    };
+    let namespaces = custom
+        .payload()
+        .try_into_any_norito::<Vec<String>>()
+        .map_err(|_| ProtectedContractNamespacesError::InvalidPayload)?;
+    validate_protected_contract_namespaces(&namespaces)?;
+    Ok(Some(namespaces))
 }
 /// Reserved physical durable-state namespace for consensus-managed contract lifecycle markers.
 ///
@@ -898,9 +974,67 @@ mod tests {
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("smart contract code fixture key generation should succeed")
     }
+    fn protected_namespaces_parameter(payload: iroha_primitives::json::Json) -> CustomParameter {
+        CustomParameter::new(
+            CustomParameterId::new(
+                PROTECTED_CONTRACT_NAMESPACES_PARAMETER
+                    .parse()
+                    .expect("protected namespace parameter id"),
+            ),
+            payload,
+        )
+    }
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+    #[test]
+    fn protected_namespace_policy_distinguishes_absent_valid_and_malformed_state() {
+        let mut parameters = Parameters::default();
+        assert_eq!(
+            protected_contract_namespaces(&parameters).expect("absent policy is valid"),
+            None
+        );
+
+        parameters.set_parameter(Parameter::Custom(protected_namespaces_parameter(
+            iroha_primitives::json::Json::new(vec!["apps".to_owned(), "dataspace:0".to_owned()]),
+        )));
+        assert_eq!(
+            protected_contract_namespaces(&parameters).expect("canonical policy"),
+            Some(vec!["apps".to_owned(), "dataspace:0".to_owned()])
+        );
+
+        parameters.set_parameter(Parameter::Custom(protected_namespaces_parameter(
+            iroha_primitives::json::Json::new("apps"),
+        )));
+        assert_eq!(
+            protected_contract_namespaces(&parameters),
+            Err(ProtectedContractNamespacesError::InvalidPayload)
+        );
+    }
+    #[test]
+    fn protected_namespace_policy_rejects_noncanonical_and_duplicate_tokens() {
+        for (namespaces, expected) in [
+            (
+                vec![" apps".to_owned()],
+                ProtectedContractNamespacesError::InvalidNamespace { index: 0 },
+            ),
+            (
+                vec!["système".to_owned()],
+                ProtectedContractNamespacesError::InvalidNamespace { index: 0 },
+            ),
+            (
+                vec!["apps".to_owned(), "apps".to_owned()],
+                ProtectedContractNamespacesError::DuplicateNamespace {
+                    namespace: "apps".to_owned(),
+                },
+            ),
+        ] {
+            assert_eq!(
+                validate_protected_contract_namespaces(&namespaces),
+                Err(expected)
+            );
+        }
     }
     fn minimal_contract_artifact(
         abi_version: u8,

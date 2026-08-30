@@ -18,7 +18,6 @@ mod fixtures;
 /// Candidate paths that may expose an `OpenAPI` document.
 const OPENAPI_CANDIDATES: &[&str] = &[
     "/openapi.json",
-    "/openapi",
     "/swagger.json",
     "/swagger/v1/swagger.json",
     iroha_torii_shared::uri::SCHEMA,
@@ -147,6 +146,32 @@ async fn router_builds_under_current_features() {
     );
     let app = torii.api_router_for_tests();
     diff_openapi_if_available(&app).await;
+    let canonical_openapi = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/openapi.json"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(canonical_openapi.status(), StatusCode::OK);
+    let retired_openapi_alias = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/openapi"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        retired_openapi_alias.status(),
+        StatusCode::NOT_FOUND,
+        "the extensionless OpenAPI compatibility alias must remain absent"
+    );
     // A couple of smoke GETs that are present regardless of features
     let resp1 = app
         .clone()

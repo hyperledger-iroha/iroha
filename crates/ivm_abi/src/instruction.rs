@@ -107,9 +107,17 @@ pub mod wide {
         pub const POSEIDON6_INPUTS: usize = 6;
         /// Largest valid first input register for [`POSEIDON6`].
         pub const POSEIDON6_MAX_INPUT_BASE: u8 = u8::MAX - (POSEIDON6_INPUTS as u8 - 1);
+        /// Retired scalar/truncated cryptography slot; always invalid in ABI V1.
+        #[doc(hidden)]
         pub const PUBKGEN: u8 = 0x84;
+        /// Retired scalar/truncated cryptography slot; always invalid in ABI V1.
+        #[doc(hidden)]
         pub const VALCOM: u8 = 0x85;
+        /// Retired scalar/truncated cryptography slot; always invalid in ABI V1.
+        #[doc(hidden)]
         pub const ECADD: u8 = 0x86;
+        /// Retired scalar/truncated cryptography slot; always invalid in ABI V1.
+        #[doc(hidden)]
         pub const ECMUL_VAR: u8 = 0x87;
         pub const AESENC: u8 = 0x88;
         pub const AESDEC: u8 = 0x89;
@@ -118,6 +126,8 @@ pub mod wide {
         pub const ED25519BATCHVERIFY: u8 = 0x8F;
         pub const ECDSAVERIFY: u8 = 0x8C;
         pub const DILITHIUMVERIFY: u8 = 0x8D;
+        /// Retired scalar/truncated cryptography slot; always invalid in ABI V1.
+        #[doc(hidden)]
         pub const PAIRING: u8 = 0x8E;
     }
     /// Reserved ISO20022 helpers (not enabled in ABI v1).
@@ -268,10 +278,6 @@ pub mod wide {
                 | crypto::SHA3BLOCK
                 | crypto::POSEIDON2
                 | crypto::POSEIDON6
-                | crypto::PUBKGEN
-                | crypto::VALCOM
-                | crypto::ECADD
-                | crypto::ECMUL_VAR
                 | crypto::AESENC
                 | crypto::AESDEC
                 | crypto::BLAKE2S
@@ -279,7 +285,6 @@ pub mod wide {
                 | crypto::ED25519BATCHVERIFY
                 | crypto::ECDSAVERIFY
                 | crypto::DILITHIUMVERIFY
-                | crypto::PAIRING
                 // Zero-knowledge helpers
                 | zk::ASSERT
                 | zk::ASSERT_EQ

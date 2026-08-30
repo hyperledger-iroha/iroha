@@ -50,8 +50,8 @@ release qualified.
    optional Parliament pulse or mandatory NPoS pulse produced from the parent
    state is verified against the key session active at its own height, not the
    successor pointer visible after the block's transactions execute. The
-   retired consensus VRF commit/reveal protocol and restored compatibility
-   roster records are neither entropy sources nor fallbacks.
+   No alternate entropy source or detached roster record is accepted as a
+   fallback.
 4. The future pulse deterministically ranks primaries and alternates. Candidates
    accept or decline their own invitations under their transaction authority;
    `BeginInvitationAcceptance` is permissionless and carries only the election
@@ -70,7 +70,6 @@ release qualified.
    authenticated absence makes the immutable original-seat public-finding
    quorum mathematically unreachable, Core sets that body to `NoResult` and
    rejects the governance attempt.
-   No public compatibility-roster read exists.
    Every member of a frozen candidate snapshot retains its citizenship bond
    while its election is `AwaitingPulse`, `Drawing`, or
    `AcceptingInvitations`. `NoRoster` and superseded elections release unseated
@@ -501,11 +500,15 @@ penalty. Rejected ZK verification attempts still consume the block's
 confidential operation, verifier-call, proof-byte, confidential-gas, and
 ordinary gas budgets. The same exactly-once block accounting applies to
 ordinary prepared overlays, trigger work, detached fallback, and early
-mixed-batch rejection. Sealed reveals commit both their carrier identity and
-the enclosed signed execution identity in ordinary and autonomous-merge
-admission, preventing replay through the same or a different sealed carrier.
-Public transaction lookups accept either identity and project the canonical
-outer carrier.
+mixed-batch rejection. Same-block trigger lifecycle changes execute in
+canonical order, so a newly registered trigger can affect a later transaction
+and a failing trigger rolls that transaction and its trigger effects back
+atomically. Every sealed reveal commits its outer carrier; only a reveal
+authenticated against pre-carrier pending-commitment state also commits the
+exact enclosed signed replay alias. Autonomous merge persists that decision in
+its certified execution transcript, and recovery does not reclassify it from
+post-state. Public transaction lookups accept either committed identity and
+project the canonical outer carrier.
 
 # Outstanding release gates
 

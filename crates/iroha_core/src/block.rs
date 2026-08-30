@@ -1756,7 +1756,10 @@ fn record_lane_settlement_metrics(
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
-    executor::{charge_fees_for_applied_overlay, charge_fees_for_rejected_live_batch},
+    executor::{
+        charge_fees_for_applied_overlay, charge_fees_for_precharged_overlay,
+        charge_fees_for_rejected_live_batch, precharge_gas_for_applied_overlay,
+    },
     kura::{
         PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
         PipelineTxSnapshot,
@@ -4096,9 +4099,39 @@ pub(crate) mod valid {
     }
     fn account_transaction_gas(state_block: &mut StateBlock<'_>, gas_used: u64) {
         if gas_used > 0 {
-            state_block.gas_used_in_block =
-                state_block.gas_used_in_block.saturating_add(gas_used);
+            state_block.gas_used_in_block = state_block.gas_used_in_block.saturating_add(gas_used);
         }
+    }
+    fn instruction_mutates_trigger_lifecycle(instruction: &InstructionBox) -> bool {
+        let any = instruction.as_any();
+        any.downcast_ref::<iroha_data_model::isi::RegisterBox>()
+            .is_some_and(|register| {
+                matches!(register, iroha_data_model::isi::RegisterBox::Trigger(_))
+            })
+            || any
+                .downcast_ref::<iroha_data_model::isi::UnregisterBox>()
+                .is_some_and(|unregister| {
+                    matches!(unregister, iroha_data_model::isi::UnregisterBox::Trigger(_))
+                })
+            || any
+                .downcast_ref::<iroha_data_model::isi::MintBox>()
+                .is_some_and(|mint| {
+                    matches!(mint, iroha_data_model::isi::MintBox::TriggerRepetitions(_))
+                })
+            || any
+                .downcast_ref::<iroha_data_model::isi::BurnBox>()
+                .is_some_and(|burn| {
+                    matches!(burn, iroha_data_model::isi::BurnBox::TriggerRepetitions(_))
+                })
+            || any
+                .downcast_ref::<iroha_data_model::isi::SetKeyValueBox>()
+                .is_some_and(|set| matches!(set, iroha_data_model::isi::SetKeyValueBox::Trigger(_)))
+            || any
+                .downcast_ref::<iroha_data_model::isi::RemoveKeyValueBox>()
+                .is_some_and(|remove| {
+                    matches!(remove, iroha_data_model::isi::RemoveKeyValueBox::Trigger(_))
+                })
+            || any.is::<iroha_data_model::isi::ExecuteTrigger>()
     }
     fn charge_rejected_overlay_fees(
         state_block_mut: &mut StateBlock<'_>,
@@ -4175,6 +4208,8 @@ pub(crate) mod valid {
             ));
         }
         let admission = validate_block_transaction_admission(&mut state_tx, tx, routing)?;
+        precharge_gas_for_applied_overlay(&mut state_tx, tx, overlay)
+            .map_err(TransactionRejectionReason::Validation)?;
         let confidential_gas =
             crate::gas::sum_confidential_gas_costs(overlay.instruction_slice().iter());
         state_tx.record_confidential_gas_delta(confidential_gas);
@@ -4203,7 +4238,9 @@ pub(crate) mod valid {
                 Err(error) => Err(error),
             };
         }
-        if let Err(error) = charge_fees_for_applied_overlay(&mut state_tx, authority, tx, overlay) {
+        if let Err(error) =
+            charge_fees_for_precharged_overlay(&mut state_tx, authority, tx, overlay)
+        {
             let rejection_reason = TransactionRejectionReason::Validation(error);
             let gas_used = state_tx.last_tx_gas_used;
             let confidential_work = ConfidentialWorkV1::capture(&state_tx);
@@ -4269,7 +4306,7 @@ pub(crate) mod valid {
         dataspace_id: DataSpaceId,
         rejection_reason: &TransactionRejectionReason,
     ) -> Result<(), TransactionRejectionReason> {
-        if !rejected_live_batch_gas_is_accountable(gas_used, rejection_reason) {
+        if !rejected_live_batch_fees_are_chargeable(gas_used, rejection_reason) {
             return Ok(());
         }
         let mut fee_tx = state_block_mut.transaction();
@@ -4283,7 +4320,18 @@ pub(crate) mod valid {
         fee_tx.apply();
         Ok(())
     }
-    fn rejected_live_batch_gas_is_accountable(
+    pub(super) fn rejected_live_batch_fees_are_chargeable(
+        gas_used: u64,
+        rejection_reason: &TransactionRejectionReason,
+    ) -> bool {
+        rejected_live_batch_gas_is_accountable(gas_used, rejection_reason)
+            && !matches!(
+                rejection_reason,
+                TransactionRejectionReason::Validation(error)
+                    if crate::executor::is_live_batch_overlay_limit_rejection(error)
+            )
+    }
+    pub(super) fn rejected_live_batch_gas_is_accountable(
         gas_used: u64,
         rejection_reason: &TransactionRejectionReason,
     ) -> bool {
@@ -13066,6 +13114,52 @@ pub(crate) mod valid {
                                 action.metadata(),
                             )
                     });
+            let candidate_mutates_trigger_lifecycle = txs.iter().enumerate().any(|(idx, tx)| {
+                if stateless_rejections[idx].is_some() {
+                    return false;
+                }
+                if tx
+                    .instructions()
+                    .explicit_instructions()
+                    .any(instruction_mutates_trigger_lifecycle)
+                {
+                    return true;
+                }
+                match &prepared_overlays[idx] {
+                    Ok(PreparedBlockExecution::Overlay(prepared)) => {
+                        prepared
+                            .overlay
+                            .instruction_slice()
+                            .iter()
+                            .any(instruction_mutates_trigger_lifecycle)
+                            // An opaque overlay rebuilt against live state can materialize a
+                            // different instruction set. Fence the whole candidate whenever that
+                            // rebuild remains possible, even if the block-start overlay contained
+                            // no trigger lifecycle effect.
+                            || (uses_live_vm_overlay_scheduler(tx.instructions())
+                                && (prepared.force_live_rebuild
+                                    || prepared.durable_state_reads.is_some()
+                                    || is_quarantine[idx]))
+                    }
+                    // A live mixed batch can materialize trigger effects through an opaque
+                    // contract call. Explicit-only batches were scanned above and need no
+                    // candidate-wide serialization fence.
+                    Ok(PreparedBlockExecution::LiveBatch) => matches!(
+                        tx.instructions(),
+                        Executable::Batch(items)
+                            if items.iter().any(|item| matches!(
+                                item,
+                                iroha_data_model::transaction::executable::ExecutableBatchItem::ContractCall(_)
+                            ))
+                    ),
+                    Err(error) => {
+                        uses_live_vm_overlay_scheduler(tx.instructions())
+                            && error.may_change_with_live_state()
+                    }
+                }
+            });
+            let detached_sequential_required =
+                data_triggers_enabled || candidate_mutates_trigger_lifecycle;
             #[cfg(feature = "telemetry")]
             let t_access_start = Instant::now();
             let access_start = timings.as_ref().map(|_| Instant::now());
@@ -13124,7 +13218,7 @@ pub(crate) mod valid {
                 access_sources.push(source);
             }
             for (idx, set) in access.iter_mut().enumerate() {
-                if fee_postprocessing_required[idx] {
+                if detached_sequential_required || fee_postprocessing_required[idx] {
                     set.add_write(GLOBAL_WILDCARD_KEY.to_owned());
                 }
             }
@@ -13359,15 +13453,15 @@ pub(crate) mod valid {
                     PipelineRecoverySidecar::new(height, block_hash, dag_snapshot, txs_sidecar);
                 #[cfg(feature = "zk-preverify")]
                 {
-                    let proofs = crate::zk::collect_trace_proofs_for_height(height);
-                    if !proofs.is_empty() {
+                    let trace_digests = crate::zk::collect_trace_digests_for_height(height);
+                    if !trace_digests.is_empty() {
                         iroha_logger::debug!(
                             height,
-                            count = proofs.len(),
-                            "attaching {} trace proof digests to pipeline sidecar",
-                            proofs.len()
+                            count = trace_digests.len(),
+                            "attaching {} trace digests to pipeline sidecar",
+                            trace_digests.len()
                         );
-                        sidecar.proofs = proofs;
+                        sidecar.proofs = trace_digests;
                     }
                 }
                 match state_block.kura().enqueue_pipeline_metadata(sidecar) {
@@ -14245,6 +14339,9 @@ pub(crate) mod valid {
                             })
                     };
                     let eval_detached = |p: &PreparedEntry| {
+                        if detached_sequential_required {
+                            return (p.idx, None, Some(DetachedFallbackReason::DurableState));
+                        }
                         if let Some(Some(Ok(ovl))) = overlays.get(p.idx) {
                             if matches!(
                                 &*state_block.world.executor,
@@ -14356,7 +14453,7 @@ pub(crate) mod valid {
                                             None,
                                             Some(DetachedFallbackReason::UnsupportedInstruction),
                                         )
-                                    } else if data_triggers_enabled
+                                    } else if detached_sequential_required
                                         || (transaction_postprocessing_required[p.idx]
                                             && !delta.supports_detached_fee_postprocessing())
                                     {
@@ -14533,7 +14630,7 @@ pub(crate) mod valid {
                     let simple_transfer_batch = !prepared.is_empty() && {
                         let precheck_tx = state_block.transaction();
                         prepared.iter().all(|p| {
-                            !data_triggers_enabled
+                            !detached_sequential_required
                                 && !transaction_postprocessing_required[p.idx]
                                 && !crate::validation_fee::transaction_has_validation_fee_metadata(
                                     txs[p.idx],
@@ -14656,8 +14753,7 @@ pub(crate) mod valid {
                                             &admission,
                                         ) {
                                             if rejected_live_batch_gas_is_accountable(
-                                                gas_used,
-                                                &reason,
+                                                gas_used, &reason,
                                             ) {
                                                 batch_gas_used =
                                                     batch_gas_used.saturating_add(gas_used);
@@ -14666,8 +14762,7 @@ pub(crate) mod valid {
                                             record_result(p.idx, Err(reason));
                                             continue;
                                         }
-                                        batch_gas_used =
-                                            batch_gas_used.saturating_add(gas_used);
+                                        batch_gas_used = batch_gas_used.saturating_add(gas_used);
                                         batch_successes = batch_successes.saturating_add(1);
                                         record_result(p.idx, Ok(trigger_sequence));
                                         let lane_id = routing_decisions[p.idx].lane_id;
@@ -14683,10 +14778,8 @@ pub(crate) mod valid {
                                         }
                                     }
                                     Err(reason) => {
-                                        if rejected_live_batch_gas_is_accountable(
-                                            gas_used,
-                                            &reason,
-                                        ) {
+                                        if rejected_live_batch_gas_is_accountable(gas_used, &reason)
+                                        {
                                             batch_gas_used =
                                                 batch_gas_used.saturating_add(gas_used);
                                         }
@@ -14802,42 +14895,54 @@ pub(crate) mod valid {
                                         .as_ref()
                                         .expect("detached delta requires an overlay")
                                         .as_ref()
-                                        .expect(
-                                            "accepted detached delta requires a valid overlay",
-                                        );
-                                    if !transaction_postprocessing_required[p.idx] {
+                                        .expect("accepted detached delta requires a valid overlay");
+                                    if transaction_postprocessing_required[p.idx] {
+                                        if let Err(error) = precharge_gas_for_applied_overlay(
+                                            &mut state_tx,
+                                            tx,
+                                            overlay.as_ref(),
+                                        ) {
+                                            drop(state_tx);
+                                            record_amx_abort(state_block, p.idx, "commit");
+                                            record_result(
+                                                p.idx,
+                                                Err(TransactionRejectionReason::Validation(error)),
+                                            );
+                                            continue;
+                                        }
+                                    } else {
                                         state_tx.last_tx_gas_used = crate::gas::meter_instructions(
                                             overlay.instruction_slice(),
                                         );
                                     }
-                                    let single_transfer_result = if transaction_postprocessing_required
-                                        [p.idx]
-                                    {
-                                        delta
-                                            .merge_single_transfer_effects_into_transaction(
+                                    let single_transfer_result =
+                                        if transaction_postprocessing_required[p.idx] {
+                                            delta
+                                                .merge_single_transfer_effects_into_transaction(
+                                                    &mut state_tx,
+                                                    &p.authority,
+                                                )
+                                                .map(|result| {
+                                                    result.and_then(|()| {
+                                                        charge_fees_for_precharged_overlay(
+                                                            &mut state_tx,
+                                                            &p.authority,
+                                                            tx,
+                                                            overlay.as_ref(),
+                                                        )
+                                                        .map_err(
+                                                            TransactionRejectionReason::Validation,
+                                                        )?;
+                                                        state_tx
+                                                            .execute_data_triggers_dfs(&p.authority)
+                                                    })
+                                                })
+                                        } else {
+                                            delta.merge_single_transfer_into_transaction(
                                                 &mut state_tx,
                                                 &p.authority,
                                             )
-                                            .map(|result| {
-                                                result.and_then(|()| {
-                                                    charge_fees_for_applied_overlay(
-                                                        &mut state_tx,
-                                                        &p.authority,
-                                                        tx,
-                                                        overlay.as_ref(),
-                                                    )
-                                                    .map_err(
-                                                        TransactionRejectionReason::Validation,
-                                                    )?;
-                                                    state_tx.execute_data_triggers_dfs(&p.authority)
-                                                })
-                                            })
-                                    } else {
-                                        delta.merge_single_transfer_into_transaction(
-                                            &mut state_tx,
-                                            &p.authority,
-                                        )
-                                    };
+                                        };
                                     if let Some(result) = single_transfer_result {
                                         match result {
                                             Ok(trigger_sequence) => {
@@ -29482,6 +29587,122 @@ mod tests {
             .register_confidential_proof(1)
             .expect_err("the rejected overlay must exhaust the one-operation block budget");
         assert!(error.to_string().contains("per block exceeded"));
+    }
+    #[test]
+    fn ordinary_prepared_overlay_block_cap_prevents_post_cap_execution() {
+        for parallel_apply in [false, true] {
+            let chain_id =
+                ChainId::try_from(format!("ordinary-overlay-parent-gas-{parallel_apply}"))
+                    .expect("canonical test chain id");
+            let (authority, keypair) = gen_account_in("wonderland");
+            let mut state = state_with_transaction_policy(&chain_id, &authority, false, false);
+            let mut pipeline = state.pipeline.clone();
+            pipeline.parallel_apply = parallel_apply;
+            pipeline.parallel_overlay = true;
+            pipeline.workers = 2;
+            state.set_pipeline(pipeline);
+            let instruction =
+                InstructionBox::from(Log::new(Level::INFO, "meter ordinary overlay".into()));
+            let expected_gas = crate::gas::meter_instructions(core::slice::from_ref(&instruction));
+            assert!(expected_gas > 0, "the fixture must consume gas");
+            let accepted = [0_u64, 1_u64, 2_u64]
+                .into_iter()
+                .map(|creation_time_ms| {
+                    let mut builder = TransactionBuilder::new(
+                        state.network_id,
+                        authority.clone(),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    );
+                    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+                    let transaction = builder
+                        .with_instructions([instruction.clone()])
+                        .sign(keypair.private_key());
+                    AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
+                })
+                .collect::<Vec<_>>();
+            let previous = previous_block_at_height(1);
+            let block = BlockBuilder::new(accepted)
+                .chain(1, Some(&previous))
+                .sign(keypair.private_key())
+                .unpack(|_| {});
+            let mut state_block = state.block(block.header());
+            state_block.gas_limit_per_block = expected_gas;
+
+            let valid = block
+                .validate_and_record_transactions(&mut state_block)
+                .unpack(|_| {});
+            let results = valid
+                .as_ref()
+                .entrypoint_results()
+                .map(|(_, _, result)| result.0.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                results.iter().filter(|result| result.is_ok()).count(),
+                1,
+                "exactly one overlay must fit with parallel_apply={parallel_apply}: {results:?}"
+            );
+            assert_eq!(
+                results
+                    .iter()
+                    .filter(|result| matches!(
+                        result,
+                        Err(TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(message)
+                        )) if message.contains("block gas limit exceeded")
+                    ))
+                    .count(),
+                2,
+                "every overlay after the cap must fail before execution with parallel_apply={parallel_apply}: {results:?}"
+            );
+            assert_eq!(
+                state_block.gas_used_in_block, expected_gas,
+                "the rejected overlay must fail its base-gas reservation before executing work"
+            );
+        }
+    }
+    #[test]
+    fn rejected_prepared_overlay_accounts_full_gas_exactly_once() {
+        let chain_id = ChainId::from("rejected-overlay-exact-gas");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let (missing_account, _) = gen_account_in("missing");
+        let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let instruction = InstructionBox::from(SetKeyValue::account(
+            missing_account,
+            "rejected_overlay_marker".parse().expect("metadata key"),
+            Json::new("must roll back"),
+        ));
+        let expected_gas = crate::gas::meter_instructions(core::slice::from_ref(&instruction));
+        assert!(expected_gas > 0, "the fixture must consume gas");
+        let transaction = TransactionBuilder::new(
+            state.network_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(keypair.private_key());
+        let previous = previous_block_at_height(1);
+        let block = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
+            transaction,
+        ))])
+        .chain(1, Some(&previous))
+        .sign(keypair.private_key())
+        .unpack(|_| {});
+        let mut state_block = state.block(block.header());
+        state_block.gas_limit_per_block = expected_gas.saturating_mul(4);
+
+        let valid = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let results = valid
+            .as_ref()
+            .entrypoint_results()
+            .map(|(_, _, result)| result.0.clone())
+            .collect::<Vec<_>>();
+        assert!(matches!(results.as_slice(), [Err(_)]), "{results:?}");
+        assert_eq!(state_block.gas_used_in_block, expected_gas);
     }
     fn add_pipeline_metadata_trigger(
         world: &mut World,

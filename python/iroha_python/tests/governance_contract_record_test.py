@@ -61,6 +61,26 @@ def test_governance_contract_record_parses_active_and_absent_shapes() -> None:
     assert absent.lifecycle is None
 
 
+def test_governance_contract_record_parses_bounded_emergency_hold() -> None:
+    payload = active_response()
+    payload["emergency_hold_active"] = True
+    payload["lifecycle"]["emergency_hold"] = {  # type: ignore[index]
+        "incident_digest_hex": "44" * 32,
+        "proposal_content_id_hex": "55" * 32,
+        "governance_attempt_id_hex": "66" * 32,
+        "reason": "containment",
+        "imposed_at_height": 10,
+        "expires_at_height": 20,
+    }
+
+    record = GovernanceContractRecord.from_payload(payload)
+
+    assert record.lifecycle is not None
+    assert record.lifecycle.emergency_hold is not None
+    assert record.lifecycle.emergency_hold.imposed_at_height == 10
+    assert record.lifecycle.emergency_hold.expires_at_height == 20
+
+
 def test_governance_contract_record_rejects_cross_field_and_shape_drift() -> None:
     invalid = []
     mismatched = active_response()
@@ -80,6 +100,9 @@ def test_governance_contract_record_rejects_cross_field_and_shape_drift() -> Non
     unsupported_version = active_response()
     unsupported_version["lifecycle"]["version"] = 2  # type: ignore[index]
     invalid.append(unsupported_version)
+    zero_revision = active_response()
+    zero_revision["lifecycle"]["revision"] = 0  # type: ignore[index]
+    invalid.append(zero_revision)
     absent_with_extra = {
         "found": False,
         "contract_address": CONTRACT_ADDRESS,
@@ -91,3 +114,29 @@ def test_governance_contract_record_rejects_cross_field_and_shape_drift() -> Non
     for payload in invalid:
         with pytest.raises((TypeError, ValueError)):
             GovernanceContractRecord.from_payload(copy.deepcopy(payload))
+
+
+@pytest.mark.parametrize("value", [True, "7", 7.0, -1, 1 << 64])
+def test_governance_contract_record_rejects_non_wire_revision(value: object) -> None:
+    payload = active_response()
+    payload["lifecycle"]["revision"] = value  # type: ignore[index]
+
+    with pytest.raises((TypeError, ValueError), match="unsigned 64-bit integer"):
+        GovernanceContractRecord.from_payload(payload)
+
+
+@pytest.mark.parametrize("value", [True, "10", 10.0, -1, 1 << 64])
+def test_governance_contract_record_rejects_non_wire_hold_heights(value: object) -> None:
+    payload = active_response()
+    payload["emergency_hold_active"] = True
+    payload["lifecycle"]["emergency_hold"] = {  # type: ignore[index]
+        "incident_digest_hex": "44" * 32,
+        "proposal_content_id_hex": "55" * 32,
+        "governance_attempt_id_hex": "66" * 32,
+        "reason": "containment",
+        "imposed_at_height": value,
+        "expires_at_height": 20,
+    }
+
+    with pytest.raises((TypeError, ValueError), match="unsigned 64-bit integer"):
+        GovernanceContractRecord.from_payload(payload)

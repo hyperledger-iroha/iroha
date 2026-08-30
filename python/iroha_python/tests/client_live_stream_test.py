@@ -12,6 +12,8 @@ from requests.structures import CaseInsensitiveDict
 import iroha_python
 import iroha_python.client as client_module
 from iroha_python import (
+    NetworkId,
+    OperatorSigningContext,
     SseStreamError,
     ToriiCanonicalRequestAuth,
     ToriiClient,
@@ -36,6 +38,7 @@ class SequencedSession(requests.Session):
                 "params": kwargs.get("params"),
                 "headers": kwargs.get("headers") or {},
                 "stream": kwargs.get("stream"),
+                "allow_redirects": kwargs.get("allow_redirects"),
             }
         )
         if not self._responses:
@@ -53,6 +56,7 @@ class SequencedSession(requests.Session):
                 "params": {},
                 "headers": dict(request.headers),
                 "stream": kwargs.get("stream"),
+                "allow_redirects": kwargs.get("allow_redirects"),
             }
         )
         if not self._responses:
@@ -75,6 +79,26 @@ class SseStubResponse(StubResponse):
         del kwargs
         for line in self._lines:
             yield line if decode_unicode else line.encode("utf-8")
+
+
+class StubOperatorKeyPair:
+    """Deterministic operator signer sufficient for transport-boundary tests."""
+
+    public_key_multihash = "ed0120" + "11" * 32
+
+    @staticmethod
+    def sign(message: bytes) -> bytes:
+        assert message
+        return b"\x5a" * 64
+
+
+def operator_context() -> OperatorSigningContext:
+    """Return one immutable exact-network status-stream signer."""
+
+    return OperatorSigningContext(
+        NetworkId.from_bytes(bytes([0xA5]) * 32),
+        StubOperatorKeyPair(),
+    )
 
 
 _LIVE_STREAM_HELPERS = (
@@ -233,6 +257,52 @@ def test_live_event_stream_optionally_signs_exact_final_uri() -> None:
     assert call["headers"]["Accept"] == "text/event-stream"
     assert "X-Iroha-Account" in call["headers"]
     assert "X-Iroha-Signature" in call["headers"]
+
+
+def test_sumeragi_status_stream_uses_fresh_one_shot_operator_auth() -> None:
+    payload = {"view": 2}
+    session = SequencedSession(
+        [
+            SseStubResponse([f"data: {json.dumps(payload)}", ""]),
+            SseStubResponse([f"data: {json.dumps(payload)}", ""]),
+        ]
+    )
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        operator_signing_context=operator_context(),
+        max_retries=3,
+    )
+
+    assert next(client.stream_sumeragi_status()) == payload
+    assert next(client.stream_sumeragi_status()) == payload
+
+    assert len(session.calls) == 2
+    nonces = []
+    for call in session.calls:
+        headers = {name.lower(): value for name, value in call["headers"].items()}
+        assert call["stream"] is True
+        assert call["allow_redirects"] is False
+        assert headers["accept"] == "text/event-stream"
+        assert headers["x-iroha-operator-public-key"] == StubOperatorKeyPair.public_key_multihash
+        assert headers["x-iroha-operator-signature"]
+        nonces.append(headers["x-iroha-operator-nonce"])
+    assert nonces[0] != nonces[1]
+
+
+def test_sumeragi_status_stream_rejects_missing_signer_and_retries_before_dispatch() -> None:
+    session = SequencedSession([])
+    client = ToriiClient("https://torii.example", session=session, max_retries=3)
+
+    with pytest.raises(ValueError, match="operator_signing_context"):
+        client.stream_sumeragi_status()
+    with pytest.raises(ValueError, match="max_retries must be zero"):
+        ToriiClient(
+            "https://torii.example",
+            session=session,
+            operator_signing_context=operator_context(),
+        ).stream_sumeragi_status(max_retries=1)
+    assert session.calls == []
 
 
 @pytest.mark.parametrize(

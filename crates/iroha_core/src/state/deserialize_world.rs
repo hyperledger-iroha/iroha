@@ -7551,8 +7551,6 @@ fn parse_world(
     let governance_last_unlock_sweep_height =
         take_required(&mut map, "governance_last_unlock_sweep_height")?;
     let governance_unlock_stats = take_required(&mut map, "governance_unlock_stats")?;
-    let council = take_required(&mut map, "council")?;
-    let parliament_bodies = take_required(&mut map, "parliament_bodies")?;
     let parliament_attempts = take_required(&mut map, "parliament_attempts")?;
     let tle_key_sessions = take_required(&mut map, "tle_key_sessions")?;
     let tle_key_session_rosters = take_required(&mut map, "tle_key_session_rosters")?;
@@ -7831,8 +7829,6 @@ fn parse_world(
         governance_slashes,
         governance_last_unlock_sweep_height,
         governance_unlock_stats,
-        council,
-        parliament_bodies,
         parliament_attempts,
         parliament_timed_ovn_resource_reservations: Storage::default(),
         tle_key_sessions,
@@ -8632,7 +8628,6 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
                 .collect(),
         runtime_upgrade_provenance:
             iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
-        citizen_service: iroha_config::parameters::actual::CitizenServiceDiscipline::default(),
         viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
         sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
         sorafs_pin_fee_asset_id:

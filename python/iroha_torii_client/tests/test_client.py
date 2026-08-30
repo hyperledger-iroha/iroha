@@ -4755,6 +4755,108 @@ def test_governance_contract_response_enforces_the_exact_lifecycle_shape() -> No
             )
 
 
+def test_governance_contract_lifecycle_requires_exact_wire_u64_values() -> None:
+    lifecycle = {
+        "version": 1,
+        "origin": "direct",
+        "origin_account": CANONICAL_OWNER,
+        "origin_proposal_content_id_hex": None,
+        "origin_governance_attempt_id_hex": None,
+        "owner": CANONICAL_OWNER,
+        "pending_owner": None,
+        "parliament_delegated": False,
+        "active_code_hash_hex": "22" * 32,
+        "revision": (1 << 64) - 1,
+        "emergency_hold": None,
+    }
+    parsed = ToriiClient._parse_governance_contract_lifecycle(
+        lifecycle,
+        context="governance contract response.lifecycle",
+    )
+    assert parsed.revision == (1 << 64) - 1
+
+    for value in (True, "7", 7.0, -1, 1 << 64):
+        invalid = copy.deepcopy(lifecycle)
+        invalid["revision"] = value
+        with pytest.raises(RuntimeError, match="unsigned 64-bit JSON integer"):
+            ToriiClient._parse_governance_contract_lifecycle(
+                invalid,
+                context="governance contract response.lifecycle",
+            )
+
+    hold = {
+        "incident_digest_hex": "44" * 32,
+        "proposal_content_id_hex": "55" * 32,
+        "governance_attempt_id_hex": "66" * 32,
+        "reason": "containment",
+        "imposed_at_height": (1 << 64) - 2,
+        "expires_at_height": (1 << 64) - 1,
+    }
+    parsed_hold = ToriiClient._parse_governance_contract_emergency_hold(
+        hold,
+        context="governance contract response.lifecycle.emergency_hold",
+    )
+    assert parsed_hold.expires_at_height == (1 << 64) - 1
+
+    for value in (True, "10", 10.0, -1, 1 << 64):
+        invalid = copy.deepcopy(hold)
+        invalid["imposed_at_height"] = value
+        with pytest.raises(RuntimeError, match="unsigned 64-bit JSON integer"):
+            ToriiClient._parse_governance_contract_emergency_hold(
+                invalid,
+                context="governance contract response.lifecycle.emergency_hold",
+            )
+
+
+def test_governance_contract_transport_rejects_duplicate_lifecycle_keys() -> None:
+    contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+    payload = {
+        "found": True,
+        "contract_address": contract_address,
+        "contract_subject_account": CANONICAL_OWNER,
+        "dataspace": "universal",
+        "active": True,
+        "lifecycle": {
+            "version": 1,
+            "origin": "direct",
+            "origin_account": CANONICAL_OWNER,
+            "origin_proposal_content_id_hex": None,
+            "origin_governance_attempt_id_hex": None,
+            "owner": CANONICAL_OWNER,
+            "pending_owner": None,
+            "parliament_delegated": False,
+            "active_code_hash_hex": "22" * 32,
+            "revision": 7,
+            "emergency_hold": None,
+        },
+        "emergency_hold_active": False,
+        "code_hash_hex": "22" * 32,
+        "abi_hash_hex": "33" * 32,
+        "public_entrypoints": ["ping"],
+    }
+    duplicate = json.dumps(payload, separators=(",", ":")).replace(
+        '"revision":7',
+        '"revision":7,"revision":8',
+    )
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            raw=duplicate.encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="duplicate JSON object member `revision`"):
+        client.get_governance_contract(
+            contract_address,
+            canonical_auth=_governance_auth(),
+        )
+
+    assert session.calls[0]["stream"] is True
+    assert session.calls[0]["allow_redirects"] is False
+
+
 @pytest.mark.parametrize(
     "selector",
     [

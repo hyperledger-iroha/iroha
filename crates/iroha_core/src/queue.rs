@@ -41,8 +41,9 @@ use crate::{
     },
     prelude::*,
     state::{
-        QueuePlanAdmissionRegistryMatch, State, StateReadOnly, StateReadOnlyWithTransactions,
-        TransactionsReadOnly, WorldReadOnly, queue_plan_admission_registry_match,
+        QueuePlanAdmissionRegistryMatch, QueuePlanBindingApplicationEvidence, State, StateReadOnly,
+        StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly,
+        queue_plan_admission_registry_match,
     },
     sumeragi::{
         lane_planner::AutonomousLaneReservationSelectionAuthorization,
@@ -11026,7 +11027,103 @@ impl Queue {
             }
             let has_materialized_owner = self.txs.contains_key(&hash);
             let has_durable_reservation_owner = reservation_owner.is_present();
-            let state_committed = accepted.has_committed_replay_identity(&state_view);
+            let state_committed = accepted.has_committed_replay_identity(state_view);
+            let carrier_committed = state_view.has_entrypoint(entrypoint_hash);
+            let global_binding = recorded_global_admission_identity
+                .is_some()
+                .then(|| {
+                    claim.global_admission_binding().map_err(|reason| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} has a malformed global admission binding; retaining its durable record: {reason}"
+                        ))
+                    })
+                })
+                .transpose()?;
+            let global_registry_match = if let Some(binding) = global_binding.as_ref() {
+                let expected_network_id_digest =
+                    crate::torii_proxy::queue_plan_admission_network_id_digest(
+                        state_view.network_id(),
+                    );
+                if binding.network_id_digest != expected_network_id_digest {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} belongs to another network; retaining its durable record"
+                    )));
+                }
+                Some(
+                    if state_committed {
+                        State::queue_plan_admission_registry_match_in_view(
+                            state_view,
+                            binding.entrypoint_hash.clone(),
+                            binding.canonical_hash(),
+                        )
+                    } else {
+                        queue_plan_admission_registry_match(
+                            state_view,
+                            binding.entrypoint_hash.clone(),
+                            binding.canonical_hash(),
+                        )
+                    }
+                    .map_err(|reason| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} cannot validate its global admission registry marker; retaining its durable record: {reason}"
+                        ))
+                    })?,
+                )
+            } else {
+                None
+            };
+            if state_committed
+                && matches!(
+                    global_registry_match,
+                    Some(
+                        QueuePlanAdmissionRegistryMatch::Absent
+                            | QueuePlanAdmissionRegistryMatch::Conflict
+                    )
+                )
+            {
+                if has_materialized_owner || has_durable_reservation_owner {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} is a committed replay duplicate without its exact canonical admission owner while queue or reservation ownership remains live"
+                    )));
+                }
+                if global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Conflict) {
+                    summary.tombstoned_conflicting_global_admission = summary
+                        .tombstoned_conflicting_global_admission
+                        .saturating_add(1);
+                } else {
+                    summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
+                }
+                terminal_removals.push((
+                    entrypoint_hash,
+                    recorded_routing_plan.digest(),
+                    recorded_journal_digest,
+                ));
+                continue;
+            }
+            if state_committed && let Some(binding) = global_binding.as_ref() {
+                debug_assert_eq!(
+                    global_registry_match,
+                    Some(QueuePlanAdmissionRegistryMatch::Exact)
+                );
+                let expected_evidence = if carrier_committed {
+                    QueuePlanBindingApplicationEvidence::AppliedDirect
+                } else {
+                    QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias
+                };
+                match State::queue_plan_binding_application_evidence_in_view(state_view, &binding) {
+                    Ok(evidence) if evidence == expected_evidence => {}
+                    Ok(_) => {
+                        return Err(invalid(format!(
+                            "queue-plan journal transaction {hash} lacks exact canonical replay-terminal evidence; retaining its durable record"
+                        )));
+                    }
+                    Err(reason) => {
+                        return Err(invalid(format!(
+                            "queue-plan journal transaction {hash} cannot authenticate replay-terminal canonical State; retaining its durable record: {reason}"
+                        )));
+                    }
+                }
+            }
             // A release terminal outcome can become Complete only after Queue
             // durably forgets its release owner. The post-Complete crash image
             // therefore reaches this branch with the QueuePlan record as its
@@ -11050,48 +11147,13 @@ impl Queue {
             // has already been authenticated above; current fee, registry,
             // manifest, and route policy must not reject accepted work after
             // canonical application.
-            let (global_registry_match, canonical_pending_handoff) = if state_committed {
-                (None, false)
-            } else if recorded_global_admission_identity.is_some() {
-                let binding =
-                    crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
-                        &QueuePlanDurableAdmissionV1 {
-                            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
-                            context: recorded_admission_context.clone(),
-                            global_admission_identity: recorded_global_admission_identity,
-                            routing_plan: recorded_routing_plan.clone(),
-                            entrypoint_hash,
-                            signed_transaction_hash: recorded_signed_transaction_hash,
-                            enqueue_timestamp_ms,
-                            journal_record_digest: recorded_journal_digest,
-                        },
-                    )
-                    .map_err(|reason| {
-                        invalid(format!(
-                            "queue-plan journal transaction {hash} has a malformed global admission binding; retaining its durable record: {reason}"
-                        ))
-                    })?;
-                let expected_network_id_digest =
-                    crate::torii_proxy::queue_plan_admission_network_id_digest(
-                        state_view.network_id(),
-                    );
-                if binding.network_id_digest != expected_network_id_digest {
-                    return Err(invalid(format!(
-                        "queue-plan journal transaction {hash} belongs to another network; retaining its durable record"
-                    )));
-                }
-                let registry_match = queue_plan_admission_registry_match(
-                    state_view,
-                    binding.entrypoint_hash.clone(),
-                    binding.canonical_hash(),
-                )
-                .map_err(|reason| {
-                    invalid(format!(
-                        "queue-plan journal transaction {hash} cannot validate its global admission registry marker; retaining its durable record: {reason}"
-                    ))
-                })?;
-                if registry_match == QueuePlanAdmissionRegistryMatch::Exact {
-                    let canonical_binding = State::queue_plan_pending_binding_in_view(
+            let canonical_pending_handoff = if !state_committed
+                && global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Exact)
+            {
+                let binding = global_binding
+                    .as_ref()
+                    .expect("exact global registry match has an admission binding");
+                let canonical_binding = State::queue_plan_pending_binding_in_view(
                         state_view,
                         binding.entrypoint_hash.clone(),
                     )
@@ -11105,18 +11167,14 @@ impl Queue {
                             "queue-plan journal transaction {hash} has an exact registry owner without a pending application obligation"
                         ))
                     })?;
-                    if canonical_binding != binding {
-                        return Err(invalid(format!(
-                            "queue-plan journal transaction {hash} differs from its full canonical pending binding"
-                        )));
-                    }
+                if canonical_binding != *binding {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} differs from its full canonical pending binding"
+                    )));
                 }
-                (
-                    Some(registry_match),
-                    registry_match == QueuePlanAdmissionRegistryMatch::Exact,
-                )
+                true
             } else {
-                (None, false)
+                false
             };
             if global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Conflict) {
                 if has_materialized_owner || has_durable_reservation_owner {
@@ -12014,6 +12072,24 @@ impl Queue {
         &self,
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<bool, LaneQueueReservationError> {
+        self.reject_exact_queue_plan_admission_claim_inner(binding, false)
+    }
+    /// Durably release an exact replay-terminal QueuePlan owner which never entered a lane.
+    ///
+    /// Canonical State must first resolve the owner's pending obligation through a committed
+    /// signed replay alias. This Queue-side boundary then refuses to race any selected, popped,
+    /// reserved, or terminalizing lifecycle owner; those remain under the Kura corridor.
+    fn reject_unreserved_replay_terminal_queue_plan_admission_claim(
+        &self,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+    ) -> Result<bool, LaneQueueReservationError> {
+        self.reject_exact_queue_plan_admission_claim_inner(binding, true)
+    }
+    fn reject_exact_queue_plan_admission_claim_inner(
+        &self,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+        require_unreserved_replay_terminal_owner: bool,
+    ) -> Result<bool, LaneQueueReservationError> {
         binding
             .validate_structure()
             .map_err(LaneQueueReservationError::InvalidIdentity)?;
@@ -12047,6 +12123,39 @@ impl Queue {
                 // A delayed losing certificate must not delete a later admission for the same
                 // entrypoint, including an ABA replacement with the same routing-plan digest.
                 return Ok(false);
+            }
+            if require_unreserved_replay_terminal_owner {
+                let reservation_owned = {
+                    let reservations = self.lane_reservations.lock();
+                    reservations.live_by_entrypoint.contains_key(&hash)
+                        || reservations
+                            .commit_barriers
+                            .iter()
+                            .any(|key| key.entrypoint_hash == hash)
+                        || reservations
+                            .plan_tombstoned
+                            .iter()
+                            .any(|key| key.entrypoint_hash == hash)
+                        || reservations.release_barriers.iter().any(|barrier| {
+                            barrier
+                                .ordered_keys
+                                .iter()
+                                .any(|key| key.entrypoint_hash == hash)
+                        })
+                        || reservations.completed_releases.iter().any(|completion| {
+                            completion
+                                .ordered_records
+                                .iter()
+                                .any(|record| record.key.entrypoint_hash == hash)
+                        })
+                };
+                if reservation_owned
+                    || self.global_selection_owners.lock().contains_key(&hash)
+                    || self.inflight_guards.load(Ordering::Acquire) != 0
+                    || self.selection_attempts.load(Ordering::Acquire) != 0
+                {
+                    return Ok(false);
+                }
             }
             let transaction = self
                 .txs
@@ -16752,7 +16861,6 @@ impl Queue {
                 tx = %tx.hash_as_entrypoint(),
                 "Pushing to the queue in batch"
             );
-            let hash = tx.hash_as_entrypoint();
             if tx.has_committed_replay_identity(&state_view) {
                 precheck_failure = Some(Failure {
                     tx: tx.into(),
@@ -19718,6 +19826,88 @@ impl Queue {
             &BTreeMap::new(),
         )
     }
+    /// Remove queue owners whose carrier or signed replay alias is committed.
+    ///
+    /// Sealed reveals can have distinct carrier hashes while enclosing the same signed
+    /// transaction. Once an authenticated reveal commits that signed alias, every ordinary
+    /// sibling owner is terminal even though its outer hash is absent from the carrier block.
+    /// Ordinary siblings are removed directly. A globally bound direct or sibling owner is
+    /// removed only after canonical State resolves its exact pending obligation and Queue proves
+    /// that no lane, Kura-terminal, selection, or popped-guard owner exists.
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    pub(crate) fn remove_state_committed_replay_owners_preserving_globally_bound(
+        &self,
+        state_view: &StateView<'_>,
+        telemetry: Option<&StateTelemetry>,
+    ) -> Result<usize, LaneQueueReservationError> {
+        let hashes = self
+            .txs
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .value()
+                    .has_committed_replay_identity(state_view)
+                    .then_some(*entry.key())
+            })
+            .collect::<Vec<_>>();
+        let mut removed = self.remove_committed_hashes_inner(
+            hashes,
+            telemetry,
+            CommittedHashCleanupMode::PreserveGloballyBoundOwners,
+            &BTreeMap::new(),
+        );
+        let mut replay_terminal_bindings = Vec::new();
+        for entry in &self.txs {
+            let accepted = entry.value().as_accepted();
+            let carrier_hash = accepted.hash_as_entrypoint();
+            if !self.has_globally_bound_durable_claim(carrier_hash) {
+                continue;
+            }
+            let expected_evidence = if state_view.has_entrypoint(carrier_hash) {
+                QueuePlanBindingApplicationEvidence::AppliedDirect
+            } else if let TransactionEntrypoint::SealedReveal(reveal) = accepted.entrypoint()
+                && state_view.has_entrypoint(reveal.signed_transaction().hash_as_entrypoint())
+            {
+                QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias
+            } else {
+                continue;
+            };
+            let claim = self.durable_plan_claims.get(&carrier_hash).ok_or(
+                LaneQueueReservationError::ReconciliationMissingDurableClaim { hash: carrier_hash },
+            )?;
+            let binding = claim
+                .global_admission_binding()
+                .map_err(LaneQueueReservationError::InvalidIdentity)?;
+            let registry_match = State::queue_plan_admission_registry_match_in_view(
+                state_view,
+                binding.entrypoint_hash.clone(),
+                binding.canonical_hash(),
+            )
+            .map_err(LaneQueueReservationError::InvalidIdentity)?;
+            if registry_match == QueuePlanAdmissionRegistryMatch::Exact {
+                match State::queue_plan_binding_application_evidence_in_view(state_view, &binding) {
+                    Ok(evidence) if evidence == expected_evidence => {}
+                    Ok(_) => continue,
+                    Err(reason) => {
+                        return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                            "replay-terminal QueuePlan owner has invalid canonical application state: {reason}"
+                        )));
+                    }
+                }
+            }
+            // Absent and conflicting registry projections prove this exact
+            // durable claim never became the canonical admission owner. Exact
+            // committed replay membership above therefore terminalizes it as
+            // a losing duplicate without fabricating Applied* State evidence.
+            replay_terminal_bindings.push(binding);
+        }
+        for binding in replay_terminal_bindings {
+            removed = removed.saturating_add(usize::from(
+                self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)?,
+            ));
+        }
+        Ok(removed)
+    }
     /// Remove committed ordinary owners while retaining globally bound QueuePlan custody.
     ///
     /// A globally bound owner can still be the Queue half of an autonomous
@@ -20712,8 +20902,8 @@ pub mod tests {
         proof::{ProofAttachment, ProofAttachmentList, ProofBox},
         runtime::RuntimeUpgradeManifest,
         transaction::signed::{
-            SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
-            compute_sealed_transaction_commitment,
+            SealedTransactionCommitmentPayload, SealedTransactionReveal,
+            SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
         },
     };
     use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
@@ -21112,6 +21302,50 @@ pub mod tests {
         state
             .install_queue_plan_pending_binding_for_test(binding)
             .expect("install complete QueuePlan registry owner evidence");
+    }
+    fn commit_globally_bound_fixture_directly(fixture: &GloballyBoundGuardFixture) {
+        install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+        let signer = checked_random_queue_keypair();
+        let block = crate::block::BlockBuilder::new(vec![fixture.transaction.clone()])
+            .chain(0, None)
+            .sign(signer.private_key())
+            .unpack(|_| {});
+        let block: iroha_data_model::block::SignedBlock = block.into();
+        {
+            let mut state_block = fixture.state.block(block.header());
+            state_block
+                .resolve_queue_plan_pending_obligations_from_block(&block)
+                .expect("direct carrier resolves its exact QueuePlan obligation");
+            state_block
+                .commit_world_overlay_for_testing()
+                .expect("publish direct QueuePlan terminal state");
+        }
+        let mut transactions = fixture.state.transactions.block();
+        transactions.insert_block_with_single_tx(
+            fixture.transaction.hash_as_entrypoint(),
+            nonzero!(1_usize),
+        );
+        transactions
+            .commit()
+            .expect("commit direct carrier membership");
+        assert_eq!(
+            State::queue_plan_binding_application_evidence_in_view(
+                &fixture.state.view(),
+                &fixture.binding,
+            )
+            .expect("read direct QueuePlan terminal evidence"),
+            QueuePlanBindingApplicationEvidence::AppliedDirect,
+        );
+    }
+    fn commit_globally_bound_fixture_membership_only(fixture: &GloballyBoundGuardFixture) {
+        let mut transactions = fixture.state.transactions.block();
+        transactions.insert_block_with_single_tx(
+            fixture.transaction.hash_as_entrypoint(),
+            nonzero!(1_usize),
+        );
+        transactions
+            .commit()
+            .expect("commit exact transaction membership without QueuePlan marker staging");
     }
     fn admit_globally_certified_reservation_transaction_for_test(
         queue: &Queue,
@@ -24183,6 +24417,62 @@ pub mod tests {
             .push(tx, state.view())
             .expect("exact self-registration remains the intentional bootstrap exception");
         assert_eq!(queue.active_len(), 1);
+    }
+    #[test]
+    fn committed_sealed_signed_alias_releases_ordinary_sibling_carriers() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let (authority, keypair) = gen_account_in("sealed-queue-cleanup");
+        let signed = TransactionBuilder::new(
+            state.network_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed queue cleanup".into())])
+        .sign(keypair.private_key());
+        let deadline = 9;
+        let carriers = [[0x51; 32], [0x52; 32]].map(|salt| {
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+                TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+                    compute_sealed_transaction_commitment(
+                        &state.network_id,
+                        &signed,
+                        salt,
+                        deadline,
+                    ),
+                    signed.clone(),
+                    salt,
+                )),
+            ))
+        });
+        register_accepted_tx_authority_for_queue_test(&mut state, &carriers[0]);
+        for carrier in carriers {
+            queue
+                .push(carrier, state.view())
+                .expect("distinct reveal carriers may be pending before either alias commits");
+        }
+        assert_eq!(queue.active_len(), 2);
+        {
+            let mut transactions = state.transactions.block();
+            transactions
+                .insert_block_with_single_tx(signed.hash_as_entrypoint(), nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("commit authenticated signed reveal alias");
+        }
+
+        let removed = queue
+            .remove_state_committed_replay_owners_preserving_globally_bound(&state.view(), None)
+            .expect("remove committed replay siblings");
+
+        assert_eq!(removed, 2);
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.retained_bytes(), 0);
     }
     #[test]
     fn retained_byte_budget_rejects_before_count_capacity_and_releases_on_remove() {
@@ -27872,6 +28162,311 @@ pub mod tests {
         let guard = fixture.pop_guard();
         drop(guard);
         fixture.assert_restored_fifo_owner_with_order(&[hash, follower_hash]);
+    }
+    #[test]
+    fn globally_bound_direct_commit_releases_unreserved_runtime_owner() {
+        let fixture = globally_bound_guard_fixture();
+        commit_globally_bound_fixture_directly(&fixture);
+
+        assert_eq!(
+            fixture
+                .queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &fixture.state.view(),
+                    None,
+                )
+                .expect("direct terminal cleanup must be exact and durable"),
+            1,
+        );
+        fixture.assert_terminally_removed();
+    }
+    #[test]
+    fn globally_bound_commit_before_marker_staging_releases_runtime_owner() {
+        let fixture = globally_bound_guard_fixture();
+        assert_eq!(
+            fixture
+                .state
+                .queue_plan_admission_binding_registry_match(&fixture.binding)
+                .expect("read absent pre-staging QueuePlan registry"),
+            QueuePlanAdmissionRegistryMatch::Absent,
+        );
+        commit_globally_bound_fixture_membership_only(&fixture);
+        assert_eq!(
+            State::queue_plan_binding_application_evidence_in_view(
+                &fixture.state.view(),
+                &fixture.binding,
+            )
+            .expect("read absent crash-window application evidence"),
+            QueuePlanBindingApplicationEvidence::Absent,
+        );
+        assert_eq!(
+            fixture
+                .queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &fixture.state.view(),
+                    None,
+                )
+                .expect("committed replay membership terminalizes the unstaged losing owner"),
+            1,
+        );
+        fixture.assert_terminally_removed();
+    }
+    #[test]
+    fn globally_bound_committed_conflict_tombstones_during_startup_replay() {
+        let fixture = globally_bound_guard_fixture();
+        let routing_plan = fixture
+            .binding
+            .routing_plan()
+            .expect("fixture binding routing plan");
+        let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            fixture.state.network_id_ref(),
+            fixture.transaction.entrypoint(),
+            &routing_plan,
+            fixture.binding.admission_context.clone(),
+            fixture.binding.enqueue_timestamp_ms.saturating_add(1),
+        )
+        .expect("build canonical conflicting QueuePlan owner");
+        install_queue_plan_registry_value_for_test(&fixture.state, &conflicting_binding);
+        assert_eq!(
+            fixture
+                .state
+                .queue_plan_admission_binding_registry_match(&fixture.binding)
+                .expect("read losing QueuePlan registry projection"),
+            QueuePlanAdmissionRegistryMatch::Conflict,
+        );
+        commit_globally_bound_fixture_membership_only(&fixture);
+        let journal_path = fixture._dir.path().join("global_guard_queue_plan.norito");
+        let GloballyBoundGuardFixture {
+            state,
+            queue,
+            time_handle,
+            _dir: dir,
+            ..
+        } = fixture;
+        drop(queue);
+        let replay_time_source = time_handle.source();
+        let replay_queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &replay_time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install losing conflict journal"),
+            1,
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("startup tombstones a committed losing QueuePlan conflict");
+        assert_eq!(summary.tombstoned_conflicting_global_admission, 1);
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(replay_queue.active_len(), 0);
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("losing conflict journal")
+                .live_record_count()
+                .expect("count losing conflict records"),
+            0,
+        );
+        drop(dir);
+    }
+    #[test]
+    fn globally_bound_sealed_sibling_is_tombstoned_after_direct_signed_commit() {
+        let dir = tempfile::tempdir().expect("sealed sibling journal directory");
+        let journal_path = dir.path().join("sealed_sibling_queue_plan.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        install_single_validator_topology_for_queue_test(&mut state, 0xD3);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install sealed sibling queue-plan journal");
+
+        let direct = accepted_queue_plan_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &direct);
+        let TransactionEntrypoint::External(signed) = direct.entrypoint() else {
+            panic!("QueuePlan fixture must be a direct external transaction")
+        };
+        let salt = [0xD4; 32];
+        let sealed = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+                compute_sealed_transaction_commitment(&state.network_id, signed, salt, 9),
+                signed.clone(),
+                salt,
+            )),
+        ));
+        assert_ne!(direct.hash_as_entrypoint(), sealed.hash_as_entrypoint());
+
+        let direct_plan = queue
+            .route_plan_with_state(&direct, &state)
+            .expect("route direct signed carrier");
+        let direct_context = queue
+            .plan_admission_context_with_state(&state, &direct_plan)
+            .expect("capture direct carrier admission context");
+        let direct_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            state.network_id_ref(),
+            direct.entrypoint(),
+            &direct_plan,
+            direct_context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("build direct carrier QueuePlan binding");
+        install_queue_plan_registry_value_for_test(&state, &direct_binding);
+        let sealed_binding = admit_globally_certified_reservation_transaction_for_test(
+            &queue,
+            &state,
+            sealed.clone(),
+        );
+        assert_eq!(queue.active_len(), 1);
+
+        let signer = checked_random_queue_keypair();
+        let block = crate::block::BlockBuilder::new(vec![direct.clone()])
+            .chain(0, None)
+            .sign(signer.private_key())
+            .unpack(|_| {});
+        let block: iroha_data_model::block::SignedBlock = block.into();
+        {
+            let mut state_block = state.block(block.header());
+            state_block
+                .resolve_queue_plan_pending_obligations_from_block(&block)
+                .expect("direct signed carrier terminalizes its sealed QueuePlan sibling");
+            state_block
+                .commit_world_overlay_for_testing()
+                .expect("publish sealed sibling replay-terminal evidence");
+        }
+        let mut transactions = state.transactions.block();
+        transactions.insert_block_with_single_tx(direct.hash_as_entrypoint(), nonzero!(1_usize));
+        transactions
+            .commit()
+            .expect("commit direct signed transaction membership");
+        assert_eq!(
+            State::queue_plan_binding_application_evidence_in_view(&state.view(), &sealed_binding,)
+                .expect("authenticate sealed sibling terminal evidence"),
+            QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias,
+        );
+        let restart_journal_path = dir.path().join("sealed_sibling_restart_queue_plan.norito");
+        fs::copy(&journal_path, &restart_journal_path)
+            .expect("snapshot the durable pre-cleanup journal for restart replay");
+
+        assert_eq!(
+            queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &state.view(),
+                    None,
+                )
+                .expect("retire exact sealed sibling QueuePlan owner"),
+            1,
+        );
+        let sealed_hash = sealed.hash_as_entrypoint();
+        assert_eq!(queue.active_len(), 0);
+        assert!(!queue.txs.contains_key(&sealed_hash));
+        assert!(!queue.routing_plans.contains_key(&sealed_hash));
+        assert!(!queue.durable_plan_claims.contains_key(&sealed_hash));
+        assert!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed sealed sibling journal")
+                .replay()
+                .expect("replay sealed sibling terminal journal")
+                .is_empty(),
+            "runtime cleanup must durably tombstone the sealed sibling journal claim"
+        );
+
+        let replay_queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&restart_journal_path, 1024 * 1024, true)
+                .expect("install retained sealed sibling journal"),
+            1,
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("startup authenticates and tombstones the replay-terminal sealed sibling");
+        assert_eq!(summary.tombstoned_committed, 1);
+        assert_eq!(replay_queue.active_len(), 0);
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed sealed sibling restart journal")
+                .live_record_count()
+                .expect("count sealed sibling restart journal records"),
+            0,
+        );
+    }
+    #[test]
+    fn globally_bound_direct_commit_tombstones_owner_during_startup_replay() {
+        let fixture = globally_bound_guard_fixture();
+        commit_globally_bound_fixture_directly(&fixture);
+        let journal_path = fixture._dir.path().join("global_guard_queue_plan.norito");
+        let GloballyBoundGuardFixture {
+            state,
+            queue,
+            time_handle,
+            _dir: dir,
+            ..
+        } = fixture;
+        drop(queue);
+        let replay_time_source = time_handle.source();
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &replay_time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install retained direct-owner journal"),
+            1,
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("startup must authenticate and tombstone direct terminal owner");
+        assert_eq!(summary.tombstoned_committed, 1);
+        assert_eq!(replay_queue.active_len(), 0);
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("startup replay journal")
+                .live_record_count()
+                .expect("count startup replay records"),
+            0,
+        );
+        drop(dir);
     }
     include!("queue/global_guard_claim_conflict_tests.rs");
     #[test]

@@ -98,9 +98,10 @@ pub enum AuthenticationPolicy {
     /// The operator credential exchange authenticates inside the handler.
     ///
     /// `WebAuthn` registration and login cannot require an already-established operator signature:
-    /// registration accepts the configured bootstrap credential until enrollment, while login
-    /// verifies a `WebAuthn` challenge. The handlers still enforce mTLS, rate limits, lockout,
-    /// bootstrap/session policy, and challenge verification as appropriate.
+    /// registration accepts the dedicated operator bootstrap token only until the first credential,
+    /// while login verifies a `WebAuthn` challenge. Afterward only an authenticated session may
+    /// enroll rollover credentials. The handlers still enforce mTLS, rate limits, lockout, and
+    /// challenge verification as appropriate; listener API tokens never enter this boundary.
     OperatorCredentialExchange,
     /// The protocol performs authentication inside its own handshake.
     ProtocolHandshake,
@@ -112,6 +113,24 @@ pub enum AuthenticationPolicy {
     Unauthenticated,
 }
 impl AuthenticationPolicy {
+    /// Return the canonical first-release metadata label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToriiDefault => "torii_default",
+            Self::OnboardingToken => "onboarding_token",
+            Self::CanonicalAccountSignature => "canonical_account_signature",
+            Self::OptionalCanonicalAccountSignature => "optional_canonical_account_signature",
+            Self::CanonicalSignedBody => "canonical_signed_body",
+            Self::ManifestConditionalContent => "manifest_conditional_content",
+            Self::IdentityBoundSignature => "identity_bound_signature",
+            Self::OperatorSignature => "operator_signature",
+            Self::OperatorCredentialExchange => "operator_credential_exchange",
+            Self::ProtocolHandshake => "protocol_handshake",
+            Self::NestedRouteAuthentication => "nested_route_authentication",
+            Self::Unauthenticated => "unauthenticated",
+        }
+    }
     /// Return whether every response from this authentication boundary must be private and
     /// non-cacheable.
     #[must_use]
@@ -166,6 +185,22 @@ pub enum AdmissionPolicy {
     /// The exact nested target route admits its own account, validator, operator, signed-body, or
     /// public-read principal before any target effect is performed.
     TargetRoute,
+}
+impl AdmissionPolicy {
+    /// Return the canonical first-release metadata label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::AuthenticatedAccount => "authenticated_account",
+            Self::DataspaceVisible => "dataspace_visible",
+            Self::AuthenticatedProtocolPrincipal => "authenticated_protocol_principal",
+            Self::ValidatorRosterMember => "validator_roster_member",
+            Self::GovernedAuditor => "governed_auditor",
+            Self::Operator => "operator",
+            Self::TargetRoute => "target_route",
+        }
+    }
 }
 /// Router path normalization accepted by a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1268,8 +1303,16 @@ pub mod aliases {
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
     }
+    const fn dataspace_lookup(
+        stable_route_id: &'static str,
+        path: &'static str,
+    ) -> RouteDescriptor {
+        public_lookup(stable_route_id, path)
+            .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::DataspaceVisible)
+    }
     /// Resolve an account alias.
-    pub const RESOLVE: RouteDescriptor = public_lookup("aliases.resolve", "/v1/aliases/resolve");
+    pub const RESOLVE: RouteDescriptor = dataspace_lookup("aliases.resolve", "/v1/aliases/resolve");
     /// Plan one atomic declarative alias setup transaction.
     pub const SETUP_PLAN: RouteDescriptor =
         public_lookup("aliases.setup_plan", "/v1/aliases/setup/plan")
@@ -1287,10 +1330,10 @@ pub mod aliases {
             .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Resolve the deterministic numeric alias index.
     pub const RESOLVE_INDEX: RouteDescriptor =
-        public_lookup("aliases.resolve_index", "/v1/aliases/resolve-index");
+        dataspace_lookup("aliases.resolve_index", "/v1/aliases/resolve-index");
     /// List aliases bound to an account.
     pub const BY_ACCOUNT: RouteDescriptor =
-        public_lookup("aliases.by_account", "/v1/aliases/by-account");
+        dataspace_lookup("aliases.by_account", "/v1/aliases/by-account");
     /// Resolve a retail recipient reference.
     pub const RETAIL_RECIPIENT_LOOKUP: RouteDescriptor =
         public_lookup("retail.recipient.lookup", "/v1/retail/recipients/lookup")
@@ -1839,37 +1882,15 @@ pub mod diagnostic {
         reason: "OpenAPI document discovery convention",
     })
     .with_implicit_head(true);
-    /// `OpenAPI` document convenience endpoint.
-    pub const OPENAPI: RouteDescriptor = RouteDescriptor::new(
-        "protocol.openapi",
-        HttpMethod::Get,
-        "/openapi",
-        ApiSurface::Protocol,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_projections(RouteProjections::OPENAPI)
-    .with_path_policy(PathPolicy::ProtocolException {
-        reason: "OpenAPI document discovery convention",
-    })
-    .with_implicit_head(true);
     /// Schema route registered by `add_schema_routes`.
     pub const SCHEMA_ROUTES: &[RouteDescriptor] = &[SCHEMA];
     /// `OpenAPI` routes registered by `add_openapi_routes`.
-    pub const OPENAPI_ROUTES: &[RouteDescriptor] = &[OPENAPI_JSON, OPENAPI];
+    pub const OPENAPI_ROUTES: &[RouteDescriptor] = &[OPENAPI_JSON];
     /// Profiling route registered by `add_profiling_routes`.
     pub const PROFILE_ROUTES: &[RouteDescriptor] = &[PROFILE];
     /// Diagnostic and self-description routes registered by the builder.
-    pub const ROUTES: &[RouteDescriptor] = &[
-        STATUS,
-        STATUS_TAIL,
-        METRICS,
-        PROFILE,
-        SCHEMA,
-        OPENAPI_JSON,
-        OPENAPI,
-    ];
+    pub const ROUTES: &[RouteDescriptor] =
+        &[STATUS, STATUS_TAIL, METRICS, PROFILE, SCHEMA, OPENAPI_JSON];
 }
 /// Transaction, query, proof, and pipeline routes.
 pub mod pipeline {
@@ -2000,11 +2021,12 @@ pub mod pipeline {
         "trigger.completion.list",
         HttpMethod::Get,
         "/v1/triggers/completed",
-        ApiSurface::Public,
+        ApiSurface::Operator,
         Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::Operator,
     )
+    .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
@@ -2521,17 +2543,14 @@ pub mod sumeragi {
             id,
             HttpMethod::Get,
             path,
-            ApiSurface::Protocol,
+            ApiSurface::Operator,
             Listener::Torii,
             RouteEffect::LongLivedStream,
-            AdmissionPolicy::ValidatorRosterMember,
+            AdmissionPolicy::Operator,
         )
-        .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+        .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_feature_gate(FeatureGate::Feature("telemetry"))
         .with_projections(RouteProjections::OPENAPI)
-        .with_path_policy(PathPolicy::ProtocolException {
-            reason: "Sumeragi SSE transport endpoint",
-        })
         .with_implicit_head(true)
     }
     /// Count persisted consensus evidence records as an authenticated operator.
@@ -2571,7 +2590,7 @@ pub mod sumeragi {
     /// Read non-authoritative Sumeragi operator and lane diagnostics as an authenticated operator.
     pub const DIAGNOSTICS: RouteDescriptor =
         telemetry_operator_get("sumeragi.diagnostics.read", "/v1/sumeragi/diagnostics");
-    /// Stream authoritative Sumeragi status snapshots over SSE.
+    /// Stream authoritative Sumeragi status snapshots as an authenticated operator.
     pub const STATUS_SSE: RouteDescriptor =
         telemetry_sse("sumeragi.status.stream_sse", "/v1/sumeragi/status/sse");
     /// Read the current leader snapshot as an authenticated operator.
@@ -2980,7 +2999,7 @@ pub mod runtime_governance {
     /// Read governance unlock statistics.
     pub const GOV_UNLOCK_STATS: RouteDescriptor =
         app_signed_get("governance.unlock.stats", "/v1/gov/unlocks/stats");
-    /// Read an active governance contract binding.
+    /// Read the retained governance lifecycle for a contract, whether active or inactive.
     pub const GOV_CONTRACT_GET: RouteDescriptor = app_signed_get(
         "governance.contract.read",
         "/v1/gov/contracts/{contract_address}",
@@ -3469,9 +3488,6 @@ pub mod sorafs {
         "sorafs.storage_plan.read",
         "/v1/sorafs/storage/plan/{manifest_id}",
     );
-    /// Run the operator-only legacy storage range diagnostic.
-    pub const STORAGE_FETCH: RouteDescriptor =
-        operator_local_expensive_post("sorafs.storage.fetch", "/v1/sorafs/storage/fetch");
     /// Request a storage access token.
     pub const STORAGE_TOKEN: RouteDescriptor =
         documented_post("sorafs.storage_token.issue", "/v1/sorafs/storage/token")
@@ -3619,7 +3635,6 @@ pub mod sorafs {
         CID_LOOKUP,
         STORAGE_MANIFEST,
         STORAGE_PLAN,
-        STORAGE_FETCH,
         STORAGE_TOKEN,
         STORAGE_CAR,
         STORAGE_CHUNK,
@@ -3849,7 +3864,7 @@ pub mod application_api {
         API_CID_BY_CID_GET => app_sdk_get("application.api_cid_by_cid_get", "/v1/api/cid/{cid}");
         API_CID_BY_CID_BY_PATH_GET => app_wildcard_get("application.api_cid_by_cid_by_path_get", "/v1/api/cid/{cid}/{*path}");
         API_CID_BY_CID_BY_PATH_POST => app_wildcard_post("application.api_cid_by_cid_by_path_post", "/v1/api/cid/{cid}/{*path}");
-        ACCOUNTS_BY_ACCOUNT_ID_GET => app_get("application.accounts_by_account_id_get", "/v1/accounts/{account_id}");
+        ACCOUNTS_BY_ACCOUNT_ID_GET => dataspace_get("application.accounts_by_account_id_get", "/v1/accounts/{account_id}");
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET => internal_get("application.internal_accounts_by_account_id_get", "/v1/internal/accounts/{account_id}");
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET => internal_get("application.internal_accounts_by_account_id_transactions_by_entrypoint_hash_get", "/v1/internal/accounts/{account_id}/transactions/{entrypoint_hash}");
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => internal_get("application.internal_accounts_by_account_id_assets_by_asset_definition_id_get", "/v1/internal/accounts/{account_id}/assets/{asset_definition_id}");
@@ -3868,18 +3883,18 @@ pub mod application_api {
         CONTRACTS_ROLLUPS_MARGIN_HEALTH_GET => dataspace_sdk_get("application.contracts_rollups_margin_health_get", "/v1/contracts/rollups/margin/health");
         CONTRACTS_ROLLUPS_RWA_LOTS_GET => dataspace_sdk_get("application.contracts_rollups_rwa_lots_get", "/v1/contracts/rollups/rwa/lots");
         CONTRACTS_ROLLUPS_DLMM_HOOKS_GET => dataspace_sdk_get("application.contracts_rollups_dlmm_hooks_get", "/v1/contracts/rollups/dlmm/hooks");
-        ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => app_get("application.accounts_by_account_id_assets_get", "/v1/accounts/{account_id}/assets");
+        ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => dataspace_get("application.accounts_by_account_id_assets_get", "/v1/accounts/{account_id}/assets");
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST => account_compute_post("application.accounts_by_account_id_assets_query_post", "/v1/accounts/{account_id}/assets/query");
-        ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => app_get("application.accounts_by_account_id_permissions_get", "/v1/accounts/{account_id}/permissions");
-        ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => app_get("application.accounts_by_account_id_transactions_get", "/v1/accounts/{account_id}/transactions");
-        ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => app_get("application.accounts_by_account_id_history_get", "/v1/accounts/{account_id}/history");
+        ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => dataspace_get("application.accounts_by_account_id_permissions_get", "/v1/accounts/{account_id}/permissions");
+        ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => dataspace_get("application.accounts_by_account_id_transactions_get", "/v1/accounts/{account_id}/transactions");
+        ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => dataspace_get("application.accounts_by_account_id_history_get", "/v1/accounts/{account_id}/history");
         PROOFS_QUERY_POST => signed_compute_post("application.proofs_query_post", "/v1/proofs/query");
         ZK_PROOF_TAGS_BY_BACKEND_BY_HASH_GET => app_get("application.zk_proof_tags_by_backend_by_hash_get", "/v1/zk/proof-tags/{backend}/{hash}");
         DOMAINS_GET => app_get("application.domains_get", "/v1/domains");
         DOMAINS_QUERY_POST => account_compute_post("application.domains_query_post", "/v1/domains/query");
         ACCOUNTS_GET => app_get("application.accounts_get", "/v1/accounts");
         ACCOUNTS_QUERY_POST => account_compute_post("application.accounts_query_post", "/v1/accounts/query");
-        TRANSACTIONS_QUERY_POST => account_compute_post("application.transactions_query_post", "/v1/transactions/query");
+        TRANSACTIONS_QUERY_POST => operator_expensive_post("application.transactions_query_post", "/v1/transactions/query");
         TRANSACTIONS_VISIBLE_QUERY_POST => account_compute_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");
         ACCOUNTS_ONBOARD_PLAN_POST => onboarding_compute_post("application.accounts_onboard_plan_post", "/v1/accounts/onboard/plan");
         ACCOUNTS_ONBOARD_PREPARE_POST => onboarding_compute_post("application.accounts_onboard_prepare_post", "/v1/accounts/onboard/prepare");

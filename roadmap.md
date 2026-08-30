@@ -393,11 +393,11 @@ Completed history lives in [`status.md`](./status.md).
   its JavaScript adapter in favor of authenticated CAR/chunk reads, then
   regenerate the OpenAPI provenance bundle and update the SoraFS operator
   runbooks in the same change.
-- Collapse permanent operator bearer-token modes to one bootstrap-before-first-
-  credential flow, remove duplicate response fields, and retain only
-  `/openapi.json` as the OpenAPI discovery endpoint. Duplicate MCP Connect tool
-  aliases are already removed; preserve the four canonical `iroha.connect.*`
-  tools without reintroducing composite credential-minting helpers.
+- Remove duplicate response fields and retain only `/openapi.json` as the
+  OpenAPI discovery endpoint. Duplicate MCP Connect tool aliases and permanent
+  operator bearer-token modes are already removed; preserve the four canonical
+  `iroha.connect.*` tools and the single first-credential operator-token
+  bootstrap flow without reintroducing composite credential-minting helpers.
 - Audit wildcard diagnostic and configuration-alias surfaces (`/status/{*tail}`
   and one-way parser spellings) against first-release callers, deleting each
   surface that has no production owner instead of carrying compatibility
@@ -521,6 +521,12 @@ Completed history lives in [`status.md`](./status.md).
   Confirmation-capacity abort, exact stale-head supersession, fail-fast
   execution-failure unchanged-state isolation, state equality, and restart;
   run them from the settled candidate before treating the matrix as evidence.
+  The same immutable-candidate matrix must cover same-block trigger lifecycle
+  ordering and rollback, pre-effect gas reservation, nested-work retention,
+  exact prepared-overlay and live-batch block-gas accounting,
+  authenticated sealed-reveal alias recovery, replay-terminal QueuePlan
+  obligation compaction and exact evidence, opaque contract-state boundaries,
+  and sibling-carrier queue retirement across live cleanup and restart.
 - Candidate-qualify the exact Ready-Proposal-Sign producer-point preemption and
   the certified-response queue-refresh retry. The first patched four-validator
   rerun showed no recurrence of the former queue-cut fail-stop, but its

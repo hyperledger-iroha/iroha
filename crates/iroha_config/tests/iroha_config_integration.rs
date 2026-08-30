@@ -17,6 +17,8 @@ mod governance_citizen_service_parse;
 mod kura_retention_hard_cut;
 #[path = "minamoto_profile.rs"]
 mod minamoto_profile;
+#[path = "operator_auth_bootstrap_hard_cut.rs"]
+mod operator_auth_bootstrap_hard_cut;
 #[path = "p2p_hard_cut.rs"]
 mod p2p_hard_cut;
 #[path = "pipeline_cycle_ceiling.rs"]

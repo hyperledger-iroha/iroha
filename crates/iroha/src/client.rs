@@ -2718,6 +2718,8 @@ pub struct SccpCapabilities {
     pub proof_request_path: String,
     /// Newest-first indexed outbound-message endpoint.
     pub recent_messages_path: String,
+    /// Route-scoped SORA outbound contract-material endpoint template.
+    pub sora_outbound_material_path: String,
     /// Fixed SCCP V1 route-registry capacity limits.
     pub registry_limits: SccpRegistryLimits,
     /// Consensus-critical proof and deterministic verifier-work limits.
@@ -2936,6 +2938,11 @@ fn validate_sccp_capabilities(capabilities: &SccpCapabilities) -> Result<()> {
             capabilities.recent_messages_path.as_str(),
             "/v1/sccp/messages/recent",
             "recent_messages_path",
+        ),
+        (
+            capabilities.sora_outbound_material_path.as_str(),
+            "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+            "sora_outbound_material_path",
         ),
     ] {
         if actual != expected {
@@ -13899,7 +13906,7 @@ mod evidence_http_tests {
         assert_status_scope(&snapshot, "global");
     }
     #[test]
-    fn get_account_read_requests_json_and_decodes_typed_payload() {
+    fn get_account_read_signs_request_and_decodes_typed_payload() {
         use iroha_torii_shared::AccountReadResponse;
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let payload = AccountReadResponse {
@@ -13914,8 +13921,8 @@ mod evidence_http_tests {
         .expect("account payload");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &body);
+        let client = client_with_base_url(base_url());
         let decoded = with_mock_http(respond_with(&store, response), || {
-            let client = client_with_base_url(base_url());
             client.get_account_read(&account_id)
         })
         .expect("account read response");
@@ -13926,10 +13933,7 @@ mod evidence_http_tests {
             .first()
             .cloned()
             .expect("account snapshot");
-        let expected_url = join_torii_url(
-            &client_with_base_url(base_url()).torii_url,
-            &format!("v1/accounts/{account_id}"),
-        );
+        let expected_url = join_torii_url(&client.torii_url, &format!("v1/accounts/{account_id}"));
         assert_eq!(snapshot.url.path(), expected_url.path());
         assert!(
             snapshot.headers.iter().any(|(name, value)| {
@@ -13937,6 +13941,54 @@ mod evidence_http_tests {
             }),
             "request should set Accept: application/json"
         );
+        assert_canonical_account_signed_request(&client, &snapshot);
+    }
+
+    #[test]
+    fn get_account_read_unsigned_omits_canonical_authentication() {
+        use iroha_torii_shared::AccountReadResponse;
+
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
+        let payload = AccountReadResponse {
+            account_id: account_id.clone(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        };
+        let body = norito::json::to_string(
+            &norito::json::to_value(&payload).expect("account payload value"),
+        )
+        .expect("account payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &body);
+        let client = client_with_base_url(base_url());
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client.get_account_read_unsigned(&account_id)
+        })
+        .expect("anonymous account read response");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("account snapshot");
+        for header in [
+            HEADER_ACCOUNT,
+            HEADER_SIGNATURE,
+            HEADER_TIMESTAMP_MS,
+            HEADER_NONCE,
+            HEADER_WITNESS,
+        ] {
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .all(|(name, _)| !name.eq_ignore_ascii_case(header)),
+                "anonymous account read must omit `{header}`"
+            );
+        }
     }
     #[test]
     fn runtime_and_node_json_requests_set_accept_json() {
@@ -16536,7 +16588,8 @@ impl Client {
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
         self.get_transaction_status_response_with_scope(hash, Some("global"))
     }
-    /// GET `/v1/triggers/completed` — list historical trigger completions from committed blocks.
+    /// Operator-signed GET `/v1/triggers/completed` — list historical trigger completions from
+    /// committed blocks.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response has an unexpected content type,
@@ -16552,31 +16605,34 @@ impl Client {
         limit: Option<u64>,
         scan_limit_blocks: Option<u64>,
     ) -> Result<TriggerCompletionListResponse> {
-        let url = join_torii_url(&self.torii_url, "v1/triggers/completed");
-        let mut builder = self
-            .default_request(HttpMethod::GET, url)
+        let mut url = join_torii_url(&self.torii_url, "v1/triggers/completed");
+        {
+            let mut query = url.query_pairs_mut();
+            if let Some(trigger_id) = trigger_id {
+                query.append_pair("id", trigger_id);
+            }
+            if let Some(entrypoint_hash) = entrypoint_hash {
+                query.append_pair("entrypoint_hash", entrypoint_hash);
+            }
+            if let Some(outcome) = outcome {
+                query.append_pair("outcome", outcome);
+            }
+            if let Some(from_height) = from_height {
+                query.append_pair("from_height", &from_height.to_string());
+            }
+            if let Some(to_height) = to_height {
+                query.append_pair("to_height", &to_height.to_string());
+            }
+            if let Some(limit) = limit {
+                query.append_pair("limit", &limit.to_string());
+            }
+            if let Some(scan_limit_blocks) = scan_limit_blocks {
+                query.append_pair("scan_limit_blocks", &scan_limit_blocks.to_string());
+            }
+        }
+        let builder = self
+            .operator_signed_request(HttpMethod::GET, url, Vec::new())?
             .header("Accept", APPLICATION_JSON);
-        if let Some(trigger_id) = trigger_id {
-            builder = builder.param("id", trigger_id);
-        }
-        if let Some(entrypoint_hash) = entrypoint_hash {
-            builder = builder.param("entrypoint_hash", entrypoint_hash);
-        }
-        if let Some(outcome) = outcome {
-            builder = builder.param("outcome", outcome);
-        }
-        if let Some(from_height) = from_height {
-            builder = builder.param("from_height", &from_height.to_string());
-        }
-        if let Some(to_height) = to_height {
-            builder = builder.param("to_height", &to_height.to_string());
-        }
-        if let Some(limit) = limit {
-            builder = builder.param("limit", &limit.to_string());
-        }
-        if let Some(scan_limit_blocks) = scan_limit_blocks {
-            builder = builder.param("scan_limit_blocks", &scan_limit_blocks.to_string());
-        }
         let resp = self.send_builder(builder)?;
         match resp.status() {
             StatusCode::OK | StatusCode::ACCEPTED => {
@@ -17104,7 +17160,8 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_debug_witness_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/debug/witness");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp =
+            self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new())?)?;
         Self::decode_json_http_status(
             resp,
             StatusCode::OK,
@@ -17112,15 +17169,16 @@ impl Client {
         )
     }
     /// Fetch current execution witness snapshot as Norito-encoded bytes.
-    /// Prefers Accept-driven `/v1/debug/witness` and falls back to `.bin`.
+    /// Fetches `/v1/debug/witness` once with operator authentication and Norito content negotiation.
     ///
     /// # Errors
-    /// Returns an error if the HTTP request fails or both endpoints return non-OK responses.
+    /// Returns an error if request signing or transport fails, or the endpoint returns a non-OK
+    /// response.
     pub fn get_debug_witness_norito(&self) -> Result<Vec<u8>> {
         // Try Accept-driven path first
         let url = join_torii_url(&self.torii_url, "v1/debug/witness");
         let resp = self.send_prepared_request(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", "application/x-norito")
                 .build()?,
         )?;
@@ -22994,7 +23052,7 @@ impl Client {
         )?;
         Self::decode_json_ok(resp, "Failed to get runtime upgrades")
     }
-    /// GET `/v1/accounts/{account_id}` — canonical account materialization read.
+    /// Canonically signed GET `/v1/accounts/{account_id}` account materialization read.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, the response is not
@@ -23003,10 +23061,27 @@ impl Client {
         let path = format!("v1/accounts/{account_id}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_typed_json_ok_response(&resp, "account get request")
+    }
+    /// Anonymous GET `/v1/accounts/{account_id}` account materialization read.
+    ///
+    /// This explicit variant sees public dataspaces only. Use [`Self::get_account_read`]
+    /// when the configured account should add its authorized restricted routes.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, the response is not
+    /// typed JSON, or JSON deserialization fails.
+    pub fn get_account_read_unsigned(&self, account_id: &AccountId) -> Result<AccountReadResponse> {
+        let path = format!("v1/accounts/{account_id}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.request_without_canonical_account_auth(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        Self::parse_typed_json_ok_response(&resp, "unsigned account get request")
     }
     /// GET `/v1/accounts/{uaid}/portfolio` — aggregated holdings for a UAID.
     ///
@@ -33276,6 +33351,22 @@ mod tests {
             );
         }
     }
+    fn assert_no_account_signature_headers(snapshot: &RequestSnapshot) {
+        for header in [
+            HEADER_ACCOUNT,
+            HEADER_SIGNATURE,
+            HEADER_TIMESTAMP_MS,
+            HEADER_NONCE,
+        ] {
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .all(|(name, _)| !name.eq_ignore_ascii_case(header)),
+                "operator request must not carry account-signature header `{header}`"
+            );
+        }
+    }
     fn assert_request(snapshot: &RequestSnapshot, method: &HttpMethod, path: &str) {
         assert_eq!(&snapshot.method, method);
         assert_eq!(snapshot.url.path(), path);
@@ -33334,6 +33425,31 @@ mod tests {
         assert_operator_signature_headers(&snapshot);
     }
     #[test]
+    fn trigger_completion_history_uses_operator_signature_bound_to_query() {
+        let mut client = client_with_base_url(base_url());
+        client.set_operator_key_pair(checked_random_keypair());
+        let (result, snapshot) = capture_request(empty_response(StatusCode::UNAUTHORIZED), || {
+            client.get_trigger_completions(
+                Some("timer"),
+                Some("abcd"),
+                Some("failure"),
+                Some(10),
+                Some(20),
+                Some(5),
+                Some(100),
+            )
+        });
+        let _ = result.expect_err("mocked unauthorized response should fail");
+        assert_request(&snapshot, &HttpMethod::GET, "/v1/triggers/completed");
+        assert_operator_signature_headers(&snapshot);
+        assert_eq!(
+            snapshot.url.query(),
+            Some(
+                "id=timer&entrypoint_hash=abcd&outcome=failure&from_height=10&to_height=20&limit=5&scan_limit_blocks=100"
+            )
+        );
+    }
+    #[test]
     fn set_config_includes_operator_signature_headers_when_key_configured() {
         let mut client = client_with_base_url(base_url());
         client.set_operator_key_pair(checked_random_keypair());
@@ -33355,6 +33471,58 @@ mod tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(snapshot.url.path(), torii_uri::CONFIGURATION);
         assert_operator_signature_headers(&snapshot);
+    }
+    #[test]
+    fn debug_witness_json_uses_exact_operator_authentication_boundary() {
+        let client = client_with_base_url(base_url());
+        let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
+            client.get_debug_witness_json()
+        });
+
+        result.expect("mocked witness JSON should decode");
+        assert_request(&snapshot, &HttpMethod::GET, "/v1/debug/witness");
+        assert_operator_signature_headers(&snapshot);
+        assert_no_account_signature_headers(&snapshot);
+    }
+    #[test]
+    fn debug_witness_norito_uses_exact_operator_authentication_boundary() {
+        let client = client_with_base_url(base_url());
+        let expected = vec![0x4e, 0x52, 0x54, 0x30];
+        let (result, snapshot) = capture_request(
+            mk_response(StatusCode::OK, expected.clone(), Some(APPLICATION_NORITO)),
+            || client.get_debug_witness_norito(),
+        );
+
+        assert_eq!(
+            result.expect("mocked witness bytes should return"),
+            expected
+        );
+        assert_request(&snapshot, &HttpMethod::GET, "/v1/debug/witness");
+        assert_single_accept_header(&snapshot, APPLICATION_NORITO);
+        assert_operator_signature_headers(&snapshot);
+        assert_no_account_signature_headers(&snapshot);
+    }
+    #[test]
+    fn debug_witness_norito_non_ok_response_does_not_fallback() {
+        let client = client_with_base_url(base_url());
+        let (result, snapshot) = capture_request(
+            mk_response(
+                StatusCode::NOT_FOUND,
+                b"witness unavailable".to_vec(),
+                Some("text/plain"),
+            ),
+            || client.get_debug_witness_norito(),
+        );
+
+        let error = result.expect_err("mocked non-OK witness response must fail");
+        assert!(
+            error.to_string().contains("404"),
+            "unexpected witness error: {error:#}"
+        );
+        assert_request(&snapshot, &HttpMethod::GET, "/v1/debug/witness");
+        assert_single_accept_header(&snapshot, APPLICATION_NORITO);
+        assert_operator_signature_headers(&snapshot);
+        assert_no_account_signature_headers(&snapshot);
     }
     #[test]
     fn sumeragi_json_endpoints_request_json() {
@@ -35478,6 +35646,9 @@ mod tests {
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
             proof_request_path: "/v1/sccp/proof-requests/{message_id}".to_owned(),
             recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
+            sora_outbound_material_path:
+                "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
+                    .to_owned(),
             registry_limits: SccpRegistryLimits {
                 governed_lanes: 16,
                 live_governed_routes: 64,
@@ -35842,6 +36013,10 @@ mod tests {
         );
         assert_single_accept_header(&snapshot, APPLICATION_NORITO);
         let encoded = norito::json::to_json(&decoded).expect("capabilities JSON");
+        assert!(encoded.contains("sora_outbound_material_path"));
+        assert!(encoded.contains(
+            "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
+        ));
         for retired in ["manifests", "artifacts", "jobs", "solana", "ton_"] {
             assert!(
                 !encoded.contains(retired),

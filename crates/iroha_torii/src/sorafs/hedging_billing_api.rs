@@ -579,10 +579,12 @@ where
                 "hedging_billing_runtime_busy",
             )
         })?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        iroha_core::panic_hook::with_hook_suppressed(operation)
-    })
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || {
+            let _permit = permit;
+            operation()
+        },
+    ))
     .await
     .map_err(|_| runtime_unavailable_response())?
     .map_err(runtime_error_response)
@@ -599,16 +601,16 @@ where
                 "hedging_billing_runtime_busy",
             )
         })?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        iroha_core::panic_hook::with_hook_suppressed(|| {
+    crate::panic_recovery::join_recoverable(crate::panic_recovery::spawn_blocking_recoverable(
+        move || {
+            let _permit = permit;
             let bytes = norito::to_bytes(&value).map_err(|_| ())?;
             if bytes.len() > max_bytes {
                 return Err(());
             }
             Ok(bytes)
-        })
-    })
+        },
+    ))
     .await
     .map_err(|_| runtime_unavailable_response())?
     .map_err(|()| runtime_unavailable_response())

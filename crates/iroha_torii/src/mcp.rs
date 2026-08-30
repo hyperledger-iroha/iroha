@@ -510,8 +510,27 @@ impl ToolSpec {
         );
         obj.insert("outputSchema".into(), default_tool_output_schema());
         obj.insert("annotations".into(), tool_annotations(self));
+        if let Some(route_auth) = tool_route_auth_metadata(self) {
+            let mut meta = Map::new();
+            meta.insert("iroha/routeAuth".into(), route_auth);
+            obj.insert("_meta".into(), Value::Object(meta));
+        }
         Value::Object(obj)
     }
+}
+
+fn tool_route_auth_metadata(tool: &ToolSpec) -> Option<Value> {
+    let descriptor = catalog_descriptor_for_method_path(
+        CATALOG_PROJECTION_GROUPS,
+        &tool.method,
+        tool.path_template.as_str(),
+    )?;
+    Some(norito::json!({
+        "schemaVersion": (descriptor.auth_metadata_schema_version()),
+        "stableRouteId": (descriptor.stable_route_id()),
+        "authentication": (descriptor.authentication().as_str()),
+        "admission": (descriptor.admission().as_str())
+    }))
 }
 fn tool_annotations(tool: &ToolSpec) -> Value {
     let read_only = match tool.effect {
@@ -3647,6 +3666,7 @@ fn build_input_schema(
     let mut required = Vec::new();
     let mut has_request_body = false;
     let mut request_body_required = false;
+    let mut content_type_schema = string_schema();
     if !path_props.is_empty() {
         let mut path_schema = Map::new();
         path_schema.insert("type".into(), Value::String("object".to_owned()));
@@ -3703,8 +3723,17 @@ fn build_input_schema(
                 "description": "Base64-encoded request body payload for binary formats."
             }),
         );
+        let media_types = request_body_media_types(spec, request_body);
+        if let [media_type] = media_types.as_slice() {
+            content_type_schema = norito::json!({
+                "type": "string",
+                "const": (media_type),
+                "default": (media_type),
+                "description": "The sole media type accepted by this route. Omission uses this value."
+            });
+        }
     }
-    properties.insert("content_type".into(), string_schema());
+    properties.insert("content_type".into(), content_type_schema);
     properties.insert("accept".into(), string_schema());
     properties.insert(
         "project".into(),
@@ -3742,6 +3771,16 @@ fn build_input_schema(
         }
     }
     Value::Object(schema)
+}
+fn request_body_media_types(spec: &Value, request_body: &Value) -> Vec<String> {
+    let request_body = deref_openapi_value(spec, request_body);
+    let Some(content) = request_body.get("content").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let mut media_types: Vec<_> = content.keys().cloned().collect();
+    media_types.sort();
+    media_types.dedup();
+    media_types
 }
 fn build_request_body_schema(spec: &Value, request_body: &Value) -> Option<Value> {
     let request_body = deref_openapi_value(spec, request_body);
@@ -4647,7 +4686,7 @@ fn should_skip_operation(
     if operation_uses_streaming_transport(spec, operation) {
         return true;
     }
-    if path.starts_with("/openapi") {
+    if path == "/openapi.json" {
         return true;
     }
     if !expose_operator_routes {
@@ -4694,7 +4733,14 @@ async fn dispatch_openapi_tool(
     validate_governance_openapi_dispatch(tool, arguments)?;
     let route = fill_path_template(&tool.path_template, arguments.get("path"))?;
     let route = append_query(route, arguments.get("query"))?;
-    let (body, content_type) = build_request_body(arguments)?;
+    let default_content_type = tool
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("content_type"))
+        .and_then(|schema| schema.get("const"))
+        .and_then(Value::as_str);
+    let (body, content_type) = build_request_body(arguments, default_content_type)?;
     let accept = arguments.get("accept").and_then(Value::as_str);
     let structured = dispatch_route_borrowed(
         app,
@@ -8304,7 +8350,10 @@ fn dispatched_remote_ip(inbound_headers: &HeaderMap) -> Option<IpAddr> {
 fn dispatched_connect_addr(remote_ip: Option<IpAddr>) -> SocketAddr {
     SocketAddr::new(remote_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), 0)
 }
-fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>), String> {
+fn build_request_body<'a>(
+    arguments: &'a Map,
+    default_content_type: Option<&'a str>,
+) -> Result<(Vec<u8>, Option<&'a str>), String> {
     if arguments.contains_key("body") && arguments.contains_key("body_base64") {
         return Err("`body` and `body_base64` are mutually exclusive".to_owned());
     }
@@ -8321,11 +8370,11 @@ fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>), String
                     .ok_or_else(|| "`content_type` must be a string".to_owned())
             })
             .transpose()?
+            .or(default_content_type)
             .or(Some(crate::utils::NORITO_MIME_TYPE));
         return Ok((bytes, content_type));
     }
     if let Some(body_value) = arguments.get("body") {
-        let bytes = encode_mcp_json_body(body_value, "encode body")?;
         let content_type = arguments
             .get("content_type")
             .map(|value| {
@@ -8334,10 +8383,29 @@ fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>), String
                     .ok_or_else(|| "`content_type` must be a string".to_owned())
             })
             .transpose()?
+            .or(default_content_type)
             .or(Some("application/json"));
+        let bytes = if content_type.is_some_and(is_raw_text_request_media_type) {
+            body_value
+                .as_str()
+                .ok_or_else(|| "text or XML `body` must be a string".to_owned())?
+                .as_bytes()
+                .to_vec()
+        } else {
+            encode_mcp_json_body(body_value, "encode body")?
+        };
         return Ok((bytes, content_type));
     }
     Ok((Vec::new(), None))
+}
+fn is_raw_text_request_media_type(content_type: &str) -> bool {
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+    essence == "application/xml" || essence == "text/xml" || essence.starts_with("text/")
 }
 fn fill_path_template(path_template: &str, path_args: Option<&Value>) -> Result<String, String> {
     let empty_args = Map::new();

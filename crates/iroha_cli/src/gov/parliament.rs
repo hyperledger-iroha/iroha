@@ -28,9 +28,8 @@ use iroha_data_model::isi::governance::{
     ParliamentFinalizeOpenedBallotV1, ParliamentLifecycleTransitionV1,
     ParliamentTleFinalReleaseSignatureV1, SubmitParliamentLifecycleTransitionV1,
 };
+use iroha_torii_shared::parliament_api::PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1;
 use url::{Host, Url};
-
-const MAX_RELEASE_PEERS_V1: usize = 31;
 
 fn parse_governance_attempt_id(input: &str) -> Result<GovernanceAttemptId, String> {
     let id = input.parse::<GovernanceAttemptId>().map_err(|_| {
@@ -341,9 +340,9 @@ pub struct FinalizeOpenedBallotArgs {
 
 impl Run for FinalizeOpenedBallotArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        if self.peer_urls.len() > MAX_RELEASE_PEERS_V1 {
+        if self.peer_urls.len() > PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1 {
             bail!(
-                "Parliament TLE release coordinator accepts at most {MAX_RELEASE_PEERS_V1} peers"
+                "Parliament TLE release coordinator accepts at most {PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1} peers"
             );
         }
         let mut unique_peers = BTreeMap::new();

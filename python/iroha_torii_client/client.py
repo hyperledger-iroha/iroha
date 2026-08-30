@@ -768,7 +768,7 @@ __all__ = [
     "GovernanceContractEmergencyHold",
     "GovernanceContractLifecycle",
     "GovernanceContractResponse",
-    "BallotSubmitResult",
+    "BallotDraftResult",
     "ProtectedNamespacesApplyResult",
     "ProtectedNamespacesStatus",
     "PeerInfo",
@@ -5384,12 +5384,10 @@ class GovernanceContractResponse:
 
 
 @dataclass(frozen=True)
-class BallotSubmitResult:
-    """Response to ``/v1/gov/ballots/*`` submissions."""
+class BallotDraftResult:
+    """Successful unsigned transaction draft from ``/v1/gov/ballots/*``."""
 
-    ok: bool
-    accepted: bool
-    reason: Optional[str]
+    drafted: bool
     tx_instructions: List[TransactionInstruction]
 
 
@@ -9600,7 +9598,7 @@ class _SumeragiDiagnosticsParser:
 
 _ToriiClientGovernanceBallotMixin: type[Any] = create_governance_ballot_client_mixin(
     canonical_auth_type=ToriiCanonicalRequestAuth,
-    ballot_submit_result_type=BallotSubmitResult,
+    ballot_draft_result_type=BallotDraftResult,
     offline_hash_literal=_offline_hash_literal,
     canonical_quantity=_canonical_quantity,
 )
@@ -17664,6 +17662,14 @@ class ToriiClient(
         return result
 
     @staticmethod
+    def _require_wire_u64(value: Any, context: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RuntimeError(f"{context} must be an unsigned 64-bit JSON integer")
+        if value < 0 or value > (1 << 64) - 1:
+            raise RuntimeError(f"{context} must be an unsigned 64-bit JSON integer")
+        return value
+
+    @staticmethod
     def _quantity(value: Any, context: str) -> str:
         return _canonical_quantity(value, context)
 
@@ -18791,7 +18797,7 @@ class ToriiClient(
             ),
             context=context,
         )
-        version = ToriiClient._coerce_unsigned(
+        version = ToriiClient._require_wire_u64(
             record.get("version"), f"{context}.version"
         )
         if version != 1:
@@ -18810,7 +18816,7 @@ class ToriiClient(
                 value, context=f"{context}.{field}", expected_length=64
             )
 
-        revision = ToriiClient._coerce_unsigned(
+        revision = ToriiClient._require_wire_u64(
             record.get("revision"), f"{context}.revision"
         )
         if revision == 0:
@@ -18888,10 +18894,10 @@ class ToriiClient(
             ),
             context=context,
         )
-        imposed_at_height = ToriiClient._coerce_unsigned(
+        imposed_at_height = ToriiClient._require_wire_u64(
             record.get("imposed_at_height"), f"{context}.imposed_at_height"
         )
-        expires_at_height = ToriiClient._coerce_unsigned(
+        expires_at_height = ToriiClient._require_wire_u64(
             record.get("expires_at_height"), f"{context}.expires_at_height"
         )
         if imposed_at_height == 0:

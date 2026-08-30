@@ -23,6 +23,10 @@ use iroha_crypto::{
     },
     tle::{TleError, TleMasterPublicKey, TleReleaseIdentityV1},
 };
+pub use iroha_data_model::governance::types::{
+    PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1 as TIMED_OVN_BALLOT_RECORD_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1 as TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
+};
 use iroha_data_model::{
     governance::types::{PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1, TleKeySessionId},
     parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1,
@@ -40,10 +44,6 @@ use crate::tle_release::{
 
 /// Fixed version of the public timed-OVN evidence format.
 pub const TIMED_OVN_EVIDENCE_VERSION_V1: u16 = 1;
-/// Exact canonical byte length of one timed-OVN registration record.
-pub const TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: usize = 3_624;
-/// Exact canonical byte length of one timed-OVN masked-ballot record.
-pub const TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
 
 /// Derive the canonical fixed-suite parameter digest for every timed-OVN v1 attempt.
 ///

@@ -214,10 +214,14 @@ impl StandardToriiHarness {
         let kura = Kura::blank_kura_for_testing();
         let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
         seed_peer(&mut world, local_peer_id.clone());
-        let state = Arc::new(State::new_for_testing(
+        let chain_id = cfg.common.chain.clone();
+        let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             world,
             kura.clone(),
             LiveQueryStore::start_test(),
+            chain_id,
+            network_id,
         ));
         Self::from_state(cfg, &kura, state)
     }
@@ -234,8 +238,8 @@ impl StandardToriiHarness {
         ));
         let harness = ToriiHarness::new(
             cfg,
-            ChainId::from("test-chain"),
-            iroha_torii::test_utils::signed_query_network_id(),
+            state.chain_id_ref().clone(),
+            *state.network_id_ref(),
             kura,
             &state,
             &queue,

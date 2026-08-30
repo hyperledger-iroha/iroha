@@ -309,7 +309,6 @@ fn governance_dag_readback_cannot_reintroduce_path_based_file_reads() {
 #[test]
 fn sorafs_bounded_file_readbacks_stay_on_heavy_workers() {
     assert_eq!(MAX_LOCAL_MANIFEST_RESPONSE_BYTES, 16 * 1024 * 1024);
-    assert_eq!(MAX_STORAGE_FETCH_RESPONSE_BYTES, 8 * 1024 * 1024);
     assert_eq!(MAX_CAR_RANGE_PAYLOAD_BYTES, 8 * 1024 * 1024);
     assert_eq!(MAX_CAR_RANGE_RESPONSE_BYTES, 16 * 1024 * 1024);
     let source = include_str!("../api.rs");
@@ -333,11 +332,6 @@ fn sorafs_bounded_file_readbacks_stay_on_heavy_workers() {
             "pub(crate) async fn handle_get_sorafs_site_manifest(",
             "pub(crate) async fn handle_get_sorafs_site_root(",
             ".load_manifest_bytes()",
-        ),
-        (
-            "pub(crate) async fn handle_post_sorafs_storage_fetch(",
-            "fn required_canonical_stream_header(",
-            ".read_payload_range(",
         ),
         (
             "pub(crate) async fn handle_get_sorafs_storage_car_range(",

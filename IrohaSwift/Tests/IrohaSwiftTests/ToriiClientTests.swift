@@ -531,6 +531,38 @@ final class ToriiClientTests: XCTestCase {
         }
     }
 
+    private func assertCanonicalDataspaceReadRequest(
+        _ request: URLRequest,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let url = try XCTUnwrap(request.url, file: file, line: line)
+        XCTAssertEqual(request.httpMethod, "GET", file: file, line: line)
+        let expectedHeaders = try ToriiCanonicalRequest.buildHeaders(
+            method: "GET",
+            url: url,
+            accountId: authority,
+            privateKey: canonicalSigningSeed,
+            networkId: TestNetworkIds.canonical,
+            timestampMs: 4_102_444_801_000,
+            nonce: "canonical-read-test"
+        )
+        for header in [
+            ToriiCanonicalRequest.headerAccount,
+            ToriiCanonicalRequest.headerSignature,
+            ToriiCanonicalRequest.headerTimestampMs,
+            ToriiCanonicalRequest.headerNonce,
+        ] {
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: header),
+                expectedHeaders[header],
+                "canonical header \(header) must bind the final account-read URL",
+                file: file,
+                line: line
+            )
+        }
+    }
+
     private func expectCanonicalEventRequest(queryItems: [URLQueryItem]) {
         StubURLProtocol.handler = { request in
             try self.assertCanonicalEventRequest(request, queryItems: queryItems)
@@ -558,7 +590,8 @@ final class ToriiClientTests: XCTestCase {
     private func makeClient(
         baseURL: URL = URL(string: "https://example.test")!,
         defaultHeaders: [String: String] = [:],
-        operatorSigningContext: ToriiOperatorSigningContext? = ToriiClientTests.operatorSigningContext
+        operatorSigningContext: ToriiOperatorSigningContext? = ToriiClientTests.operatorSigningContext,
+        includeCanonicalReadAuth: Bool = true
     ) -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
@@ -568,7 +601,7 @@ final class ToriiClientTests: XCTestCase {
             session: session,
             defaultHeaders: defaultHeaders,
             localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
-            canonicalRequestAuth: canonicalReadAuth,
+            canonicalRequestAuth: includeCanonicalReadAuth ? canonicalReadAuth : nil,
             operatorSigningContext: operatorSigningContext
         )
     }
@@ -1105,6 +1138,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsAsync() async throws {
         StubURLProtocol.handler = { request in
+            try self.assertCanonicalDataspaceReadRequest(request)
             self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
@@ -7889,6 +7923,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetTransactionsEncodesAccountLiteral() async throws {
         StubURLProtocol.handler = { request in
+            try self.assertCanonicalDataspaceReadRequest(request)
             self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/transactions")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
@@ -7899,6 +7934,41 @@ final class ToriiClientTests: XCTestCase {
 
         let transactions = try await makeClient().getTransactions(accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
         XCTAssertEqual(transactions.total, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAccountDataspaceReadsRemainAnonymousWithoutCanonicalSigner() async throws {
+        let accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        var paths: [String] = []
+        StubURLProtocol.handler = { request in
+            paths.append(try XCTUnwrap(request.url?.path))
+            for header in [
+                ToriiCanonicalRequest.headerAccount,
+                ToriiCanonicalRequest.headerSignature,
+                ToriiCanonicalRequest.headerTimestampMs,
+                ToriiCanonicalRequest.headerNonce,
+            ] {
+                XCTAssertNil(request.value(forHTTPHeaderField: header))
+            }
+            let body = request.url?.path.hasSuffix("/assets") == true
+                ? "[]"
+                : #"{"items":[],"total":0}"#
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+
+        let client = makeClient(includeCanonicalReadAuth: false)
+        _ = try await client.getAssets(accountId: accountId)
+        _ = try await client.getTransactions(accountId: accountId)
+
+        XCTAssertEqual(paths.count, 2)
+        XCTAssertTrue(paths[0].hasSuffix("/assets"))
+        XCTAssertTrue(paths[1].hasSuffix("/transactions"))
     }
 
     @available(iOS 15.0, macOS 12.0, *)

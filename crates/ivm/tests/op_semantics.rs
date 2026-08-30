@@ -25,7 +25,7 @@ fn add_sub_xor_wide() {
     );
     halt32(&mut code);
     let mut vm = IVM::new(1_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(2, 10);
     vm.registers.set(3, 20);
     vm.registers.set(5, 7);
@@ -50,7 +50,7 @@ fn beq_wide_offset() {
     );
     halt32(&mut code);
     let mut vm = IVM::new(1_000);
-    vm.memory.load_code(&code);
+    vm.memory.load_code(&code).unwrap();
     vm.registers.set(1, 42);
     vm.registers.set(2, 42);
     vm.registers.set(8, 0xAA);

@@ -8167,8 +8167,12 @@ redistributable schemas, and official trust/revocation bundles.
 - Completed 2026-06-04: added a deterministic durable ISO audit index at
   `store_dir/audit/messages.index.json`. The index is sorted by message id,
   carries `index_sha256`, links each entry to the corresponding message file and
-  `record_sha256`, and is regenerated from only valid records on reload so
-  forged persisted files are excluded from the audit manifest.
+  `record_sha256`, is atomically written under a 32 MiB aggregate cap, and uses
+  an exact versioned root/row schema. Reload now stops on every malformed,
+  legacy, tampered, filename-mismatched, or conflicting record instead of
+  silently excluding it and overwriting the evidence. A missing or
+  schema-valid stale local index remains recoverable because it is derived and
+  is regenerated only after the complete V2 record/tombstone store validates.
 - Completed 2026-06-04: exposed the durable ISO audit manifest through Torii at
   `GET /v1/iso20022/audit/messages`, backed by the same deterministic index
   builder used for `store_dir/audit/messages.index.json`, and added endpoint

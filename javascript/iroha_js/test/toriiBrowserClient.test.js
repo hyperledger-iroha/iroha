@@ -385,6 +385,9 @@ test("ToriiBrowserClient signs every scoped Explorer and contract read over its 
     if (path === "/v1/explorer/rwas/rwa-id") {
       return jsonResponse({ quantity: "0", held_quantity: "0" });
     }
+    if (path.endsWith("/assets") && path.startsWith("/v1/accounts/")) {
+      return jsonResponse({ items: [], total: 0 });
+    }
     if (
       [
         "/v1/explorer/accounts",
@@ -460,6 +463,10 @@ test("ToriiBrowserClient signs every scoped Explorer and contract read over its 
     () => client.listLatestExplorerInstructions({ limit: 1, kind: "transfer" }),
     () => client.getExplorerInstruction("transaction-hash", 0, { addressFormat: "i105" }),
     () => client.getExplorerInstructionContractView("transaction-hash", 0),
+    () => client.getAccount(FIXTURE_ALICE_ID),
+    () => client.listAccountAssets(FIXTURE_ALICE_ID),
+    () => client.listAccountPermissions(FIXTURE_ALICE_ID),
+    () => client.listAccountHistory(FIXTURE_ALICE_ID),
     () => client.listContractActivity({ limit: 1, contractAlias: "demo::module" }),
     () => client.listContractEvents({ limit: 1, eventKind: "filled" }),
     async () => {
@@ -491,18 +498,25 @@ test("ToriiBrowserClient leaves optional dataspace reads anonymous without a sig
       if (new URL(url).pathname.endsWith("/events/sse")) {
         return sseResponse([]);
       }
+      if (new URL(url).pathname.endsWith("/assets")) {
+        return jsonResponse({ items: [], total: 0 });
+      }
       return jsonResponse({});
     },
   });
   await client.getExplorerDomain("wonderland");
   await client.getExplorerMetrics();
+  await client.getAccount(FIXTURE_ALICE_ID);
+  await client.listAccountAssets(FIXTURE_ALICE_ID);
+  await client.listAccountPermissions(FIXTURE_ALICE_ID);
+  await client.listAccountHistory(FIXTURE_ALICE_ID);
   await client.listContractEvents();
   const aborted = new AbortController();
   aborted.abort();
   for await (const _event of client.streamContractEvents({ signal: aborted.signal })) {
     // No frames are expected.
   }
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 8);
   for (const { init } of calls) {
     assert.equal(init.credentials, "omit");
     assert.equal(init.headers["X-Iroha-Account"], undefined);

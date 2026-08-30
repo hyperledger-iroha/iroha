@@ -1820,6 +1820,8 @@ async fn handler_pipeline_transaction_details(
 }
 async fn handler_trigger_completions(
     State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     AxQuery(query): AxQuery<TriggerCompletionQuery>,
 ) -> Result<Response, Error> {
@@ -1827,8 +1829,30 @@ async fn handler_trigger_completions(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
+    check_operator_rate_limit(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/triggers/completed",
+        true,
+    )
+    .await?;
+    let admission = acquire_query_admission(&app, true).await?;
+    let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
+        // Keep the admission permits inside the physical task. Dropping the
+        // HTTP future must not free capacity while Kura reconstruction still
+        // consumes CPU and memory.
+        let result = trigger_completion_query_response(&app, &query);
+        (result, admission)
+    });
+    let (result, _admission) = crate::panic_recovery::join_recoverable(worker)
+        .await
+        .map_err(|error| Error::AppServiceUnavailable {
+            code: "trigger_completion_worker_failed",
+            message: error.to_string(),
+        })?;
     Ok(crate::utils::respond_with_format(
-        trigger_completion_query_response(&app, &query)?,
+        result?,
         format,
     ))
 }

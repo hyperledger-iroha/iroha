@@ -85,6 +85,18 @@ fn public_finding_requires_authority_bound_two_thirds_endorsement() {
             .public_finding_deadline_height(),
         Some(32)
     );
+    let mut public_vote = state.clone();
+    public_vote
+        .bodies
+        .get_mut(&body_id)
+        .expect("public body")
+        .instance
+        .status = BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Vote);
+    assert_eq!(
+        public_vote.validate(),
+        Err(ParliamentReducerErrorV1::DecisionModeMismatch),
+        "a public-finding body has no private Vote phase"
+    );
 
     let mut expired = state.clone();
     assert_eq!(
@@ -679,6 +691,47 @@ fn timed_ovn_checkpoint_prechecks_reject_phase_and_height_before_replay() {
         Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
             ParliamentReducerEntityV1::BallotAttempt
         ))
+    );
+}
+
+#[test]
+fn restore_rejects_body_and_active_ballot_lifecycle_divergence() {
+    let fixture = opened_policy_ballot(3, 3);
+    fixture
+        .state
+        .validate()
+        .expect("opened ballot fixture is canonical");
+
+    let mut nonballoting_body = fixture.state.clone();
+    nonballoting_body
+        .bodies
+        .get_mut(&fixture.body_id)
+        .expect("fixture body")
+        .instance
+        .status = BodyInstanceStatusV1::RosterSealed;
+    assert!(matches!(
+        nonballoting_body.validate(),
+        Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+            ParliamentReducerEntityV1::BodyInstance
+        ))
+    ));
+
+    let mut finalized = fixture;
+    assert_eq!(
+        finalize_policy(&mut finalized, 2, 1, 0),
+        ParliamentAggregateOutcomeV1::Approved
+    );
+    finalized
+        .state
+        .bodies
+        .get_mut(&finalized.body_id)
+        .expect("fixture body")
+        .instance
+        .status = BodyInstanceStatusV1::Rejected;
+    assert_eq!(
+        finalized.state.validate(),
+        Err(ParliamentReducerErrorV1::CertificateBindingMismatch),
+        "the body terminal status must agree with the finalized aggregate outcome"
     );
 }
 

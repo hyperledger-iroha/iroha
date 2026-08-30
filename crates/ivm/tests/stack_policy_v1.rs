@@ -108,8 +108,12 @@ fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
         );
     }
     assert!(
-        IVM_SOURCE.contains("Memory::new_with_stack_limit(0, config.stack_limit_for_gas())"),
-        "the production VM constructor must derive memory geometry from IvmConfig"
+        IVM_SOURCE.contains("Memory::new_with_stack_limit(config.stack_limit_for_gas())"),
+        "the production VM constructor must use the fallible one-argument memory constructor"
+    );
+    assert!(
+        IVM_SOURCE.contains("IvmConfig derives a valid ABI V1 stack limit"),
+        "the production VM constructor must document why the derived stack limit is infallible"
     );
     let node_configuration_sources = [
         include_str!("../../iroha_config/src/parameters/actual.rs"),

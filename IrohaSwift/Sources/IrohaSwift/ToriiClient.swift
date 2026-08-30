@@ -18370,25 +18370,41 @@ public struct ToriiGovernanceProposalResponse: Decodable, Sendable {
 }
 
 public struct ToriiGovernanceBallotResponse: Decodable, Sendable {
-    public let ok: Bool
-    public let accepted: Bool
-    public let reason: String?
+    public let drafted: Bool
     public let txInstructions: [ToriiGovernanceInstruction]
 
-    private enum CodingKeys: String, CodingKey {
-        case ok
-        case accepted
-        case reason
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case drafted
         case txInstructions = "tx_instructions"
     }
 
-    public init(ok: Bool,
-                accepted: Bool,
-                reason: String?,
-                txInstructions: [ToriiGovernanceInstruction]) {
-        self.ok = ok
-        self.accepted = accepted
-        self.reason = reason
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "governance ballot draft response"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let drafted = try container.decode(Bool.self, forKey: .drafted)
+        guard drafted else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .drafted,
+                in: container,
+                debugDescription: "drafted must be exactly true"
+            )
+        }
+        let txInstructions = try container.decode(
+            [ToriiGovernanceInstruction].self,
+            forKey: .txInstructions
+        )
+        guard txInstructions.count == 1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .txInstructions,
+                in: container,
+                debugDescription: "governance ballot draft must contain exactly one instruction"
+            )
+        }
+        self.drafted = true
         self.txInstructions = txInstructions
     }
 }
@@ -23222,8 +23238,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             let exactScope = try requireToriiExactNonEmptyQueryValue(scope, field: "scope")
             items.append(URLQueryItem(name: "scope", value: exactScope))
         }
-        let request = try makeRequest(path: "/v1/accounts/\(encodedAccountId)/assets",
-                                      queryItems: items)
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/accounts/\(encodedAccountId)/assets",
+            queryItems: items
+        )
         let data = try await data(for: request)
         return try decodeAssetBalances(from: data)
     }
@@ -23703,7 +23721,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
             items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
-        let request = try makeRequest(path: "/v1/accounts/\(encodedAccountId)/transactions", queryItems: items)
+        let request = try makeDataspaceVisibleRequest(
+            path: "/v1/accounts/\(encodedAccountId)/transactions",
+            queryItems: items
+        )
         let data = try await data(for: request)
         return try decodeTransactionEnvelope(from: data)
     }

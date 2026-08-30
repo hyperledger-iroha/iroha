@@ -776,7 +776,7 @@ impl ParliamentAttemptStateV1 {
             candidate_snapshot,
             &bodies,
         );
-        if plan.assignment_cap == 0 || plan.bodies.rosters.len() != bodies.len() {
+        if plan.assignment_cap == 0 || plan.rosters.len() != bodies.len() {
             return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
         }
 
@@ -794,12 +794,11 @@ impl ParliamentAttemptStateV1 {
                 .expect("election id came from this map");
             let request = election.attempt.request;
             let roster = plan
-                .bodies
                 .rosters
                 .get(&request.body)
                 .ok_or(ParliamentReducerErrorV1::InvalidAssignmentPlan)?;
             if roster.body != request.body
-                || roster.epoch != pulse_height
+                || roster.pulse_height != pulse_height
                 || roster.candidate_count != request.candidate_count
                 || roster.members.is_empty()
                 || u32::try_from(roster.members.len()).ok()

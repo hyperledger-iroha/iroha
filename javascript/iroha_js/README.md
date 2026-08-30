@@ -2098,18 +2098,11 @@ console.log(
   `admitted transaction=${admission.tx_hash_hex} manifest=${admission.manifest_digest_hex}`,
 );
 
-// Local storage diagnostics use a separately provisioned, exact-network
+// Local storage-state diagnostics use a separately provisioned, exact-network
 // OperatorSigningContext; do not reuse the transaction key implicitly.
 const operatorTorii = new ToriiClient(toriiUrl, {
   operatorSigningContext: runtimeOperatorSigningContext,
 });
-const range = await operatorTorii.fetchSorafsPayloadRange({
-  manifestIdHex: admission.manifest_digest_hex,
-  offset: 0,
-  length: 4096,
-});
-const firstChunk = Buffer.from(range.data_b64, "base64");
-
 const storageState = await operatorTorii.getSorafsStorageState();
 console.log(`pin queue depth=${storageState.pin_queue_depth}`);
 
@@ -2243,13 +2236,12 @@ console.log("scoreboard saved:", proveResult.scoreboardPath);
 console.log("proof summary saved:", proveResult.proofSummaryPath);
 ```
 
-`fetchSorafsPayloadRange` is a legacy local diagnostic, not a public content
-transport. It and `getSorafsStorageState` fail before dispatch unless the
-client has an immutable exact-network `OperatorSigningContext`. Remote
-cache-miss hydration no longer falls back to this unsigned JSON fetch; it
-requires a request-bound CAR/chunk stream capability. Without one, the cache
-miss returns a capability-required error while already-local content remains
-available.
+`getSorafsStorageState` fails before dispatch unless the client has an immutable
+exact-network `OperatorSigningContext`. Payload bytes are available only through
+request-bound CAR/chunk stream capabilities; Torii has no JSON payload-range
+diagnostic or unsigned remote-hydration fallback. Without a valid capability, a
+cache miss returns a capability-required error while already-local content
+remains available.
 
 `fetchDaPayloadViaGateway` automatically derives the chunker handle from the manifest bundle when you omit `chunkerHandle`, and the exported `deriveDaChunkerHandle` helper surfaces the same logic for bespoke tooling. `generateDaProofSummary` reuses the Norito + PoR logic from the CLI via the native binding so proofs remain identical across SDKs.
 

@@ -1,9 +1,8 @@
 //! Canonical governance and SORA Parliament data model.
 //!
 //! The module exposes closed V1 identifiers, lifecycle states, aggregate
-//! decision arithmetic, certificate bindings, and governance-domain events.
-#[cfg(feature = "governance")]
-pub mod events;
+//! decision arithmetic, and certificate bindings. Ledger events live in the
+//! canonical [`crate::events::data::governance`] module.
 /// Canonical governance and Parliament wire types.
 pub mod types {
     pub use crate::parliament_types::*;

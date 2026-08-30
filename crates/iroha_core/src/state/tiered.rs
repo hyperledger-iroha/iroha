@@ -2076,12 +2076,6 @@ impl TieredStateBackend {
             GovernanceSlash,
             world.governance_slashes
         );
-        collect_map!(TieredSegment::Council, Council, world.council);
-        collect_map!(
-            TieredSegment::ParliamentBodies,
-            ParliamentBodies,
-            world.parliament_bodies
-        );
         collect_map!(
             TieredSegment::ParliamentAttempts,
             ParliamentAttempt,
@@ -2634,10 +2628,7 @@ mod measured_bytes_impls {
             FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgSnapshotV1,
             GlobalThresholdBeaconPulseLinkV1,
         },
-        governance::{
-            parliament::ParliamentAttemptStateV1, state::ParliamentTerm,
-            timed_ovn::TimedOvnLifecycleStateV1,
-        },
+        governance::{parliament::ParliamentAttemptStateV1, timed_ovn::TimedOvnLifecycleStateV1},
         privacy_state::{
             PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantV1,
             PrivacyRootHeadRecordV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
@@ -2690,13 +2681,12 @@ mod measured_bytes_impls {
         domain::{Domain, DomainId},
         events::EventFilterBox,
         governance::types::{
-            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
-            ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
-            RuntimeUpgradeProposal, SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
-            TleKeySessionId, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
+            ProposalKind, RuntimeUpgradeProposal, SccpRouteGovernanceProposal,
+            SorafsProviderGovernanceProposal, TleKeySessionId,
+            ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         ipfs::IpfsPath,
-        isi::governance::CouncilDerivationKind,
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -2789,7 +2779,6 @@ mod measured_bytes_impls {
         ConfidentialTreeProfile,
         ContractAbiHash,
         ContractCodeHash,
-        CouncilDerivationKind,
         EntryPointKind,
         GovernanceReferendumMode,
         GovernanceReferendumStatus,
@@ -3950,26 +3939,6 @@ mod measured_bytes_impls {
             total
         }
     }
-    impl MeasuredBytes for ParliamentRoster {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ParliamentRoster>();
-            total = total.saturating_add(self.body.measured_bytes_extra());
-            total = total.saturating_add(self.epoch.measured_bytes_extra());
-            total = total.saturating_add(self.members.measured_bytes_extra());
-            total = total.saturating_add(self.alternates.measured_bytes_extra());
-            total = total.saturating_add(self.candidate_count.measured_bytes_extra());
-            total = total.saturating_add(self.derived_by.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for ParliamentBodies {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ParliamentBodies>();
-            total = total.saturating_add(self.selection_epoch.measured_bytes_extra());
-            total = total.saturating_add(self.rosters.measured_bytes_extra());
-            total
-        }
-    }
     impl MeasuredBytes for ParliamentAttemptStateV1 {
         fn measured_bytes(&self) -> usize {
             size_of::<ParliamentAttemptStateV1>()
@@ -4004,17 +3973,6 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             size_of::<FinalizedGlobalThresholdBeaconPulseV1>()
                 .saturating_add(norito::codec::Encode::encode(self).len())
-        }
-    }
-    impl MeasuredBytes for ParliamentTerm {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ParliamentTerm>();
-            total = total.saturating_add(self.epoch.measured_bytes_extra());
-            total = total.saturating_add(self.members.measured_bytes_extra());
-            total = total.saturating_add(self.alternates.measured_bytes_extra());
-            total = total.saturating_add(self.candidate_count.measured_bytes_extra());
-            total = total.saturating_add(self.derived_by.measured_bytes_extra());
-            total
         }
     }
     impl MeasuredBytes for ProofAttachment {
@@ -4225,8 +4183,6 @@ enum TieredSegment {
     GovernanceReferenda,
     GovernanceLocks,
     GovernanceSlashes,
-    Council,
-    ParliamentBodies,
     ParliamentAttempts,
     TleKeySessions,
     TleKeySessionRosters,
@@ -4304,8 +4260,6 @@ impl TieredSegment {
             TieredSegment::GovernanceReferenda => "governance_referenda",
             TieredSegment::GovernanceLocks => "governance_locks",
             TieredSegment::GovernanceSlashes => "governance_slashes",
-            TieredSegment::Council => "council",
-            TieredSegment::ParliamentBodies => "parliament_bodies",
             TieredSegment::ParliamentAttempts => "parliament_attempts",
             TieredSegment::TleKeySessions => "tle_key_sessions",
             TieredSegment::TleKeySessionRosters => "tle_key_session_rosters",
@@ -4393,8 +4347,6 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "governance_referenda" => TieredSegment::GovernanceReferenda,
             "governance_locks" => TieredSegment::GovernanceLocks,
             "governance_slashes" => TieredSegment::GovernanceSlashes,
-            "council" => TieredSegment::Council,
-            "parliament_bodies" => TieredSegment::ParliamentBodies,
             "parliament_attempts" => TieredSegment::ParliamentAttempts,
             "tle_key_sessions" => TieredSegment::TleKeySessions,
             "tle_key_session_rosters" => TieredSegment::TleKeySessionRosters,
@@ -4615,8 +4567,6 @@ pub(crate) enum TieredKeyHandle {
     GovernanceReferendum(String),
     GovernanceLock(String),
     GovernanceSlash(String),
-    Council(u64),
-    ParliamentBodies(u64),
     ParliamentAttempt(iroha_data_model::governance::types::GovernanceAttemptId),
     TleKeySession(iroha_data_model::governance::types::TleKeySessionId),
     TleKeySessionRoster(iroha_data_model::governance::types::TleKeySessionId),
@@ -4708,8 +4658,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(_) => TieredSegment::GovernanceReferenda,
             TieredKeyHandle::GovernanceLock(_) => TieredSegment::GovernanceLocks,
             TieredKeyHandle::GovernanceSlash(_) => TieredSegment::GovernanceSlashes,
-            TieredKeyHandle::Council(_) => TieredSegment::Council,
-            TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
             TieredKeyHandle::ParliamentAttempt(_) => TieredSegment::ParliamentAttempts,
             TieredKeyHandle::TleKeySession(_) => TieredSegment::TleKeySessions,
             TieredKeyHandle::TleKeySessionRoster(_) => TieredSegment::TleKeySessionRosters,
@@ -4803,8 +4751,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceLock(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentAttempt(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleKeySessionRoster(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4948,8 +4894,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
-            TieredKeyHandle::Council(id) => fetch!(world.council, id),
-            TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
             TieredKeyHandle::TleKeySessionRoster(id) => {
@@ -5099,8 +5043,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
-            TieredKeyHandle::Council(id) => fetch!(world.council, id),
-            TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
             TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
             TieredKeyHandle::TleKeySessionRoster(id) => {
@@ -5302,8 +5244,6 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GovernanceReferendum(id) => write!(f, "gov_referendum:{id}"),
             TieredKeyHandle::GovernanceLock(id) => write!(f, "gov_lock:{id}"),
             TieredKeyHandle::GovernanceSlash(id) => write!(f, "gov_slash:{id}"),
-            TieredKeyHandle::Council(id) => write!(f, "council:{id}"),
-            TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
             TieredKeyHandle::ParliamentAttempt(id) => write!(f, "parliament_attempt:{id}"),
             TieredKeyHandle::TleKeySession(id) => write!(f, "tle_key_session:{id}"),
             TieredKeyHandle::TleKeySessionRoster(id) => {

@@ -23,7 +23,6 @@ sha2 = { version = "0.10.9" }
 sha3_hash = { package = "sha3", version = "0.10.8", default-features = false, features = ["std"] }
 ff = { version = "0.13.1", features = ["derive"] }
 halo2curves = { workspace = true }
-halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
 rayon = "1.11.0"
 num_cpus = "1.17.0"
 # Security: RUSTSEC-2025-0024 requires >=0.5.15
@@ -173,11 +172,6 @@ harness = false
 [[bench]]
 name = "bench_parallel"
 path = "benches/bench_parallel.rs"
-harness = false
-
-[[bench]]
-name = "bench_zk"
-path = "benches/bench_zk.rs"
 harness = false
 
 [[bench]]

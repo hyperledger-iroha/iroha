@@ -34,15 +34,13 @@ mod core_host;
 mod cuda;
 mod decoder;
 mod dev_env;
-pub mod ec;
 pub mod encoding;
 mod error;
-mod execution_proof;
+mod execution_summary;
 pub mod field;
 pub mod field_dispatch;
 pub mod gas;
 mod gpu_manager;
-pub mod halo2;
 pub mod host;
 pub mod instruction;
 pub mod iso20022;
@@ -146,14 +144,11 @@ pub use crate::{
         vector_add_f32, vor_cuda, vxor_cuda,
     },
     decoder::decode,
-    ec::{
-        ec_add, ec_add_truncated, ec_mul, ec_mul_truncated, pairing_check, pairing_check_truncated,
-    },
     error::{
         HostOutputResource, Perm, VMError, VmBudgetSnapshot, VmExecutionContext,
         VmExecutionDiagnostic, VmSourceLocation, VmTrapKind,
     },
-    execution_proof::{EXECUTION_PROOF_VERSION_V1, ExecutionProof},
+    execution_summary::{EXECUTION_SUMMARY_VERSION_V1, ExecutionSummary},
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
     host::IVMHost,
     iso20022::*,
@@ -163,7 +158,7 @@ pub use crate::{
     },
     kotodama::compiler::Compiler as KotodamaCompiler,
     memory::{AccessRange, Memory, WriteLogEntry},
-    pedersen::{pedersen_commit, pedersen_commit_truncated},
+    pedersen::pedersen_commit,
     pointer_abi::{
         PointerType, Tlv, is_type_allowed_for_policy, render_pointer_types_markdown_table,
         validate_tlv_bytes,

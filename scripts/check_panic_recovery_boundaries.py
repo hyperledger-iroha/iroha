@@ -25,6 +25,11 @@ NO_BARE_BLOCKING = (
     "crates/iroha_torii/src/da/taikai.rs",
     "crates/iroha_torii/src/private_settlement.rs",
     "crates/iroha_torii/src/sorafs/api.rs",
+    "crates/iroha_torii/src/sorafs/gateway_compliance_api.rs",
+    "crates/iroha_torii/src/sorafs/hedging_billing_api.rs",
+    "crates/iroha_torii/src/sorafs/orderbook_runtime.rs",
+    "crates/iroha_torii/src/sorafs/por/persistence_randomness.rs",
+    "crates/iroha_torii/src/sorafs/reserve_runtime.rs",
     "crates/iroha_torii/src/zk_attachments.rs",
     "crates/iroha_torii/src/zk_prover.rs",
     "crates/iroha_torii/src/sns.rs",
@@ -55,16 +60,49 @@ REQUIRED_SNIPPETS = {
         "governance_dag_blocking_response",
         "crate::panic_recovery::spawn_blocking_recoverable",
     ),
+    "crates/iroha_torii/src/sorafs/gateway_compliance_api.rs": (
+        "crate::panic_recovery::spawn_blocking_recoverable",
+        "crate::panic_recovery::join_recoverable",
+    ),
+    "crates/iroha_torii/src/sorafs/hedging_billing_api.rs": (
+        "crate::panic_recovery::spawn_blocking_recoverable",
+        "crate::panic_recovery::join_recoverable",
+    ),
+    "crates/iroha_torii/src/sorafs/orderbook_runtime.rs": (
+        "crate::panic_recovery::spawn_blocking_recoverable",
+        "crate::panic_recovery::join_recoverable",
+    ),
+    "crates/iroha_torii/src/sorafs/por/persistence_randomness.rs": (
+        "crate::panic_recovery::spawn_blocking_recoverable",
+        "crate::panic_recovery::join_recoverable",
+    ),
+    "crates/iroha_torii/src/sorafs/reserve_runtime.rs": (
+        "crate::panic_recovery::spawn_blocking_recoverable",
+        "crate::panic_recovery::join_recoverable",
+    ),
     "crates/iroha_core/src/executor.rs": (
         "crate::panic_hook::catch_unwind_suppressed",
     ),
     "crates/iroha_core/src/zk.rs": (
         "let pk = crate::panic_hook::catch_unwind_suppressed",
     ),
+    "crates/iroha_core/src/zk/kagemusha_accumulation.rs": (
+        "crate::panic_hook::catch_unwind_suppressed",
+        "recoverable_native_verifier_panic_suppresses_shutdown_hook_scope",
+    ),
+    "crates/iroha_core/src/zk/kagemusha_recursion_adapter.rs": (
+        "crate::panic_hook::catch_unwind_suppressed",
+    ),
 }
 
 FORBIDDEN_RECOVERY_SNIPPETS = {
     "crates/iroha_core/src/executor.rs": (
+        "std::panic::catch_unwind",
+    ),
+    "crates/iroha_core/src/zk/kagemusha_accumulation.rs": (
+        "std::panic::catch_unwind",
+    ),
+    "crates/iroha_core/src/zk/kagemusha_recursion_adapter.rs": (
         "std::panic::catch_unwind",
     ),
     "crates/iroha_torii/src/privacy_issuance_api.rs": (

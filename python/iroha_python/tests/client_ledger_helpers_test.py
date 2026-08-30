@@ -3840,6 +3840,72 @@ def test_account_permission_listing_accepts_configured_chain_discriminant() -> N
     ]
 
 
+def test_dataspace_visible_account_reads_use_configured_canonical_signer() -> None:
+    account = account_address(0x46)
+    session = FakeSession(
+        [
+            response(200, {"id": account}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+        ]
+    )
+    client = authenticated_query_client(session)
+
+    assert client.find_account(account) == {"id": account}
+    assert client.list_account_assets(account) == {"items": [], "total": 0}
+    assert client.list_account_transactions(account) == {"items": [], "total": 0}
+    assert client.list_account_permissions(account) == {"items": [], "total": 0}
+    assert client.find_account_assets(account) == []
+
+    assert len(session.calls) == 5
+    for call in session.calls:
+        assert call["allow_redirects"] is False
+        headers = call["headers"]
+        assert isinstance(headers, dict)
+        for header in (
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce",
+        ):
+            assert header in headers
+
+
+def test_dataspace_visible_account_reads_remain_anonymous_without_signer() -> None:
+    account = account_address(0x47)
+    session = FakeSession(
+        [
+            response(200, {"id": account}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    assert client.find_account(account) == {"id": account}
+    assert client.list_account_assets(account) == {"items": [], "total": 0}
+    assert client.list_account_transactions(account) == {"items": [], "total": 0}
+    assert client.list_account_permissions(account) == {"items": [], "total": 0}
+    assert client.find_account_assets(account) == []
+
+    assert len(session.calls) == 5
+    for call in session.calls:
+        assert call["allow_redirects"] is True
+        headers = call["headers"]
+        assert isinstance(headers, dict)
+        for header in (
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce",
+        ):
+            assert header not in headers
+
+
 def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None:
     taira_account = account_address(6, 0x0171)
     session = FakeSession([])

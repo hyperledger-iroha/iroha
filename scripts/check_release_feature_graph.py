@@ -9,10 +9,19 @@ import sys
 from pathlib import Path
 
 
-DEFAULT_PACKAGES = ("irohad", "iroha_cli", "iroha_genesis")
+DEFAULT_PACKAGES = (
+    "irohad",
+    "iroha_cli",
+    "iroha_genesis",
+    "iroha_kagami",
+    "ivm",
+)
 FORBIDDEN_FEATURES = (
     'iroha feature "test-fixtures"',
+    'iroha_core feature "iroha-core-tests"',
     'iroha_data_model feature "test-fixtures"',
+    'iroha_p2p feature "test-fixtures"',
+    'iroha_sccp feature "test-fixtures"',
 )
 
 
@@ -43,6 +52,12 @@ def feature_graph(repo: Path, package: str) -> str:
     return completed.stdout
 
 
+def forbidden_features_in_graph(graph: str) -> tuple[str, ...]:
+    """Return development-only feature markers present in a Cargo graph."""
+
+    return tuple(feature for feature in FORBIDDEN_FEATURES if feature in graph)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -57,9 +72,8 @@ def main() -> int:
     failures: list[str] = []
     for package in packages:
         graph = feature_graph(repo, package)
-        for forbidden in FORBIDDEN_FEATURES:
-            if forbidden in graph:
-                failures.append(f"{package}: enabled {forbidden}")
+        for forbidden in forbidden_features_in_graph(graph):
+            failures.append(f"{package}: enabled {forbidden}")
     if failures:
         print("development-only features reached a shipping graph:", file=sys.stderr)
         for failure in failures:

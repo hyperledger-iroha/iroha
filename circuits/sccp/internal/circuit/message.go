@@ -309,15 +309,15 @@ func (c *MessageCircuit) constrainTransfer(api frontend.API) error {
 			assertByte(offset+i, bytes[i])
 		}
 	}
-	assertByte(0, 2) // SccpPayloadV1::Transfer discriminant
+	assertByte(0, profile.TransferPayloadDiscriminant)
 	assertByte(1, 1)
-	assertLE32(2, 0) // SORA domain
+	assertLE32(2, profile.SoraDomain)
 	assertLE32(6, c.cfg.TargetDomain)
 	if err := nonZeroBytes(api, p[18:22]); err != nil { // route revision
 		return err
 	}
-	assertLE32(22, 0) // XOR is native to SORA
-	assertByte(26, 1)
+	assertLE32(22, profile.SoraDomain) // XOR is native to SORA
+	assertByte(26, profile.CanonicalTextCodec)
 	assertLE32(27, 3)
 	for i, b := range []byte("xor") {
 		assertByte(31+i, b)
@@ -325,7 +325,7 @@ func (c *MessageCircuit) constrainTransfer(api frontend.API) error {
 	if err := nonZeroBytes(api, p[34:50]); err != nil { // positive u128 amount
 		return err
 	}
-	assertByte(50, 1) // canonical-text sender
+	assertByte(50, profile.CanonicalTextCodec)
 	senderLength, err := leBytesToVariable(api, p[51:55])
 	if err != nil {
 		return err
@@ -357,24 +357,24 @@ func (c *MessageCircuit) constrainTransfer(api frontend.API) error {
 			conditionalByteEqual(api, selector, p[recipientOffset+1+i], b)
 		}
 		recipient := p[recipientOffset+5 : recipientOffset+5+c.cfg.RecipientLength]
-		if c.cfg.RecipientCodec == 5 {
+		if c.cfg.RecipientCodec == profile.TRONAddress21Codec {
 			conditionalByteEqual(api, selector, recipient[0], 0x41)
 		}
-		if c.cfg.RecipientCodec == 7 {
+		if c.cfg.RecipientCodec == profile.TONAccount36Codec {
 			for i := 0; i < 4; i++ { // TON basechain workchain 0, big endian
 				conditionalByteEqual(api, selector, recipient[i], 0)
 			}
 		}
 		nonZeroRecipient := recipient
-		if c.cfg.RecipientCodec == 5 {
+		if c.cfg.RecipientCodec == profile.TRONAddress21Codec {
 			nonZeroRecipient = recipient[1:]
-		} else if c.cfg.RecipientCodec == 7 {
+		} else if c.cfg.RecipientCodec == profile.TONAccount36Codec {
 			nonZeroRecipient = recipient[4:]
 		}
 		if err := conditionalNonZeroBytes(api, selector, nonZeroRecipient); err != nil {
 			return err
 		}
-		conditionalByteEqual(api, selector, p[routeOffset], 1)
+		conditionalByteEqual(api, selector, p[routeOffset], profile.CanonicalTextCodec)
 		var routeLength [4]byte
 		binary.LittleEndian.PutUint32(routeLength[:], uint32(len(c.cfg.RouteID)))
 		for i, b := range routeLength {
@@ -444,7 +444,7 @@ func (c *MessageCircuit) constrainMerkleInclusion(api frontend.API) error {
 		}
 	}
 	commitment := []uints.U8{
-		uints.NewU8(1), uints.NewU8(5), uints.NewU8(profile.SoraNetworkTag), uints.NewU8(c.cfg.TargetNetworkTag),
+		uints.NewU8(1), uints.NewU8(profile.TransferHubMessageKind), uints.NewU8(profile.SoraNetworkTag), uints.NewU8(c.cfg.TargetNetworkTag),
 	}
 	commitment = append(commitment, c.RawSignals[8][:]...)
 	commitment = append(commitment, c.RawSignals[9][:]...)

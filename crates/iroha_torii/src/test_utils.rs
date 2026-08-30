@@ -1288,17 +1288,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             slash_double_vote_bps: 0,
             slash_invalid_proof_bps: 0,
             slash_ineligible_proof_bps: 0,
-            citizen_service: A::CitizenServiceDiscipline {
-                seat_cooldown_blocks: defaults::governance::citizen_service::SEAT_COOLDOWN_BLOCKS,
-                max_seats_per_epoch: defaults::governance::citizen_service::MAX_SEATS_PER_EPOCH,
-                free_declines_per_epoch:
-                    defaults::governance::citizen_service::FREE_DECLINES_PER_EPOCH,
-                decline_slash_bps: defaults::governance::citizen_service::DECLINE_SLASH_BPS,
-                no_show_slash_bps: defaults::governance::citizen_service::NO_SHOW_SLASH_BPS,
-                misconduct_slash_bps: defaults::governance::citizen_service::MISCONDUCT_SLASH_BPS,
-                role_bond_multipliers: defaults::governance::citizen_service::role_bond_multipliers(
-                ),
-            },
             sorafs_pin_policy: A::SorafsPinPolicyConstraints::default(),
             sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id()
                 .parse()

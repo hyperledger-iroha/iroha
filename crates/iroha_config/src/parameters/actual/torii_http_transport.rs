@@ -7,7 +7,7 @@ pub struct ToriiHttpTransport {
     pub max_connections_per_ip: NonZeroUsize,
     /// Absolute deadline for reading one HTTP/1 request head.
     pub header_read_timeout: Duration,
-    /// Maximum duration without socket write progress.
+    /// Maximum duration without socket write progress and graceful connection-drain deadline.
     pub write_timeout: Duration,
     /// Maximum number of HTTP/1 headers accepted in one request.
     pub max_headers: NonZeroUsize,

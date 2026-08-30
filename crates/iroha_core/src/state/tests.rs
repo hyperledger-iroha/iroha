@@ -33967,8 +33967,6 @@ state_test! { sync first_release_governance_state_fields_are_required
         "governance_slashes",
         "governance_last_unlock_sweep_height",
         "governance_unlock_stats",
-        "council",
-        "parliament_bodies",
         "parliament_attempts",
     ] {
         let mut snapshot = norito::json::to_value(&state).expect("serialize state snapshot");

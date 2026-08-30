@@ -294,10 +294,28 @@ Params:
 Result:
 
 - `tools`: array of descriptors (`name`, `description`, `inputSchema`,
-  `outputSchema`, `annotations`)
+  `outputSchema`, `annotations`, and optional `_meta`)
 - `nextCursor`: string when another page exists; omitted on the final page
 - `_meta.iroha.listChanged`: `true` when the client toolset hash differs
 - `_meta.iroha.toolsetVersion`: current server toolset hash
+
+Catalog-backed tool descriptors also publish `_meta["iroha/routeAuth"]` with
+the exact route-catalog contract:
+
+```json
+{
+  "schemaVersion": 1,
+  "stableRouteId": "application.accounts_by_account_id_history_get",
+  "authentication": "optional_canonical_account_signature",
+  "admission": "dataspace_visible"
+}
+```
+
+`stableRouteId` is the route's stable catalog identifier. `authentication` and
+`admission` are the canonical V1 policy labels, not client hints: callers must
+satisfy both policies when invoking the tool. Consumers should reject unknown
+`schemaVersion` values rather than guessing their meaning. Tools that do not
+map to a catalog route omit `iroha/routeAuth`.
 
 Notes:
 

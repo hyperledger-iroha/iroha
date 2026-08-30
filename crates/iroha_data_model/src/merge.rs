@@ -576,6 +576,12 @@ pub struct MergeLaneExecution {
     pub entrypoint_hashes: Vec<Hash>,
     /// Exact entrypoints executed in descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
+    /// Signed replay alias authenticated from pre-carrier state for each entrypoint.
+    ///
+    /// Entries are aligned one-for-one with `entrypoints`. `Some` is valid only for a
+    /// sealed reveal that exactly authenticated its pending commitment at execution time;
+    /// rejected unauthenticated reveals and every other entrypoint kind carry `None`.
+    pub authenticated_signed_replay_aliases: Vec<Option<Hash>>,
     /// Canonical framed Norito encodings of the exact durable queue reservation
     /// keys, aligned one-for-one with `entrypoints`.
     ///

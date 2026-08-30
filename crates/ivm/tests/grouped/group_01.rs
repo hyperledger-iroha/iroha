@@ -14,12 +14,6 @@ mod abi_syscall_list_golden;
 mod abi_syscall_sorted;
 #[path = "../acceleration_simd.rs"]
 mod acceleration_simd;
-#[path = "../add_carry_circuit.rs"]
-mod add_carry_circuit;
-#[path = "../aes_circuit.rs"]
-mod aes_circuit;
-#[path = "../alu_circuit.rs"]
-mod alu_circuit;
 #[path = "../api.rs"]
 mod api;
 #[path = "../arithmetic.rs"]
@@ -28,8 +22,6 @@ mod arithmetic;
 mod arithmetic_checked_boundaries;
 #[path = "../assert.rs"]
 mod assert;
-#[path = "../assert_circuit.rs"]
-mod assert_circuit;
 #[path = "../axt_descriptor_builder.rs"]
 mod axt_descriptor_builder;
 #[path = "../axt_host_flow.rs"]
@@ -44,8 +36,6 @@ mod bn254_backend;
 mod bn254_vec;
 #[path = "../branch_cycles.rs"]
 mod branch_cycles;
-#[path = "../burn_circuit.rs"]
-mod burn_circuit;
 #[path = "../byte_merkle_tree.rs"]
 mod byte_merkle_tree;
 #[path = "../classic_opcode_rejected.rs"]
@@ -62,7 +52,5 @@ mod compact_bundle_helpers;
 mod compact_bundle_norito;
 #[path = "../comparison.rs"]
 mod comparison;
-#[path = "../comparison_circuit.rs"]
-mod comparison_circuit;
 #[path = "../contract_artifact.rs"]
 mod contract_artifact;

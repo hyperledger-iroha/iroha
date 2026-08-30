@@ -242,30 +242,21 @@ pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 4] = [
     SCCP_DOMAIN_TRON,
     SCCP_DOMAIN_TON,
 ];
-/// Return whether every key in an account controller is executable by the V1
-/// EVM/TVM destination contracts.
+/// Return whether an account controller is provable and executable by every V1
+/// destination route.
 ///
-/// Rust supports additional account-key algorithms, but accepting one as a Taira-origin SCCP sender
-/// would create an outbound lock that the immutable first-release destination routes cannot parse
-/// exactly. V1 therefore admits single-key and canonical multisig controllers composed only from
-/// Ed25519 and compressed secp256k1 public keys. This check is an economic admission rule, not a
-/// signature-policy shortcut: normal transaction authorization still verifies the complete
-/// controller before this predicate is reached.
+/// The fixed semantic circuits constrain the canonical 36-byte
+/// single-controller Ed25519 `AccountAddress`. Accepting any other Rust
+/// controller as a Taira-origin SCCP sender would create an outbound lock that
+/// no V1 destination proof can finalize. This is an economic admission rule,
+/// not a signature-policy shortcut: normal transaction authorization still
+/// verifies the complete controller before this predicate is reached.
 #[must_use]
 pub fn sccp_destination_contract_supports_account_v1(account: &AccountId) -> bool {
-    fn supports_key(key: &iroha_crypto::PublicKey) -> bool {
-        matches!(
-            key.try_algorithm(),
-            Ok(Algorithm::Ed25519 | Algorithm::Secp256k1)
-        )
-    }
-    match account.controller() {
-        AccountController::Single(key) => supports_key(key),
-        AccountController::Multisig(policy) => policy
-            .members()
-            .iter()
-            .all(|member| supports_key(member.public_key())),
-    }
+    matches!(
+        account.controller(),
+        AccountController::Single(key) if key.try_algorithm() == Ok(Algorithm::Ed25519)
+    )
 }
 /// External protocol domains that can safely originate native SCCP messages in V1.
 ///
@@ -5552,6 +5543,37 @@ pub fn decode_sccp_normalized_codec_value(
         _ => None,
     }
 }
+/// Return whether a canonical recipient can be executed by the governed V1
+/// destination deployment.
+///
+/// TON cannot derive a usable Jetton wallet when its owner is the Jetton master
+/// itself. Rejecting that address at source admission prevents a permanently
+/// unacknowledgeable mint from locking SORA custody and destination capacity.
+#[must_use]
+pub fn sccp_destination_contract_accepts_recipient_v1(
+    destination: &SccpDestinationDeploymentV1,
+    recipient_codec: u8,
+    recipient: &[u8],
+) -> bool {
+    match (
+        destination,
+        decode_sccp_normalized_codec_value(recipient_codec, recipient),
+    ) {
+        (
+            SccpDestinationDeploymentV1::Evm(_),
+            Some(SccpNormalizedCodecValueV1::EvmAddress20 { .. }),
+        )
+        | (
+            SccpDestinationDeploymentV1::Tron(_),
+            Some(SccpNormalizedCodecValueV1::TronAddress21 { .. }),
+        ) => true,
+        (
+            SccpDestinationDeploymentV1::Ton(deployment),
+            Some(SccpNormalizedCodecValueV1::TonAccount36 { workchain, account }),
+        ) => (SccpTonAddressV1 { workchain, account }) != deployment.jetton_master_address,
+        _ => false,
+    }
+}
 fn validate_sccp_codec_bytes(codec_id: u8, bytes: &[u8]) -> bool {
     decode_sccp_normalized_codec_value(codec_id, bytes).is_some()
 }
@@ -6686,7 +6708,7 @@ mod tests {
         }
     }
     #[test]
-    fn destination_contract_account_policy_is_closed_over_every_multisig_member() {
+    fn destination_contract_account_policy_matches_the_fixed_semantic_circuit() {
         let key = |seed: u8, algorithm| {
             KeyPair::try_from_seed(vec![seed; 32], algorithm)
                 .expect("destination-controller fixture key")
@@ -6699,22 +6721,22 @@ mod tests {
         assert!(sccp_destination_contract_supports_account_v1(
             &AccountId::new(ed25519.clone())
         ));
-        assert!(sccp_destination_contract_supports_account_v1(
+        assert!(!sccp_destination_contract_supports_account_v1(
             &AccountId::new(secp256k1.clone())
         ));
         assert!(!sccp_destination_contract_supports_account_v1(
             &AccountId::new(mldsa.clone())
         ));
-        let supported_multisig = MultisigPolicy::new(
+        let all_supported_key_algorithms = MultisigPolicy::new(
             2,
             vec![
                 MultisigMember::new(ed25519.clone(), 1).expect("Ed25519 member"),
                 MultisigMember::new(secp256k1, 1).expect("secp256k1 member"),
             ],
         )
-        .expect("supported mixed-curve policy");
-        assert!(sccp_destination_contract_supports_account_v1(
-            &AccountId::new_multisig(supported_multisig)
+        .expect("well-formed mixed-curve policy");
+        assert!(!sccp_destination_contract_supports_account_v1(
+            &AccountId::new_multisig(all_supported_key_algorithms)
         ));
         let unsupported_multisig = MultisigPolicy::new(
             2,
@@ -6726,6 +6748,38 @@ mod tests {
         .expect("valid Rust policy with one unsupported destination member");
         assert!(!sccp_destination_contract_supports_account_v1(
             &AccountId::new_multisig(unsupported_multisig)
+        ));
+        let one_member_ed25519 = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(key(0x34, Algorithm::Ed25519), 1).expect("Ed25519 member")],
+        )
+        .expect("well-formed one-member policy");
+        assert!(!sccp_destination_contract_supports_account_v1(
+            &AccountId::new_multisig(one_member_ed25519)
+        ));
+    }
+    #[test]
+    fn destination_contract_recipient_policy_rejects_the_ton_jetton_master() {
+        let ton = ton_deployment();
+        let master = canonical_sccp_ton_account36_bytes_v1(ton.jetton_master_address)
+            .expect("fixture master is a canonical TON basechain address");
+        let wallet_owner = canonical_sccp_ton_account36_bytes_v1(ton_address(0x83))
+            .expect("fixture owner is a canonical TON basechain address");
+        let destination = SccpDestinationDeploymentV1::Ton(ton);
+        assert!(!sccp_destination_contract_accepts_recipient_v1(
+            &destination,
+            SCCP_CODEC_TON_ACCOUNT36,
+            &master,
+        ));
+        assert!(sccp_destination_contract_accepts_recipient_v1(
+            &destination,
+            SCCP_CODEC_TON_ACCOUNT36,
+            &wallet_owner,
+        ));
+        assert!(!sccp_destination_contract_accepts_recipient_v1(
+            &destination,
+            SCCP_CODEC_EVM_ADDRESS20,
+            &[0x11; 20],
         ));
     }
     #[test]

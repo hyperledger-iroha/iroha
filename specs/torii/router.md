@@ -38,7 +38,13 @@ cloning the growing registration manifest. This approach guarantees that:
 
 - Every descriptor and every mounted, OpenAPI, SDK, or MCP projection carries
   route-auth metadata schema V1. Catalog validation rejects an absent/legacy
-  version instead of inferring authentication or admission semantics.
+  version instead of inferring authentication or admission semantics. OpenAPI
+  operations publish the descriptor-derived contract under
+  `x-iroha-route-auth`; MCP `tools/list` publishes the identical four fields
+  under `_meta["iroha/routeAuth"]`. OpenAPI also projects standard header
+  security schemes for canonical account, optional canonical account,
+  onboarding-token, and exact operator-signature policies; protocol-specific
+  bearer or handshake schemes remain owned by their operation definitions.
 - A route's method, authentication policy, path, feature gate, and stable ID
   agree with its canonical descriptor.
 - Duplicate registrations are rejected by stable ID, while finalization

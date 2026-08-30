@@ -1,4 +1,4 @@
-// Command sccp-circuits exposes the closed catalogue and fail-closed release check.
+// Command sccp-circuits exposes the closed catalogue and deterministic test vectors.
 package main
 
 import (
@@ -15,12 +15,11 @@ import (
 
 	"github.com/hyperledger-iroha/iroha/circuits/sccp/internal/circuit"
 	"github.com/hyperledger-iroha/iroha/circuits/sccp/internal/profile"
-	"github.com/hyperledger-iroha/iroha/circuits/sccp/internal/release"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fatal("usage: sccp-circuits <catalogue|emit-kat|constraint-count|check-production>")
+		fatal("usage: sccp-circuits <catalogue|emit-kat|constraint-count>")
 	}
 	switch os.Args[1] {
 	case "catalogue":
@@ -29,8 +28,6 @@ func main() {
 		emitKAT(os.Args[2:])
 	case "constraint-count":
 		constraintCount(os.Args[2:])
-	case "check-production":
-		checkProduction(os.Args[2:])
 	default:
 		fatal("unknown command %q", os.Args[1])
 	}
@@ -142,22 +139,6 @@ func catalogue() {
 	if err := encoder.Encode(entries); err != nil {
 		fatal("encode catalogue: %v", err)
 	}
-}
-
-func checkProduction(arguments []string) {
-	flags := flag.NewFlagSet("check-production", flag.ExitOnError)
-	coverage := flags.String("coverage", "manifests/semantic-coverage-final-v1.json", "checked-in semantic coverage manifest")
-	closure := flags.String("closure", "release/circuit-closure-final-v1.json", "externally signed ceremony/audit closure")
-	if err := flags.Parse(arguments); err != nil {
-		fatal("parse arguments: %v", err)
-	}
-	if flags.NArg() != 0 {
-		fatal("check-production does not accept positional arguments")
-	}
-	if err := release.CheckProduction(*coverage, *closure); err != nil {
-		fatal("not production ready: %v", err)
-	}
-	fmt.Println("SCCP circuit closure is production-ready")
 }
 
 func fatal(format string, arguments ...any) {

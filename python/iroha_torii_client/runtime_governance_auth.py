@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
+_RUNTIME_GOVERNANCE_JSON_MAX_BYTES = 16 * 1024 * 1024
+
 
 class RuntimeGovernanceAuthMixin:
     """Authenticate protected runtime/governance requests before dispatch."""
 
     _canonical_request_headers: Callable[..., Any]
+    _bounded_strict_json_object_response: Callable[..., Optional[Mapping[str, Any]]]
     _encode_json_body: Callable[..., bytes]
     _ensure_mapping: Callable[..., Mapping[str, Any]]
     _expect_status: Callable[..., None]
@@ -28,6 +31,7 @@ class RuntimeGovernanceAuthMixin:
         canonical_auth: Any,
         data: Optional[bytes] = None,
         headers: Optional[Mapping[str, str]] = None,
+        stream: bool = False,
         context: str,
     ) -> Any:
         auth = self._require_canonical_auth(canonical_auth, context)
@@ -47,6 +51,7 @@ class RuntimeGovernanceAuthMixin:
             path,
             headers=final_headers,
             data=data,
+            stream=stream,
             allow_retry=False,
             allow_redirects=False,
         )
@@ -67,12 +72,21 @@ class RuntimeGovernanceAuthMixin:
             path,
             canonical_auth=canonical_auth,
             data=data,
+            stream=True,
             context=context,
         )
         self._expect_status(response, expected_status)
         if response.status_code == 204:
+            response.close()
             return {}
-        return self._ensure_mapping(response.json(), context)
+        payload = self._bounded_strict_json_object_response(
+            response,
+            _RUNTIME_GOVERNANCE_JSON_MAX_BYTES,
+            context,
+        )
+        if payload is None:
+            raise RuntimeError(f"{context} endpoint returned no JSON payload")
+        return payload
 
     def _account_request_json(
         self,
@@ -90,10 +104,18 @@ class RuntimeGovernanceAuthMixin:
             path,
             canonical_auth=canonical_auth,
             data=data,
+            stream=True,
             context=context,
         )
         self._expect_status(response, expected_status)
-        return self._maybe_json(response)
+        if response.status_code == 204:
+            response.close()
+            return None
+        return self._bounded_strict_json_object_response(
+            response,
+            _RUNTIME_GOVERNANCE_JSON_MAX_BYTES,
+            context,
+        )
 
     def get_node_capabilities(self, *, canonical_auth: Any) -> Any:
         payload = self._account_json_request(

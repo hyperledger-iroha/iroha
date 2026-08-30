@@ -2270,6 +2270,7 @@ pub(crate) mod tests {
             autonomous_epoch,
             autonomous_payload_hash: payload.payload_hash,
             entrypoint_hashes,
+            authenticated_signed_replay_aliases: vec![None; entrypoints.len()],
             entrypoints,
             reservation_keys: encoded_reservation_keys,
             routing_plans: encoded_routing_plans,

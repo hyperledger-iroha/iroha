@@ -154,6 +154,8 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "queue_plan_admission_v2_",
     "queue_plan_pending_obligation_v1_",
     "queue_plan_pending_route_member_v1_",
+    "queue_plan_pending_signed_alias_member_v1_",
+    "queue_plan_signed_alias_terminal_v1_",
     "nexus_fee_receipt_settled_",
     "nexus_fee_settlement_settled_",
     "sealed_tx_commitment_",
@@ -24469,6 +24471,8 @@ seiyaku DurableOwner {
             "queue_plan_admission_v2_deadbeef_cafebabe",
             "queue_plan_pending_obligation_v1_deadbeef_cafebabe",
             "queue_plan_pending_route_member_v1_0_0_deadbeef_cafebabe",
+            "queue_plan_pending_signed_alias_member_v1_deadbeef_cafebabe_deadbeef",
+            "queue_plan_signed_alias_terminal_v1_deadbeef_cafebabe",
             "nexus_fee_receipt_settled_deadbeef",
             "nexus_fee_settlement_settled_1_2_3_deadbeef",
             "sealed_tx_commitment_deadbeef",
@@ -24509,6 +24513,8 @@ seiyaku DurableOwner {
             "queue_plan_admission_v2x",
             "queue_plan_pending_obligation_v1x",
             "queue_plan_pending_route_member_v1x",
+            "queue_plan_pending_signed_alias_member_v1x",
+            "queue_plan_signed_alias_terminal_v1x",
             "offline_device_attestation_policyx",
             "kagemushax",
             "pkdeploy_verified_lane_relayx",
@@ -24525,79 +24531,117 @@ seiyaku DurableOwner {
         }
     }
     #[test]
-    fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker() {
-        let marker: StatePath = format!(
-            "queue_plan_admission_v2_{}_{}",
-            "ab".repeat(Hash::LENGTH),
-            "cd".repeat(Hash::LENGTH)
-        )
-        .parse()
-        .expect("QueuePlan admission marker key");
-        let authority: AccountId = fixture_account("alice");
-        let contract = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                .parse()
-                .expect("canonical test network id"),
-            &authority,
-            178,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive adversarial contract");
-        let mut host = CoreHost::new(authority);
-        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
-            contract_subject: contract.subject_id(),
-            contract_address: contract,
-            contract_alias: Some(
-                "adversarial::queue_plan_registry"
+    fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_markers() {
+        let markers: [StatePath; 3] = [
+            format!(
+                "queue_plan_admission_v2_{}_{}",
+                "ab".repeat(Hash::LENGTH),
+                "cd".repeat(Hash::LENGTH)
+            )
+            .parse()
+            .expect("QueuePlan admission marker key"),
+            format!(
+                "queue_plan_pending_signed_alias_member_v1_{}_{}_{}",
+                "ab".repeat(Hash::LENGTH),
+                "cd".repeat(Hash::LENGTH),
+                "ef".repeat(Hash::LENGTH)
+            )
+            .parse()
+            .expect("QueuePlan pending signed-alias marker key"),
+            format!(
+                "queue_plan_signed_alias_terminal_v1_{}_{}",
+                "ab".repeat(Hash::LENGTH),
+                "cd".repeat(Hash::LENGTH)
+            )
+            .parse()
+            .expect("QueuePlan signed-alias terminal marker key"),
+        ];
+        for marker in markers {
+            let authority: AccountId = fixture_account("alice");
+            let contract = ContractAddress::derive(
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                     .parse()
-                    .expect("contract alias"),
-            ),
-            entrypoint: "main".to_owned(),
-        }));
-        let mut vm = IVM::new(10_000);
-        let code = ivm::encoding::wide::encode_halt().to_le_bytes();
-        vm.load_program(&build_authenticated_test_contract_program_with_states(
-            &code,
-            0,
-            false,
-            vec![ivm::EmbeddedStateDescriptor {
-                name: marker.to_string(),
-                ty: ivm::EmbeddedStateType::Bytes,
-            }],
-        ))
-        .expect("load self-describing adversarial QueuePlan contract");
-        let path_ptr = store_state_path_tlv(&mut vm, &marker);
-        let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
-        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
-        vm.set_register(10, path_ptr);
-        vm.set_register(11, value_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Err(ivm::VMError::PermissionDenied),
-            "STATE_SET must reject a QueuePlan registry marker before contract scoping"
-        );
-        vm.set_register(10, path_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
-            Err(ivm::VMError::PermissionDenied),
-            "STATE_DEL must not create a QueuePlan registry tombstone"
-        );
-        for syscall in [
-            ivm_sys::SYSCALL_STATE_GET,
-            ivm_sys::SYSCALL_STATE_HAS,
-            ivm_sys::SYSCALL_STATE_LEN,
-        ] {
+                    .expect("canonical test network id"),
+                &authority,
+                178,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("derive adversarial contract");
+            let mut host = CoreHost::new(authority);
+            host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+                contract_subject: contract.subject_id(),
+                contract_address: contract,
+                contract_alias: Some(
+                    "adversarial::queue_plan_registry"
+                        .parse()
+                        .expect("contract alias"),
+                ),
+                entrypoint: "main".to_owned(),
+            }));
+            let mut vm = IVM::new(10_000);
+            let code = ivm::encoding::wide::encode_halt().to_le_bytes();
+            vm.load_program(&build_authenticated_test_contract_program_with_states(
+                &code,
+                0,
+                false,
+                vec![ivm::EmbeddedStateDescriptor {
+                    name: marker.to_string(),
+                    ty: ivm::EmbeddedStateType::Bytes,
+                }],
+            ))
+            .expect("load self-describing adversarial QueuePlan contract");
+            let path_ptr = store_state_path_tlv(&mut vm, &marker);
+            let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
+            host.durable_state_base
+                .insert(marker.clone(), forged.clone());
+            let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
+            vm.set_register(10, path_ptr);
+            vm.set_register(11, value_ptr);
+            assert_eq!(
+                host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+                Err(ivm::VMError::PermissionDenied),
+                "STATE_SET must reject a QueuePlan registry marker before contract scoping"
+            );
             vm.set_register(10, path_ptr);
             assert_eq!(
-                host.syscall(syscall, &mut vm),
+                host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
                 Err(ivm::VMError::PermissionDenied),
-                "QueuePlan registry markers must remain opaque"
+                "STATE_DEL must not create a QueuePlan registry tombstone"
+            );
+            for syscall in [
+                ivm_sys::SYSCALL_STATE_GET,
+                ivm_sys::SYSCALL_STATE_HAS,
+                ivm_sys::SYSCALL_STATE_LEN,
+            ] {
+                vm.set_register(10, path_ptr);
+                assert_eq!(
+                    host.syscall(syscall, &mut vm),
+                    Err(ivm::VMError::PermissionDenied),
+                    "QueuePlan registry markers must remain opaque"
+                );
+            }
+            vm.set_register(10, path_ptr);
+            vm.set_register(11, 0);
+            vm.set_register(12, 1);
+            host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm)
+                .expect("opaque QueuePlan keys are omitted from enumeration");
+            assert_eq!(vm.register(11), 0, "hidden total must exclude the marker");
+            assert_eq!(vm.register(12), 0, "hidden page must exclude the marker");
+            let keys_tlv = vm
+                .memory
+                .validate_tlv(vm.register(10))
+                .expect("state key list TLV");
+            let keys: Vec<StatePath> =
+                norito::decode_from_bytes(keys_tlv.payload).expect("decode state key list");
+            assert!(
+                keys.is_empty(),
+                "STATE_KEYS must not disclose the marker key"
+            );
+            assert!(
+                host.durable_state_overlay.is_empty(),
+                "rejected QueuePlan registry access must not retain a raw or scoped write"
             );
         }
-        assert!(
-            host.durable_state_overlay.is_empty(),
-            "rejected QueuePlan registry access must not retain a raw or scoped write"
-        );
     }
     #[test]
     fn state_syscalls_cannot_forge_delete_or_disclose_merge_lane_frontier() {

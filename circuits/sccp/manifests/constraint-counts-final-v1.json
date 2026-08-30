@@ -8,7 +8,7 @@
     "module_mode": "vendor",
     "network": "none"
   },
-  "definition_state": "post-block-header-root-and-composable-epoch-anchor-binding",
+  "definition_state": "final-v1-wire-identifiers-aligned",
   "profiles": [
     {
       "profile": "sccp-final-v1-bsc-mainnet-epoch-anchor-update",
@@ -22,7 +22,7 @@
       "role": "message",
       "outer_curve": "bn254",
       "constraints": 36473351,
-      "kat_sha256": "0cd6a39f110f0afa17fd0343b586feacd0e66902c1e5bb2e51cfe8753f0a761c"
+      "kat_sha256": "bf0bdf95282961bcf3e97903487fc0773d6de8ba62280ec0954affa4c72872ad"
     },
     {
       "profile": "sccp-final-v1-ethereum-mainnet-epoch-anchor-update",
@@ -36,7 +36,7 @@
       "role": "message",
       "outer_curve": "bn254",
       "constraints": 36473349,
-      "kat_sha256": "d43a5d4b6f0c4f7adef5435fea98f914e491abf5aa449a6581fb7227ea53efb8"
+      "kat_sha256": "48715de72c792496a52d930e53573ac1abbd7571ebc09151ae9c94c8b268cf6f"
     },
     {
       "profile": "sccp-final-v1-ton-mainnet-epoch-anchor-update",
@@ -50,7 +50,7 @@
       "role": "message",
       "outer_curve": "bls12-381",
       "constraints": 34718292,
-      "kat_sha256": "62ce4b0c4a6bb90eee73b655353b8866530a7ce288424f77e07ce6b0c65d5173"
+      "kat_sha256": "77ed6524a11625e10b4b1ae363d8a305a9a67bf5d39a801e5bc80358cb5dd3c2"
     },
     {
       "profile": "sccp-final-v1-tron-mainnet-epoch-anchor-update",
@@ -64,11 +64,11 @@
       "role": "message",
       "outer_curve": "bn254",
       "constraints": 36474274,
-      "kat_sha256": "28be620f9ccefa56859717c04b9c2d4a70b25b743b7d060af449aafba2296a22"
+      "kat_sha256": "43db673cc7c4d17c4bd71ed9a1e80b8f5dc3b378e0c8125fccc5e85d3c825518"
     }
   ],
-  "epoch_anchor_recurrence": {
-    "r1cs_serialization": "gnark-v0.16.3-constraint-system-writeto",
+  "artifact_state": {
+    "r1cs_identities_current": false,
     "invalidated_artifact_roles": [
       "r1cs",
       "phase2_transcript",
@@ -83,41 +83,15 @@
       "reproducibility_ceremony_audit",
       "destination_integration_audit"
     ],
-    "profiles": [
-      {
-        "profile": "sccp-final-v1-bsc-mainnet-epoch-anchor-update",
-        "constraint_delta": 97,
-        "r1cs_bytes": 7315806903,
-        "r1cs_sha256": "a9ce853283e12688ad57682131764fc3c5899f2a6b3ca171b2acd4a3cb298209",
-        "kat_public_values_changed": false,
-        "invalidated_phase2_ceremony": "sccp-final-v1-bsc-mainnet-epoch-anchor-update-phase2"
-      },
-      {
-        "profile": "sccp-final-v1-ethereum-mainnet-epoch-anchor-update",
-        "constraint_delta": 97,
-        "r1cs_bytes": 7315811354,
-        "r1cs_sha256": "74784b6b470fe5e491d6fc0f57a1502210a416641750a9c0a2361f5dd13f4270",
-        "kat_public_values_changed": false,
-        "invalidated_phase2_ceremony": "sccp-final-v1-ethereum-mainnet-epoch-anchor-update-phase2"
-      },
-      {
-        "profile": "sccp-final-v1-ton-mainnet-epoch-anchor-update",
-        "constraint_delta": 97,
-        "r1cs_bytes": 7158464567,
-        "r1cs_sha256": "e8464554cf53d3dc2e75fc069dfc15a1ffdd0cd0536b32c8790a8c9dbe892629",
-        "kat_public_values_changed": false,
-        "invalidated_phase2_ceremony": "sccp-final-v1-ton-mainnet-epoch-anchor-update-phase2"
-      },
-      {
-        "profile": "sccp-final-v1-tron-mainnet-epoch-anchor-update",
-        "constraint_delta": 97,
-        "r1cs_bytes": 7315793983,
-        "r1cs_sha256": "cd7618339502ae8453c2c218216e2eb9e1b2ca54527bdcbd60b06cdc15392ab5",
-        "kat_public_values_changed": false,
-        "invalidated_phase2_ceremony": "sccp-final-v1-tron-mainnet-epoch-anchor-update-phase2"
-      }
-    ]
+    "profiles_requiring_fresh_r1cs": [
+      "sccp-final-v1-bsc-mainnet-message",
+      "sccp-final-v1-ethereum-mainnet-message",
+      "sccp-final-v1-ton-mainnet-message",
+      "sccp-final-v1-tron-mainnet-epoch-anchor-update",
+      "sccp-final-v1-tron-mainnet-message"
+    ],
+    "reason": "Final-V1 payload discriminant, hub-kind, domain, and codec identifiers were aligned with the canonical Rust wire format. No earlier R1CS identity or dependent release artifact for these profiles is current."
   },
   "production_admissible": false,
-  "note": "The composable epoch-anchor authorization adds 97 constraints to every epoch profile without changing its positive KAT public values. Every earlier epoch R1CS, Phase-2 transcript, PK, VK, fixed verifier, and destination deployment is invalid; fresh circuit-specific ceremonies and all three independent audits are mandatory."
+  "note": "Constraint counts are unchanged because only embedded constants changed. Corrected KATs are checked in, but fresh R1CS identities, circuit-specific ceremonies, destination deployments, and all three independent audits are mandatory before release."
 }

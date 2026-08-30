@@ -255,12 +255,12 @@ FAMILIES = {
 }
 
 ROUTE_MACRO_DEFINITION_SHA256 = {
-    "catalog_route_policy": "60a5d4d3cb782b3609a24dd5b6850fb1511da3f6bb5f6a3029734c13f84ca18e",
+    "catalog_route_policy": "c475a7e8265ec2c2bf300226a5082cd7cab8653dd29d4e3dfa0629d5a8a444c6",
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_ROW_COUNT = 541
-ROUTE_TUPLE_SHA256 = "91a60004faa27b7a045249ccfc96b7626cc0524c8fb80677796a0bfaa521fb95"
+ROUTE_ROW_COUNT = 539
+ROUTE_TUPLE_SHA256 = "b9331452184668efedff4f7fa13154aee43ff606394bc39fe8b69cbccd2fcd72"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -1000,6 +1000,21 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
             (
                 "catalog_get($handler).authenticated_operator($state.clone())",
                 "catalog_get($handler).authenticated_operator($state)",
+            ),
+            (
+                "HandlerAuthentication::OptionalCanonicalAccountSignature",
+                "HandlerAuthentication::CanonicalAccountSignature",
+            ),
+            (
+                "RESOLVE => limited_optional_canonical_signature_post("
+                "handler_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);",
+                "RESOLVE => limited_canonical_signature_post("
+                "handler_alias_resolve, EXACT_ALIAS_READ_MAX_BODY_BYTES);",
+            ),
+            (
+                "ACCOUNTS_BY_ACCOUNT_ID_GET => "
+                "optional_canonical_signature_get(handler_account_get);",
+                "ACCOUNTS_BY_ACCOUNT_ID_GET => public_get(handler_account_get);",
             ),
         )
         for old, new in mutations:

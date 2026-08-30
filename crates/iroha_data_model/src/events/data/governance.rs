@@ -10,9 +10,8 @@ mod model {
             BallotAttemptId, BallotAttemptStatusV1, BodyInstanceId, BodyInstanceStatusV1,
             GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceCertificateId,
             GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentAggregateOutcomeV1,
-            ParliamentAggregateTallyV1, ParliamentBodies, ParliamentBody,
-            ParliamentConcentrationWarningV1, ParliamentNoResultKindV1, ProposalContentId,
-            RiskTierV1,
+            ParliamentAggregateTallyV1, ParliamentBody, ParliamentConcentrationWarningV1,
+            ParliamentNoResultKindV1, ProposalContentId, RiskTierV1,
         },
         isi::governance::{
             ParliamentAutomaticExecutionOutcomeV1, ParliamentLifecycleTransitionKindV1,
@@ -56,10 +55,6 @@ mod model {
         ReferendumClosed(GovernanceReferendumClosed),
         /// A governance lock expired and was unlocked.
         LockUnlocked(GovernanceLockUnlocked),
-        /// Compatibility event emitted by the retired manual epoch-council instruction.
-        CouncilPersisted(GovernanceCouncilPersisted),
-        /// Compatibility event emitted by the retired independent epoch-council subsystem.
-        ParliamentSelected(GovernanceParliamentSelected),
         /// A canonical attempt was created from immutable proposal content.
         ParliamentAttemptCreated(GovernanceParliamentAttemptCreated),
         /// One typed reducer transition was accepted and applied.
@@ -88,8 +83,6 @@ mod model {
         CitizenRegistered(GovernanceCitizenRegistered),
         /// A citizenship bond was withdrawn and the citizen was removed.
         CitizenRevoked(GovernanceCitizenRevoked),
-        /// A citizen service discipline event was recorded.
-        CitizenServiceRecorded(GovernanceCitizenServiceRecorded),
         /// A standalone governance referendum reached an exact final decision.
         ReferendumDecided(GovernanceReferendumDecided),
     }
@@ -330,34 +323,6 @@ mod model {
         /// Amount returned from escrow.
         pub amount: Quantity,
     }
-    /// Compatibility payload from the retired manual epoch-council instruction.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceCouncilPersisted {
-        /// Epoch index
-        pub epoch: u64,
-        /// Number of members stored
-        pub members_count: u32,
-        /// Number of alternates stored alongside members.
-        #[norito(default)]
-        pub alternates_count: u32,
-        /// Total eligible candidates considered by the historical subsystem.
-        #[norito(default)]
-        pub candidates_count: u32,
-        /// Derivation method.
-        pub derived_by: crate::isi::governance::CouncilDerivationKind,
-    }
-    /// Compatibility payload from the retired independent epoch-council subsystem.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceParliamentSelected {
-        /// Epoch index associated with the selection.
-        pub selection_epoch: u64,
-        /// Body rosters for the epoch.
-        pub bodies: ParliamentBodies,
-    }
     /// Canonical creation of one retryable end-to-end Parliament attempt.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -517,25 +482,6 @@ mod model {
         /// Quorum required to open the referendum.
         pub required: u32,
     }
-    /// Citizen service discipline event payload.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceCitizenServiceRecorded {
-        /// Citizen account receiving the record.
-        pub owner: crate::account::AccountId,
-        /// Epoch associated with the assignment.
-        pub epoch: u64,
-        /// Governance role label (e.g., `council` or `policy_jury`).
-        pub role: String,
-        /// Recorded event kind.
-        pub event: crate::isi::governance::CitizenServiceEvent,
-        /// Exact amount slashed from the citizenship bond.
-        pub slashed: Quantity,
-        /// Height until which the citizen remains on cooldown.
-        #[norito(default)]
-        pub cooldown_until: u64,
-    }
     /// Exact decision for one standalone governance referendum.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -568,8 +514,6 @@ impl_json_via_norito_bytes!(
     GovernanceReferendumOpened,
     GovernanceReferendumClosed,
     GovernanceLockUnlocked,
-    GovernanceCouncilPersisted,
-    GovernanceParliamentSelected,
     GovernanceParliamentAttemptCreated,
     GovernanceParliamentLifecycleTransitionApplied,
     GovernanceParliamentAttemptTransitioned,
@@ -585,21 +529,19 @@ impl_json_via_norito_bytes!(
     GovernanceLockRestituted,
     GovernanceCitizenRegistered,
     GovernanceCitizenRevoked,
-    GovernanceCitizenServiceRecorded,
     GovernanceReferendumDecided,
 );
 /// Prelude exports
 pub mod prelude {
     pub use super::{
         GovernanceBallotAccepted, GovernanceBallotMode, GovernanceBallotRejected,
-        GovernanceCitizenRegistered, GovernanceCitizenRevoked, GovernanceCitizenServiceRecorded,
-        GovernanceCouncilPersisted, GovernanceEvent, GovernanceLockCreated, GovernanceLockExtended,
-        GovernanceLockRestituted, GovernanceLockSlashed, GovernanceLockUnlocked,
-        GovernanceParliamentAggregateFinalized, GovernanceParliamentApprovalRecorded,
-        GovernanceParliamentAttemptCreated, GovernanceParliamentAttemptTransitioned,
-        GovernanceParliamentBallotTransitioned, GovernanceParliamentBodyTransitioned,
-        GovernanceParliamentCertificateIssued, GovernanceParliamentConcentrationWarning,
-        GovernanceParliamentLifecycleTransitionApplied, GovernanceParliamentSelected,
+        GovernanceCitizenRegistered, GovernanceCitizenRevoked, GovernanceEvent,
+        GovernanceLockCreated, GovernanceLockExtended, GovernanceLockRestituted,
+        GovernanceLockSlashed, GovernanceLockUnlocked, GovernanceParliamentAggregateFinalized,
+        GovernanceParliamentApprovalRecorded, GovernanceParliamentAttemptCreated,
+        GovernanceParliamentAttemptTransitioned, GovernanceParliamentBallotTransitioned,
+        GovernanceParliamentBodyTransitioned, GovernanceParliamentCertificateIssued,
+        GovernanceParliamentConcentrationWarning, GovernanceParliamentLifecycleTransitionApplied,
         GovernanceProposalApproved, GovernanceProposalEnacted, GovernanceProposalRejected,
         GovernanceProposalSubmitted, GovernanceReferendumClosed, GovernanceReferendumDecided,
         GovernanceReferendumOpened, GovernanceSlashReason,

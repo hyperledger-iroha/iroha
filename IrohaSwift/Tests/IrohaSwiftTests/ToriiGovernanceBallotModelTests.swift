@@ -452,7 +452,7 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
             return (
                 HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                                 headerFields: ["Content-Type": "application/json"])!,
-                Data("{\"ok\":true,\"accepted\":true,\"reason\":null,\"tx_instructions\":[]}".utf8)
+                Data("{\"drafted\":true,\"tx_instructions\":[{\"wire_id\":\"CastZkBallot\",\"payload_hex\":\"00\"}]}".utf8)
             )
         }
         let request = ToriiGovernanceZkBallotV1Request(
@@ -502,7 +502,7 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
             return (
                 HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                                 headerFields: ["Content-Type": "application/json"])!,
-                Data("{\"ok\":true,\"accepted\":true,\"reason\":null,\"tx_instructions\":[]}".utf8)
+                Data("{\"drafted\":true,\"tx_instructions\":[{\"wire_id\":\"CastZkBallot\",\"payload_hex\":\"00\"}]}".utf8)
             )
         }
         let request = ToriiGovernanceZkBallotProofRequest(

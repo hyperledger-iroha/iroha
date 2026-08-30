@@ -155,6 +155,73 @@ test("ToriiClient canonical auth accepts byte-array private keys", async () => {
   assert.equal(captured[0].init.headers["X-Iroha-Account"], AUTH_ALIAS);
 });
 
+test("ToriiClient uses its configured signer for optional account reads", async () => {
+  const captured = [];
+  const fetchImpl = async (url, init) => {
+    captured.push({ url: new URL(url), init });
+    return new Response(JSON.stringify({ items: [], total: 0 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const privateKey = Buffer.alloc(32, 12);
+  const targetAccountId = "target-1@hbl.sbp";
+  const client = new ToriiClient("https://localhost:8080", {
+    fetchImpl,
+    canonicalRequestAuth: { accountId: AUTH_ALIAS, privateKey },
+  });
+
+  await client.listAccountAssets(targetAccountId);
+  await client.listAccountTransactions(targetAccountId);
+  await client.listAccountPermissions(targetAccountId);
+
+  assert.deepEqual(
+    captured.map(({ url }) => url.pathname),
+    [
+      `/v1/accounts/${encodeURIComponent(targetAccountId)}/assets`,
+      `/v1/accounts/${encodeURIComponent(targetAccountId)}/transactions`,
+      `/v1/accounts/${encodeURIComponent(targetAccountId)}/permissions`,
+    ],
+  );
+  for (const { init } of captured) {
+    assert.equal(init.headers["X-Iroha-Account"], AUTH_ALIAS);
+    assert.ok(init.headers["X-Iroha-Signature"]);
+    assert.ok(init.headers["X-Iroha-Timestamp-Ms"]);
+    assert.ok(init.headers["X-Iroha-Nonce"]);
+    assert.equal(init.redirect, "error");
+  }
+});
+
+test("ToriiClient permits explicit anonymous optional account reads", async () => {
+  const captured = [];
+  const fetchImpl = async (url, init) => {
+    captured.push({ url: new URL(url), init });
+    return new Response(JSON.stringify({ items: [], total: 0 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const privateKey = Buffer.alloc(32, 13);
+  const targetAccountId = "target-2@hbl.sbp";
+  const client = new ToriiClient("https://localhost:8080", {
+    fetchImpl,
+    canonicalRequestAuth: { accountId: AUTH_ALIAS, privateKey },
+  });
+
+  await client.listAccountAssets(targetAccountId, { canonicalAuth: null });
+  await client.listAccountTransactions(targetAccountId, { canonicalAuth: null });
+  await client.listAccountPermissions(targetAccountId, { canonicalAuth: null });
+
+  assert.equal(captured.length, 3);
+  for (const { init } of captured) {
+    assert.equal(init.headers["X-Iroha-Account"], undefined);
+    assert.equal(init.headers["X-Iroha-Signature"], undefined);
+    assert.equal(init.headers["X-Iroha-Timestamp-Ms"], undefined);
+    assert.equal(init.headers["X-Iroha-Nonce"], undefined);
+    assert.equal(init.redirect, undefined);
+  }
+});
+
 test("ToriiClient canonical auth rejects non-byte private key arrays", async () => {
   const client = new ToriiClient("https://localhost:8080", {
     fetchImpl: async () => {

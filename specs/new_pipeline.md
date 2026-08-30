@@ -1874,9 +1874,6 @@ Vector & cryptography (opcode high byte)
 - BLAKE2S (`0x78`): compress; Gas: 40
 - AESENC (`0x77`): AES round; Gas: 30. AESDEC (`0x7D`): Gas: 30
 - POSEIDON2 (`0x71`), POSEIDON6 (`0x72`): field S‑box permute; Gas: 10
-- ECADD (`0x75`): elliptic curve add; Gas: 20
-- ECMUL_VAR (`0x76`): variable‑time scalar mul; Gas: 100
-- PAIRING (`0x80`): BLS12‑381 pairing check; Gas: 500
 - ED25519VERIFY (`0x79`): signature verify; Gas: 1000
 - ECDSAVERIFY (`0x7F`): signature verify; Gas: 1500
 - DILITHIUMVERIFY (`0x81`): PQC verify; Gas: 5000
@@ -1897,13 +1894,12 @@ ISO 20022 (messaging)
 - Gas: 1 unless the underlying syscall applies additional costs per bytes/keys.
 
 Status and source of truth
-- The opcode numbers and gas costs are aligned with `crates/ivm/src/instruction.rs`
+- The opcode numbers and gas costs are aligned with `crates/ivm_abi/src/instruction.rs`
   and `crates/ivm/src/gas.rs`. Where an opcode is listed here but not present
   in the crate, it is marked “Proposed” and is not consensus‑binding until
-  implemented and covered by tests. If an opcode exists in the crate but is not
-  documented here (e.g., `PUBKGEN`, `VALCOM`), the crate definition is
-  normative and this appendix will be extended; gas follows `gas.rs` (both are
-  currently 50).
+  implemented and covered by tests. The former scalar/truncated `PUBKGEN`,
+  `VALCOM`, `ECADD`, `ECMUL_VAR`, and `PAIRING` slots are reserved, have no gas
+  entry, and are rejected by ABI V1 admission and execution.
 
 Notes
 - This appendix is the normative source for IVM opcode semantics and gas.
@@ -1911,9 +1907,6 @@ Notes
   Overall gas is charged by the scalar reference path; acceleration does not
   change charges. Syscalls and host operations must document access‑set
   implications. Changes require a gas schedule version bump.
- - Side‑channel note: variable‑time ops (e.g., `ECMUL_VAR`) MUST NOT be used
-   with private scalars in consensus paths. They are intended for verification
-   with public inputs only.
 
 ## Appendix: Example Walkthrough
 

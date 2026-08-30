@@ -1507,13 +1507,7 @@ impl From<super::smart_contract_code::CommitContractDeployment> for super::Instr
         super::Instruction::into_instruction_box(Box::new(instruction))
     }
 }
-// Allow direct conversion for governance citizenship and service instructions
-#[cfg(feature = "governance")]
-impl From<super::governance::RecordCitizenServiceOutcome> for super::InstructionBox {
-    fn from(instruction: super::governance::RecordCitizenServiceOutcome) -> Self {
-        super::Instruction::into_instruction_box(Box::new(instruction))
-    }
-}
+// Allow direct conversion for governance citizenship instructions.
 #[cfg(feature = "governance")]
 impl From<super::governance::RegisterCitizen> for super::InstructionBox {
     fn from(instruction: super::governance::RegisterCitizen) -> Self {

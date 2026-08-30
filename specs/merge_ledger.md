@@ -76,8 +76,15 @@ dataspace, and view. Each `MergeLaneExecution` embeds:
 - exact `NetworkId`, epoch, payload, lane, dataspace, incarnation, and activation bindings;
 - exact entrypoints, queue reservation keys, routing plans, and Native AMX
   receipts;
+- the one-for-one optional signed replay alias authenticated from pre-carrier
+  state for each entrypoint;
 - deterministic results and result hashes; and
 - the settlement commitment derived by the same execution.
+
+The replay-alias transcript is part of the canonical execution bytes and hash.
+`Some` is valid only for an exactly authenticated sealed reveal; successful
+reveals must declare it, while rejected unauthenticated reveals and non-reveal
+entrypoints declare `None`.
 
 The global leader executes the ordered sources on a revertible `StateBlock`
 based on the current committed WSV. The batch commits the base height/hash,
@@ -340,6 +347,21 @@ If Kura persistence fails, State is not published. If the process stops after
 Kura succeeds but before State publication, startup only hydrates entries whose
 carrier height/hash is present in the canonical committed block prefix. Future
 log/carrier suffixes are rolled back before block replay.
+
+Recovery publishes carrier membership from the durable replay-alias transcript
+rather than reconstructing authentication after the pending commitment has
+been consumed. Post-commit cleanup removes ordinary sibling reveal carriers
+made replay-ineligible by a committed signed alias. A direct carrier commit
+atomically removes its own globally admitted pending obligation and exact route
+members. A distinct carrier committed through its authenticated signed alias
+also removes the bounded signed-first reverse member, replaces the potentially
+large pending obligation with one compact outer-identity terminal binding, and
+then exposes exact `AppliedViaSignedAlias` evidence. Queue cleanup may retire a
+globally admitted sibling only from the matching direct or signed-alias State
+evidence and only when no reservation, selection guard, or Kura terminal
+barrier still owns it; startup applies the same fail-closed rule. This prevents
+permanent full-obligation retention without inferring application from absent
+state.
 
 The merge log is a framed append-only file with validated hash/epoch-to-frame
 offsets and a maintained latest execution-height index. Hash lookup performs a

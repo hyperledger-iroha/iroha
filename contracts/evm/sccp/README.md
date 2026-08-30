@@ -40,14 +40,13 @@ Account roles are deliberately asymmetric. An external-to-Taira burn accepts
 only the exact `test...` I105 spelling for discriminant `369` and a single,
 canonical Ed25519 controller in the prime-order subgroup, matching Taira
 settlement admission and rejecting both small-order and mixed-torsion points.
-A proof-authenticated Taira-to-external sender may instead be a single-key or
-canonical multisig `AccountId` composed from Ed25519 and compressed secp256k1
-keys. The parser checks the complete V1 AccountAddress tags, big-endian policy
-fields, Rust algorithm-name member order, I105 round trip and checksum, weak
-Ed25519 encodings, and off-curve/noncanonical secp256k1 encodings. Taira rejects
-all other controller algorithms before locking assets, so no accepted outbound
-message can be unfinalizable merely because its sender controller is outside
-the immutable destination parser.
+A proof-authenticated Taira-to-external sender uses that same canonical
+single-key Ed25519 controller because it is the sole account shape constrained
+by the fixed V1 semantic circuits. The destination parser still rejects
+malformed AccountAddress tags, noncanonical I105 round trips and checksums, and
+weak Ed25519 encodings. Taira rejects multisig, secp256k1, and every other
+controller before locking assets, so every accepted sender is provable by the
+immutable destination verifier.
 
 Generic owner emitters and the secp256k1 attestation verifier are intentionally
 absent. Generic proof-only message wrappers are also absent: accepting a proof

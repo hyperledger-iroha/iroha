@@ -7,18 +7,21 @@
 //! compiling a second schema builder.
 
 use iroha_torii_shared::route_catalog::{
-    CATALOGED_ROUTES, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
-    RouteCatalog,
+    AuthenticationPolicy, CATALOGED_ROUTES, CatalogProjection, EnabledFeatures,
+    HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor,
 };
 use norito::json::{Map, Value};
-use std::{collections::BTreeSet, sync::LazyLock};
+use std::{collections::BTreeMap, sync::LazyLock};
 /// OpenAPI operation extension consumed by the MCP policy bridge.
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
+/// OpenAPI operation extension carrying the catalog's versioned authentication contract.
+pub(crate) const ROUTE_AUTH_EXTENSION: &str = "x-iroha-route-auth";
 /// Package-local source authority for Torii's OpenAPI contract.
 const CANONICAL_OPENAPI_JSON: &str = include_str!("../assets/openapi/torii.json");
 static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     let mut document: Value = norito::json::from_str(CANONICAL_OPENAPI_JSON)
         .expect("package-local Torii OpenAPI authority must be valid Norito JSON");
+    ensure_catalog_security_schemes(&mut document);
     {
         let paths = document
             .as_object_mut()
@@ -38,7 +41,7 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
     const OPERATION_METHODS: [&str; 5] = ["get", "post", "put", "patch", "delete"];
     let projected =
         RouteCatalog::new(CATALOGED_ROUTES).project(CatalogProjection::OpenApi, enabled_features);
-    let enabled: BTreeSet<(String, &'static str)> = projected
+    let enabled: BTreeMap<(String, &'static str), &RouteDescriptor> = projected
         .iter()
         .filter_map(|route| {
             let method = match route.method() {
@@ -49,22 +52,7 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
                 CatalogHttpMethod::Delete => "delete",
                 CatalogHttpMethod::Any => return None,
             };
-            Some((route.path().replace("{*", "{"), method))
-        })
-        .collect();
-    let private_no_store: BTreeSet<(String, &'static str)> = projected
-        .iter()
-        .filter(|route| route.requires_private_no_store())
-        .filter_map(|route| {
-            let method = match route.method() {
-                CatalogHttpMethod::Get => "get",
-                CatalogHttpMethod::Post => "post",
-                CatalogHttpMethod::Put => "put",
-                CatalogHttpMethod::Patch => "patch",
-                CatalogHttpMethod::Delete => "delete",
-                CatalogHttpMethod::Any => return None,
-            };
-            Some((route.path().replace("{*", "{"), method))
+            Some(((route.path().replace("{*", "{"), method), *route))
         })
         .collect();
     for (path, path_item) in paths.iter_mut() {
@@ -72,18 +60,23 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
             continue;
         };
         for method in OPERATION_METHODS {
-            if !enabled.contains(&(path.clone(), method)) {
+            let Some(descriptor) = enabled.get(&(path.clone(), method)) else {
                 methods.remove(method);
-            }
-        }
-        for method in OPERATION_METHODS {
-            if !private_no_store.contains(&(path.clone(), method)) {
+                continue;
+            };
+            let Some(operation) = methods.get_mut(method).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            operation.insert(
+                ROUTE_AUTH_EXTENSION.to_owned(),
+                route_auth_metadata(**descriptor),
+            );
+            apply_catalog_operation_contract(operation, **descriptor);
+            if !descriptor.requires_private_no_store() {
                 continue;
             }
-            let Some(responses) = methods
-                .get_mut(method)
-                .and_then(Value::as_object_mut)
-                .and_then(|operation| operation.get_mut("responses"))
+            let Some(responses) = operation
+                .get_mut("responses")
                 .and_then(Value::as_object_mut)
             else {
                 continue;
@@ -118,6 +111,128 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
                 .any(|method| methods.contains_key(*method))
         })
     });
+}
+fn route_auth_metadata(descriptor: RouteDescriptor) -> Value {
+    norito::json!({
+        "schemaVersion": (descriptor.auth_metadata_schema_version()),
+        "stableRouteId": (descriptor.stable_route_id()),
+        "authentication": (descriptor.authentication().as_str()),
+        "admission": (descriptor.admission().as_str())
+    })
+}
+fn apply_catalog_operation_contract(operation: &mut Map, descriptor: RouteDescriptor) {
+    if let Some(security) = standard_security_requirements(descriptor.authentication()) {
+        operation.insert("security".to_owned(), security);
+    }
+    if descriptor.method() == CatalogHttpMethod::Post
+        && descriptor.stable_route_id().starts_with("iso20022.")
+    {
+        operation.insert(
+            "requestBody".to_owned(),
+            norito::json!({
+                "content": {
+                    "application/xml": {
+                        "schema": {
+                            "$ref": "#/components/schemas/XmlText"
+                        }
+                    }
+                },
+                "required": true
+            }),
+        );
+    }
+}
+fn standard_security_requirements(authentication: AuthenticationPolicy) -> Option<Value> {
+    let canonical_single_signature = norito::json!({
+        "IrohaCanonicalAccount": [],
+        "IrohaCanonicalNonce": [],
+        "IrohaCanonicalSignature": [],
+        "IrohaCanonicalTimestampMs": []
+    });
+    let canonical_witness = norito::json!({ "IrohaCanonicalWitness": [] });
+    let operator_signature = norito::json!({
+        "IrohaOperatorPublicKey": [],
+        "IrohaOperatorTimestampMs": [],
+        "IrohaOperatorNonce": [],
+        "IrohaOperatorSignature": []
+    });
+    match authentication {
+        AuthenticationPolicy::ToriiDefault => Some(norito::json!([
+            {},
+            { "IrohaApiToken": [] }
+        ])),
+        AuthenticationPolicy::OnboardingToken => {
+            Some(norito::json!([{ "IrohaOnboardingToken": [] }]))
+        }
+        AuthenticationPolicy::CanonicalAccountSignature => Some(Value::Array(vec![
+            canonical_single_signature,
+            canonical_witness,
+        ])),
+        AuthenticationPolicy::OptionalCanonicalAccountSignature
+        | AuthenticationPolicy::ManifestConditionalContent => Some(Value::Array(vec![
+            Value::Object(Map::new()),
+            canonical_single_signature,
+            canonical_witness,
+        ])),
+        AuthenticationPolicy::OperatorSignature => Some(Value::Array(vec![operator_signature])),
+        AuthenticationPolicy::Unauthenticated => Some(Value::Array(Vec::new())),
+        AuthenticationPolicy::CanonicalSignedBody
+        | AuthenticationPolicy::IdentityBoundSignature
+        | AuthenticationPolicy::OperatorCredentialExchange
+        | AuthenticationPolicy::ProtocolHandshake
+        | AuthenticationPolicy::NestedRouteAuthentication => None,
+    }
+}
+fn ensure_catalog_security_schemes(document: &mut Value) {
+    let security_schemes = document
+        .as_object_mut()
+        .and_then(|document| document.get_mut("components"))
+        .and_then(Value::as_object_mut)
+        .and_then(|components| components.get_mut("securitySchemes"))
+        .and_then(Value::as_object_mut)
+        .expect("package-local Torii OpenAPI authority must contain component security schemes");
+    for (name, header_name, description) in [
+        (
+            "IrohaApiToken",
+            "X-API-Token",
+            "Deployment-configured Torii API token. Whether it is required is selected by node configuration.",
+        ),
+        (
+            "IrohaOnboardingToken",
+            "X-Iroha-Onboarding-Token",
+            "Dedicated single-use onboarding token.",
+        ),
+        (
+            "IrohaOperatorPublicKey",
+            "X-Iroha-Operator-Public-Key",
+            "Allow-listed exact-network operator public key bound into the request signature.",
+        ),
+        (
+            "IrohaOperatorTimestampMs",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "Fresh Unix timestamp in milliseconds bound into the operator request signature.",
+        ),
+        (
+            "IrohaOperatorNonce",
+            "X-Iroha-Operator-Nonce",
+            "Fresh nonce bound into the operator request signature.",
+        ),
+        (
+            "IrohaOperatorSignature",
+            "X-Iroha-Operator-Signature",
+            "Canonical operator signature over the exact request.",
+        ),
+    ] {
+        security_schemes.insert(
+            name.to_owned(),
+            norito::json!({
+                "type": "apiKey",
+                "in": "header",
+                "name": (header_name),
+                "description": (description)
+            }),
+        );
+    }
 }
 fn remove_hard_retired_schemas(document: &mut Value) {
     let schemas = document
@@ -2820,6 +2935,29 @@ mod tests {
                 Some(expected_operation_effect(&method, &path)),
                 "static tool effect drift for {method} {path}"
             );
+            let descriptor = RouteCatalog::new(CATALOGED_ROUTES)
+                .routes()
+                .iter()
+                .find(|descriptor| {
+                    descriptor.projections().openapi()
+                        && descriptor.path().replace("{*", "{") == path
+                        && method_name(descriptor.method()) == method
+                })
+                .unwrap_or_else(|| panic!("missing catalog descriptor for {method} {path}"));
+            assert_eq!(
+                operation.get(ROUTE_AUTH_EXTENSION),
+                Some(&route_auth_metadata(**descriptor)),
+                "static route-auth metadata drift for {method} {path}"
+            );
+            if let Some(expected_security) =
+                standard_security_requirements(descriptor.authentication())
+            {
+                assert_eq!(
+                    operation.get("security"),
+                    Some(&expected_security),
+                    "static standard security drift for {method} {path}"
+                );
+            }
         }
     }
     #[test]
@@ -3114,6 +3252,99 @@ mod tests {
     }
     // Textual inclusion preserves the original OpenAPI test-module paths.
     include!("openapi/tests/sorafs_contracts.rs");
+    #[test]
+    fn openapi_route_auth_metadata_matches_enabled_catalog_projection() {
+        let document = generate_spec();
+        let projected = RouteCatalog::new(CATALOGED_ROUTES).project(
+            CatalogProjection::OpenApi,
+            crate::router::builder::compiled_route_features(),
+        );
+        for descriptor in projected {
+            let method = match descriptor.method() {
+                CatalogHttpMethod::Get => "get",
+                CatalogHttpMethod::Post => "post",
+                CatalogHttpMethod::Put => "put",
+                CatalogHttpMethod::Patch => "patch",
+                CatalogHttpMethod::Delete => "delete",
+                CatalogHttpMethod::Any => {
+                    panic!("ANY protocol gateways cannot enter the OpenAPI projection")
+                }
+            };
+            let path = descriptor.path().replace("{*", "{");
+            let operation = openapi_operation(&document, &path, method);
+            assert_eq!(
+                operation.get(ROUTE_AUTH_EXTENSION),
+                Some(&route_auth_metadata(*descriptor)),
+                "{method} {path} route-auth metadata"
+            );
+        }
+    }
+    #[test]
+    fn openapi_standard_security_matches_enabled_catalog_authentication() {
+        let document = generate_spec();
+        let projected = RouteCatalog::new(CATALOGED_ROUTES).project(
+            CatalogProjection::OpenApi,
+            crate::router::builder::compiled_route_features(),
+        );
+        for descriptor in projected {
+            let method = match descriptor.method() {
+                CatalogHttpMethod::Get => "get",
+                CatalogHttpMethod::Post => "post",
+                CatalogHttpMethod::Put => "put",
+                CatalogHttpMethod::Patch => "patch",
+                CatalogHttpMethod::Delete => "delete",
+                CatalogHttpMethod::Any => {
+                    panic!("ANY protocol gateways cannot enter the OpenAPI projection")
+                }
+            };
+            let path = descriptor.path().replace("{*", "{");
+            let operation = openapi_operation(&document, &path, method);
+            if let Some(expected) = standard_security_requirements(descriptor.authentication()) {
+                assert_eq!(
+                    operation.get("security"),
+                    Some(&expected),
+                    "{method} {path} standard security"
+                );
+            }
+        }
+
+        let schemes = document
+            .get("components")
+            .and_then(|components| components.get("securitySchemes"))
+            .and_then(Value::as_object)
+            .expect("security schemes");
+        for (scheme, header) in [
+            ("IrohaOperatorPublicKey", "X-Iroha-Operator-Public-Key"),
+            ("IrohaOperatorTimestampMs", "X-Iroha-Operator-Timestamp-Ms"),
+            ("IrohaOperatorNonce", "X-Iroha-Operator-Nonce"),
+            ("IrohaOperatorSignature", "X-Iroha-Operator-Signature"),
+        ] {
+            assert_eq!(
+                schemes
+                    .get(scheme)
+                    .and_then(|value| value.get("name"))
+                    .and_then(Value::as_str),
+                Some(header),
+                "operator security scheme {scheme}"
+            );
+        }
+    }
+    #[test]
+    fn protocol_specific_bootle_bearer_security_is_preserved() {
+        let document = generate_spec();
+        for path in [
+            "/v1/privacy/bootle-lantern/issuance/authorize",
+            "/v1/privacy/bootle-lantern/issuance/issue",
+        ] {
+            assert_eq!(
+                openapi_operation(&document, path, "post").get("security"),
+                Some(&norito::json!([
+                    { "BootleLanternIssuanceBearer": [] }
+                ])),
+                "{path} must retain its protocol-specific bearer scheme"
+            );
+        }
+    }
     #[test]
     fn openapi_operations_equal_the_enabled_catalog_projection() {
         use iroha_torii_shared::route_catalog::{
