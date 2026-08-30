@@ -204,6 +204,40 @@ pub fn genesis_with_keypair_and_post_topology(
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
     )
 }
+
+/// Build and sign the default genesis with post-topology instructions without
+/// pre-executing its transactions.
+///
+/// This is the internal half of the custom-`NetworkBuilder` path. The builder
+/// must pre-execute the returned block under its fully merged runtime
+/// configuration before any peer starts; direct node startup must never use
+/// this block as prepared genesis.
+pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+) -> GenesisBlock {
+    init_instruction_registry();
+    build_minimal_genesis_unexecuted_with_post_topology(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        genesis_key_pair,
+        chain_id(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+    )
+    .0
+}
+
 pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     extra_transactions: Vec<Vec<InstructionBox>>,
     post_topology_transactions: Vec<Vec<InstructionBox>>,

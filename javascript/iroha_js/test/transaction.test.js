@@ -2,21 +2,14 @@ import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 import { ed25519 } from "@noble/curves/ed25519";
 import {
-  hashInstructionBatch,
-  hashSignedTransaction,
-  hashSignedTransactionPayload,
-  decodeSignedTransaction,
-  encodeContractArgumentRecord,
-  resignSignedTransaction,
-  submitSignedTransaction,
+  _createTransactionApi,
   buildMintAndTransferTransaction,
-  buildBurnAssetTransaction,
-  buildBurnTriggerTransaction,
   buildRegisterDomainAndMintTransaction,
   buildRegisterAccountAndTransferTransaction,
   buildRegisterAssetDefinitionAndMintTransaction,
   buildRegisterAssetDefinitionMintAndTransferTransaction,
 } from "../src/transaction.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 import {
   LocalSigningContext,
   ToriiClient as BaseToriiClient,
@@ -147,8 +140,8 @@ function encodeAssetIdForKnownAccount(assetDefinitionId, accountId) {
 test("hashSignedTransaction delegates to native binding and returns hex", () => {
   const input = Buffer.from([0xde, 0xad]);
   const fakeHash = Buffer.from([0x01, 0x02, 0x03, 0x04]);
-  withNativeBinding({ hashSignedTransaction: () => fakeHash }, () => {
-    const result = hashSignedTransaction(input);
+  withTransactionApi({ hashSignedTransaction: () => fakeHash }, (transaction) => {
+    const result = transaction.hashSignedTransaction(input);
     assert.equal(result, fakeHash.toString("hex"));
   });
 });
@@ -156,10 +149,10 @@ test("hashSignedTransaction delegates to native binding and returns hex", () => 
 test("hashSignedTransactionPayload delegates to the native payload hasher", () => {
   const input = Buffer.from([0xca, 0xfe]);
   const fakeHash = Buffer.alloc(32, 0x5a);
-  withNativeBinding({ hashSignedTransactionPayload: () => fakeHash }, () => {
-    assert.equal(hashSignedTransactionPayload(input), fakeHash.toString("hex"));
+  withTransactionApi({ hashSignedTransactionPayload: () => fakeHash }, (transaction) => {
+    assert.equal(transaction.hashSignedTransactionPayload(input), fakeHash.toString("hex"));
     assert.deepEqual(
-      hashSignedTransactionPayload(input, { encoding: "buffer" }),
+      transaction.hashSignedTransactionPayload(input, { encoding: "buffer" }),
       fakeHash,
     );
   });
@@ -173,28 +166,32 @@ test("decodeSignedTransaction parses the native JSON inspection envelope", () =>
       authority: "account",
     },
   };
-  withNativeBinding(
+  withTransactionApi(
     { decodeSignedTransactionJson: () => JSON.stringify(decoded) },
-    () => assert.deepEqual(decodeSignedTransaction(input), decoded),
+    (transaction) => assert.deepEqual(transaction.decodeSignedTransaction(input), decoded),
   );
-  withNativeBinding(
+  withTransactionApi(
     { decodeSignedTransactionJson: () => "[]" },
-    () => assert.throws(() => decodeSignedTransaction(input), /must be an object/u),
+    (transaction) =>
+      assert.throws(
+        () => transaction.decodeSignedTransaction(input),
+        /must be an object/u,
+      ),
   );
 });
 
 test("encodeContractArgumentRecord delegates exact JSON to the native encoder", () => {
   const calls = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       encodeContractArgumentRecordJson: (schemaJson, payloadJson) => {
         calls.push([schemaJson, payloadJson]);
         return Buffer.from([1, 2, 3]);
       },
     },
-    () => {
+    (transaction) => {
       assert.deepEqual(
-        encodeContractArgumentRecord(
+        transaction.encodeContractArgumentRecord(
           { fields: [{ name: "amount" }] },
           { amount: 10 },
         ),
@@ -205,11 +202,11 @@ test("encodeContractArgumentRecord delegates exact JSON to the native encoder", 
   assert.deepEqual(calls, [
     ['{"fields":[{"name":"amount"}]}', '{"amount":10}'],
   ]);
-  withNativeBinding(
+  withTransactionApi(
     { encodeContractArgumentRecordJson: () => Buffer.alloc(0) },
-    () =>
+    (transaction) =>
       assert.throws(
-        () => encodeContractArgumentRecord(undefined, { amount: 10 }),
+        () => transaction.encodeContractArgumentRecord(undefined, { amount: 10 }),
         /must be JSON values/u,
       ),
   );
@@ -218,22 +215,23 @@ test("encodeContractArgumentRecord delegates exact JSON to the native encoder", 
 test("hashInstructionBatch serializes instructions and delegates to native", () => {
   const fakeHash = Buffer.alloc(32, 0x6b);
   const calls = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       hashInstructionBatch: (instructions) => {
         calls.push(instructions);
         return fakeHash;
       },
     },
-    () => {
+    (transaction) => {
       assert.equal(
-        hashInstructionBatch([{ Log: { level: "INFO", msg: "bound" } }]),
+        transaction.hashInstructionBatch([{ Log: { level: "INFO", msg: "bound" } }]),
         fakeHash.toString("hex"),
       );
       assert.deepEqual(
-        hashInstructionBatch([JSON.stringify({ Fail: { message: "stop" } })], {
-          encoding: "buffer",
-        }),
+        transaction.hashInstructionBatch(
+          [JSON.stringify({ Fail: { message: "stop" } })],
+          { encoding: "buffer" },
+        ),
         fakeHash,
       );
     },
@@ -297,8 +295,8 @@ test("submitSignedTransaction submits payload and polls until exact Applied fina
     },
   };
 
-  const result = await withNativeBinding(binding, () =>
-    submitSignedTransaction(client, txBytes, {
+  const result = await withTransactionApi(binding, (transaction) =>
+    transaction.submitSignedTransaction(client, txBytes, {
       waitForCommit: true,
       pollIntervalMs: 0,
       networkId: NETWORK_ID,
@@ -353,8 +351,8 @@ test("submitSignedTransaction rejects removed finality options before signing or
     "transactionStatusScope",
   ]) {
     await assert.rejects(
-      withNativeBinding(binding, () =>
-        submitSignedTransaction(client, txBytes, {
+      withTransactionApi(binding, (transaction) =>
+        transaction.submitSignedTransaction(client, txBytes, {
           waitForCommit: true,
           networkId: NETWORK_ID,
           privateKey: Buffer.alloc(32, 0x01),
@@ -380,8 +378,8 @@ test("submitSignedTransaction rejects even null removed scope", async () => {
   };
 
   await assert.rejects(
-    withNativeBinding(binding, () =>
-      submitSignedTransaction(client, Buffer.from([0xce]), {
+    withTransactionApi(binding, (transaction) =>
+      transaction.submitSignedTransaction(client, Buffer.from([0xce]), {
         scope: null,
       }),
     ),
@@ -418,10 +416,10 @@ test("submitSignedTransaction times out without state-resolved Applied finality"
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
-  await withNativeBinding(binding, async () => {
+  await withTransactionApi(binding, async (transaction) => {
     await assert.rejects(
       () =>
-        submitSignedTransaction(client, txBytes, {
+        transaction.submitSignedTransaction(client, txBytes, {
           waitForCommit: true,
           timeoutMs: 1,
           pollIntervalMs: 0,
@@ -469,10 +467,10 @@ test("submitSignedTransaction rejects a deceptive non-canonical status envelope"
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
-  await withNativeBinding(binding, async () => {
+  await withTransactionApi(binding, async (transaction) => {
     await assert.rejects(
       () =>
-        submitSignedTransaction(client, txBytes, {
+        transaction.submitSignedTransaction(client, txBytes, {
           waitForCommit: true,
           timeoutMs: 5,
           pollIntervalMs: 0,
@@ -488,7 +486,7 @@ test("resignSignedTransaction delegates to native binding", () => {
   const input = Buffer.from([0xde]);
   const key = Buffer.alloc(32, 0x11);
   const output = Buffer.from([0xef]);
-  withNativeBinding(
+  withTransactionApi(
     {
       signTransaction: (networkId, tx, pk) => {
         assert.deepEqual(Buffer.from(networkId), Buffer.from(NETWORK_ID.toBytes()));
@@ -497,8 +495,8 @@ test("resignSignedTransaction delegates to native binding", () => {
         return output;
       },
     },
-    () => {
-      const result = resignSignedTransaction(NETWORK_ID, input, key);
+    (transaction) => {
+      const result = transaction.resignSignedTransaction(NETWORK_ID, input, key);
       assert.deepEqual(result, output);
     },
   );
@@ -506,17 +504,17 @@ test("resignSignedTransaction delegates to native binding", () => {
 
 baseTest("resignSignedTransaction rejects non-nominal NetworkId before native dispatch", () => {
   let nativeCalls = 0;
-  withNativeBinding(
+  withTransactionApi(
     {
       signTransaction: () => {
         nativeCalls += 1;
         return Buffer.from([0xef]);
       },
     },
-    () => {
+    (transaction) => {
       assert.throws(
         () =>
-          resignSignedTransaction(
+          transaction.resignSignedTransaction(
             NETWORK_ID.literal,
             Buffer.from([0xde]),
             Buffer.alloc(32, 0x11),
@@ -535,18 +533,18 @@ baseTest("submitSignedTransaction rejects retired identity aliases before re-sig
     },
   });
   let nativeCalls = 0;
-  await withNativeBinding(
+  await withTransactionApi(
     {
       signTransaction: () => {
         nativeCalls += 1;
         return Buffer.from([0xef]);
       },
     },
-    async () => {
+    async (transaction) => {
       for (const retired of ["chain", "chainId", "chain_id"]) {
         await assert.rejects(
           () =>
-            submitSignedTransaction(client, Buffer.from([0xde]), {
+            transaction.submitSignedTransaction(client, Buffer.from([0xde]), {
               networkId: NETWORK_ID,
               privateKey: Buffer.alloc(32, 0x11),
               [retired]: "retired",
@@ -560,7 +558,7 @@ baseTest("submitSignedTransaction rejects retired identity aliases before re-sig
 });
 test("buildMintAndTransferTransaction yields multi-instruction payload", () => {
   const captures = [];
-  const result = withNativeBinding(
+  const result = withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
@@ -570,8 +568,8 @@ test("buildMintAndTransferTransaction yields multi-instruction payload", () => {
         };
       },
     },
-    () =>
-      buildMintAndTransferTransaction({
+    (transaction) =>
+      transaction.buildMintAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -606,7 +604,7 @@ test("buildMintAndTransferTransaction yields multi-instruction payload", () => {
 
 test("buildBurnAssetTransaction yields single burn instruction", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
@@ -617,8 +615,8 @@ test("buildBurnAssetTransaction yields single burn instruction", () => {
         };
       },
     },
-    () =>
-      buildBurnAssetTransaction({
+    (transaction) =>
+      transaction.buildBurnAssetTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -638,7 +636,7 @@ test("buildBurnAssetTransaction yields single burn instruction", () => {
 
 test("buildBurnTriggerTransaction yields single trigger burn instruction", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
@@ -649,8 +647,8 @@ test("buildBurnTriggerTransaction yields single trigger burn instruction", () =>
         };
       },
     },
-    () =>
-      buildBurnTriggerTransaction({
+    (transaction) =>
+      transaction.buildBurnTriggerTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -670,7 +668,7 @@ test("buildBurnTriggerTransaction yields single trigger burn instruction", () =>
 
 test("buildMintAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
@@ -680,8 +678,8 @@ test("buildMintAndTransferTransaction supports transfer arrays", () => {
         };
       },
     },
-    () =>
-      buildMintAndTransferTransaction({
+    (transaction) =>
+      transaction.buildMintAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -755,7 +753,7 @@ test("buildMintAndTransferTransaction requires at least one transfer", () => {
 
 test("buildRegisterDomainAndMintTransaction expands registration and mint", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
@@ -765,8 +763,8 @@ test("buildRegisterDomainAndMintTransaction expands registration and mint", () =
         };
       },
     },
-    () =>
-      buildRegisterDomainAndMintTransaction({
+    (transaction) =>
+      transaction.buildRegisterDomainAndMintTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -794,7 +792,7 @@ test("buildRegisterDomainAndMintTransaction expands registration and mint", () =
 
 test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
@@ -804,8 +802,8 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
         };
       },
     },
-    () =>
-      buildRegisterDomainAndMintTransaction({
+    (transaction) =>
+      transaction.buildRegisterDomainAndMintTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -867,7 +865,7 @@ test("buildRegisterDomainAndMintTransaction enforces assetId in mints", () => {
 
 test("buildRegisterAccountAndTransferTransaction expands registration and transfer", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
@@ -877,8 +875,8 @@ test("buildRegisterAccountAndTransferTransaction expands registration and transf
         };
       },
     },
-    () =>
-      buildRegisterAccountAndTransferTransaction({
+    (transaction) =>
+      transaction.buildRegisterAccountAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -925,7 +923,7 @@ test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () =
     publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x33))),
   }).toI105();
   const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
@@ -935,8 +933,8 @@ test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () =
         };
       },
     },
-    () =>
-      buildRegisterAccountAndTransferTransaction({
+    (transaction) =>
+      transaction.buildRegisterAccountAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -1012,7 +1010,7 @@ test("buildRegisterAccountAndTransferTransaction enforces sourceAssetId in trans
 
 test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
@@ -1022,8 +1020,8 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
         };
       },
     },
-    () =>
-      buildRegisterAssetDefinitionAndMintTransaction({
+    (transaction) =>
+      transaction.buildRegisterAssetDefinitionAndMintTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -1096,7 +1094,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects confidential policy
 
 test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
@@ -1106,8 +1104,8 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
         };
       },
     },
-    () =>
-      buildRegisterAssetDefinitionAndMintTransaction({
+    (transaction) =>
+      transaction.buildRegisterAssetDefinitionAndMintTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -1295,7 +1293,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects mismatched assetId/
 
 test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition, mint, and transfer", () => {
   const captures = [];
-  withNativeBinding(
+  withTransactionApi(
     {
       encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
@@ -1306,8 +1304,8 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
         };
       },
     },
-    () =>
-      buildRegisterAssetDefinitionMintAndTransferTransaction({
+    (transaction) =>
+      transaction.buildRegisterAssetDefinitionMintAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -1352,7 +1350,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   }).toI105();
   const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
   const secondAccountIdInput = i105FromEd25519AccountId(secondAccountIdRaw);
-  withNativeBinding(
+  withTransactionApi(
     {
       encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
@@ -1363,8 +1361,8 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         };
       },
     },
-    () =>
-      buildRegisterAssetDefinitionMintAndTransferTransaction({
+    (transaction) =>
+      transaction.buildRegisterAssetDefinitionMintAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
@@ -1524,14 +1522,8 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
   );
 });
 
-function withNativeBinding(binding, fn) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = binding;
-  try {
-    return fn();
-  } finally {
-    globalThis.__IROHA_NATIVE_BINDING__ = previous;
-  }
+function withTransactionApi(binding, fn) {
+  return fn(_createTransactionApi(createNativeRuntime(binding)));
 }
 
 function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {

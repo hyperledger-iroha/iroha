@@ -13,18 +13,20 @@ import {
   sign as signRaw,
 } from "node:crypto";
 import { verifyEd25519Strict } from "./ed25519Strict.js";
-import { getNativeBinding } from "./native.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+  resolveOptionalNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import { networkIdBytes } from "./networkId.js";
 import {
   CRYPTO_ALGORITHMS,
   normalizeCryptoAlgorithm,
-  SUPPORTED_CRYPTO_ALGORITHMS,
 } from "./cryptoAlgorithms.js";
 
 export {
   CRYPTO_ALGORITHMS,
   normalizeCryptoAlgorithm,
-  SUPPORTED_CRYPTO_ALGORITHMS,
 };
 
 const ED25519_SEED_LENGTH = 32;
@@ -102,32 +104,8 @@ const ED25519_SPKI_PREFIX = Buffer.from([
   0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
 ]);
 
-function resolveNativeBinding() {
-  return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
-}
-
-function resolveOptionalNativeBinding() {
-  if (globalThis.__IROHA_NATIVE_BINDING__ !== undefined) {
-    return globalThis.__IROHA_NATIVE_BINDING__;
-  }
-  try {
-    return getNativeBinding();
-  } catch (error) {
-    if (
-      error?.code === "ERR_IROHA_NATIVE_BINDING" &&
-      error?.nativeStatus === "missing_file"
-    ) {
-      return null;
-    }
-    // A present-but-invalid binding is a supply-chain failure, not an optional
-    // capability miss. Preserve checksum/manifest/load errors rather than
-    // silently falling back to the portable Ed25519 implementation.
-    throw error;
-  }
-}
-
-export function supportedCryptoAlgorithms() {
-  const native = resolveOptionalNativeBinding();
+function supportedCryptoAlgorithmsWithRuntime(nativeRuntime) {
+  const native = resolveOptionalNativeRuntimeBinding(nativeRuntime);
   if (typeof native?.supportedCryptoAlgorithms === "function") {
     return native.supportedCryptoAlgorithms().map((algorithm) =>
       normalizeCryptoAlgorithm(algorithm),
@@ -160,18 +138,23 @@ function normalizeNativeKeyPair(result, algorithm) {
  * If supplied, `seed` must be a 32-byte secret generated with at least 256
  * bits of entropy. It is a deterministic key-generation seed, not a password.
  * Omit it for operating-system-random production keys.
- * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: string}} [options]
+ * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: import("../index.js").CryptoAlgorithm}} [options]
  * @returns {{algorithm: string, publicKey: Buffer, privateKey: Buffer, distid?: string | null}}
  */
-export function generateKeyPair(options = {}) {
+function generateKeyPairWithRuntime(nativeRuntime, options = {}) {
   const algorithm = normalizeCryptoAlgorithm(options.algorithm);
   if (algorithm !== CRYPTO_ALGORITHMS.ED25519) {
-    const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoKeypair");
-    const seed = options.seed ? normalizeSeed(options.seed) : undefined;
+    const native = ensureGenericCryptoNative(
+      resolveNativeRuntimeBinding(nativeRuntime),
+      "cryptoKeypair",
+    );
+    const seed =
+      options.seed === undefined ? undefined : normalizeSeed(options.seed);
     return normalizeNativeKeyPair(native.cryptoKeypair(algorithm, seed), algorithm);
   }
-  const seed = options.seed ? normalizeSeed(options.seed) : undefined;
-  const native = resolveOptionalNativeBinding();
+  const seed =
+    options.seed === undefined ? undefined : normalizeSeed(options.seed);
+  const native = resolveOptionalNativeRuntimeBinding(nativeRuntime);
   if (typeof native?.ed25519Keypair === "function") {
     const result = native.ed25519Keypair(seed);
     return {
@@ -191,19 +174,22 @@ export function generateKeyPair(options = {}) {
 /**
  * Derive the public key for a given private key (32-byte seed or 64-byte seed+public concatenation).
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
- * @param {{algorithm?: string}} [options]
+ * @param {{algorithm?: import("../index.js").CryptoAlgorithm}} [options]
  * @returns {Buffer}
  */
-export function publicKeyFromPrivate(privateKey, options = {}) {
+function publicKeyFromPrivateWithRuntime(nativeRuntime, privateKey, options = {}) {
   const algorithm = normalizeCryptoAlgorithm(options.algorithm);
   if (algorithm !== CRYPTO_ALGORITHMS.ED25519) {
-    const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoPublicKeyFromPrivate");
+    const native = ensureGenericCryptoNative(
+      resolveNativeRuntimeBinding(nativeRuntime),
+      "cryptoPublicKeyFromPrivate",
+    );
     return Buffer.from(
       native.cryptoPublicKeyFromPrivate(algorithm, toBuffer(privateKey, "privateKey")),
     );
   }
   const buffer = toBuffer(privateKey, "privateKey");
-  const native = resolveOptionalNativeBinding();
+  const native = resolveOptionalNativeRuntimeBinding(nativeRuntime);
   if (typeof native?.ed25519PublicKeyFromPrivate === "function") {
     return Buffer.from(native.ed25519PublicKeyFromPrivate(buffer));
   }
@@ -211,18 +197,24 @@ export function publicKeyFromPrivate(privateKey, options = {}) {
   return exportPublicKey(privateKeyFromSeed(seed));
 }
 
-export function loadKeyPair(privateKey, options = {}) {
+function loadKeyPairWithRuntime(nativeRuntime, privateKey, options = {}) {
   const algorithm = normalizeCryptoAlgorithm(options.algorithm);
   if (algorithm === CRYPTO_ALGORITHMS.ED25519) {
     const privateKeyBuffer = toBuffer(privateKey, "privateKey");
     return {
       algorithm,
-      publicKey: publicKeyFromPrivate(privateKeyBuffer),
+      publicKey: publicKeyFromPrivateWithRuntime(
+        nativeRuntime,
+        privateKeyBuffer,
+      ),
       privateKey: extractSeed(privateKeyBuffer),
       distid: null,
     };
   }
-  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoKeypairFromPrivate");
+  const native = ensureGenericCryptoNative(
+    resolveNativeRuntimeBinding(nativeRuntime),
+    "cryptoKeypairFromPrivate",
+  );
   return normalizeNativeKeyPair(
     native.cryptoKeypairFromPrivate(algorithm, toBuffer(privateKey, "privateKey")),
     algorithm,
@@ -319,12 +311,15 @@ export function ed25519SeedToRecoveryPhrase(privateKey) {
   return entropyToRecoveryPhrase(extractSeed(privateKey));
 }
 
-export function sign(message, privateKey, options = {}) {
+function signWithRuntime(nativeRuntime, message, privateKey, options = {}) {
   const algorithm = normalizeCryptoAlgorithm(options.algorithm);
   if (algorithm === CRYPTO_ALGORITHMS.ED25519) {
     return signEd25519(message, privateKey);
   }
-  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoSign");
+  const native = ensureGenericCryptoNative(
+    resolveNativeRuntimeBinding(nativeRuntime),
+    "cryptoSign",
+  );
   return Buffer.from(
     native.cryptoSign(
       algorithm,
@@ -334,12 +329,21 @@ export function sign(message, privateKey, options = {}) {
   );
 }
 
-export function verify(message, signature, publicKey, options = {}) {
+function verifyWithRuntime(
+  nativeRuntime,
+  message,
+  signature,
+  publicKey,
+  options = {},
+) {
   const algorithm = normalizeCryptoAlgorithm(options.algorithm);
   if (algorithm === CRYPTO_ALGORITHMS.ED25519) {
     return verifyEd25519(message, signature, publicKey);
   }
-  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoVerify");
+  const native = ensureGenericCryptoNative(
+    resolveNativeRuntimeBinding(nativeRuntime),
+    "cryptoVerify",
+  );
   return Boolean(
     native.cryptoVerify(
       algorithm,
@@ -350,15 +354,21 @@ export function verify(message, signature, publicKey, options = {}) {
   );
 }
 
-export function publicKeyMultihash(publicKey, options = {}) {
+function publicKeyMultihashWithRuntime(nativeRuntime, publicKey, options = {}) {
   const algorithm = normalizeCryptoAlgorithm(options.algorithm);
-  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoPublicKeyMultihash");
+  const native = ensureGenericCryptoNative(
+    resolveNativeRuntimeBinding(nativeRuntime),
+    "cryptoPublicKeyMultihash",
+  );
   return native.cryptoPublicKeyMultihash(algorithm, toBuffer(publicKey, "publicKey"));
 }
 
-export function privateKeyMultihash(privateKey, options = {}) {
+function privateKeyMultihashWithRuntime(nativeRuntime, privateKey, options = {}) {
   const algorithm = normalizeCryptoAlgorithm(options.algorithm);
-  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoPrivateKeyMultihash");
+  const native = ensureGenericCryptoNative(
+    resolveNativeRuntimeBinding(nativeRuntime),
+    "cryptoPrivateKeyMultihash",
+  );
   return native.cryptoPrivateKeyMultihash(algorithm, toBuffer(privateKey, "privateKey"));
 }
 
@@ -448,12 +458,14 @@ export class ConfidentialMemoKeypairV1 {
   #suite;
   #publicKey;
   #secretKey;
+  #nativeRuntime;
   #destroyed = false;
 
-  constructor(access, suite, publicKey, secretKey) {
+  constructor(access, nativeRuntime, suite, publicKey, secretKey) {
     if (access !== CONFIDENTIAL_MEMO_KEYPAIR_ACCESS) {
       throw new TypeError("ConfidentialMemoKeypairV1 instances must be generated by the SDK");
     }
+    this.#nativeRuntime = nativeRuntime;
     this.#suite = suite;
     this.#publicKey = Buffer.from(publicKey);
     this.#secretKey = Buffer.from(secretKey);
@@ -481,7 +493,10 @@ export class ConfidentialMemoKeypairV1 {
   }
 
   open(envelope) {
-    return openConfidentialMemoV1({ keypair: this, envelope });
+    return openConfidentialMemoV1WithRuntime(this.#nativeRuntime, {
+      keypair: this,
+      envelope,
+    });
   }
 
   _borrowSecretKeyV1(access) {
@@ -500,11 +515,11 @@ export class ConfidentialMemoKeypairV1 {
 }
 
 /** Generate one local ML-KEM confidential-memo keypair. */
-export function generateConfidentialMemoKeypairV1(input) {
+function generateConfidentialMemoKeypairV1WithRuntime(nativeRuntime, input) {
   assertExactConfidentialMemoFields(input, ["suite"], "generateConfidentialMemoKeypairV1 input");
   const suite = normalizeConfidentialMemoSuiteV1(input.suite);
   const native = ensureConfidentialMemoNative(
-    resolveNativeBinding(),
+    resolveNativeRuntimeBinding(nativeRuntime),
     "generateConfidentialMemoKeypairV1",
   );
   const generated = native.generateConfidentialMemoKeypairV1(suite);
@@ -525,6 +540,7 @@ export function generateConfidentialMemoKeypairV1(input) {
     }
     return new ConfidentialMemoKeypairV1(
       CONFIDENTIAL_MEMO_KEYPAIR_ACCESS,
+      nativeRuntime,
       suite,
       publicKey,
       secretKey,
@@ -536,7 +552,7 @@ export function generateConfidentialMemoKeypairV1(input) {
 }
 
 /** Seal a memo to one through eight suite-matched local recipient keys. */
-export function sealConfidentialMemoV1(input) {
+function sealConfidentialMemoV1WithRuntime(nativeRuntime, input) {
   assertExactConfidentialMemoFields(
     input,
     ["suite", "recipients", "plaintext"],
@@ -579,7 +595,10 @@ export function sealConfidentialMemoV1(input) {
     throw new TypeError("plaintext must be an explicit byte buffer, not a string");
   }
   const plaintext = toOwnedBuffer(input.plaintext, "plaintext");
-  const native = ensureConfidentialMemoNative(resolveNativeBinding(), "sealConfidentialMemoV1");
+  const native = ensureConfidentialMemoNative(
+    resolveNativeRuntimeBinding(nativeRuntime),
+    "sealConfidentialMemoV1",
+  );
   try {
     return Buffer.from(native.sealConfidentialMemoV1(suite, recipients, plaintext));
   } finally {
@@ -588,7 +607,7 @@ export function sealConfidentialMemoV1(input) {
 }
 
 /** Open one exact-eight-slot memo without exposing the keypair's secret bytes. */
-export function openConfidentialMemoV1(input) {
+function openConfidentialMemoV1WithRuntime(nativeRuntime, input) {
   assertExactConfidentialMemoFields(
     input,
     ["keypair", "envelope"],
@@ -598,7 +617,10 @@ export function openConfidentialMemoV1(input) {
     throw new TypeError("keypair must be a live ConfidentialMemoKeypairV1");
   }
   const envelope = toOwnedBuffer(input.envelope, "envelope");
-  const native = ensureConfidentialMemoNative(resolveNativeBinding(), "openConfidentialMemoV1");
+  const native = ensureConfidentialMemoNative(
+    resolveNativeRuntimeBinding(nativeRuntime),
+    "openConfidentialMemoV1",
+  );
   return Buffer.from(
     native.openConfidentialMemoV1(
       input.keypair.suite,
@@ -608,8 +630,8 @@ export function openConfidentialMemoV1(input) {
   );
 }
 
-export function generateSm2KeyPair(options = {}) {
-  const native = ensureSm2Native(resolveNativeBinding());
+function generateSm2KeyPairWithRuntime(nativeRuntime, options = {}) {
+  const native = ensureSm2Native(resolveNativeRuntimeBinding(nativeRuntime));
   const effectiveDistid = normalizeSm2Distid(options.distid, native);
   const result = native.sm2Keypair(effectiveDistid);
   const privateKey = Buffer.from(result.privateKey);
@@ -628,8 +650,8 @@ export function generateSm2KeyPair(options = {}) {
   };
 }
 
-export function deriveSm2KeyPairFromSeed(seed, distid) {
-  const native = ensureSm2Native(resolveNativeBinding());
+function deriveSm2KeyPairFromSeedWithRuntime(nativeRuntime, seed, distid) {
+  const native = ensureSm2Native(resolveNativeRuntimeBinding(nativeRuntime));
   const seedBuffer = toBuffer(seed, "seed");
   const effectiveDistid = normalizeSm2Distid(distid, native);
   const result = native.sm2KeypairFromSeed(effectiveDistid, seedBuffer);
@@ -649,8 +671,8 @@ export function deriveSm2KeyPairFromSeed(seed, distid) {
   };
 }
 
-export function loadSm2KeyPair(privateKey, distid) {
-  const native = ensureSm2Native(resolveNativeBinding());
+function loadSm2KeyPairWithRuntime(nativeRuntime, privateKey, distid) {
+  const native = ensureSm2Native(resolveNativeRuntimeBinding(nativeRuntime));
   const privateKeyBuffer = toBuffer(privateKey, "privateKey");
   if (privateKeyBuffer.length !== SM2_PRIVATE_KEY_LENGTH) {
     throw new Error(`sm2 private key must be ${SM2_PRIVATE_KEY_LENGTH} bytes`);
@@ -665,8 +687,8 @@ export function loadSm2KeyPair(privateKey, distid) {
   };
 }
 
-export function sm2PublicKeyMultihash(publicKey, distid) {
-  const native = ensureSm2Native(resolveNativeBinding());
+function sm2PublicKeyMultihashWithRuntime(nativeRuntime, publicKey, distid) {
+  const native = ensureSm2Native(resolveNativeRuntimeBinding(nativeRuntime));
   const buffer = toBuffer(publicKey, "publicKey");
   if (buffer.length !== SM2_PUBLIC_KEY_LENGTH) {
     throw new Error(`sm2 public key must be ${SM2_PUBLIC_KEY_LENGTH} bytes`);
@@ -675,8 +697,8 @@ export function sm2PublicKeyMultihash(publicKey, distid) {
   return native.sm2PublicKeyMultihash(buffer, effectiveDistid);
 }
 
-export function signSm2(message, privateKey, distid) {
-  const native = ensureSm2Native(resolveNativeBinding());
+function signSm2WithRuntime(nativeRuntime, message, privateKey, distid) {
+  const native = ensureSm2Native(resolveNativeRuntimeBinding(nativeRuntime));
   const privateKeyBuffer = toBuffer(privateKey, "privateKey");
   if (privateKeyBuffer.length !== SM2_PRIVATE_KEY_LENGTH) {
     throw new Error(`sm2 private key must be ${SM2_PRIVATE_KEY_LENGTH} bytes`);
@@ -691,8 +713,14 @@ export function signSm2(message, privateKey, distid) {
   return buffer;
 }
 
-export function verifySm2(message, signature, publicKey, distid) {
-  const native = ensureSm2Native(resolveNativeBinding());
+function verifySm2WithRuntime(
+  nativeRuntime,
+  message,
+  signature,
+  publicKey,
+  distid,
+) {
+  const native = ensureSm2Native(resolveNativeRuntimeBinding(nativeRuntime));
   const publicKeyBuffer = toBuffer(publicKey, "publicKey");
   if (publicKeyBuffer.length !== SM2_PUBLIC_KEY_LENGTH) {
     throw new Error(`sm2 public key must be ${SM2_PUBLIC_KEY_LENGTH} bytes`);
@@ -731,13 +759,13 @@ export function buildKaigiRosterJoinProof(options) {
  * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
  * @returns {{skSpend: Buffer, nk: Buffer, ivk: Buffer, ovk: Buffer, fvk: Buffer, skSpendHex: string, nkHex: string, ivkHex: string, ovkHex: string, fvkHex: string, asHex(): Record<string, string>}}
  */
-export function deriveConfidentialKeyset(spendKey) {
+function deriveConfidentialKeysetWithRuntime(nativeRuntime, spendKey) {
   const seed = toBuffer(spendKey, "spendKey");
   if (seed.length !== 32) {
     throw new Error("confidential spend key must be 32 bytes");
   }
 
-  const native = resolveNativeBinding();
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (typeof native.deriveConfidentialKeyset !== "function") {
     throw new Error("Native binding does not expose deriveConfidentialKeyset");
   }
@@ -758,7 +786,7 @@ export function deriveConfidentialKeyset(spendKey) {
  * @param {string} spendKeyHex
  * @returns {ReturnType<typeof deriveConfidentialKeyset>}
  */
-export function deriveConfidentialKeysetFromHex(spendKeyHex) {
+function deriveConfidentialKeysetFromHexWithRuntime(nativeRuntime, spendKeyHex) {
   if (typeof spendKeyHex !== "string") {
     throw new TypeError("spendKeyHex must be a string");
   }
@@ -773,7 +801,7 @@ export function deriveConfidentialKeysetFromHex(spendKeyHex) {
   if (seed.length !== 32) {
     throw new Error("confidential spend key must be valid hex");
   }
-  return deriveConfidentialKeyset(seed);
+  return deriveConfidentialKeysetWithRuntime(nativeRuntime, seed);
 }
 
 /**
@@ -782,9 +810,13 @@ export function deriveConfidentialKeysetFromHex(spendKeyHex) {
  * @param {{diversifierHex: string}} options
  * @returns {Buffer}
  */
-export function deriveConfidentialOwnerTagV2(spendKey, options) {
+function deriveConfidentialOwnerTagV2WithRuntime(
+  nativeRuntime,
+  spendKey,
+  options,
+) {
   const native = ensureConfidentialV2Native(
-    resolveNativeBinding(),
+    resolveNativeRuntimeBinding(nativeRuntime),
     "deriveConfidentialOwnerTagV2",
   );
   const spendKeyBuffer = toBuffer(spendKey, "spendKey");
@@ -806,9 +838,9 @@ export function deriveConfidentialOwnerTagV2(spendKey, options) {
  * @param {ArrayBufferView | ArrayBuffer | Buffer | string} seed
  * @returns {{diversifier: Buffer, diversifierHex: string}}
  */
-export function deriveConfidentialDiversifierV2(seed) {
+function deriveConfidentialDiversifierV2WithRuntime(nativeRuntime, seed) {
   const native = ensureConfidentialV2Native(
-    resolveNativeBinding(),
+    resolveNativeRuntimeBinding(nativeRuntime),
     "deriveConfidentialDiversifierV2",
   );
   const seedBuffer = toBuffer(seed, "seed");
@@ -827,9 +859,9 @@ export function deriveConfidentialDiversifierV2(seed) {
  * @param {{spendKey: ArrayBufferView | ArrayBuffer | Buffer, diversifierSeed: ArrayBufferView | ArrayBuffer | Buffer | string}} input
  * @returns {{ownerTag: Buffer, ownerTagHex: string, diversifier: Buffer, diversifierHex: string}}
  */
-export function deriveConfidentialReceiveAddressV2(input) {
+function deriveConfidentialReceiveAddressV2WithRuntime(nativeRuntime, input) {
   const native = ensureConfidentialV2Native(
-    resolveNativeBinding(),
+    resolveNativeRuntimeBinding(nativeRuntime),
     "deriveConfidentialReceiveAddressV2",
   );
   const spendKeyBuffer = toBuffer(input?.spendKey, "spendKey");
@@ -856,9 +888,9 @@ export function deriveConfidentialReceiveAddressV2(input) {
  * @param {{assetDefinitionId: string, amount: string | number | bigint, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer, ownerTagHex?: string, ownerTag?: ArrayBufferView | ArrayBuffer | Buffer}} input
  * @returns {{commitment: Buffer, commitmentHex: string}}
  */
-export function deriveConfidentialNoteV2(input) {
+function deriveConfidentialNoteV2WithRuntime(nativeRuntime, input) {
   const native = ensureConfidentialV2Native(
-    resolveNativeBinding(),
+    resolveNativeRuntimeBinding(nativeRuntime),
     "deriveConfidentialNoteV2",
   );
   const assetDefinitionId = normalizeConfidentialV2ExactString(
@@ -890,9 +922,9 @@ export function deriveConfidentialNoteV2(input) {
  * @param {{networkId: import("./networkId.js").NetworkId, assetDefinitionId: string, spendKey: ArrayBufferView | ArrayBuffer | Buffer, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer}} input
  * @returns {{nullifier: Buffer, nullifierHex: string}}
  */
-export function deriveConfidentialNullifierV2(input) {
+function deriveConfidentialNullifierV2WithRuntime(nativeRuntime, input) {
   const native = ensureConfidentialV2Native(
-    resolveNativeBinding(),
+    resolveNativeRuntimeBinding(nativeRuntime),
     "deriveConfidentialNullifierV2",
   );
   const networkId = Buffer.from(
@@ -1042,12 +1074,8 @@ function invokePrivacyNative(native, operation, ...args) {
   }
 }
 
-export function isPrivacyNativeAvailable() {
-  try {
-    return hasPrivacyNative(resolveNativeBinding());
-  } catch {
-    return false;
-  }
+function isPrivacyNativeAvailableWithRuntime(nativeRuntime) {
+  return hasPrivacyNative(resolveOptionalNativeRuntimeBinding(nativeRuntime));
 }
 
 /**
@@ -1058,9 +1086,9 @@ export function isPrivacyNativeAvailable() {
  * Torii client for the authoritative committed manifest.
  * @returns {Buffer}
  */
-export function privacyCompiledProfileCatalogV1() {
+function privacyCompiledProfileCatalogV1WithRuntime(nativeRuntime) {
   const native = ensurePrivacyNative(
-    resolveNativeBinding(),
+    resolveNativeRuntimeBinding(nativeRuntime),
     "privacyCompiledProfileCatalogV1",
   );
   const result = invokePrivacyNative(native, "privacyCompiledProfileCatalogV1");
@@ -1072,18 +1100,17 @@ export function privacyCompiledProfileCatalogV1() {
 }
 
 /**
- * Return the canonical SM2 signing fixture values/**
  * Return the canonical SM2 signing fixture values for the given seed and message.
  * @param {string} distid
  * @param {ArrayBufferView | ArrayBuffer | Buffer | string} seed
  * @param {ArrayBufferView | ArrayBuffer | Buffer | string} message
  * @returns {{distid: string, seedHex: string, messageHex: string, privateKeyHex: string, publicKeySec1Hex: string, publicKeyMultihash: string, publicKeyPrefixed: string, za: string, signature: string, r: string, s: string}}
  */
-export function sm2FixtureFromSeed(distid, seed, message) {
+function sm2FixtureFromSeedWithRuntime(nativeRuntime, distid, seed, message) {
   if (typeof distid !== "string") {
     throw new TypeError("distid must be a string");
   }
-  const native = resolveNativeBinding();
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   const seedBuffer = toBuffer(seed, "seed");
   const messageBuffer = toBuffer(message, "message");
   if (!native?.sm2FixtureFromSeed) {
@@ -1110,6 +1137,246 @@ export function sm2FixtureFromSeed(distid, seed, message) {
     r: fixture.r,
     s: fixture.s,
   };
+}
+
+/** @internal Source-level runtime facade; intentionally absent from package exports. */
+export function _createCryptoApi(nativeRuntime) {
+  return Object.freeze({
+    buildKaigiRosterJoinProof,
+    supportedCryptoAlgorithms: () =>
+      supportedCryptoAlgorithmsWithRuntime(nativeRuntime),
+    generateKeyPair: (options = {}) =>
+      generateKeyPairWithRuntime(nativeRuntime, options),
+    publicKeyFromPrivate: (privateKey, options = {}) =>
+      publicKeyFromPrivateWithRuntime(nativeRuntime, privateKey, options),
+    loadKeyPair: (privateKey, options = {}) =>
+      loadKeyPairWithRuntime(nativeRuntime, privateKey, options),
+    sign: (message, privateKey, options = {}) =>
+      signWithRuntime(nativeRuntime, message, privateKey, options),
+    verify: (message, signature, publicKey, options = {}) =>
+      verifyWithRuntime(
+        nativeRuntime,
+        message,
+        signature,
+        publicKey,
+        options,
+      ),
+    publicKeyMultihash: (publicKey, options = {}) =>
+      publicKeyMultihashWithRuntime(nativeRuntime, publicKey, options),
+    privateKeyMultihash: (privateKey, options = {}) =>
+      privateKeyMultihashWithRuntime(nativeRuntime, privateKey, options),
+    generateConfidentialMemoKeypairV1: (input) =>
+      generateConfidentialMemoKeypairV1WithRuntime(nativeRuntime, input),
+    sealConfidentialMemoV1: (input) =>
+      sealConfidentialMemoV1WithRuntime(nativeRuntime, input),
+    openConfidentialMemoV1: (input) =>
+      openConfidentialMemoV1WithRuntime(nativeRuntime, input),
+    generateSm2KeyPair: (options = {}) =>
+      generateSm2KeyPairWithRuntime(nativeRuntime, options),
+    deriveSm2KeyPairFromSeed: (seed, distid) =>
+      deriveSm2KeyPairFromSeedWithRuntime(nativeRuntime, seed, distid),
+    loadSm2KeyPair: (privateKey, distid) =>
+      loadSm2KeyPairWithRuntime(nativeRuntime, privateKey, distid),
+    sm2PublicKeyMultihash: (publicKey, distid) =>
+      sm2PublicKeyMultihashWithRuntime(nativeRuntime, publicKey, distid),
+    signSm2: (message, privateKey, distid) =>
+      signSm2WithRuntime(nativeRuntime, message, privateKey, distid),
+    verifySm2: (message, signature, publicKey, distid) =>
+      verifySm2WithRuntime(
+        nativeRuntime,
+        message,
+        signature,
+        publicKey,
+        distid,
+      ),
+    deriveConfidentialKeyset: (spendKey) =>
+      deriveConfidentialKeysetWithRuntime(nativeRuntime, spendKey),
+    deriveConfidentialKeysetFromHex: (spendKeyHex) =>
+      deriveConfidentialKeysetFromHexWithRuntime(nativeRuntime, spendKeyHex),
+    deriveConfidentialOwnerTagV2: (spendKey, options) =>
+      deriveConfidentialOwnerTagV2WithRuntime(
+        nativeRuntime,
+        spendKey,
+        options,
+      ),
+    deriveConfidentialDiversifierV2: (seed) =>
+      deriveConfidentialDiversifierV2WithRuntime(nativeRuntime, seed),
+    deriveConfidentialReceiveAddressV2: (input) =>
+      deriveConfidentialReceiveAddressV2WithRuntime(nativeRuntime, input),
+    deriveConfidentialNoteV2: (input) =>
+      deriveConfidentialNoteV2WithRuntime(nativeRuntime, input),
+    deriveConfidentialNullifierV2: (input) =>
+      deriveConfidentialNullifierV2WithRuntime(nativeRuntime, input),
+    isPrivacyNativeAvailable: () =>
+      isPrivacyNativeAvailableWithRuntime(nativeRuntime),
+    privacyCompiledProfileCatalogV1: () =>
+      privacyCompiledProfileCatalogV1WithRuntime(nativeRuntime),
+    sm2FixtureFromSeed: (distid, seed, message) =>
+      sm2FixtureFromSeedWithRuntime(nativeRuntime, distid, seed, message),
+  });
+}
+
+export function supportedCryptoAlgorithms() {
+  return supportedCryptoAlgorithmsWithRuntime(defaultNativeRuntime);
+}
+
+export function generateKeyPair(options = {}) {
+  return generateKeyPairWithRuntime(defaultNativeRuntime, options);
+}
+
+export function publicKeyFromPrivate(privateKey, options = {}) {
+  return publicKeyFromPrivateWithRuntime(
+    defaultNativeRuntime,
+    privateKey,
+    options,
+  );
+}
+
+export function loadKeyPair(privateKey, options = {}) {
+  return loadKeyPairWithRuntime(defaultNativeRuntime, privateKey, options);
+}
+
+export function sign(message, privateKey, options = {}) {
+  return signWithRuntime(defaultNativeRuntime, message, privateKey, options);
+}
+
+export function verify(message, signature, publicKey, options = {}) {
+  return verifyWithRuntime(
+    defaultNativeRuntime,
+    message,
+    signature,
+    publicKey,
+    options,
+  );
+}
+
+export function publicKeyMultihash(publicKey, options = {}) {
+  return publicKeyMultihashWithRuntime(
+    defaultNativeRuntime,
+    publicKey,
+    options,
+  );
+}
+
+export function privateKeyMultihash(privateKey, options = {}) {
+  return privateKeyMultihashWithRuntime(
+    defaultNativeRuntime,
+    privateKey,
+    options,
+  );
+}
+
+export function generateConfidentialMemoKeypairV1(input) {
+  return generateConfidentialMemoKeypairV1WithRuntime(
+    defaultNativeRuntime,
+    input,
+  );
+}
+
+export function sealConfidentialMemoV1(input) {
+  return sealConfidentialMemoV1WithRuntime(defaultNativeRuntime, input);
+}
+
+export function openConfidentialMemoV1(input) {
+  return openConfidentialMemoV1WithRuntime(defaultNativeRuntime, input);
+}
+
+export function generateSm2KeyPair(options = {}) {
+  return generateSm2KeyPairWithRuntime(defaultNativeRuntime, options);
+}
+
+export function deriveSm2KeyPairFromSeed(seed, distid) {
+  return deriveSm2KeyPairFromSeedWithRuntime(
+    defaultNativeRuntime,
+    seed,
+    distid,
+  );
+}
+
+export function loadSm2KeyPair(privateKey, distid) {
+  return loadSm2KeyPairWithRuntime(defaultNativeRuntime, privateKey, distid);
+}
+
+export function sm2PublicKeyMultihash(publicKey, distid) {
+  return sm2PublicKeyMultihashWithRuntime(
+    defaultNativeRuntime,
+    publicKey,
+    distid,
+  );
+}
+
+export function signSm2(message, privateKey, distid) {
+  return signSm2WithRuntime(
+    defaultNativeRuntime,
+    message,
+    privateKey,
+    distid,
+  );
+}
+
+export function verifySm2(message, signature, publicKey, distid) {
+  return verifySm2WithRuntime(
+    defaultNativeRuntime,
+    message,
+    signature,
+    publicKey,
+    distid,
+  );
+}
+
+export function deriveConfidentialKeyset(spendKey) {
+  return deriveConfidentialKeysetWithRuntime(defaultNativeRuntime, spendKey);
+}
+
+export function deriveConfidentialKeysetFromHex(spendKeyHex) {
+  return deriveConfidentialKeysetFromHexWithRuntime(
+    defaultNativeRuntime,
+    spendKeyHex,
+  );
+}
+
+export function deriveConfidentialOwnerTagV2(spendKey, options) {
+  return deriveConfidentialOwnerTagV2WithRuntime(
+    defaultNativeRuntime,
+    spendKey,
+    options,
+  );
+}
+
+export function deriveConfidentialDiversifierV2(seed) {
+  return deriveConfidentialDiversifierV2WithRuntime(defaultNativeRuntime, seed);
+}
+
+export function deriveConfidentialReceiveAddressV2(input) {
+  return deriveConfidentialReceiveAddressV2WithRuntime(
+    defaultNativeRuntime,
+    input,
+  );
+}
+
+export function deriveConfidentialNoteV2(input) {
+  return deriveConfidentialNoteV2WithRuntime(defaultNativeRuntime, input);
+}
+
+export function deriveConfidentialNullifierV2(input) {
+  return deriveConfidentialNullifierV2WithRuntime(defaultNativeRuntime, input);
+}
+
+export function isPrivacyNativeAvailable() {
+  return isPrivacyNativeAvailableWithRuntime(defaultNativeRuntime);
+}
+
+export function privacyCompiledProfileCatalogV1() {
+  return privacyCompiledProfileCatalogV1WithRuntime(defaultNativeRuntime);
+}
+
+export function sm2FixtureFromSeed(distid, seed, message) {
+  return sm2FixtureFromSeedWithRuntime(
+    defaultNativeRuntime,
+    distid,
+    seed,
+    message,
+  );
 }
 
 function privateKeyFromSeed(seed) {

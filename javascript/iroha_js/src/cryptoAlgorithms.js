@@ -14,28 +14,14 @@ export const CRYPTO_ALGORITHMS = Object.freeze({
   SM2: "sm2",
 });
 
-export const SUPPORTED_CRYPTO_ALGORITHMS = Object.freeze([
-  CRYPTO_ALGORITHMS.ED25519,
-  CRYPTO_ALGORITHMS.SECP256K1,
-  CRYPTO_ALGORITHMS.BLS_NORMAL,
-  CRYPTO_ALGORITHMS.BLS_SMALL,
-  CRYPTO_ALGORITHMS.ML_DSA,
-  CRYPTO_ALGORITHMS.GOST_2012_256_A,
-  CRYPTO_ALGORITHMS.GOST_2012_256_B,
-  CRYPTO_ALGORITHMS.GOST_2012_256_C,
-  CRYPTO_ALGORITHMS.GOST_2012_512_A,
-  CRYPTO_ALGORITHMS.GOST_2012_512_B,
-  CRYPTO_ALGORITHMS.SM2,
-]);
-
-const SUPPORTED_CRYPTO_ALGORITHM_SET = new Set(SUPPORTED_CRYPTO_ALGORITHMS);
+const KNOWN_CRYPTO_ALGORITHM_SET = new Set(Object.values(CRYPTO_ALGORITHMS));
 
 export function normalizeCryptoAlgorithm(
   algorithm = CRYPTO_ALGORITHMS.ED25519,
 ) {
   if (
     typeof algorithm !== "string" ||
-    !SUPPORTED_CRYPTO_ALGORITHM_SET.has(algorithm)
+    !KNOWN_CRYPTO_ALGORITHM_SET.has(algorithm)
   ) {
     throw new Error(`unsupported crypto algorithm: ${algorithm}`);
   }

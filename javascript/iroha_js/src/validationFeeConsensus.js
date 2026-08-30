@@ -1,7 +1,10 @@
 import { Buffer } from "node:buffer";
 
 import { AccountAddress } from "./address.js";
-import { getNativeBinding } from "./native.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import { networkIdBytes } from "./networkId.js";
 import { ensureCanonicalAccountId } from "./normalizers.js";
 import { normalizeParliamentGovernanceCertificateV1 } from "./parliamentApiV1.js";
@@ -436,8 +439,8 @@ export function normalizeValidationFeeCheckpointV1(value) {
   });
 }
 
-function nativeBinding() {
-  const native = globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+function nativeBinding(nativeRuntime) {
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (
     typeof native?.connectNoritoBridgeAbiVersion !== "function" ||
     native.connectNoritoBridgeAbiVersion() !==
@@ -453,9 +456,13 @@ function nativeBinding() {
 }
 
 /** Encode the exact Norito V1 proof request for `checkpoint`. */
-export function encodeValidationFeeCurrentPolicyProofRequestV1(checkpoint) {
+function encodeValidationFeeCurrentPolicyProofRequestV1WithRuntime(
+  nativeRuntime,
+  checkpoint,
+) {
   const normalized = normalizeValidationFeeCheckpointV1(checkpoint);
-  const encoded = nativeBinding().validationFeeCurrentPolicyProofRequestV1(
+  const native = nativeBinding(nativeRuntime);
+  const encoded = native.validationFeeCurrentPolicyProofRequestV1(
     normalized.height,
     Buffer.from(normalized.contextId, "hex"),
   );
@@ -489,7 +496,8 @@ function freezeProjection(value) {
  * Locally verify one canonical Norito proof page and return its immutable
  * policy projection. The native verifier performs all consensus cryptography.
  */
-export function verifyValidationFeeCurrentPolicyProofV1(
+function verifyValidationFeeCurrentPolicyProofV1WithRuntime(
+  nativeRuntime,
   proofNorito,
   bindingValue,
   checkpointValue,
@@ -505,7 +513,8 @@ export function verifyValidationFeeCurrentPolicyProofV1(
       `proofNorito must contain 1..${VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES} bytes`,
     );
   }
-  const json = nativeBinding().validationFeeVerifyCurrentPolicyProofV1(
+  const native = nativeBinding(nativeRuntime);
+  const json = native.validationFeeVerifyCurrentPolicyProofV1(
     proof,
     Buffer.from(networkIdBytes(binding.networkId, "validation-fee ledger binding.networkId")),
     Buffer.from(binding.policyChainGenesisHash, "hex"),
@@ -582,4 +591,52 @@ export function verifyValidationFeeCurrentPolicyProofV1(
     "validation-fee projection.current_policy",
   );
   return freezeProjection(normalized);
+}
+
+/** @internal Create validation-fee consensus codecs for one immutable runtime. */
+export function createValidationFeeConsensusApi(nativeRuntime) {
+  return Object.freeze({
+    encodeValidationFeeCurrentPolicyProofRequestV1: (checkpoint) =>
+      encodeValidationFeeCurrentPolicyProofRequestV1WithRuntime(
+        nativeRuntime,
+        checkpoint,
+      ),
+    verifyValidationFeeCurrentPolicyProofV1: (
+      proofNorito,
+      bindingValue,
+      checkpointValue,
+    ) =>
+      verifyValidationFeeCurrentPolicyProofV1WithRuntime(
+        nativeRuntime,
+        proofNorito,
+        bindingValue,
+        checkpointValue,
+      ),
+  });
+}
+
+const DEFAULT_VALIDATION_FEE_CONSENSUS_API =
+  createValidationFeeConsensusApi(defaultNativeRuntime);
+
+/** Encode the exact Norito V1 proof request for `checkpoint`. */
+export function encodeValidationFeeCurrentPolicyProofRequestV1(checkpoint) {
+  return DEFAULT_VALIDATION_FEE_CONSENSUS_API
+    .encodeValidationFeeCurrentPolicyProofRequestV1(checkpoint);
+}
+
+/**
+ * Locally verify one canonical Norito proof page and return its immutable
+ * policy projection. The native verifier performs all consensus cryptography.
+ */
+export function verifyValidationFeeCurrentPolicyProofV1(
+  proofNorito,
+  bindingValue,
+  checkpointValue,
+) {
+  return DEFAULT_VALIDATION_FEE_CONSENSUS_API
+    .verifyValidationFeeCurrentPolicyProofV1(
+      proofNorito,
+      bindingValue,
+      checkpointValue,
+    );
 }

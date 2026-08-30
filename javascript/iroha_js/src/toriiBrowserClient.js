@@ -41,7 +41,7 @@ import {
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
 } from "./authenticatedBlockProofs.browser.js";
 
-const DEFAULT_SUCCESS_STATUSES = [200];
+const DEFAULT_SUCCESS_STATUSES = Object.freeze([200]);
 const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
 const DEFAULT_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const DEFAULT_BINARY_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
@@ -49,6 +49,7 @@ const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
 const KAIGI_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
 const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
+const MAX_SAFE_INTEGER_BIGINT = 9_007_199_254_740_991n;
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
 const EXPLORER_CURSOR_MAX_LIMIT = 100;
@@ -89,6 +90,15 @@ const PIPELINE_STATUS_VALUES = new Set([
 const PIPELINE_FAILURE_STATUSES = new Set(["Rejected", "Expired"]);
 const PIPELINE_STATUS_RESOLUTION_VALUES = new Set(["queue", "cache", "state"]);
 const TRANSACTION_ADMISSION_SUCCESS_STATUSES = Object.freeze([202]);
+const TORII_BROWSER_CLIENT_OPTION_KEYS = new Set([
+  "allowInsecure",
+  "canonicalRequestAuth",
+  "defaultHeaders",
+  "fetchImpl",
+  "networkId",
+  "operatorSigningContext",
+  "timeoutMs",
+]);
 const TRANSACTION_SUBMISSION_OPTION_KEYS = new Set(["signal", "headers"]);
 const TRANSACTION_STATUS_READ_OPTION_KEYS = new Set(["signal", "headers", "scope"]);
 const TRANSACTION_STATUS_POLL_OPTION_KEYS = new Set([
@@ -125,7 +135,7 @@ const TRANSACTION_QUERY_OPTION_KEYS = new Set([
   "limit", "offset", "filter", "sort", "fetch_size", "countMode", "count_mode",
   "queryName", "query_name", "select", "assetId", "authority", "resultOk",
   "sinceTimestampMs", "untilTimestampMs", "authAccountId", "sign", "timestampMs",
-  "nonce", "headers", "successStatuses", "signal",
+  "nonce", "headers", "signal",
 ]);
 const CONTRACT_ACTIVITY_OPTION_KEYS = new Set([
   ...COUNTED_LIST_OPTION_KEYS,
@@ -175,11 +185,30 @@ const LEDGER_HEADERS_OPTION_KEYS = new Set(["from", "limit", "signal"]);
 const LEDGER_READ_OPTION_KEYS = new Set(["signal"]);
 
 function normalizeBaseUrl(baseUrl) {
-  const raw = String(baseUrl ?? "").trim();
-  if (!raw) {
+  if (typeof baseUrl !== "string" && !(baseUrl instanceof URL)) {
+    throw new TypeError("ToriiBrowserClient baseUrl must be a string or URL");
+  }
+  const raw = typeof baseUrl === "string" ? baseUrl : baseUrl.toString();
+  if (raw.length === 0 || raw.trim() !== raw) {
     throw new TypeError("ToriiBrowserClient baseUrl must be a non-empty URL");
   }
-  return raw.replace(/\/+$/, "").replace(/\/v1\/explorer$/i, "").replace(/\/v1$/i, "");
+  const parsed = new URL(raw);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new TypeError("ToriiBrowserClient baseUrl must use http or https");
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new TypeError("ToriiBrowserClient baseUrl must not contain credentials");
+  }
+  if (parsed.search !== "" || parsed.hash !== "") {
+    throw new TypeError("ToriiBrowserClient baseUrl must not contain a query or fragment");
+  }
+  const pathname = parsed.pathname.replace(/\/+$/u, "");
+  if (/\/v1(?:\/explorer)?$/iu.test(pathname)) {
+    throw new TypeError(
+      "ToriiBrowserClient baseUrl must be the Torii root, without /v1 or /v1/explorer",
+    );
+  }
+  return `${parsed.origin}${pathname}`;
 }
 
 function appendSearchParams(url, params) {
@@ -197,6 +226,36 @@ function requireObject(value, context) {
     throw new TypeError(`${context} must be an object`);
   }
   return value;
+}
+
+function requirePlainObject(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be a plain object`);
+  }
+  return value;
+}
+
+function normalizeDefaultHeaders(value, context) {
+  if (value === undefined) {
+    return {};
+  }
+  const source = requirePlainObject(value, context);
+  const headers = {};
+  for (const [name, headerValue] of Object.entries(source)) {
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(name)) {
+      throw new TypeError(`${context} contains invalid header name ${name}`);
+    }
+    if (typeof headerValue !== "string" || /[\0\r\n]/u.test(headerValue)) {
+      throw new TypeError(`${context}.${name} must be a single-line string`);
+    }
+    Object.defineProperty(headers, name, {
+      configurable: true,
+      enumerable: true,
+      value: headerValue,
+      writable: true,
+    });
+  }
+  return headers;
 }
 
 function headersContainCredentials(headers) {
@@ -839,8 +898,8 @@ function normalizeExplorerLatestHistoryPage(value, context, normalizeItem = (ite
 
 function normalizePositiveInteger(value, context, fallback) {
   if (value === undefined || value === null) return fallback;
-  const numeric = Number(value);
-  if (!Number.isSafeInteger(numeric) || numeric < 1) {
+  const numeric = normalizeSafeInteger(value, context);
+  if (numeric < 1) {
     throw new TypeError(`${context} must be a positive safe integer`);
   }
   return numeric;
@@ -848,11 +907,29 @@ function normalizePositiveInteger(value, context, fallback) {
 
 function normalizeOffset(value, context, fallback = 0) {
   if (value === undefined || value === null) return fallback;
-  const numeric = Number(value);
-  if (!Number.isSafeInteger(numeric) || numeric < 0) {
+  const numeric = normalizeSafeInteger(value, context);
+  if (numeric < 0) {
     throw new TypeError(`${context} must be a non-negative safe integer`);
   }
   return numeric;
+}
+
+function normalizeSafeInteger(value, context) {
+  if (typeof value === "number") {
+    if (Number.isSafeInteger(value)) {
+      return value;
+    }
+  } else if (typeof value === "bigint") {
+    if (value >= 0n && value <= MAX_SAFE_INTEGER_BIGINT) {
+      return Number(value);
+    }
+  } else if (typeof value === "string" && /^(?:0|[1-9]\d*)$/u.test(value)) {
+    const parsed = BigInt(value);
+    if (parsed <= MAX_SAFE_INTEGER_BIGINT) {
+      return Number(parsed);
+    }
+  }
+  throw new TypeError(`${context} must be a safe integer`);
 }
 
 function normalizeBoolean(value, context) {
@@ -1195,17 +1272,20 @@ function signalOnlyOptions(options, context) {
   return item;
 }
 
-function copyRequestFields(source) {
-  const body = { ...source };
-  delete body.signal;
-  delete body.headers;
-  delete body.successStatuses;
-  return body;
+function rejectSuccessStatuses(options, context) {
+  if (Object.hasOwn(options, "successStatuses")) {
+    throw new TypeError(`${context} contains unsupported option successStatuses`);
+  }
 }
 
 function normalizeMultisigSelectorBody(value, context) {
   const source = requireObject(value, context);
-  const body = copyRequestFields(source);
+  for (const unsupported of ["headers", "signal", "successStatuses"]) {
+    if (Object.hasOwn(source, unsupported)) {
+      throw new TypeError(`${context} contains unsupported field ${unsupported}`);
+    }
+  }
+  const body = { ...source };
   if (
     source.multisigAccountId !== undefined &&
     body.multisig_account_id !== undefined
@@ -1333,8 +1413,7 @@ async function responseText(response) {
 
 function requestSignal(options, timeoutMs) {
   const callerSignal = options.signal;
-  const normalizedTimeout = Number(timeoutMs);
-  if (!(normalizedTimeout > 0) || typeof AbortController !== "function") {
+  if (!(timeoutMs > 0) || typeof AbortController !== "function") {
     return { signal: callerSignal, cleanup() {} };
   }
   const controller = new AbortController();
@@ -1349,8 +1428,8 @@ function requestSignal(options, timeoutMs) {
   const timeoutId = controller.signal.aborted
     ? undefined
     : setTimeout(
-        () => controller.abort(new Error(`Torii request timed out after ${normalizedTimeout} ms`)),
-        normalizedTimeout,
+        () => controller.abort(new Error(`Torii request timed out after ${timeoutMs} ms`)),
+        timeoutMs,
       );
   let cleaned = false;
   return {
@@ -1364,10 +1443,31 @@ function requestSignal(options, timeoutMs) {
   };
 }
 
-async function fetchToriiResponse(client, url, init, options, cleanupSignal) {
+function normalizeSuccessStatuses(value, context) {
+  if (value === undefined) {
+    return DEFAULT_SUCCESS_STATUSES;
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${context} must be a non-empty status array`);
+  }
+  return value.map((status, index) => {
+    if (!Number.isSafeInteger(status) || status < 100 || status > 599) {
+      throw new TypeError(`${context}[${index}] must be an HTTP status integer`);
+    }
+    return status;
+  });
+}
+
+async function fetchToriiResponse(
+  fetchImpl,
+  url,
+  init,
+  successStatuses,
+  cleanupSignal,
+) {
   let response;
   try {
-    response = await client.fetchImpl(url, init);
+    response = await fetchImpl(url, init);
   } finally {
     cleanupSignal();
   }
@@ -1375,7 +1475,6 @@ async function fetchToriiResponse(client, url, init, options, cleanupSignal) {
     throw new TypeError("Torii one-shot request must not accept a redirected response");
   }
   const status = responseStatus(response);
-  const successStatuses = options.successStatuses ?? DEFAULT_SUCCESS_STATUSES;
   if (!successStatuses.includes(status)) {
     const errorResponse = typeof response?.clone === "function" ? response.clone() : response;
     const bodyText = await responseText(response);
@@ -1904,60 +2003,73 @@ function streamGapFromEvent(event) {
 
 
 export class ToriiBrowserClient {
+  #baseUrl;
+  #canonicalRequestAuth;
+  #defaultHeaders;
+  #fetchImpl;
+  #networkId;
+  #operatorSigningContext;
+  #timeoutMs;
+
   constructor(baseUrl, options = {}) {
-    const normalizedOptions = requireObject(options, "ToriiBrowserClient options");
-    this.baseUrl = normalizeBaseUrl(baseUrl);
-    this.fetchImpl = normalizedOptions.fetchImpl ?? globalThis.fetch?.bind(globalThis);
-    if (typeof this.fetchImpl !== "function") {
+    const normalizedOptions = requireSupportedOptions(
+      requirePlainObject(options, "ToriiBrowserClient options"),
+      "ToriiBrowserClient options",
+      TORII_BROWSER_CLIENT_OPTION_KEYS,
+    );
+    this.#baseUrl = normalizeBaseUrl(baseUrl);
+    this.#fetchImpl = normalizedOptions.fetchImpl ?? globalThis.fetch?.bind(globalThis);
+    if (typeof this.#fetchImpl !== "function") {
       throw new TypeError("ToriiBrowserClient requires a fetch implementation");
     }
-    this.defaultHeaders = {
-      ...(normalizedOptions.config?.toriiClient?.defaultHeaders ?? {}),
-      ...(normalizedOptions.defaultHeaders ?? {}),
-    };
-    rejectPrecomputedCanonicalHeaders(this.defaultHeaders);
+    const defaultHeaders = normalizeDefaultHeaders(
+      normalizedOptions.defaultHeaders,
+      "ToriiBrowserClient options.defaultHeaders",
+    );
+    rejectPrecomputedCanonicalHeaders(defaultHeaders);
+    this.#defaultHeaders = Object.freeze(defaultHeaders);
     const allowInsecure = normalizedOptions.allowInsecure ?? false;
     if (typeof allowInsecure !== "boolean") {
       throw new TypeError("ToriiBrowserClient options.allowInsecure must be a boolean");
     }
-    this.allowInsecure = allowInsecure;
-    const protocol = new URL(this.baseUrl).protocol.toLowerCase();
+    const protocol = new URL(this.#baseUrl).protocol.toLowerCase();
     if (
-      headersContainCredentials(this.defaultHeaders) &&
+      headersContainCredentials(this.#defaultHeaders) &&
       protocol !== "https:" &&
-      !this.allowInsecure
+      !allowInsecure
     ) {
       throw new Error(
         "ToriiBrowserClient: credential headers require an https base URL; pass allowInsecure: true for local/dev use only.",
       );
     }
-    this.timeoutMs =
-      normalizedOptions.config?.toriiClient?.timeoutMs ?? normalizedOptions.timeoutMs ?? null;
-    const networkId = normalizedOptions.networkId ?? null;
-    if (networkId !== null) {
-      networkIdBytes(networkId, "ToriiBrowserClient options.networkId");
+    this.#timeoutMs = normalizeOffset(
+      normalizedOptions.timeoutMs,
+      "ToriiBrowserClient options.timeoutMs",
+      null,
+    );
+    this.#networkId = normalizedOptions.networkId ?? null;
+    if (this.#networkId !== null) {
+      networkIdBytes(this.#networkId, "ToriiBrowserClient options.networkId");
     }
-    Object.defineProperty(this, "networkId", {
-      value: networkId,
-      writable: false,
-      configurable: false,
-      enumerable: true,
-    });
-    Object.defineProperty(this, "_canonicalRequestAuth", {
-      value: normalizeBrowserCanonicalRequestAuth(
-        normalizedOptions.canonicalRequestAuth,
-        networkId,
-      ),
-      writable: false,
-      configurable: false,
-      enumerable: false,
-    });
-    Object.defineProperty(this, "_operatorSigningContext", {
-      value: normalizedOptions.operatorSigningContext ?? null,
-      writable: false,
-      configurable: false,
-      enumerable: false,
-    });
+    this.#canonicalRequestAuth = normalizeBrowserCanonicalRequestAuth(
+      normalizedOptions.canonicalRequestAuth,
+      this.#networkId,
+    );
+    const operatorSigningContext = normalizedOptions.operatorSigningContext ?? null;
+    this.#operatorSigningContext = operatorSigningContext === null
+      ? null
+      : requireOperatorSigningContext(
+          operatorSigningContext,
+          "ToriiBrowserClient options.operatorSigningContext",
+        );
+  }
+
+  get baseUrl() {
+    return this.#baseUrl;
+  }
+
+  get networkId() {
+    return this.#networkId;
   }
 
   getOfflineCapability(options = {}) {
@@ -2056,7 +2168,7 @@ export class ToriiBrowserClient {
 
   _url(path, params) {
     const normalizedPath = requireNonEmptyString(path, "path").replace(/^\/+/, "");
-    const base = new URL(`${this.baseUrl}/`);
+    const base = new URL(`${this.#baseUrl}/`);
     const url = new URL(normalizedPath, base);
     appendSearchParams(url, params);
     return url;
@@ -2068,15 +2180,15 @@ export class ToriiBrowserClient {
     }
     rejectPrecomputedCanonicalHeaders(init.headers);
     init.credentials = "omit";
-    if (this._canonicalRequestAuth === null) return;
+    if (this.#canonicalRequestAuth === null) return;
     const signed = await buildCanonicalJsonRequest({
-      accountId: this._canonicalRequestAuth.accountId,
-      networkId: this.networkId,
+      accountId: this.#canonicalRequestAuth.accountId,
+      networkId: this.#networkId,
       method: "GET",
       path: url.pathname,
       query: url.search.startsWith("?") ? url.search.slice(1) : url.search,
       headers: init.headers,
-      sign: this._canonicalRequestAuth.sign,
+      sign: this.#canonicalRequestAuth.sign,
     });
     init.headers = signed.headers;
     init.redirect = "error";
@@ -2084,12 +2196,16 @@ export class ToriiBrowserClient {
 
   async _json(method, path, options = {}) {
     const normalizedOptions = requireObject(options, `${method} ${path} options`);
+    const successStatuses = normalizeSuccessStatuses(
+      normalizedOptions.successStatuses,
+      `${method} ${path} successStatuses`,
+    );
     const headers = {
       Accept: "application/json",
-      ...this.defaultHeaders,
+      ...this.#defaultHeaders,
       ...(normalizedOptions.headers ?? {}),
     };
-    const { signal, cleanup } = requestSignal(normalizedOptions, this.timeoutMs);
+    const { signal, cleanup } = requestSignal(normalizedOptions, this.#timeoutMs);
     const init = {
       method,
       cache: "no-store",
@@ -2135,10 +2251,10 @@ export class ToriiBrowserClient {
       init.redirect = "error";
     }
     const { response, status } = await fetchToriiResponse(
-      this,
+      this.#fetchImpl,
       url,
       init,
-      normalizedOptions,
+      successStatuses,
       cleanup,
     );
     if (normalizedOptions.responseObserver !== undefined) {
@@ -2167,13 +2283,13 @@ export class ToriiBrowserClient {
   async _bytes(method, path, options = {}) {
     const normalizedOptions = requireObject(options, `${method} ${path} options`);
     const headers = {
-      ...this.defaultHeaders,
+      ...this.#defaultHeaders,
       ...(normalizedOptions.headers ?? {}),
       Accept: "application/x-norito",
     };
-    const { signal, cleanup } = requestSignal(normalizedOptions, this.timeoutMs);
+    const { signal, cleanup } = requestSignal(normalizedOptions, this.#timeoutMs);
     const { response } = await fetchToriiResponse(
-      this,
+      this.#fetchImpl,
       this._url(path, normalizedOptions.params),
       {
         method,
@@ -2181,7 +2297,7 @@ export class ToriiBrowserClient {
         headers,
         signal,
       },
-      normalizedOptions,
+      DEFAULT_SUCCESS_STATUSES,
       cleanup,
     );
     const contentType = response.headers?.get?.("content-type") ?? "";
@@ -2197,22 +2313,23 @@ export class ToriiBrowserClient {
     );
   }
 
-  async _canonicalJson(method, path, body, options, successStatuses = [200], responseOptions = {}) {
+  async _canonicalJson(method, path, body, options) {
     const opts = requireObject(options, `${method} ${path} canonical options`);
+    rejectSuccessStatuses(opts, `${method} ${path} canonical options`);
     if (typeof opts.sign !== "function") {
       throw new TypeError(`${method} ${path} options.sign is required`);
     }
-    if (this.networkId === null) {
+    if (this.#networkId === null) {
       throw new TypeError(
         `${method} ${path} requires ToriiBrowserClient options.networkId`,
       );
     }
     const signed = await buildCanonicalJsonRequest({
       accountId: requireNonEmptyString(opts.authAccountId, `${method} ${path} options.authAccountId`),
-      networkId: this.networkId,
+      networkId: this.#networkId,
       method,
       path,
-      baseUrl: this.baseUrl,
+      baseUrl: this.#baseUrl,
       body,
       headers: opts.headers,
       sign: opts.sign,
@@ -2225,8 +2342,6 @@ export class ToriiBrowserClient {
       headers: signed.headers,
       oneShot: true,
       signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? successStatuses,
-      ...responseOptions,
     });
   }
 
@@ -2236,7 +2351,7 @@ export class ToriiBrowserClient {
     if (accountId !== opts.authAccountId) {
       throw new TypeError(`${path} query authAccountId must be an exact canonical I105 account id`);
     }
-    rejectPrecomputedCanonicalHeaders({ ...this.defaultHeaders, ...(opts.headers ?? {}) });
+    rejectPrecomputedCanonicalHeaders({ ...this.#defaultHeaders, ...(opts.headers ?? {}) });
     return this._canonicalJson("POST", path, body, opts);
   }
 
@@ -2297,7 +2412,6 @@ export class ToriiBrowserClient {
         },
         headers: opts.headers,
         signal: signalFrom(opts),
-        successStatuses: [200],
       });
       return normalizePublicPipelineStatusEnvelope(
         payload,
@@ -2439,11 +2553,12 @@ export class ToriiBrowserClient {
   async getContractDeploymentState(request, options = {}) {
     const body = normalizeContractDeploymentStateRequest(request);
     const opts = requireObject(options, "getContractDeploymentState options");
+    rejectSuccessStatuses(opts, "getContractDeploymentState options");
     if (opts.sign !== undefined) {
       if (typeof opts.sign !== "function") {
         throw new TypeError("getContractDeploymentState options.sign must be a function");
       }
-      if (this.networkId === null) {
+      if (this.#networkId === null) {
         throw new TypeError(
           "getContractDeploymentState requires ToriiBrowserClient options.networkId",
         );
@@ -2453,10 +2568,10 @@ export class ToriiBrowserClient {
           opts.authAccountId,
           "getContractDeploymentState options.authAccountId",
         ),
-        networkId: this.networkId,
+        networkId: this.#networkId,
         method: "POST",
         path: "/v1/contracts/deployment-state",
-        baseUrl: this.baseUrl,
+        baseUrl: this.#baseUrl,
         body,
         headers: opts.headers,
         sign: opts.sign,
@@ -2469,7 +2584,6 @@ export class ToriiBrowserClient {
         headers: signed.headers,
         oneShot: true,
         signal: signalFrom(opts),
-        successStatuses: opts.successStatuses ?? [200],
       });
       return normalizeContractDeploymentStateResponse(response, body);
     }
@@ -2477,7 +2591,6 @@ export class ToriiBrowserClient {
       body,
       headers: opts.headers,
       signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? [200],
     });
     return normalizeContractDeploymentStateResponse(response, body);
   }
@@ -2485,6 +2598,7 @@ export class ToriiBrowserClient {
   /** Read exact account state, using the configured canonical signer when present. */
   getAccount(accountId, options = {}) {
     const opts = requireObject(options, "getAccount options");
+    rejectSuccessStatuses(opts, "getAccount options");
     return this._json(
       "GET",
       `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}`,
@@ -2492,7 +2606,6 @@ export class ToriiBrowserClient {
         headers: opts.headers,
         dataspaceVisible: true,
         signal: signalFrom(opts),
-        successStatuses: opts.successStatuses ?? [200],
       },
     );
   }
@@ -2704,11 +2817,11 @@ export class ToriiBrowserClient {
       const init = {
         method: "GET",
         cache: "no-store",
-        headers: streamRequestHeaders(client.defaultHeaders),
+        headers: streamRequestHeaders(client.#defaultHeaders),
         signal: signalFrom(opts),
       };
       await client._applyDataspaceReadIdentity(url, init);
-      const response = await client.fetchImpl(url, init);
+      const response = await client.#fetchImpl(url, init);
       if (init.redirect === "error" && response?.redirected === true) {
         throw new TypeError("Torii one-shot request must not accept a redirected response");
       }
@@ -3225,17 +3338,19 @@ export class ToriiBrowserClient {
 
   async submitMultisigPropose(request, options = {}) {
     const opts = requireObject(options, "submitMultisigPropose options");
+    rejectSuccessStatuses(opts, "submitMultisigPropose options");
     return this._json("POST", "/v1/multisig/propose", {
       rawBody: noritoEncodeMultisigProposeRequest(requireObject(request, "submitMultisigPropose request")),
       contentType: "application/x-norito",
       headers: { Accept: "application/json", ...(opts.headers ?? {}) },
       signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? [200, 202],
+      successStatuses: [200, 202],
     });
   }
 
   async submitMultisigContractCallPropose(request, options = {}) {
     const opts = requireObject(options, "submitMultisigContractCallPropose options");
+    rejectSuccessStatuses(opts, "submitMultisigContractCallPropose options");
     return this._json("POST", "/v1/contracts/call/multisig/propose", {
       rawBody: noritoEncodeMultisigContractCallProposeRequest(
         requireObject(request, "submitMultisigContractCallPropose request"),
@@ -3243,12 +3358,13 @@ export class ToriiBrowserClient {
       contentType: "application/x-norito",
       headers: { Accept: "application/json", ...(opts.headers ?? {}) },
       signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? [200, 202],
+      successStatuses: [200, 202],
     });
   }
 
   async submitMultisigContractCallApprove(request, options = {}) {
     const opts = requireObject(options, "submitMultisigContractCallApprove options");
+    rejectSuccessStatuses(opts, "submitMultisigContractCallApprove options");
     return this._json("POST", "/v1/contracts/call/multisig/approve", {
       rawBody: noritoEncodeMultisigContractCallApproveRequest(
         requireObject(request, "submitMultisigContractCallApprove request"),
@@ -3256,7 +3372,7 @@ export class ToriiBrowserClient {
       contentType: "application/x-norito",
       headers: { Accept: "application/json", ...(opts.headers ?? {}) },
       signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? [200, 202],
+      successStatuses: [200, 202],
     });
   }
 
@@ -3265,7 +3381,7 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/sumeragi/status", {
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
+        this.#operatorSigningContext,
         "getSumeragiStatus",
       ),
     });
@@ -3277,7 +3393,7 @@ export class ToriiBrowserClient {
       headers: { Accept: "application/json" },
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
+        this.#operatorSigningContext,
         "getSumeragiStatusTyped",
       ),
       maximumBodyBytes: SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
@@ -3301,7 +3417,7 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/sumeragi/diagnostics", {
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
+        this.#operatorSigningContext,
         "getSumeragiDiagnostics",
       ),
     });
@@ -3313,7 +3429,7 @@ export class ToriiBrowserClient {
       headers: { Accept: "application/json" },
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
+        this.#operatorSigningContext,
         "getSumeragiDiagnosticsTyped",
       ),
       maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
@@ -3337,7 +3453,7 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/kaigi/relays", {
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
+        this.#operatorSigningContext,
         "listKaigiRelays",
       ),
       maximumBodyBytes: KAIGI_JSON_RESPONSE_MAX_BYTES,
@@ -3358,7 +3474,7 @@ export class ToriiBrowserClient {
     return this._json("GET", `/v1/kaigi/relays/${encodeURIComponent(normalizedRelayId)}`, {
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
+        this.#operatorSigningContext,
         "getKaigiRelay",
       ),
       maximumBodyBytes: KAIGI_JSON_RESPONSE_MAX_BYTES,
@@ -3385,7 +3501,7 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/kaigi/relays/health", {
       signal: signalFrom(opts),
       operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
+        this.#operatorSigningContext,
         "getKaigiRelaysHealth",
       ),
       maximumBodyBytes: KAIGI_JSON_RESPONSE_MAX_BYTES,
@@ -3401,5 +3517,3 @@ export class ToriiBrowserClient {
   }
 
 }
-
-export { ToriiBrowserClient as ToriiClient, ToriiBrowserHttpError as ToriiHttpError };

@@ -75,6 +75,15 @@ def create_repository(
         "# exact APS fixture lockfile\nversion = 4\n", encoding="utf-8"
     )
     (repository / "README.md").write_text("APS source fixture\n", encoding="utf-8")
+    for source_path in (
+        *VERIFIER._FORMAL_SOURCE_PATHS,
+        *VERIFIER._FORMAL_EVIDENCE_CODE_SOURCE_PATHS,
+    ):
+        path = repository / source_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# exact APS fixture for {source_path}\n", encoding="utf-8")
+        if path.suffix == ".sh":
+            path.chmod(0o755)
     tools = repository / "tools"
     tools.mkdir()
     executable = tools / "qualify.sh"
@@ -293,7 +302,7 @@ class PrivateSettlementSourceEvidenceTests(unittest.TestCase):
             source_archive_artifact = verifier_artifacts[source_archive_reference]
             source_lockfile_artifact = verifier_artifacts[source_lockfile_reference]
             source_path_list_artifact = verifier_artifacts[source_path_list_reference]
-            self.assertEqual(
+            inventory_transcript_path, formal_source_bindings = (
                 VERIFIER._validate_pass_report(
                     bundle.joinpath(
                         *PurePosixPath(
@@ -324,8 +333,32 @@ class PrivateSettlementSourceEvidenceTests(unittest.TestCase):
                     ),
                     source_path_list_sha256=source_path_list_artifact.sha256,
                     source_path_list_bytes=source_path_list_artifact.bytes,
+                )
+            )
+            self.assertEqual(
+                inventory_transcript_path, PurePosixPath(inventory_log["path"])
+            )
+            self.assertIsNotNone(formal_source_bindings)
+            assert formal_source_bindings is not None
+            self.assertEqual(
+                formal_source_bindings.model_sha256,
+                VERIFIER._formal_package_sha256_from_source_payloads(
+                    {
+                        source_path: (repository / source_path).read_bytes()
+                        for source_path in VERIFIER._FORMAL_SOURCE_PATHS
+                    }
                 ),
-                PurePosixPath(inventory_log["path"]),
+            )
+            self.assertEqual(
+                formal_source_bindings.evidence_code_sha256,
+                VERIFIER._formal_evidence_code_sha256_from_source_payloads(
+                    {
+                        source_path: (repository / source_path).read_bytes()
+                        for source_path in (
+                            VERIFIER._FORMAL_EVIDENCE_CODE_SOURCE_PATHS
+                        )
+                    }
+                ),
             )
 
             extracted = root / "extracted"

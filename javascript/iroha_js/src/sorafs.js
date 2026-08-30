@@ -1,4 +1,7 @@
-import { getNativeBinding } from "./native.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import { NumericV1, NumericV1Error } from "./numericV1.js";
 
 const SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155;
@@ -24,8 +27,12 @@ function toBuffer(value) {
   throw new TypeError("bytes must be a Buffer, ArrayBuffer, or typed array");
 }
 
-function requireSorafsNativeFunction(functionName, capability) {
-  const binding = getNativeBinding();
+function requireSorafsNativeFunction(
+  functionName,
+  capability,
+  nativeRuntime = defaultNativeRuntime,
+) {
+  const binding = resolveNativeRuntimeBinding(nativeRuntime);
   if (!binding || typeof binding[functionName] !== "function") {
     throw new Error(
       `SoraFS ${capability} requires the native iroha_js_host module. Run \`npm run build:native\` before using these helpers.`,
@@ -34,10 +41,11 @@ function requireSorafsNativeFunction(functionName, capability) {
   return binding;
 }
 
-function requireSorafsNativeBinding() {
+function requireSorafsNativeBinding(nativeRuntime = defaultNativeRuntime) {
   return requireSorafsNativeFunction(
     "sorafsDecodeReplicationOrder",
     "decoding",
+    nativeRuntime,
   );
 }
 
@@ -1796,6 +1804,28 @@ function normaliseGatewayOptions(options = {}) {
   if (typeof options !== "object") {
     throw new TypeError("options must be an object");
   }
+  rejectUnexpectedFields(
+    options,
+    [
+      "manifestEnvelopeB64",
+      "manifestCidHex",
+      "clientId",
+      "telemetryRegion",
+      "rolloutPhase",
+      "maxPeers",
+      "retryBudget",
+      "transportPolicy",
+      "anonymityPolicy",
+      "writeMode",
+      "policyOverride",
+      "localProxy",
+      "scoreboardOutPath",
+      "scoreboardNowUnixSecs",
+      "scoreboardTelemetryLabel",
+      "scoreboardAllowImplicitMetadata",
+    ],
+    "sorafsGatewayFetch options",
+  );
   const native = {};
   if (typeof options.manifestEnvelopeB64 === "string" && options.manifestEnvelopeB64.trim() !== "") {
     native.manifest_envelope_b64 = normalizeBase64Payload(
@@ -2108,6 +2138,24 @@ export function sorafsGatewayFetch(
   providers,
   options = {},
 ) {
+  return sorafsGatewayFetchWithRuntime(
+    defaultNativeRuntime,
+    manifestIdHex,
+    chunkerHandle,
+    planJson,
+    providers,
+    options,
+  );
+}
+
+function sorafsGatewayFetchWithRuntime(
+  nativeRuntime,
+  manifestIdHex,
+  chunkerHandle,
+  planJson,
+  providers,
+  options = {},
+) {
   const baseOptions = options ?? {};
   if (!isPlainObject(baseOptions)) {
     throw new TypeError("sorafsGatewayFetch options must be a plain object");
@@ -2115,13 +2163,6 @@ export function sorafsGatewayFetch(
   const normalizedManifestId = normalizeHex32(manifestIdHex, "manifestIdHex");
   const normalizedChunkerHandle = assertNonEmptyString(chunkerHandle, "chunkerHandle");
   const normalizedPlanJson = assertNonEmptyString(planJson, "planJson");
-  const { __nativeBinding: injectedBinding, ...restOptions } = baseOptions;
-  const binding = injectedBinding ?? requireSorafsNativeBinding();
-  if (!binding || typeof binding.sorafsGatewayFetch !== "function") {
-    throw new Error(
-      "sorafsGatewayFetch requires the native iroha_js_host module. Run `npm run build:native` before using this helper.",
-    );
-  }
   if (!Array.isArray(providers) || providers.length === 0) {
     throw new TypeError("providers must be a non-empty array");
   }
@@ -2137,7 +2178,12 @@ export function sorafsGatewayFetch(
       "sorafsGatewayFetch requires at least two gateway providers.",
     );
   }
-  const nativeOptions = normaliseGatewayOptions(restOptions);
+  const nativeOptions = normaliseGatewayOptions(baseOptions);
+  const binding = requireSorafsNativeFunction(
+    "sorafsGatewayFetch",
+    "gateway fetch",
+    nativeRuntime,
+  );
   try {
     const raw = binding.sorafsGatewayFetch(
       normalizedManifestId,
@@ -2150,6 +2196,27 @@ export function sorafsGatewayFetch(
   } catch (error) {
     throw convertSorafsGatewayError(error);
   }
+}
+
+/** @internal Source-level gateway facade bound to one immutable native runtime. */
+export function _createSorafsGatewayApi(nativeRuntime) {
+  return Object.freeze({
+    sorafsGatewayFetch: (
+      manifestIdHex,
+      chunkerHandle,
+      planJson,
+      providers,
+      options = {},
+    ) =>
+      sorafsGatewayFetchWithRuntime(
+        nativeRuntime,
+        manifestIdHex,
+        chunkerHandle,
+        planJson,
+        providers,
+        options,
+      ),
+  });
 }
 
 function convertSorafsGatewayError(error) {

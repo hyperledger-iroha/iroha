@@ -7,6 +7,7 @@ import {
 } from "./config.js";
 import {
   createNativeRuntime,
+  defaultNativeRuntime,
   resolveNativeRuntimeBinding,
   resolveOptionalNativeRuntimeBinding,
 } from "./nativeRuntime.js";
@@ -38,12 +39,14 @@ import {
   validatePublicKeyForCurve,
 } from "./address.js";
 import {
+  _createDataAvailabilityApi,
   buildDaIngestRequest,
-  deriveDaChunkerHandle,
-  generateDaProofSummary,
   emitDaProofSummaryArtifact,
 } from "./dataAvailability.js";
-import { normaliseGatewayProvider, sorafsGatewayFetch } from "./sorafs.js";
+import {
+  _createSorafsGatewayApi,
+  normaliseGatewayProvider,
+} from "./sorafs.js";
 import { normalizeIsoWeekLabel } from "./sorafsPorWeek.js";
 import { buildPacs008Message, buildPacs009Message } from "./isoBridge.js";
 import { looksLikeIban, normalizeIban } from "./identifiers.js";
@@ -484,15 +487,34 @@ function resolveOptionalNativeBinding(nativeRuntime) {
 }
 
 function decodeTransactionReceiptPayload(payload, nativeRuntime) {
-  const native = resolveNativeBinding(nativeRuntime);
-  if (!native || typeof native.decodeTransactionReceiptJson !== "function") {
-    return null;
+  let native;
+  try {
+    native = resolveNativeBinding(nativeRuntime);
+  } catch (cause) {
+    throw new Error(
+      "cannot decode a non-empty Norito transaction receipt: the native decoder is unavailable",
+      { cause },
+    );
+  }
+  if (typeof native.decodeTransactionReceiptJson !== "function") {
+    throw new Error(
+      "cannot decode a non-empty Norito transaction receipt: the native binding does not expose decodeTransactionReceiptJson",
+    );
+  }
+  let json;
+  try {
+    json = native.decodeTransactionReceiptJson(payload);
+  } catch (cause) {
+    throw new Error("failed to decode the non-empty Norito transaction receipt", {
+      cause,
+    });
   }
   try {
-    const json = native.decodeTransactionReceiptJson(payload);
     return JSON.parse(json);
-  } catch {
-    return null;
+  } catch (cause) {
+    throw new Error("native transaction receipt decoder returned invalid JSON", {
+      cause,
+    });
   }
 }
 
@@ -1502,6 +1524,20 @@ export { OperatorSigningContext };
  * @property {string | null} raw
  */
 export class ToriiClient {
+  #allowInsecure;
+  #baseHost;
+  #baseProtocol;
+  #canonicalRequestAuth;
+  #config;
+  #dataModelState = {
+    dataModelValidation: { status: "unknown", actual: null },
+    dataModelValidationPromise: null,
+  };
+  #sorafsAliasWarningHook;
+  #sorafsPolicyOverrides;
+  #sorafsResolvedPolicy = null;
+  #statusState = createStatusSnapshotState();
+
   /**
    * @param {string} baseUrl Base Torii URL (e.g. http://localhost:8080).
    * @param {object} [options]
@@ -1573,7 +1609,10 @@ export class ToriiClient {
       enumerable: false,
     });
     installOperatorSigningContext(this, opts.operatorSigningContext);
-    Object.defineProperty(this, "_canonicalRequestAuth", { value: ToriiClient._normalizeCanonicalAuth(opts.canonicalRequestAuth, "ToriiClient options.canonicalRequestAuth"), writable: false });
+    this.#canonicalRequestAuth = ToriiClient._normalizeCanonicalAuth(
+      opts.canonicalRequestAuth,
+      "ToriiClient options.canonicalRequestAuth",
+    );
     const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
     const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     if (typeof fetchImpl !== "function") {
@@ -1591,12 +1630,20 @@ export class ToriiClient {
         "ToriiClient.testNativeBinding",
       );
     }
+    const injectedNativeBinding = opts[TORII_TEST_NATIVE_BINDING];
     Object.defineProperty(this, "_nativeRuntime", {
-      value: createNativeRuntime(opts[TORII_TEST_NATIVE_BINDING]),
+      value:
+        injectedNativeBinding === undefined
+          ? defaultNativeRuntime
+          : createNativeRuntime(injectedNativeBinding),
       writable: false,
       configurable: false,
       enumerable: false,
     });
+    const dataAvailabilityApi = _createDataAvailabilityApi(
+      this._nativeRuntime,
+    );
+    const sorafsGatewayApi = _createSorafsGatewayApi(this._nativeRuntime);
     const testHooks = opts[TORII_TEST_HOOKS] ?? {};
     if (testHooks === null || typeof testHooks !== "object" || Array.isArray(testHooks)) {
       throw createValidationError(
@@ -1627,13 +1674,23 @@ export class ToriiClient {
     }
     Object.defineProperties(this, {
       _sorafsGatewayFetch: {
-        value: testHooks.sorafsGatewayFetch ?? sorafsGatewayFetch,
+        value:
+          testHooks.sorafsGatewayFetch ??
+          sorafsGatewayApi.sorafsGatewayFetch,
         writable: false,
         configurable: false,
         enumerable: false,
       },
       _generateDaProofSummary: {
-        value: testHooks.generateDaProofSummary ?? generateDaProofSummary,
+        value:
+          testHooks.generateDaProofSummary ??
+          dataAvailabilityApi.generateDaProofSummary,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+      _deriveDaChunkerHandle: {
+        value: dataAvailabilityApi.deriveDaChunkerHandle,
         writable: false,
         configurable: false,
         enumerable: false,
@@ -1645,7 +1702,7 @@ export class ToriiClient {
         typeof opts.config === "object" &&
         opts.config.allowInsecure) ??
       false;
-    this._allowInsecure = requireExactBoolean(
+    this.#allowInsecure = requireExactBoolean(
       allowInsecure,
       "ToriiClient options.allowInsecure",
     );
@@ -1659,7 +1716,8 @@ export class ToriiClient {
     delete overrides[TORII_TEST_NATIVE_BINDING];
     delete overrides.localSigningContext;
     delete overrides.operatorSigningContext;
-    this._config = resolveToriiClientConfig({
+    delete overrides.canonicalRequestAuth;
+    this.#config = resolveToriiClientConfig({
       config: opts.config,
       overrides,
     });
@@ -1674,8 +1732,7 @@ export class ToriiClient {
         "ToriiClient.options.sorafsAliasPolicy",
       );
     }
-    this._sorafsPolicyOverrides = opts.sorafsAliasPolicy ? { ...opts.sorafsAliasPolicy } : null;
-    this._sorafsResolvedPolicy = null;
+    this.#sorafsPolicyOverrides = opts.sorafsAliasPolicy ? { ...opts.sorafsAliasPolicy } : null;
     if (
       opts.onSorafsAliasWarning !== undefined &&
       opts.onSorafsAliasWarning !== null &&
@@ -1687,19 +1744,15 @@ export class ToriiClient {
         "ToriiClient.options.onSorafsAliasWarning",
       );
     }
-    this._sorafsAliasWarningHook =
+    this.#sorafsAliasWarningHook =
       typeof opts.onSorafsAliasWarning === "function" ? opts.onSorafsAliasWarning : null;
-    this._statusState = createStatusSnapshotState();
-    this._dataModelValidation = { status: "unknown", actual: null };
-    this._dataModelValidationPromise = null;
     const parsedBase = new URL(this._baseUrl.endsWith("/") ? this._baseUrl : `${this._baseUrl}/`);
-    this._baseOrigin = `${parsedBase.protocol}//${parsedBase.host}`;
-    this._baseHost = parsedBase.host;
-    this._baseProtocol = parsedBase.protocol.toLowerCase();
+    this.#baseHost = parsedBase.host;
+    this.#baseProtocol = parsedBase.protocol.toLowerCase();
     const hasCredentials =
-      Boolean(this._config.authToken || this._config.apiToken) ||
-      headersContainCredentials(this._config.defaultHeaders);
-    if (hasCredentials && !this._allowInsecure && !isSecureProtocol(this._baseProtocol)) {
+      Boolean(this.#config.authToken || this.#config.apiToken) ||
+      headersContainCredentials(this.#config.defaultHeaders);
+    if (hasCredentials && !this.#allowInsecure && !isSecureProtocol(this.#baseProtocol)) {
       throw new Error(
         "ToriiClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.",
       );
@@ -2103,7 +2156,7 @@ export class ToriiClient {
       params,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
-      canonicalAuth: this._canonicalRequestAuth,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -2266,7 +2319,7 @@ export class ToriiClient {
       params,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
-      canonicalAuth: this._canonicalRequestAuth,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -2291,7 +2344,7 @@ export class ToriiClient {
       {
         headers: JSON_ACCEPT_HEADERS,
         signal,
-        canonicalAuth: this._canonicalRequestAuth,
+        canonicalAuth: this.#canonicalRequestAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -2394,7 +2447,7 @@ export class ToriiClient {
       ASSET_ID_LIST_OPTION_KEYS,
     );
     const canonicalAuth = normalizedOptions.canonicalAuth === undefined
-      ? this._canonicalRequestAuth
+      ? this.#canonicalRequestAuth
       : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...listOptions } = normalizedOptions;
     const params = ToriiClient._encodeIterableListParams(
@@ -2485,7 +2538,7 @@ export class ToriiClient {
       options,
       normalizeAccountTransactionListResponse,
       ASSET_ID_LIST_OPTION_KEYS,
-      this._canonicalRequestAuth,
+      this.#canonicalRequestAuth,
     );
   }
 
@@ -2601,7 +2654,7 @@ export class ToriiClient {
       options,
       normalizeContractActivityListResponse,
       CONTRACT_ACTIVITY_LIST_OPTION_KEYS,
-      this._canonicalRequestAuth,
+      this.#canonicalRequestAuth,
     );
   }
 
@@ -2618,7 +2671,7 @@ export class ToriiClient {
       CONTRACT_EVENT_LIST_OPTION_KEYS,
     );
     const canonicalAuth = normalizedOptions.canonicalAuth === undefined
-      ? this._canonicalRequestAuth
+      ? this.#canonicalRequestAuth
       : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
     const params = {};
@@ -2762,7 +2815,7 @@ export class ToriiClient {
       ACCOUNT_PERMISSIONS_LIST_OPTION_KEYS,
     );
     const canonicalAuth = normalizedOptions.canonicalAuth === undefined
-      ? this._canonicalRequestAuth
+      ? this.#canonicalRequestAuth
       : ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
     const params = ToriiClient._encodePaginationParams(rest);
@@ -3283,9 +3336,12 @@ export class ToriiClient {
     const {
       VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES,
       VALIDATION_FEE_HIJIRI_QUOTE_PATH,
+      createValidationFeeHijiriQuoteApi,
+    } = await loadToriiOptionalModule();
+    const {
       encodeValidationFeeHijiriQuoteRequestV1,
       verifyValidationFeeHijiriQuoteResponseV1,
-    } = await loadToriiOptionalModule();
+    } = createValidationFeeHijiriQuoteApi(this._nativeRuntime);
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
       "quoteValidationFeeHijiri",
@@ -3424,11 +3480,14 @@ export class ToriiClient {
     const {
       VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
       VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
-      encodeValidationFeeCurrentPolicyProofRequestV1,
+      createValidationFeeConsensusApi,
       normalizeValidationFeeCheckpointV1,
       normalizeValidationFeeLedgerBindingV1,
-      verifyValidationFeeCurrentPolicyProofV1,
     } = await loadToriiOptionalModule();
+    const {
+      encodeValidationFeeCurrentPolicyProofRequestV1,
+      verifyValidationFeeCurrentPolicyProofV1,
+    } = createValidationFeeConsensusApi(this._nativeRuntime);
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedCheckpoint =
       checkpoint === null || checkpoint === undefined
@@ -4354,7 +4413,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsReputationLatest",
     );
     const response = await this._request("GET", "/v1/sorafs/reputation/latest", {
@@ -4400,7 +4459,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsReputationProvider",
     );
     const response = await this._request(
@@ -4454,7 +4513,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsReputationSnapshot",
     );
     const response = await this._request(
@@ -4503,7 +4562,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsReputationWeights",
     );
     const response = await this._request("GET", "/v1/sorafs/reputation/weights", {
@@ -4554,7 +4613,7 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "listSorafsReputationEvents",
     );
     const response = await this._request("GET", "/v1/sorafs/reputation/events", {
@@ -4613,13 +4672,13 @@ export class ToriiClient {
     );
     const auth = buildSorafsReputationRequestAuth(
       rest,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "streamSorafsReputationEvents",
       { accept: "text/event-stream" },
     );
     rejectSorafsReputationResumeHeader(
       auth.headers,
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "streamSorafsReputationEvents",
     );
     const streamOptions = {
@@ -4666,7 +4725,7 @@ export class ToriiClient {
   ) {
     const auth = buildSorafsReputationRequestAuth(
       { canonicalAuth },
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       context,
     );
     setHeader(auth.headers, "Accept-Encoding", "identity");
@@ -4777,7 +4836,7 @@ export class ToriiClient {
     const context = "SoraFS billing statement endpoint";
     const auth = buildSorafsReputationRequestAuth(
       { canonicalAuth },
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "getSorafsBillingStatement",
       { accept: APPLICATION_NORITO },
     );
@@ -4859,7 +4918,7 @@ export class ToriiClient {
     const context = "SoraFS billing acknowledgement endpoint";
     const auth = buildSorafsReputationRequestAuth(
       { canonicalAuth },
-      this._config.defaultHeaders,
+      this.#config.defaultHeaders,
       "acknowledgeSorafsBillingStatement",
     );
     setHeader(auth.headers, "Content-Type", APPLICATION_NORITO);
@@ -5331,6 +5390,7 @@ export class ToriiClient {
       record.chunkerHandle,
       manifestBundle,
       "fetchDaPayloadViaGateway",
+      this._deriveDaChunkerHandle,
     );
 
     const proofSummaryOptions = normalizeProofSummaryOption(
@@ -5403,9 +5463,9 @@ export class ToriiClient {
    *   manifestPaths: {manifestPath: string, manifestJsonPath: string, chunkPlanPath: string, label: string};
    *   payloadPath: string;
    *   scoreboardPath: string | null;
-   *   proofSummaryPath: string;
-   *   proofSummaryArtifact: unknown;
-   *   proofSummary: unknown;
+   *   proofSummaryPath: string | null;
+   *   proofSummaryArtifact: unknown | null;
+   *   proofSummary: unknown | null;
    *   gatewayResult: DaGatewayFetchResult;
    *   outputDir: string;
    * }>}
@@ -5460,12 +5520,13 @@ export class ToriiClient {
       scoreboardOutPath: scoreboardPath,
     };
 
+    const proofSummaryRequest = record.proofSummary ?? true;
     const session = await this.fetchDaPayloadViaGateway({
       manifestBundle: manifest,
       chunkerHandle: record.chunkerHandle,
       gatewayProviders: providers,
       fetchOptions: mergedFetchOptions,
-      proofSummary: record.proofSummary ?? true,
+      proofSummary: proofSummaryRequest,
       signal: record.signal,
     });
 
@@ -5483,22 +5544,26 @@ export class ToriiClient {
       );
     }
 
-    const proofSummaryPath = pathModule.join(
-      outputDir,
-      `proof_summary_${manifestPaths.label}.json`,
-    );
-    const proofResult = await emitDaProofSummaryArtifact({
-      summary: session.proofSummary ?? undefined,
-      manifestBytes: manifest.manifest_bytes,
-      payloadBytes: session.gatewayResult.payload,
-      proofOptions:
-        record.proofSummary && typeof record.proofSummary === "object"
-          ? record.proofSummary
-          : undefined,
-      manifestPath: manifestPaths.manifestPath,
-      payloadPath,
-      outputPath: proofSummaryPath,
-    });
+    let proofSummaryPath = null;
+    let proofSummaryArtifact = null;
+    if (proofSummaryRequest !== false) {
+      if (session.proofSummary === null) {
+        throw new Error(
+          "proveDaAvailabilityToDir requested a proof summary but none was generated",
+        );
+      }
+      proofSummaryPath = pathModule.join(
+        outputDir,
+        `proof_summary_${manifestPaths.label}.json`,
+      );
+      const proofResult = await emitDaProofSummaryArtifact({
+        summary: session.proofSummary,
+        manifestPath: manifestPaths.manifestPath,
+        payloadPath,
+        outputPath: proofSummaryPath,
+      });
+      proofSummaryArtifact = proofResult.artifact;
+    }
 
     return {
       manifest,
@@ -5506,8 +5571,8 @@ export class ToriiClient {
       payloadPath,
       scoreboardPath,
       proofSummaryPath,
-      proofSummaryArtifact: proofResult.artifact,
-      proofSummary: proofResult.summary,
+      proofSummaryArtifact,
+      proofSummary: session.proofSummary,
       gatewayResult: session.gatewayResult,
       outputDir,
     };
@@ -6046,7 +6111,12 @@ export class ToriiClient {
   }
 
   async _ensureDataModelValidation(signal) {
-    return ensureNodeDataModelCompatibility(this, () => this.getNodeCapabilities({ canonicalAuth: this._canonicalRequestAuth, signal }));
+    return ensureNodeDataModelCompatibility(this.#dataModelState, () =>
+      this.getNodeCapabilities({
+        canonicalAuth: this.#canonicalRequestAuth,
+        signal,
+      }),
+    );
   }
 
   /**
@@ -6492,7 +6562,7 @@ export class ToriiClient {
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
-    return normalizeStatusSnapshot(payload, this._statusState);
+    return normalizeStatusSnapshot(payload, this.#statusState);
   }
 
   /**
@@ -7154,7 +7224,7 @@ export class ToriiClient {
     const response = await this._request("GET", "/v1/explorer/metrics", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
-      canonicalAuth: this._canonicalRequestAuth,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     if (response.status === 403 || response.status === 404 || response.status === 503) {
       return null;
@@ -7182,7 +7252,7 @@ export class ToriiClient {
       {
         headers: JSON_ACCEPT_HEADERS,
         signal,
-        canonicalAuth: this._canonicalRequestAuth,
+        canonicalAuth: this.#canonicalRequestAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -8498,7 +8568,7 @@ export class ToriiClient {
     const response = await this._request("GET", `/v1/explorer/blocks/${encodeURIComponent(normalized)}`, {
       signal,
       headers: JSON_ACCEPT_HEADERS,
-      canonicalAuth: this._canonicalRequestAuth,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     if (response.status === 404) {
       return null;
@@ -8524,7 +8594,7 @@ export class ToriiClient {
       params,
       headers: JSON_ACCEPT_HEADERS,
       signal: normalizedOptions.signal,
-      canonicalAuth: this._canonicalRequestAuth,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -8557,7 +8627,7 @@ export class ToriiClient {
     return this._streamSse("/v1/events/sse", {
       params: Object.keys(params).length > 0 ? params : undefined,
       signal,
-      canonicalAuth: this._canonicalRequestAuth,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
   }
 
@@ -8636,7 +8706,7 @@ export class ToriiClient {
     return this._streamSse("/v1/contracts/events/sse", {
       params: Object.keys(params).length > 0 ? params : undefined,
       signal,
-      canonicalAuth: this._canonicalRequestAuth,
+      canonicalAuth: this.#canonicalRequestAuth,
     });
   }
 
@@ -8706,7 +8776,7 @@ export class ToriiClient {
     } = buildKaigiCallSignalsQuery(options);
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
       requestedCanonicalAuth === undefined
-        ? this._canonicalRequestAuth
+        ? this.#canonicalRequestAuth
         : requestedCanonicalAuth,
       "listKaigiCallSignals.canonicalAuth",
     );
@@ -9254,9 +9324,9 @@ export class ToriiClient {
       insecureTransportTelemetryHook,
       ...rest
     } = normalizedOptions;
-    const allowInsecure = rest.allowInsecure ?? this._allowInsecure;
+    const allowInsecure = rest.allowInsecure ?? this.#allowInsecure;
     const telemetryHook =
-      insecureTransportTelemetryHook ?? this._config.insecureTransportTelemetryHook;
+      insecureTransportTelemetryHook ?? this.#config.insecureTransportTelemetryHook;
     return openConnectWebSocketInternal(
       {
         ...rest,
@@ -10830,7 +10900,7 @@ export class ToriiClient {
     const url = pathIsAbsolute ? new URL(path) : new URL(path, this._baseUrl + "/");
     const protocol = url.protocol.toLowerCase();
     const originMatches =
-      url.host === this._baseHost && protocol === this._baseProtocol;
+      url.host === this.#baseHost && protocol === this.#baseProtocol;
     const initHeaders = this._createHeaders(options.headers);
     const operatorSigningContext = options.requireIsoOperatorAuth === true
       ? requireIsoOperatorSigningContext(options.operatorSigningContext, initHeaders)
@@ -10880,17 +10950,17 @@ export class ToriiClient {
     const allowAbsoluteUrl = options.allowAbsoluteUrl === true;
     const methodUpper = String(method).toUpperCase();
     if (hasSensitiveTransport) {
-      if (protocol !== this._baseProtocol) {
+      if (protocol !== this.#baseProtocol) {
         throw new Error(
-          `ToriiClient: refusing to send sensitive request material over mismatched scheme ${url.protocol}; use ${this._baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
+          `ToriiClient: refusing to send sensitive request material over mismatched scheme ${url.protocol}; use ${this.#baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
         );
       }
-      if (pathIsAbsolute && url.host !== this._baseHost) {
+      if (pathIsAbsolute && url.host !== this.#baseHost) {
         throw new Error(
-          `ToriiClient: refusing to send sensitive request material to mismatched host ${url.host} (expected ${this._baseHost}); use relative paths on the configured base URL.`,
+          `ToriiClient: refusing to send sensitive request material to mismatched host ${url.host} (expected ${this.#baseHost}); use relative paths on the configured base URL.`,
         );
       }
-      if (!this._allowInsecure && !isSecureProtocol(protocol)) {
+      if (!this.#allowInsecure && !isSecureProtocol(protocol)) {
         throw new Error(
           `ToriiClient: refusing to send sensitive request material over insecure protocol ${url.protocol}; use https or allowInsecure: true.`,
         );
@@ -10900,7 +10970,7 @@ export class ToriiClient {
         "ToriiClient: absolute URLs are blocked when no credentials are attached; pass allowAbsoluteUrl: true to override.",
       );
     }
-    if (hasSensitiveTransport && this._allowInsecure && !isSecureProtocol(protocol)) {
+    if (hasSensitiveTransport && this.#allowInsecure && !isSecureProtocol(protocol)) {
       this._emitInsecureTransportTelemetry({
         client: "torii",
         method: methodUpper,
@@ -10969,25 +11039,25 @@ export class ToriiClient {
         ? options.retryProfile
         : "default";
     const retryPolicy =
-      (this._config.retryProfiles && this._config.retryProfiles[retryProfileName]) ||
-      this._config.retryProfiles?.default ||
+      (this.#config.retryProfiles && this.#config.retryProfiles[retryProfileName]) ||
+      this.#config.retryProfiles?.default ||
       null;
     const policyMaxRetries =
       retryPolicy && typeof retryPolicy.maxRetries === "number"
         ? retryPolicy.maxRetries
-        : this._config.maxRetries;
+        : this.#config.maxRetries;
     const policyBackoffInitial =
       retryPolicy && typeof retryPolicy.backoffInitialMs === "number"
         ? retryPolicy.backoffInitialMs
-        : this._config.backoffInitialMs;
+        : this.#config.backoffInitialMs;
     const policyBackoffMultiplier =
       retryPolicy && typeof retryPolicy.backoffMultiplier === "number"
         ? retryPolicy.backoffMultiplier
-        : this._config.backoffMultiplier;
+        : this.#config.backoffMultiplier;
     const policyMaxBackoffMs =
       retryPolicy && typeof retryPolicy.maxBackoffMs === "number"
         ? retryPolicy.maxBackoffMs
-        : this._config.maxBackoffMs;
+        : this.#config.maxBackoffMs;
     const maxRetries = options.disableRetries === true || hasOneShotAuth
       ? 0
       : Math.max(0, Number(policyMaxRetries) || 0);
@@ -11002,7 +11072,7 @@ export class ToriiClient {
       const callerSignal = options.signal ?? null;
       const attemptSignal = composeRequestSignal(
         callerSignal,
-        this._config.timeoutMs,
+        this.#config.timeoutMs,
       );
       const signal = attemptSignal.signal;
       try {
@@ -11098,7 +11168,7 @@ export class ToriiClient {
   }
 
   _emitRetryTelemetry(event) {
-    const hook = this._config.retryTelemetryHook;
+    const hook = this.#config.retryTelemetryHook;
     if (typeof hook !== "function") {
       return;
     }
@@ -11114,7 +11184,7 @@ export class ToriiClient {
   }
 
   _emitInsecureTransportTelemetry(event) {
-    const hook = this._config.insecureTransportTelemetryHook;
+    const hook = this.#config.insecureTransportTelemetryHook;
     if (typeof hook !== "function") {
       return;
     }
@@ -11126,13 +11196,13 @@ export class ToriiClient {
   }
 
   _resolveSorafsPolicy() {
-    if (this._sorafsResolvedPolicy) {
-      return this._sorafsResolvedPolicy;
+    if (this.#sorafsResolvedPolicy) {
+      return this.#sorafsResolvedPolicy;
     }
     const native = requireSorafsNativeBinding(this._nativeRuntime);
     const defaults = native.sorafsAliasPolicyDefaults();
     const policy = { ...defaults };
-    const overrides = this._sorafsPolicyOverrides;
+    const overrides = this.#sorafsPolicyOverrides;
     if (overrides && typeof overrides === "object") {
       const positive = pickOverride(overrides, "positive_ttl_secs", "positiveTtlSecs");
       if (positive !== undefined && positive !== null) {
@@ -11195,7 +11265,7 @@ export class ToriiClient {
       );
     }
 
-    this._sorafsResolvedPolicy = policy;
+    this.#sorafsResolvedPolicy = policy;
     return policy;
   }
 
@@ -11238,9 +11308,9 @@ export class ToriiClient {
 
     if (
       (evaluation.state === "refresh_window" || evaluation.rotation_due === true) &&
-      typeof this._sorafsAliasWarningHook === "function"
+      typeof this.#sorafsAliasWarningHook === "function"
     ) {
-      this._sorafsAliasWarningHook({
+      this.#sorafsAliasWarningHook({
         alias: this._getHeader(response, HEADER_SORA_NAME) ?? null,
         evaluation: formatSorafsEvaluation(evaluation),
       });
@@ -11291,15 +11361,15 @@ export class ToriiClient {
         }
       }
     };
-    applyEntries(this._config.defaultHeaders);
+    applyEntries(this.#config.defaultHeaders);
     applyEntries(provided);
-    if (this._config.apiToken) {
+    if (this.#config.apiToken) {
       if (!hasHeader(headers, "x-api-token")) {
-        headers["X-API-Token"] = this._config.apiToken;
+        headers["X-API-Token"] = this.#config.apiToken;
       }
     }
-    if (this._config.authToken && !hasHeader(headers, "authorization")) {
-      headers.Authorization = `Bearer ${this._config.authToken}`;
+    if (this.#config.authToken && !hasHeader(headers, "authorization")) {
+      headers.Authorization = `Bearer ${this.#config.authToken}`;
     }
     attachHeaderAccessors(headers);
     return headers;
@@ -11307,9 +11377,9 @@ export class ToriiClient {
 
   _hasClientCredentials() {
     return (
-      Boolean(this._config?.authToken) ||
-      Boolean(this._config?.apiToken) ||
-      headersContainCredentials(this._config?.defaultHeaders)
+      Boolean(this.#config?.authToken) ||
+      Boolean(this.#config?.apiToken) ||
+      headersContainCredentials(this.#config?.defaultHeaders)
     );
   }
 
@@ -11330,22 +11400,22 @@ export class ToriiClient {
   _shouldRetryResponse(method, status, policy) {
     const activePolicy =
       policy ||
-      this._config.retryProfiles?.default || {
-        retryMethods: this._config.retryMethods,
-        retryStatuses: this._config.retryStatuses,
+      this.#config.retryProfiles?.default || {
+        retryMethods: this.#config.retryMethods,
+        retryStatuses: this.#config.retryStatuses,
       };
-    const methods = activePolicy.retryMethods ?? this._config.retryMethods;
-    const statuses = activePolicy.retryStatuses ?? this._config.retryStatuses;
+    const methods = activePolicy.retryMethods ?? this.#config.retryMethods;
+    const statuses = activePolicy.retryStatuses ?? this.#config.retryStatuses;
     return methods.has(method.toUpperCase()) && statuses.has(Number(status));
   }
 
   _shouldRetryError(error, method, timedOut, policy) {
     const activePolicy =
       policy ||
-      this._config.retryProfiles?.default || {
-        retryMethods: this._config.retryMethods,
+      this.#config.retryProfiles?.default || {
+        retryMethods: this.#config.retryMethods,
       };
-    const methods = activePolicy.retryMethods ?? this._config.retryMethods;
+    const methods = activePolicy.retryMethods ?? this.#config.retryMethods;
     if (!methods.has(method.toUpperCase())) {
       return false;
     }
@@ -11699,8 +11769,8 @@ export class ToriiClient {
       throw new TypeError(`${context} requires ToriiClient options.localSigningContext`);
     }
     const request = this._request.bind(this); const validateDataModel = this._ensureDataModelValidation.bind(this);
-    validateSorafsOrderbookSubmissionTransport(this._baseUrl, this._allowInsecure, path, (event) => this._emitInsecureTransportTelemetry(event), context);
-    assertSorafsOrderbookFixedHeaders(this._config.defaultHeaders, `${context} defaultHeaders`);
+    validateSorafsOrderbookSubmissionTransport(this._baseUrl, this.#allowInsecure, path, (event) => this._emitInsecureTransportTelemetry(event), context);
+    assertSorafsOrderbookFixedHeaders(this.#config.defaultHeaders, `${context} defaultHeaders`);
     const fixedHeaders = { "Content-Type": APPLICATION_NORITO, Accept: APPLICATION_NORITO, "Accept-Encoding": "identity" }; const requestHeaders = this._createHeaders(fixedHeaders); const headerFingerprint = sorafsOrderbookHeaderFingerprint(requestHeaders);
     const prepared = prepareSorafsOrderbookSubmission({
       route, signedTransaction,
@@ -11709,12 +11779,12 @@ export class ToriiClient {
       expectedReceiptSigner: normalized.expectedReceiptSigner,
       native: resolveOptionalNativeBinding(this._nativeRuntime), context,
     });
-    const operation = createSorafsOrderbookSubmissionDeadline(signal, this._config.timeoutMs, context, { addAbortListener: addSignalAbortListener, removeAbortListener: removeSignalAbortListener, isAborted: signalIsAborted });
+    const operation = createSorafsOrderbookSubmissionDeadline(signal, this.#config.timeoutMs, context, { addAbortListener: addSignalAbortListener, removeAbortListener: removeSignalAbortListener, isAborted: signalIsAborted, abortReason: signalAbortReason });
     try {
       throwIfAborted(operation.signal);
       await waitForPromiseWithSignal(validateDataModel(operation.signal), operation.signal);
       throwIfAborted(operation.signal);
-      assertSorafsOrderbookFixedHeaders(this._config.defaultHeaders, `${context} defaultHeaders`);
+      assertSorafsOrderbookFixedHeaders(this.#config.defaultHeaders, `${context} defaultHeaders`);
       if (sorafsOrderbookHeaderFingerprint(this._createHeaders(fixedHeaders)) !== headerFingerprint) {
         throw new TypeError(`${context} effective request headers changed during preflight`);
       }
@@ -11898,7 +11968,7 @@ export class ToriiClient {
   }
 
   _acceptHeader() {
-    const headers = this._config?.defaultHeaders ?? {};
+    const headers = this.#config?.defaultHeaders ?? {};
     for (const [key, value] of Object.entries(headers)) {
       if (value !== undefined && value !== null && key.toLowerCase() === "accept") {
         return String(value);
@@ -12056,7 +12126,7 @@ export class ToriiClient {
       );
     }
 
-    const configuredTimeoutMs = Number(this._config?.timeoutMs);
+    const configuredTimeoutMs = Number(this.#config?.timeoutMs);
     const readTimeoutMs =
       Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
         ? Math.min(configuredTimeoutMs, BOUNDED_JSON_MAX_READ_TIMEOUT_MS)
@@ -12238,7 +12308,7 @@ export class ToriiClient {
       optionContext,
       extraAllowedKeys,
     );
-    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(normalizedOptions, optionContext, ToriiClient, this._canonicalRequestAuth);
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(normalizedOptions, optionContext, ToriiClient, this.#canonicalRequestAuth);
     const envelope = ToriiClient._buildIterableQueryEnvelope(rest);
     if (typeof envelopeHook === "function") {
       envelopeHook(envelope, rest);
@@ -12814,7 +12884,7 @@ export class ToriiClient {
     }
     let buffer;
     if (Buffer.isBuffer(value)) {
-      buffer = value;
+      buffer = Buffer.from(value);
     } else if (typeof value === "string") {
       const trimmed = value.trim();
       const hex = trimmed.startsWith("0x") || trimmed.startsWith("0X")
@@ -12826,9 +12896,11 @@ export class ToriiClient {
         buffer = Buffer.from(trimmed, "utf8");
       }
     } else if (ArrayBuffer.isView(value)) {
-      buffer = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+      buffer = Buffer.from(
+        new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+      );
     } else if (value instanceof ArrayBuffer) {
-      buffer = Buffer.from(value);
+      buffer = Buffer.from(new Uint8Array(value));
     } else if (Array.isArray(value)) {
       buffer = normalizeByteArray(value, path);
     } else {
@@ -30016,7 +30088,12 @@ function normaliseChunkPlanPayload(plan, context) {
   throw new TypeError(`${context} must be a canonical chunk fetch plan JSON string or object`);
 }
 
-function normaliseChunkerHandle(explicitHandle, manifestBundle, context) {
+function normaliseChunkerHandle(
+  explicitHandle,
+  manifestBundle,
+  context,
+  deriveChunkerHandle,
+) {
   if (explicitHandle !== undefined && explicitHandle !== null) {
     const handle = requireNonEmptyString(explicitHandle, "fetchDaPayloadViaGateway.chunkerHandle").trim();
     if (!handle) {
@@ -30049,7 +30126,7 @@ function normaliseChunkerHandle(explicitHandle, manifestBundle, context) {
   );
 	  if (manifestBytes) {
 	    try {
-	      return deriveDaChunkerHandle(manifestBytes);
+	      return deriveChunkerHandle(manifestBytes);
 	    } catch (error) {
 	      throw new TypeError(
 	        `${context}.chunkerHandle could not be derived from manifest bytes`,

@@ -198,10 +198,12 @@ _MAX_SOURCE_SEAL_MEMBER_BYTES = 8 * 1024 * 1024 * 1024
 _MAX_SOURCE_SYMLINK_TARGET_BYTES = 1024 * 1024
 _MAX_SOURCE_LOCKFILE_BYTES = 64 * 1024 * 1024
 _MAX_SOURCE_MANIFEST_BYTES = 16 * 1024 * 1024
+_MAX_RELEASE_MANIFEST_BYTES = 64 * 1024 * 1024
 _MAX_PASS_REPORT_BYTES = 512 * 1024 * 1024
 _MAX_FORMAL_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_FORMAL_PACKAGE_BYTES = 256 * 1024 * 1024
 _MAX_FORMAL_TRANSCRIPT_BYTES = 512 * 1024 * 1024
+_MAX_FORMAL_JAVA_VERSION_OUTPUT_BYTES = 64 * 1024
 _EXACT_ONE_SOURCE_ARTIFACT_KINDS = (
     "release_inventory_report",
     "source_archive",
@@ -219,19 +221,6 @@ PASS_REPORT_GATES = {
     "test_report": "focused_tests",
     "workspace_test_report": "workspace_tests",
 }
-REQUIRED_FORMAL_CONFIGURATIONS = (
-    ("AtomicPrivateSettlementV1_3.cfg", "pass"),
-    ("AtomicPrivateSettlementV1_255.cfg", "pass"),
-    ("AtomicPrivateSettlementV1_expiry.cfg", "pass"),
-    ("AtomicPrivateSettlementV1CommitteeFaults_2_validator_focused.cfg", "pass"),
-    ("AtomicPrivateSettlementV1CommitteeFaults_2.cfg", "pass"),
-    ("AtomicPrivateSettlementV1CommitteeFaults_3.cfg", "pass"),
-    ("AtomicPrivateSettlementV1CommitteeFaults_4_clean.cfg", "pass"),
-    ("AtomicPrivateSettlementV1CommitteeFaults_expiry.cfg", "pass"),
-    ("AtomicPrivateSettlementV1_partial_apply_bug.cfg", "safety_violation"),
-    ("AtomicPrivateSettlementV1_commit_before_prepare_bug.cfg", "safety_violation"),
-    ("AtomicPrivateSettlementV1_drop_stage_on_crash_bug.cfg", "safety_violation"),
-)
 REQUIRED_FORMAL_CONFIGURATION_MODELS = (
     ("AtomicPrivateSettlementV1_3.cfg", "pass", "AtomicPrivateSettlementV1.tla"),
     ("AtomicPrivateSettlementV1_255.cfg", "pass", "AtomicPrivateSettlementV1.tla"),
@@ -277,6 +266,10 @@ REQUIRED_FORMAL_CONFIGURATION_MODELS = (
         "AtomicPrivateSettlementV1.tla",
     ),
 )
+REQUIRED_FORMAL_CONFIGURATIONS = tuple(
+    (name, outcome)
+    for name, outcome, _model in REQUIRED_FORMAL_CONFIGURATION_MODELS
+)
 _FORMAL_MODEL_FILES = (
     "AtomicPrivateSettlementV1.tla",
     "AtomicPrivateSettlementV1CommitteeFaults.tla",
@@ -289,6 +282,19 @@ _FORMAL_SOURCE_PATHS = tuple(
     f"{_FORMAL_SOURCE_PREFIX}{name}" for name in _FORMAL_INPUT_FILES
 )
 _FORMAL_SOURCE_PATH_SET = frozenset(_FORMAL_SOURCE_PATHS)
+_FORMAL_EVIDENCE_CODE_SOURCE_PATHS = (
+    "scripts/formal/private_settlement_tlc_report.py",
+    "scripts/formal/run_atomic_private_settlement_tlc.sh",
+    "scripts/formal/sumeragi_v2_tlc_result_contract.sh",
+    "scripts/formal/resolve_java.sh",
+)
+_FORMAL_EVIDENCE_CODE_SOURCE_PATH_SET = frozenset(
+    _FORMAL_EVIDENCE_CODE_SOURCE_PATHS
+)
+_FORMAL_REQUIRED_SOURCE_PATH_SET = (
+    _FORMAL_SOURCE_PATH_SET | _FORMAL_EVIDENCE_CODE_SOURCE_PATH_SET
+)
+_FORMAL_EVIDENCE_CODE_DOMAIN = b"iroha-aps-formal-evidence-code-v1\0"
 _PINNED_FORMAL_TOOL_VERSION = "TLC 2.19 / TLA+ tools 1.7.4"
 _PINNED_FORMAL_TLC_VERSION = "2.19"
 _PINNED_FORMAL_TOOL_SHA256 = (
@@ -328,6 +334,14 @@ class Artifact:
     path: PurePosixPath
     sha256: str
     bytes: int
+
+
+@dataclass(frozen=True)
+class FormalSourceBindings:
+    """Source-sealed identities for models and their evidence-producing code."""
+
+    model_sha256: str
+    evidence_code_sha256: str
 
 
 def _exact_fields(value: Any, expected: set[str], label: str) -> dict[str, Any]:
@@ -423,7 +437,7 @@ def _validated_git_inventory(
 
 def _git_inventory_tree_oid_v1(
     inventory: Mapping[str, tuple[str, str]], oid_hex_chars: int
-) -> str:
+) -> FormalSourceBindings:
     root: dict[bytes, Any] = {}
     for path, leaf in inventory.items():
         components = [component.encode("utf-8") for component in path.split("/")]
@@ -532,6 +546,68 @@ def _read_stable_bounded_artifact(
     return payload
 
 
+def _decode_strict_json(payload: bytes, *, label: str) -> Any:
+    """Decode UTF-8 JSON while rejecting duplicate keys and non-finite numbers."""
+
+    def exact_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise EvidenceError(f"{label} contains duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_nonfinite(raw: str) -> Any:
+        raise EvidenceError(f"{label} contains non-finite JSON number {raw!r}")
+
+    try:
+        return json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=exact_object,
+            parse_constant=reject_nonfinite,
+        )
+    except EvidenceError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise EvidenceError(
+            f"cannot read {label} as UTF-8 JSON: {error}"
+        ) from error
+
+
+def _read_strict_json_file(
+    path: Path, *, maximum_bytes: int, label: str
+) -> Any:
+    """Read one stable, bounded, regular JSON file without following links."""
+
+    try:
+        before = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size <= 0
+            or before.st_size > maximum_bytes
+        ):
+            raise EvidenceError(f"{label} must be one bounded regular file")
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if _stable_metadata(opened) != _stable_metadata(before):
+                raise EvidenceError(f"{label} changed before it was opened")
+            payload = stream.read(maximum_bytes + 1)
+            after = os.fstat(stream.fileno())
+        path_after = path.lstat()
+    except OSError as error:
+        raise EvidenceError(f"cannot read {label}: {error}") from error
+    if (
+        len(payload) != before.st_size
+        or len(payload) > maximum_bytes
+        or _stable_metadata(after) != _stable_metadata(opened)
+        or _stable_metadata(path_after) != _stable_metadata(before)
+    ):
+        raise EvidenceError(f"{label} changed while it was read")
+    return _decode_strict_json(payload, label=label)
+
+
 def _read_bound_json_artifact(
     path: Path,
     *,
@@ -547,12 +623,7 @@ def _read_bound_json_artifact(
         expected_bytes=expected_bytes,
         label=label,
     )
-    try:
-        return json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise EvidenceError(
-            f"cannot read {label} as UTF-8 JSON: {error}"
-        ) from error
+    return _decode_strict_json(payload, label=label)
 
 
 def _validate_source_commit(
@@ -637,6 +708,25 @@ def _formal_package_sha256_from_source_payloads(
         encoded_name = name.encode("utf-8")
         _manifest_frame(digest, encoded_name)
         _manifest_frame(digest, payload)
+    return digest.hexdigest()
+
+
+def _formal_evidence_code_sha256_from_source_payloads(
+    payloads: Mapping[str, bytes],
+) -> str:
+    """Hash the exact source-sealed producer, runner, and helper scripts."""
+
+    if set(payloads) != _FORMAL_EVIDENCE_CODE_SOURCE_PATH_SET:
+        missing = sorted(_FORMAL_EVIDENCE_CODE_SOURCE_PATH_SET - set(payloads))
+        unexpected = sorted(set(payloads) - _FORMAL_EVIDENCE_CODE_SOURCE_PATH_SET)
+        raise EvidenceError(
+            "formal evidence code package is incomplete; "
+            f"missing={missing!r} unexpected={unexpected!r}"
+        )
+    digest = hashlib.sha256(_FORMAL_EVIDENCE_CODE_DOMAIN)
+    for source_path in _FORMAL_EVIDENCE_CODE_SOURCE_PATHS:
+        _manifest_frame(digest, source_path.encode("utf-8"))
+        _manifest_frame(digest, payloads[source_path])
     return digest.hexdigest()
 
 
@@ -764,9 +854,10 @@ def _validate_source_seal_inventory(
     expected_lockfile_sha256: str,
     expected_lockfile_bytes: int,
     require_formal_package: bool = False,
-) -> str | None:
+) -> FormalSourceBindings | None:
     actual: dict[str, tuple[str, str]] = {}
     formal_payloads: dict[str, bytes] = {}
+    evidence_code_payloads: dict[str, bytes] = {}
     formal_payload_bytes = 0
     prior_path: bytes | None = None
     workspace_manifest = hashlib.sha256(_WORKSPACE_SOURCE_MANIFEST_DOMAIN)
@@ -836,7 +927,7 @@ def _validate_source_seal_inventory(
             if kind == b"F":
                 if (
                     require_formal_package
-                    and actual_path in _FORMAL_SOURCE_PATH_SET
+                    and actual_path in _FORMAL_REQUIRED_SOURCE_PATH_SET
                     and payload_size > _MAX_FORMAL_INPUT_BYTES
                 ):
                     raise EvidenceError(
@@ -844,7 +935,7 @@ def _validate_source_seal_inventory(
                     )
                 if (
                     require_formal_package
-                    and actual_path in _FORMAL_SOURCE_PATH_SET
+                    and actual_path in _FORMAL_REQUIRED_SOURCE_PATH_SET
                     and formal_payload_bytes + payload_size
                     > _MAX_FORMAL_PACKAGE_BYTES
                 ):
@@ -855,7 +946,7 @@ def _validate_source_seal_inventory(
                 formal_payload = (
                     bytearray()
                     if require_formal_package
-                    and actual_path in _FORMAL_SOURCE_PATH_SET
+                    and actual_path in _FORMAL_REQUIRED_SOURCE_PATH_SET
                     else None
                 )
                 lockfile_digest = (
@@ -880,12 +971,19 @@ def _validate_source_seal_inventory(
                 actual_object = digest.hexdigest()
                 actual[actual_path] = (git_mode, actual_object)
                 if formal_payload is not None:
-                    formal_payloads[actual_path] = bytes(formal_payload)
+                    captured_payload = bytes(formal_payload)
+                    if actual_path in _FORMAL_SOURCE_PATH_SET:
+                        formal_payloads[actual_path] = captured_payload
+                    else:
+                        evidence_code_payloads[actual_path] = captured_payload
                     formal_payload_bytes += payload_size
                 if lockfile_digest is not None:
                     lockfile_binding = (lockfile_digest.hexdigest(), payload_size)
             elif kind == b"L":
-                if require_formal_package and actual_path in _FORMAL_SOURCE_PATH_SET:
+                if (
+                    require_formal_package
+                    and actual_path in _FORMAL_REQUIRED_SOURCE_PATH_SET
+                ):
                     raise EvidenceError(
                         f"formal input {actual_path!r} must be a regular file"
                     )
@@ -902,7 +1000,10 @@ def _validate_source_seal_inventory(
                     _git_object_digest(target, b"blob", oid_hex_chars),
                 )
             elif kind == b"G":
-                if require_formal_package and actual_path in _FORMAL_SOURCE_PATH_SET:
+                if (
+                    require_formal_package
+                    and actual_path in _FORMAL_REQUIRED_SOURCE_PATH_SET
+                ):
                     raise EvidenceError(
                         f"formal input {actual_path!r} must be a regular file"
                     )
@@ -947,7 +1048,14 @@ def _validate_source_seal_inventory(
     if lockfile_binding != (expected_lockfile_sha256, expected_lockfile_bytes):
         raise EvidenceError("source archive Cargo.lock differs from source_lockfile")
     if require_formal_package:
-        return _formal_package_sha256_from_source_payloads(formal_payloads)
+        return FormalSourceBindings(
+            model_sha256=_formal_package_sha256_from_source_payloads(formal_payloads),
+            evidence_code_sha256=(
+                _formal_evidence_code_sha256_from_source_payloads(
+                    evidence_code_payloads
+                )
+            ),
+        )
     return None
 
 
@@ -995,7 +1103,7 @@ def _validate_release_inventory_details(
         expected_sha256=source_path_list_sha256,
         expected_bytes=source_path_list_bytes,
     )
-    formal_package_sha256 = _validate_source_seal_inventory(
+    formal_source_bindings = _validate_source_seal_inventory(
         source_archive_path,
         expected,
         oid_hex_chars,
@@ -1006,9 +1114,9 @@ def _validate_release_inventory_details(
         expected_lockfile_bytes=source_lockfile_bytes,
         require_formal_package=True,
     )
-    if formal_package_sha256 is None:
+    if formal_source_bindings is None:
         raise EvidenceError("source archive did not yield a formal source package")
-    return formal_package_sha256
+    return formal_source_bindings
 
 
 def _exact_integer(value: Any, expected: int, label: str) -> None:
@@ -1268,7 +1376,7 @@ def _validate_pass_report(
     source_path_list_path: Path | None = None,
     source_path_list_sha256: str | None = None,
     source_path_list_bytes: int | None = None,
-) -> tuple[PurePosixPath, str | None]:
+) -> tuple[PurePosixPath, FormalSourceBindings | None]:
     """Validate one successful command gate and its separately bound transcript."""
 
     document = _read_bound_json_artifact(
@@ -1317,7 +1425,7 @@ def _validate_pass_report(
     ):
         raise EvidenceError(f"{artifact_kind}.duration_seconds must be positive")
     details = report["details"]
-    formal_package_sha256: str | None = None
+    formal_source_bindings: FormalSourceBindings | None = None
     if artifact_kind == "release_inventory_report":
         if (
             source_tree is None
@@ -1335,7 +1443,7 @@ def _validate_pass_report(
             raise EvidenceError(
                 "release_inventory_report requires the validated source manifest"
             )
-        formal_package_sha256 = _validate_release_inventory_details(
+        formal_source_bindings = _validate_release_inventory_details(
             details,
             source_tree=source_tree,
             source_tracked_file_count=source_tracked_file_count,
@@ -1403,7 +1511,7 @@ def _validate_pass_report(
             label=f"{artifact_kind}.transcript",
             artifacts_by_path=artifacts_by_path,
         ),
-        formal_package_sha256,
+        formal_source_bindings,
     )
 
 
@@ -1542,13 +1650,12 @@ def _validate_soak_report(
 def _load_formal_tlc_report_validator() -> Any:
     """Load the strict TLC result parser shared with the evidence producer."""
 
-    module_name = "_private_settlement_tlc_report_for_release"
-    existing = sys.modules.get(module_name)
-    if existing is not None:
-        return existing
     validator_path = (
         Path(__file__).with_name("formal") / "private_settlement_tlc_report.py"
     )
+    validator_digest = hashlib.sha256(validator_path.read_bytes()).hexdigest()
+    module_name = f"_private_settlement_tlc_report_for_release_{validator_digest}"
+    sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, validator_path)
     if spec is None or spec.loader is None:
         raise EvidenceError("cannot load the strict formal TLC report validator")
@@ -1590,6 +1697,8 @@ def _validate_formal_tlc_transcript(
     *,
     commit: str,
     model_sha256: str,
+    evidence_code_sha256: str,
+    java_runtime: Mapping[str, Any],
     configurations: Sequence[Mapping[str, Any]],
 ) -> None:
     """Replay the report rows from one exact, bound TLC/SANY transcript."""
@@ -1618,6 +1727,11 @@ def _validate_formal_tlc_transcript(
             f"tool_version={_PINNED_FORMAL_TOOL_VERSION}\n"
             f"tool_sha256={_PINNED_FORMAL_TOOL_SHA256}\n"
             f"model_sha256={model_sha256}\n"
+            f"evidence_code_sha256={evidence_code_sha256}\n"
+            f"java_binary_sha256={java_runtime['binary_sha256']}\n"
+            f"java_binary_bytes={java_runtime['binary_bytes']}\n"
+            f"java_version_output_sha256={java_runtime['version_output_sha256']}\n"
+            f"java_version_output_bytes={java_runtime['version_output_bytes']}\n"
         )
         + r"seed=(?P<seed>0|[1-9][0-9]*)\n"
         + r"fingerprint_index=(?P<fingerprint_index>0|[1-9][0-9]*)\n"
@@ -1659,15 +1773,17 @@ def _validate_formal_tlc_transcript(
         stdout = sections[section_index]
         stderr = sections[section_index + 1]
         section_index += 2
-        semantic_marker = f"Semantic processing of module {Path(model).stem}"
-        if (
-            stderr
-            or stdout.splitlines().count(validator.SANY_VERSION_MARKER) != 1
-            or stdout.splitlines().count(semantic_marker) != 1
-        ):
-            raise EvidenceError(
-                f"formal TLC transcript has no clean SANY result for {model}"
+        try:
+            validator.validate_sany(
+                model=model,
+                stdout=stdout,
+                stderr=stderr,
+                status=0,
             )
+        except Exception as error:
+            raise EvidenceError(
+                f"formal TLC transcript has no clean SANY result for {model}: {error}"
+            ) from error
 
     for row, (name, expected_outcome, model) in zip(
         configurations, REQUIRED_FORMAL_CONFIGURATION_MODELS, strict=True
@@ -1706,7 +1822,7 @@ def _validate_formal_model_report(
     commit: str,
     expected_sha256: str,
     expected_bytes: int,
-    formal_package_sha256: str,
+    formal_source_bindings: FormalSourceBindings,
     artifacts_by_path: dict[PurePosixPath, Artifact],
 ) -> PurePosixPath:
     document = _read_bound_json_artifact(
@@ -1726,6 +1842,8 @@ def _validate_formal_model_report(
             "tool_version",
             "tool_sha256",
             "model_sha256",
+            "evidence_code_sha256",
+            "java_runtime",
             "configurations",
             "passed",
             "transcript",
@@ -1744,16 +1862,58 @@ def _validate_formal_model_report(
         raise EvidenceError("formal_model_report.tool_version is not the pinned toolchain")
     if report["tool_sha256"] != _PINNED_FORMAL_TOOL_SHA256:
         raise EvidenceError("formal_model_report.tool_sha256 is not the pinned TLA+ tools JAR")
-    if report["model_sha256"] != formal_package_sha256:
+    if report["model_sha256"] != formal_source_bindings.model_sha256:
         raise EvidenceError(
             "formal_model_report.model_sha256 differs from the validated source package"
+        )
+    if (
+        report["evidence_code_sha256"]
+        != formal_source_bindings.evidence_code_sha256
+    ):
+        raise EvidenceError(
+            "formal_model_report.evidence_code_sha256 differs from the validated producer code"
+        )
+    java_runtime = _exact_fields(
+        report["java_runtime"],
+        {
+            "binary_sha256",
+            "binary_bytes",
+            "version_output",
+            "version_output_sha256",
+            "version_output_bytes",
+        },
+        "formal_model_report.java_runtime",
+    )
+    version_output = java_runtime["version_output"]
+    if not isinstance(version_output, str):
+        raise EvidenceError("formal_model_report Java version output must be text")
+    version_payload = version_output.encode("utf-8")
+    if (
+        not isinstance(java_runtime["binary_sha256"], str)
+        or _HEX_64.fullmatch(java_runtime["binary_sha256"]) is None
+        or isinstance(java_runtime["binary_bytes"], bool)
+        or not isinstance(java_runtime["binary_bytes"], int)
+        or java_runtime["binary_bytes"] <= 0
+        or not version_payload
+        or len(version_payload) > _MAX_FORMAL_JAVA_VERSION_OUTPUT_BYTES
+        or "\0" in version_output
+        or re.search(
+            r'(?m)^(?:openjdk|java) version "[0-9][^"]*"', version_output
+        )
+        is None
+        or java_runtime["version_output_sha256"]
+        != hashlib.sha256(version_payload).hexdigest()
+        or java_runtime["version_output_bytes"] != len(version_payload)
+    ):
+        raise EvidenceError(
+            "formal_model_report Java runtime provenance is incomplete or inconsistent"
         )
     configurations = report["configurations"]
     if not isinstance(configurations, list) or len(configurations) != len(
         REQUIRED_FORMAL_CONFIGURATIONS
     ):
         raise EvidenceError("formal model report configuration matrix is incomplete")
-    observed: list[tuple[str, str]] = []
+    observed: list[tuple[str, str, str]] = []
     for index, value in enumerate(configurations):
         row = _exact_fields(
             value,
@@ -1806,7 +1966,9 @@ def _validate_formal_model_report(
     _validate_formal_tlc_transcript(
         transcript_payload,
         commit=commit,
-        model_sha256=formal_package_sha256,
+        model_sha256=formal_source_bindings.model_sha256,
+        evidence_code_sha256=formal_source_bindings.evidence_code_sha256,
+        java_runtime=java_runtime,
         configurations=configurations,
     )
     return transcript_reference
@@ -3815,13 +3977,12 @@ def _validate_benchmark_report(
 def verify_bundle(manifest_path: Path) -> dict[str, Any]:
     """Verify a manifest, every declared artifact, and the exact file inventory."""
 
-    if manifest_path.is_symlink() or not manifest_path.is_file():
-        raise EvidenceError("manifest path must be a regular non-symlink file")
     root = manifest_path.parent.resolve(strict=True)
-    try:
-        document = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise EvidenceError(f"cannot read release manifest: {error}") from error
+    document = _read_strict_json_file(
+        manifest_path,
+        maximum_bytes=_MAX_RELEASE_MANIFEST_BYTES,
+        label="release manifest",
+    )
     manifest, artifacts = parse_manifest(document)
 
     declared = {artifact.path.as_posix() for artifact in artifacts}
@@ -3962,7 +4123,7 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
     source_path_list_path = root.joinpath(*source_path_list_reference.parts)
 
     gate_transcripts: list[PurePosixPath] = [source_transcript]
-    formal_package_sha256: str | None = None
+    formal_source_bindings: FormalSourceBindings | None = None
     for artifact_kind in PASS_REPORT_GATES:
         gate_artifacts = [
             artifact for artifact in artifacts if artifact.kind == artifact_kind
@@ -3972,7 +4133,7 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
                 f"evidence bundle must contain exactly one {artifact_kind}"
             )
         artifact = gate_artifacts[0]
-        gate_transcript, gate_formal_package_sha256 = _validate_pass_report(
+        gate_transcript, gate_formal_source_bindings = _validate_pass_report(
             root.joinpath(*artifact.path.parts),
             artifact_kind=artifact_kind,
             commit=manifest["commit"],
@@ -3992,11 +4153,11 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
             source_path_list_bytes=source_path_list_artifact.bytes,
         )
         gate_transcripts.append(gate_transcript)
-        if gate_formal_package_sha256 is not None:
-            if formal_package_sha256 is not None:
+        if gate_formal_source_bindings is not None:
+            if formal_source_bindings is not None:
                 raise EvidenceError("formal source package was validated more than once")
-            formal_package_sha256 = gate_formal_package_sha256
-    if formal_package_sha256 is None:
+            formal_source_bindings = gate_formal_source_bindings
+    if formal_source_bindings is None:
         raise EvidenceError("release inventory did not authenticate the formal source package")
     randomized_artifacts = [
         artifact for artifact in artifacts if artifact.kind == "randomized_seed_report"
@@ -4040,7 +4201,7 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
             commit=manifest["commit"],
             expected_sha256=formal_artifacts[0].sha256,
             expected_bytes=formal_artifacts[0].bytes,
-            formal_package_sha256=formal_package_sha256,
+            formal_source_bindings=formal_source_bindings,
             artifacts_by_path=artifacts_by_path,
         )
     )

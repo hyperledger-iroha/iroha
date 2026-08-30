@@ -21,18 +21,20 @@ export const BUNDLE_TARGETS = Object.freeze([
     // The first-release simplification audit measured a 1,082,470-byte eager
     // closure before moving Norito-heavy validation, Kagemusha, SCCP, and route
     // governance behind the existing optional boundary. The reviewed eager path
-    // is now 813,893 bytes (-24.8%); the 797 KiB ceiling leaves 2,235 bytes while
-    // every deferred closure remains independently inventoried below.
+    // is now 814,534 bytes (-24.8%); the 797 KiB ceiling leaves 1,594 bytes while
+    // every deferred closure remains independently inventoried below. The small
+    // reviewed increase buys private Torii security state, fail-closed receipts,
+    // and immutable native dependency contexts.
     limitKb: 797,
-    reviewedEagerBytes: 813_893,
-    reviewedCombinedBytes: 1_212_491,
+    reviewedEagerBytes: 814_534,
+    reviewedCombinedBytes: 1_214_544,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./toriiOptional.js",
         entryPoint: join(ROOT, "src", "toriiOptional.js"),
         edgeCount: 1,
-        reviewedBytes: 326_105,
-        limitKb: 319,
+        reviewedBytes: 327_517,
+        limitKb: 322,
       }),
       Object.freeze({
         specifier: "./sumeragiTyped.js",
@@ -50,10 +52,11 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The reviewed
-    // first-release codec closure is 308,737 bytes after exact ProofAttachment,
-    // instruction archive, response-binding validation, and a declaration-exact
-    // public facade. The 304 KiB ceiling leaves 2,559 bytes.
-    limitKb: 304,
+    // first-release codec closure is 311,701 bytes after exact ProofAttachment,
+    // instruction archive, response-binding validation, and immutable native
+    // dependency contexts (+0.39% from the 310,503-byte predecessor). The
+    // 306 KiB ceiling leaves 1,643 bytes.
+    limitKb: 306,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -63,9 +66,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree. The exact first-release public graph is now 359,417 bytes
-    // (-3.23%). The 354 KiB ceiling leaves 3,079 bytes.
-    limitKb: 354,
+    // pre-reset tree. The exact first-release public graph is now 361,258 bytes
+    // (-2.73%). The 355 KiB ceiling leaves 2,262 bytes.
+    limitKb: 355,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -74,8 +77,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // Protected pre-reset baseline: 97,869 bytes. Current V1: 93,480 bytes
-    // (-4.48%). The 94 KiB ceiling leaves 2,776 bytes.
+    // Protected pre-reset baseline: 97,869 bytes. Current V1: 93,163 bytes
+    // (-4.81%). The 94 KiB ceiling leaves 3,093 bytes.
     limitKb: 94,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -109,14 +112,15 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The prior first-release aggregate measured a 517,186-byte eager split closure
-    // on the pinned runner. Removing feature-specific exports from the aggregate
-    // reduces the reviewed eager surface to 489,420 bytes (-5.37%); the 480 KiB
-    // ceiling leaves 2,100 bytes. The typed Sumeragi parser and deployment-submit
-    // continuation remain separately inventoried so startup and deferred code
-    // cannot trade against one another.
-    limitKb: 480,
-    reviewedEagerBytes: 489_420,
-    reviewedCombinedBytes: 571_416,
+    // on the pinned runner. Removing feature-specific exports, then adding private
+    // browser transport state and exact URL/header/timeout guards, leaves the
+    // reviewed eager surface at 496,687 bytes (-3.96%); the 486 KiB ceiling leaves
+    // 977 bytes. The typed Sumeragi parser and deployment-submit continuation
+    // remain separately inventoried so startup and deferred code cannot trade
+    // against one another.
+    limitKb: 486,
+    reviewedEagerBytes: 496_687,
+    reviewedCombinedBytes: 578_683,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",

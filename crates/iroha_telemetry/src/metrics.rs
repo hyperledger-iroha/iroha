@@ -6365,12 +6365,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 751;
-const METRIC_CATALOG_V2_REGISTERED: usize = 708;
-const METRIC_CATALOG_V2_BYTES: usize = 102_234;
+const METRIC_CATALOG_V2_ROWS: usize = 742;
+const METRIC_CATALOG_V2_REGISTERED: usize = 699;
+const METRIC_CATALOG_V2_BYTES: usize = 100_865;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "a2a23c5deef66aa99dcfe3d27b402ea7dddd07e63cc2837b77ce9cb68c2e70d8";
+    "b13a790c3cf529faef56087ac0358384c0aa7a938eda8219e61103126374f3ae";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

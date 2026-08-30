@@ -1700,6 +1700,64 @@ test("ToriiClient constructor enforces option shapes", () => {
   );
 });
 
+test("ToriiClient keeps credentials and security state out of its public object shape", () => {
+  const privateKey = Buffer.from(APPLICATION_CANONICAL_AUTH.privateKey);
+  const expectedPrivateKey = Buffer.from(privateKey);
+  const client = new SourceToriiClient(BASE_URL, {
+    apiToken: "api-token-secret",
+    authToken: "bearer-token-secret",
+    canonicalRequestAuth: {
+      accountId: APPLICATION_CANONICAL_AUTH.accountId,
+      privateKey,
+    },
+    defaultHeaders: {
+      Accept: "application/json",
+      "X-Credential": "header-secret",
+    },
+    fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
+    localSigningContext: VK_LOCAL_SIGNING_CONTEXT,
+  });
+
+  privateKey.fill(0);
+  assert.deepEqual(
+    SourceToriiClient._normalizePrivateKey(expectedPrivateKey),
+    expectedPrivateKey,
+  );
+  assert.deepEqual(Object.keys(client), []);
+  assert.equal(client._config, undefined);
+  assert.equal(client._allowInsecure, undefined);
+  assert.equal(client._canonicalRequestAuth, undefined);
+  const serialized = JSON.stringify(client);
+  for (const secret of [
+    "api-token-secret",
+    "bearer-token-secret",
+    "header-secret",
+    expectedPrivateKey.toString("hex"),
+  ]) {
+    assert.equal(serialized.includes(secret), false);
+  }
+});
+
+test("ToriiClient copies canonical-auth byte containers", () => {
+  const inputs = [
+    Buffer.alloc(32, 0x41),
+    new Uint8Array(32).fill(0x42),
+    new Uint8Array(32).fill(0x43).buffer,
+  ];
+  for (const input of inputs) {
+    const expected = Buffer.from(
+      ArrayBuffer.isView(input) ? input : new Uint8Array(input),
+    );
+    const normalized = SourceToriiClient._normalizePrivateKey(input);
+    if (ArrayBuffer.isView(input)) {
+      input.fill(0);
+    } else {
+      new Uint8Array(input).fill(0);
+    }
+    assert.deepEqual(normalized, expected);
+  }
+});
+
 function createIsoSubmissionPayload(overrides = {}) {
   return {
     message_id: "iso-msg",
@@ -6091,6 +6149,134 @@ test("fetchDaPayloadViaGateway uses custom hooks", async (t) => {
   assert.deepEqual(optionsArg, {});
 });
 
+test("fetchDaPayloadViaGateway keeps DA and gateway calls on the client runtime", async () => {
+  const manifestBytes = Buffer.from("runtime-manifest");
+  const manifestBundle = {
+    storage_ticket_hex: "aa".repeat(32),
+    client_blob_id_hex: "cc".repeat(32),
+    blob_hash_hex: "bb".repeat(32),
+    manifest_hash_hex: "bb".repeat(32),
+    chunk_root_hex: "dd".repeat(32),
+    chunk_plan: chunkFetchPlan(
+      [
+        {
+          chunk_index: 0,
+          offset: 0,
+          length: 1,
+          digest_blake3: "ee".repeat(32),
+        },
+      ],
+      "bb".repeat(32),
+    ),
+    manifest_bytes: manifestBytes,
+    manifest_len: manifestBytes.length,
+    lane_id: 1,
+    epoch: 2,
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: "11".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
+      baseUrl: "https://gateway-one.test",
+      streamTokenB64: Buffer.from("token-one").toString("base64"),
+    },
+    {
+      name: "beta",
+      providerIdHex: "22".repeat(32),
+      gatewayPublicKeyHex: "dd".repeat(32),
+      baseUrl: "https://gateway-two.test",
+      streamTokenB64: Buffer.from("token-two").toString("base64"),
+    },
+  ];
+  const binding = {
+    label: "original",
+    daManifestChunkerHandle() {
+      return `chunker-${this.label}`;
+    },
+    sorafsGatewayFetch(_manifest, chunkerHandle) {
+      throw new Error(`gateway-${this.label}:${chunkerHandle}`);
+    },
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("manifest fetch should not run");
+    },
+    [TORII_TEST_NATIVE_BINDING]: binding,
+  });
+  binding.label = "mutated";
+  binding.daManifestChunkerHandle = () => "chunker-mutated";
+  binding.sorafsGatewayFetch = () => {
+    throw new Error("gateway-mutated");
+  };
+
+  await assert.rejects(
+    () =>
+      client.fetchDaPayloadViaGateway({
+        manifestBundle,
+        gatewayProviders: providers,
+      }),
+    /gateway-original:chunker-original/u,
+  );
+});
+
+test("fetchDaPayloadViaGateway keeps proof generation on the client runtime", async () => {
+  const manifestBytes = Buffer.from("proof-runtime-manifest");
+  const manifestBundle = {
+    storage_ticket_hex: "aa".repeat(32),
+    client_blob_id_hex: "cc".repeat(32),
+    blob_hash_hex: "bb".repeat(32),
+    manifest_hash_hex: "bb".repeat(32),
+    chunk_root_hex: "dd".repeat(32),
+    chunk_plan: chunkFetchPlan(
+      [{ chunk_index: 0, offset: 0, length: 1, digest_blake3: "ee".repeat(32) }],
+      "bb".repeat(32),
+    ),
+    manifest_bytes: manifestBytes,
+    manifest_len: manifestBytes.length,
+    lane_id: 1,
+    epoch: 2,
+  };
+  const binding = {
+    label: "original",
+    daGenerateProofs() {
+      throw new Error(`proof-${this.label}`);
+    },
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("manifest fetch should not run");
+    },
+    [TORII_TEST_NATIVE_BINDING]: binding,
+    ...toriiTestHooks({
+      sorafsGatewayFetch: () => ({ payload: Buffer.from("payload") }),
+    }),
+  });
+  binding.label = "mutated";
+  binding.daGenerateProofs = () => {
+    throw new Error("proof-mutated");
+  };
+
+  await assert.rejects(
+    () =>
+      client.fetchDaPayloadViaGateway({
+        manifestBundle,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        gatewayProviders: [
+          {
+            name: "alpha",
+            providerIdHex: "11".repeat(32),
+            gatewayPublicKeyHex: "dd".repeat(32),
+            baseUrl: "https://gateway.test",
+            streamTokenB64: Buffer.from("token").toString("base64"),
+          },
+        ],
+        proofSummary: true,
+      }),
+    /proof-original/u,
+  );
+});
+
 test("fetchDaPayloadViaGateway reuses provided manifest bundle", async (t) => {
   const gatewayResult = {
     manifestIdHex: "aa".repeat(32),
@@ -6822,11 +7008,15 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
     ],
   };
   const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "tmp-js-da-prove-"));
+  let proofCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
     ...toriiTestHooks({
       sorafsGatewayFetch: async () => gatewayResult,
-      generateDaProofSummary: async () => proofSummary,
+      generateDaProofSummary: async () => {
+        proofCalls += 1;
+        return proofSummary;
+      },
     }),
   });
   try {
@@ -6865,9 +7055,37 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
     assert.ok(await fileExists(payloadPath));
     assert.ok(await fileExists(proofPath));
     assert.ok(await fileExists(scoreboardPath));
+    assert.equal(proofCalls, 1);
 
     const scoreboardJson = JSON.parse(await fs.readFile(scoreboardPath, "utf8"));
     assert.equal(scoreboardJson[0].alias, "gw-alpha");
+
+    const withoutProof = await client.proveDaAvailabilityToDir({
+      storageTicketHex: ticketHex,
+      gatewayProviders: [
+        {
+          name: "alpha",
+          providerIdHex: "bb".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
+          baseUrl: "https://gateway.test/",
+          streamTokenB64: Buffer.from("token").toString("base64"),
+        },
+        {
+          name: "beta",
+          providerIdHex: "bc".repeat(32),
+          gatewayPublicKeyHex: "dd".repeat(32),
+          baseUrl: "https://gateway-two.test/",
+          streamTokenB64: Buffer.from("token-2").toString("base64"),
+        },
+      ],
+      chunkerHandle: gatewayResult.chunker_handle,
+      proofSummary: false,
+      outputDir: path.join(tmpDir, "without-proof"),
+    });
+    assert.equal(withoutProof.proofSummary, null);
+    assert.equal(withoutProof.proofSummaryPath, null);
+    assert.equal(withoutProof.proofSummaryArtifact, null);
+    assert.equal(proofCalls, 1);
     const proofJson = JSON.parse(await fs.readFile(proofPath, "utf8"));
     assert.equal(proofJson.sample_count, 1);
     assert.equal(proofJson.manifest_path, manifestPath);
@@ -8241,6 +8459,53 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
   const client = new ToriiClient(BASE_URL, { fetchImpl, [TORII_TEST_NATIVE_BINDING]: nativeBinding });
   const result = await client.submitTransaction(payload);
   assert.deepEqual(result, JSON.parse(receiptJson));
+});
+
+test("non-empty Norito transaction receipts fail closed", async (t) => {
+  const receiptResponse = () =>
+    createResponse({
+      status: 202,
+      arrayData: new Uint8Array([0x01, 0x02, 0x03]),
+      headers: { "content-type": "application/x-norito" },
+    });
+  const cases = [
+    {
+      name: "missing decoder",
+      binding: {},
+      pattern: /does not expose decodeTransactionReceiptJson/u,
+    },
+    {
+      name: "decoder failure",
+      binding: {
+        decodeTransactionReceiptJson() {
+          throw new Error("malformed receipt bytes");
+        },
+      },
+      pattern: /failed to decode the non-empty Norito transaction receipt/u,
+    },
+    {
+      name: "invalid decoder JSON",
+      binding: {
+        decodeTransactionReceiptJson() {
+          return "not-json";
+        },
+      },
+      pattern: /decoder returned invalid JSON/u,
+    },
+  ];
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, async () => {
+      const client = new SourceToriiClient(BASE_URL, {
+        fetchImpl: async () => receiptResponse(),
+        [TORII_TEST_NATIVE_BINDING]: fixture.binding,
+      });
+      await assert.rejects(
+        () => client._decodeTransactionIngressResponse(receiptResponse()),
+        fixture.pattern,
+      );
+    });
+  }
 });
 
 test("submitTransactionBatch posts a Norito transaction payload vector", async () => {

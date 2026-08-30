@@ -89,7 +89,6 @@ export function validatePackPaths(metadata) {
     "privacy-capabilities.d.ts",
     "repo-agreement.d.ts",
     "sumeragi-typed.d.ts",
-    "src/index.js",
     "dist/index.js",
     "dist/atomicPrivateSettlement.js",
     "dist/ivmArtifact.js",
@@ -105,13 +104,15 @@ export function validatePackPaths(metadata) {
     "nexus-app.d.ts",
     "recipes/iso_bridge_builder.mjs",
     "recipes/nexus_app_transfer.mjs",
-    "scripts/build-dist.mjs",
   ]) {
     if (!paths.has(required)) {
       throw new Error(`package smoke missing required tar entry: ${required}`);
     }
   }
   for (const path of paths) {
+    if (path.startsWith("src/") || path.startsWith("scripts/")) {
+      throw new Error(`package smoke found unpublished development path: ${path}`);
+    }
     if (path.startsWith("recipes/") && !ALLOWED_RECIPE_PATHS.has(path)) {
       throw new Error(`package smoke found forbidden non-portable recipe: ${path}`);
     }
@@ -199,6 +200,17 @@ async function main() {
       "for (const [name, value] of checks) {",
       '  if (typeof value !== "function") throw new Error(`missing packed export: ${name}`);',
       "}",
+      'if (JSON.stringify(sdk.supportedCryptoAlgorithms()) !== JSON.stringify(["ed25519"])) {',
+      '  throw new Error("clean packed install must advertise only portable Ed25519");',
+      "}",
+      "try {",
+      '  sdk.generateKeyPair({ algorithm: "sm2" });',
+      '  throw new Error("native-only crypto unexpectedly succeeded");',
+      "} catch (error) {",
+      '  if (error?.code !== "ERR_IROHA_NATIVE_BINDING" || !String(error.message).includes("IROHA_JS_NATIVE_DIR")) {',
+      '    throw new Error(`packed native setup error is not actionable: ${error?.message ?? error}`);',
+      "  }",
+      "}",
       'if (!Object.isFrozen(sdk.TAIRA_TESTNET_PROFILE) ||',
       '    sdk.TAIRA_TESTNET_PROFILE.toriiBaseUrl !== "https://taira.sora.org" ||',
       '    sdk.TAIRA_TESTNET_PROFILE.kagemushaAssetDefinitionId !== "7ZepsJTHCVLKsrFFNZGSRGZgvBhv" ||',
@@ -224,6 +236,10 @@ async function main() {
     ].join("\n");
     await run(process.execPath, ["--input-type=module", "--eval", smokeProgram], {
       cwd: consumerRoot,
+      env: {
+        ...process.env,
+        IROHA_JS_NATIVE_DIR: join(tempRoot, "missing-native"),
+      },
     });
     await run(
       process.execPath,

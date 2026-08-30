@@ -51,11 +51,17 @@ function nativeBindingError(reason, status = "unknown") {
   return error;
 }
 
+function nativeSetupHint(paths) {
+  return existsSync(join(paths.jsRoot, "scripts", "build-native.mjs"))
+    ? "run `npm run build:native`"
+    : "set `IROHA_JS_NATIVE_DIR` to a directory containing a separately built binding and checksum manifest";
+}
+
 function formatForceNativeVerificationError(verification, paths) {
   switch (verification.status) {
     case "missing_file":
       return nativeBindingError(
-        `binding missing at ${paths.bindingPath}; run \`npm run build:native\`.`,
+        `binding missing at ${paths.bindingPath}; ${nativeSetupHint(paths)}.`,
         verification.status,
       );
     case "manifest_error":
@@ -68,7 +74,7 @@ function formatForceNativeVerificationError(verification, paths) {
     case "missing_manifest":
     case "missing_expected_entry":
       return nativeBindingError(
-        `checksum manifest missing entries for ${verification.platform}; run \`npm run build:native\`.`,
+        `checksum manifest missing entries for ${verification.platform}; ${nativeSetupHint(paths)}.`,
         verification.status,
       );
     case "hash_mismatch":

@@ -3331,15 +3331,6 @@ impl Kura {
     ) {
         self.pending_control_sidecar_limits.aggregate_bytes = aggregate_bytes.get();
     }
-    /// Create an isolated test Kura whose canonical primary and lane segments match `lane_config`.
-    ///
-    /// Unlike reconciling a default test Kura after construction, this opens the
-    /// canonical block store and merge log at the requested primary paths. Tests
-    /// that exercise lifecycle changes from a non-default pre-genesis catalog
-    /// therefore do not leave an unauthenticated default-primary segment behind.
-    pub(crate) fn blank_kura_for_testing_with_lane_config(lane_config: &LaneConfig) -> Arc<Kura> {
-        Self::blank_kura_for_testing_with_lane_config_and_retention(lane_config, BLOCKS_IN_MEMORY)
-    }
     /// Create an isolated Kura with a caller-selected body-retention bound.
     ///
     /// This is exposed only to crate tests and downstream users of the

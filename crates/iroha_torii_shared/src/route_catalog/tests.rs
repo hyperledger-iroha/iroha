@@ -31,7 +31,9 @@ mod tests {
             "/v1/node/query/projection/checkpoint/publish",
         ] {
             assert!(
-                ALL_ROUTES.iter().all(|route| route.path() != retired_path),
+                CATALOGED_ROUTES
+                    .iter()
+                    .all(|route| route.path() != retired_path),
                 "retired unverified projection route remains catalogued: {retired_path}"
             );
         }
@@ -1665,6 +1667,10 @@ mod tests {
             AuthenticationPolicy::OperatorSignature
         );
         assert_eq!(sumeragi::STATUS_SSE.effect(), RouteEffect::LongLivedStream);
+        assert!(matches!(
+            sumeragi::STATUS_SSE.path_policy(),
+            PathPolicy::ProtocolException { .. }
+        ));
         assert!(sumeragi::STATUS_SSE.projections().openapi());
         assert!(!sumeragi::STATUS_SSE.projections().sdk());
         assert!(!sumeragi::STATUS_SSE.projections().mcp());

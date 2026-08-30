@@ -7,11 +7,12 @@ import { blake3 } from "@noble/hashes/blake3";
 import { ed25519 } from "@noble/curves/ed25519";
 
 import {
+  _createDataAvailabilityApi,
   buildDaIngestRequest,
   computeDaIngestSigningDigest,
   emitDaProofSummaryArtifact,
-  generateDaProofSummary,
 } from "../src/dataAvailability.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { AccountAddress } from "../src/address.js";
 import { signEd25519 } from "../src/crypto.js";
 import { NetworkId } from "../src/networkId.js";
@@ -23,6 +24,16 @@ const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xA5));
 const OWNER = AccountAddress.fromAccount({
   publicKey: Buffer.from(ed25519.getPublicKey(PRIVATE_KEY)),
 }).toI105();
+
+function generateProofSummaryWithBinding(
+  binding,
+  manifestBytes,
+  payloadBytes,
+  options = {},
+) {
+  return _createDataAvailabilityApi(createNativeRuntime(binding))
+    .generateDaProofSummary(manifestBytes, payloadBytes, options);
+}
 
 test("buildDaIngestRequest signs the complete canonical intent and encodes DA fields", () => {
   const chunkSize = 1024;
@@ -108,6 +119,20 @@ test("buildDaIngestRequest signs the complete canonical intent and encodes DA fi
     signingDigest,
     "resource-sensitive erasure fields must be signed",
   );
+});
+
+test("buildDaIngestRequest derives client blob ids without the native addon", () => {
+  const { request, artifacts } = buildDaIngestRequest({
+    payload: PAYLOAD,
+    networkId: NETWORK_ID,
+    owner: OWNER,
+    signerPublicKey:
+      "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
+    signatureHex: "aa".repeat(64),
+  });
+  const expected = Buffer.from(blake3(PAYLOAD));
+  assert.equal(artifacts.clientBlobIdHex, expected.toString("hex").toUpperCase());
+  assert.deepEqual(request.client_blob_id, [Array.from(expected)]);
 });
 
 test("DA signing digest rejects pre-release requests with omitted V1 fields", () => {
@@ -199,17 +224,21 @@ test("generateDaProofSummary normalizes native output for JS callers", () => {
   const payloadBytes = Buffer.from([0x03]);
   const nativeCalls = [];
   const rawSummary = createNativeProofSummary();
-  const summary = generateDaProofSummary(manifestBytes, payloadBytes, {
-    __nativeBinding: {
+  const summary = generateProofSummaryWithBinding(
+    {
       daGenerateProofs(manifest, payload, options) {
         nativeCalls.push({ manifest, payload, options });
         return rawSummary;
       },
     },
-    sampleCount: 3n,
-    sampleSeed: 7n,
-    leafIndexes: [1n, 3],
-  });
+    manifestBytes,
+    payloadBytes,
+    {
+      sampleCount: 3n,
+      sampleSeed: 7n,
+      leafIndexes: [1n, 3],
+    },
+  );
 
   assert.equal(nativeCalls.length, 1);
   assert.deepEqual(nativeCalls[0].manifest, manifestBytes);
@@ -241,14 +270,16 @@ test("generateDaProofSummary normalizes native output for JS callers", () => {
 
 test("generateDaProofSummary accepts array-like payloads", () => {
   const nativeCalls = [];
-  const summary = generateDaProofSummary([1, 2], [3, 4], {
-    __nativeBinding: {
+  const summary = generateProofSummaryWithBinding(
+    {
       daGenerateProofs(manifest, payload, options) {
         nativeCalls.push({ manifest, payload, options });
         return createNativeProofSummary();
       },
     },
-  });
+    [1, 2],
+    [3, 4],
+  );
 
   assert.equal(nativeCalls.length, 1);
   assert.deepEqual(Array.from(nativeCalls[0].manifest.values()), [1, 2]);
@@ -259,9 +290,11 @@ test("generateDaProofSummary accepts array-like payloads", () => {
 test("generateDaProofSummary rejects non-byte arrays", () => {
   assert.throws(
     () =>
-      generateDaProofSummary([256], [1], {
-        __nativeBinding: { daGenerateProofs: () => createNativeProofSummary() },
-      }),
+      generateProofSummaryWithBinding(
+        { daGenerateProofs: () => createNativeProofSummary() },
+        [256],
+        [1],
+      ),
     (error) => error instanceof TypeError && /manifestBytes\[0\]/i.test(error.message),
   );
 });
@@ -270,9 +303,11 @@ test("generateDaProofSummary rejects coercible non-byte array entries", () => {
   for (const entry of ["1", true, null]) {
     assert.throws(
       () =>
-        generateDaProofSummary([entry], [1], {
-          __nativeBinding: { daGenerateProofs: () => createNativeProofSummary() },
-        }),
+        generateProofSummaryWithBinding(
+          { daGenerateProofs: () => createNativeProofSummary() },
+          [entry],
+          [1],
+        ),
       (error) => error instanceof TypeError && /manifestBytes\[0\]/i.test(error.message),
     );
   }
@@ -281,9 +316,11 @@ test("generateDaProofSummary rejects coercible non-byte array entries", () => {
 test("emitDaProofSummaryArtifact writes JSON artifacts with normalized fields", async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "da-proof-"));
   const outputPath = path.join(tmpDir, "artifact.json");
-  const summary = generateDaProofSummary(Buffer.from([0xaa]), Buffer.from([0xbb]), {
-    __nativeBinding: { daGenerateProofs: () => createNativeProofSummary() },
-  });
+  const summary = generateProofSummaryWithBinding(
+    { daGenerateProofs: () => createNativeProofSummary() },
+    Buffer.from([0xaa]),
+    Buffer.from([0xbb]),
+  );
 
   const { artifact, outputPath: resolved, summary: returnedSummary } =
     await emitDaProofSummaryArtifact({

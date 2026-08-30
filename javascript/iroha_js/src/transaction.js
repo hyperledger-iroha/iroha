@@ -1,9 +1,8 @@
 import { parseCanonicalContractAddress } from "./contractAddress.js";
-import { getNativeBinding } from "./native.js";
 import {
+  _createCryptoApi,
   CRYPTO_ALGORITHMS,
   normalizeCryptoAlgorithm,
-  publicKeyFromPrivate,
 } from "./crypto.js";
 import {
   computeIvmArtifactHashes,
@@ -11,8 +10,12 @@ import {
   IVM_PROGRAM_HEADER_LENGTH,
 } from "./ivmArtifact.js";
 import { ToriiClient } from "./toriiClient.js";
-import { noritoDecodeInstruction } from "./norito.js";
+import { _createNoritoInstructionApi } from "./norito.js";
 import { networkIdBytes } from "./networkId.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -63,6 +66,7 @@ import {
 } from "./instructionBuilders.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { createRegisterAssetDefinitionInstructionBuilder } from "./assetDefinitionRegistration.js";
+import { createConfidentialProofBuilders } from "./confidentialProofBuilders.js";
 
 const submissionAbortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
@@ -86,9 +90,32 @@ function normalizeAuthority(authority) {
   return normalizeAccountId(raw, "authority");
 }
 
-function resolveNativeBinding() {
-  // Allow tests to inject a fake binding.
-  return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+const TRANSACTION_CONTEXTS = new WeakSet();
+function createTransactionContext(nativeRuntime) {
+  const context = Object.freeze({
+    nativeRuntime,
+    confidentialProofs: createConfidentialProofBuilders(nativeRuntime),
+    crypto: _createCryptoApi(nativeRuntime),
+    norito: _createNoritoInstructionApi(nativeRuntime),
+  });
+  TRANSACTION_CONTEXTS.add(context);
+  return context;
+}
+
+const DEFAULT_TRANSACTION_CONTEXT = /* @__PURE__ */ createTransactionContext(
+  defaultNativeRuntime,
+);
+
+function transactionContext(receiver) {
+  return TRANSACTION_CONTEXTS.has(receiver)
+    ? receiver
+    : DEFAULT_TRANSACTION_CONTEXT;
+}
+
+function resolveNativeBinding(receiver) {
+  return resolveNativeRuntimeBinding(
+    transactionContext(receiver).nativeRuntime,
+  );
 }
 
 const RETIRED_TRANSACTION_DOMAIN_FIELDS = Object.freeze([
@@ -460,6 +487,23 @@ function normalizeOptionalPositiveInteger(value, context) {
   });
 }
 
+function normalizePrivateKeyAlgorithm(
+  value,
+  context = "privateKeyAlgorithm",
+  defaultAlgorithm = null,
+) {
+  if (value === undefined) {
+    return defaultAlgorithm;
+  }
+  if (value === null || typeof value !== "string") {
+    throw new TypeError(`${context} must be a supported crypto algorithm string`);
+  }
+  if (value.trim() !== value) {
+    throw new TypeError(`${context} must not contain surrounding whitespace`);
+  }
+  return normalizeCryptoAlgorithm(value);
+}
+
 /**
  * Compute the canonical transaction hash (blake2b-256) for an exact canonical
  * VersionedSignedTransaction V1 wire.
@@ -468,7 +512,7 @@ function normalizeOptionalPositiveInteger(value, context) {
  * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
  */
 export function hashSignedTransaction(signedTransaction, options = {}) {
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.hashSignedTransaction !== "function") {
     throw new Error("native binding 'hashSignedTransaction' is unavailable");
   }
@@ -489,7 +533,7 @@ export function hashSignedTransaction(signedTransaction, options = {}) {
  * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
  */
 export function hashSignedTransactionPayload(signedTransaction, options = {}) {
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.hashSignedTransactionPayload !== "function") {
     throw new Error(
       "native binding 'hashSignedTransactionPayload' is unavailable",
@@ -512,7 +556,7 @@ export function hashSignedTransactionPayload(signedTransaction, options = {}) {
  * @returns {Record<string, unknown>}
  */
 export function decodeSignedTransaction(signedTransaction) {
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.decodeSignedTransactionJson !== "function") {
     throw new Error(
       "native binding 'decodeSignedTransactionJson' is unavailable",
@@ -535,7 +579,7 @@ export function decodeSignedTransaction(signedTransaction) {
  * @returns {Buffer}
  */
 export function encodeContractArgumentRecord(argumentSchema, payload) {
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.encodeContractArgumentRecordJson !== "function") {
     throw new Error(
       "native binding 'encodeContractArgumentRecordJson' is unavailable",
@@ -566,7 +610,7 @@ export function encodeContractArgumentRecord(argumentSchema, payload) {
  * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
  */
 export function hashInstructionBatch(instructions, options = {}) {
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.hashInstructionBatch !== "function") {
     throw new Error("native binding 'hashInstructionBatch' is unavailable");
   }
@@ -594,7 +638,7 @@ export function hashInstructionBatch(instructions, options = {}) {
  * @returns {Buffer}
  */
 export function resignSignedTransaction(networkId, signedTransaction, privateKey) {
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.signTransaction !== "function") {
     throw new Error("native binding 'signTransaction' is unavailable");
   }
@@ -623,13 +667,13 @@ export function resignSignedTransaction(networkId, signedTransaction, privateKey
  *   ttlMs?: number,
  *   nonce?: number,
  *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
- *   privateKeyAlgorithm?: string
+ *   privateKeyAlgorithm?: import("../index.js").CryptoAlgorithm
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function buildRegisterDomainTransaction(input) {
   const networkId = transactionNetworkIdBytes(input, "input");
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.buildRegisterDomainTransaction !== "function") {
     throw new Error(
       "native binding 'build_register_domain_transaction' is unavailable",
@@ -644,7 +688,7 @@ export function buildRegisterDomainTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
 
   const canonicalAuthority = normalizeAuthority(authority);
@@ -666,7 +710,7 @@ export function buildRegisterDomainTransaction(input) {
     ttlMs,
     nonce,
     toBuffer(privateKey),
-    privateKeyAlgorithm,
+    normalizePrivateKeyAlgorithm(privateKeyAlgorithm),
   );
   const signed =
     result?.signed_transaction ?? result?.signedTransaction ?? null;
@@ -694,13 +738,13 @@ export function buildRegisterDomainTransaction(input) {
  *   ttlMs?: number,
  *   nonce?: number,
  *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
- *   privateKeyAlgorithm?: string
+ *   privateKeyAlgorithm?: import("../index.js").CryptoAlgorithm
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function buildTransaction(input) {
   const networkId = transactionNetworkIdBytes(input, "input");
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.buildTransaction !== "function") {
     throw new Error("native binding 'build_transaction' is unavailable");
   }
@@ -714,7 +758,7 @@ export function buildTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
 
   const normalizedInstructions = serializeInstructionPayloads(
@@ -739,7 +783,7 @@ export function buildTransaction(input) {
     ttlMs,
     nonce,
     toBuffer(privateKey),
-    privateKeyAlgorithm,
+    normalizePrivateKeyAlgorithm(privateKeyAlgorithm),
   );
 
   const signed =
@@ -767,7 +811,7 @@ export function buildTransaction(input) {
  */
 export function buildExecutableBatchTransaction(input) {
   const networkId = transactionNetworkIdBytes(input, "input");
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (
     !native ||
     typeof native.buildExecutableBatchTransaction !== "function"
@@ -785,7 +829,7 @@ export function buildExecutableBatchTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const { serialized, containsContractCall } =
     serializeExecutableBatchEntries(entries);
@@ -803,7 +847,7 @@ export function buildExecutableBatchTransaction(input) {
     ttlMs,
     nonce,
     toBuffer(privateKey, "privateKey"),
-    privateKeyAlgorithm,
+    normalizePrivateKeyAlgorithm(privateKeyAlgorithm),
   );
   const signed =
     result?.signed_transaction ?? result?.signedTransaction ?? null;
@@ -838,7 +882,7 @@ export function buildExecutableBatchTransaction(input) {
  */
 export function buildTransactionPayload(input) {
   const networkId = transactionNetworkIdBytes(input, "input");
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.buildTransactionPayload !== "function") {
     throw new Error("native binding 'build_transaction_payload' is unavailable");
   }
@@ -880,7 +924,7 @@ export function buildTransactionPayload(input) {
 /** Build an exact unsigned ordered mixed executable-batch payload. */
 export function buildExecutableBatchTransactionPayload(input) {
   const networkId = transactionNetworkIdBytes(input, "input");
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (
     !native ||
     typeof native.buildExecutableBatchTransactionPayload !== "function"
@@ -936,13 +980,13 @@ export function buildExecutableBatchTransactionPayload(input) {
  *   payload: object | {payload?: object, payloadJson?: string},
  *   quotedFeePayment: object | string,
  *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
- *   privateKeyAlgorithm?: string
+ *   privateKeyAlgorithm?: import("../index.js").CryptoAlgorithm
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function signQuotedTransactionPayload(input) {
   const networkId = transactionNetworkIdBytes(input, "input");
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.signQuotedTransactionPayload !== "function") {
     throw new Error(
       "native binding 'sign_quoted_transaction_payload' is unavailable",
@@ -965,7 +1009,10 @@ export function signQuotedTransactionPayload(input) {
     payloadJson,
     quotedFeePaymentJson,
     toBuffer(input?.privateKey),
-    input?.privateKeyAlgorithm ?? null,
+    normalizePrivateKeyAlgorithm(
+      input?.privateKeyAlgorithm,
+      "input.privateKeyAlgorithm",
+    ),
   );
   const signed = result?.signed_transaction ?? result?.signedTransaction ?? null;
   const hashBytes = result?.hash ?? result?.hashBytes ?? null;
@@ -995,10 +1042,10 @@ export async function quoteAndSignTransaction(client, input, options = {}) {
   }
   const {
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
     ...draftInput
   } = input ?? {};
-  const draft = buildTransactionPayload(draftInput);
+  const draft = buildTransactionPayload.call(this, draftInput);
   const canonicalAuth = options.canonicalAuth ?? {
     accountId: draftInput.authority,
     privateKey,
@@ -1011,7 +1058,7 @@ export async function quoteAndSignTransaction(client, input, options = {}) {
     }),
     "quoteAndSignTransaction fee quote",
   );
-  const signed = signQuotedTransactionPayload({
+  const signed = signQuotedTransactionPayload.call(this, {
     networkId: draftInput.networkId,
     payload: draft,
     quotedFeePayment: quote.intent,
@@ -1148,7 +1195,8 @@ export function buildRegisterPinManifestTransaction(client, input, options = {})
     alias,
     successorOf,
   });
-  return quoteAndSignTransaction(
+  return quoteAndSignTransaction.call(
+    this,
     client,
     { ...transactionInput, instructions: [instruction] },
     options,
@@ -1183,10 +1231,10 @@ export function buildApplySccpRouteGovernanceTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildApplySccpRouteGovernanceInstruction(action);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -1219,7 +1267,7 @@ export function buildApplySccpRouteGovernanceTransaction(input) {
  */
 export function buildIvmProvedTransactionPayload(input) {
   const networkId = transactionNetworkIdBytes(input, "input");
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (
     !native ||
     typeof native.buildIvmProvedTransactionPayload !== "function"
@@ -1283,13 +1331,13 @@ export function buildIvmProvedTransactionPayload(input) {
  *   attachment?: object | string,
  *   quotedFeePayment: object | string,
  *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
- *   privateKeyAlgorithm?: string
+ *   privateKeyAlgorithm?: import("../index.js").CryptoAlgorithm
  * }} input
  * @returns {{signedTransaction: Buffer, hash: Buffer}}
  */
 export function signQuotedIvmProvedTransactionPayload(input) {
   const networkId = transactionNetworkIdBytes(input, "input");
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (
     !native ||
     typeof native.signQuotedIvmProvedTransactionPayload !== "function"
@@ -1317,7 +1365,10 @@ export function signQuotedIvmProvedTransactionPayload(input) {
     normalizeJsonObjectPayload(attachment, "attachment"),
     quotedFeePaymentJson,
     toBuffer(input?.privateKey),
-    input?.privateKeyAlgorithm ?? null,
+    normalizePrivateKeyAlgorithm(
+      input?.privateKeyAlgorithm,
+      "input.privateKeyAlgorithm",
+    ),
   );
   const signed =
     result?.signed_transaction ?? result?.signedTransaction ?? null;
@@ -1351,7 +1402,7 @@ export function signQuotedIvmProvedTransactionPayload(input) {
  */
 export function buildIvmProvedTransaction(input) {
   const networkId = transactionNetworkIdBytes(input, "input");
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.buildIvmProvedTransaction !== "function") {
     throw new Error(
       "native binding 'build_ivm_proved_transaction' is unavailable",
@@ -1368,7 +1419,7 @@ export function buildIvmProvedTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
 
   const canonicalAuthority = normalizeAuthority(authority);
@@ -1392,7 +1443,7 @@ export function buildIvmProvedTransaction(input) {
     ttlMs,
     nonce,
     toBuffer(privateKey),
-    privateKeyAlgorithm,
+    normalizePrivateKeyAlgorithm(privateKeyAlgorithm),
   );
 
   const signed =
@@ -1759,7 +1810,8 @@ function assertRequiredOverlayTransfer(proved, requiredTransfer, context) {
   const matches = overlay.filter(
     (instruction, instructionIndex) =>
       canonicalJsonValue(
-        decodeOverlayInstruction(
+        decodeOverlayInstruction.call(
+          this,
           instruction,
           `${context}.overlay[${instructionIndex}]`,
         ),
@@ -1812,7 +1864,7 @@ function decodeOverlayInstruction(value, context) {
     throw new TypeError(`${context} must be exact standard base64`);
   }
   try {
-    return noritoDecodeInstruction(bytes);
+    return transactionContext(this).norito.noritoDecodeInstruction(bytes);
   } catch (error) {
     throw new Error(
       `${context} could not be decoded as a canonical Norito InstructionBox: ${error?.message ?? error}`,
@@ -1910,16 +1962,10 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     "privateKeyAlgorithm",
     "input",
   );
-  if (
-    typeof privateKeyAlgorithmValue === "string" &&
-    privateKeyAlgorithmValue.trim() !== privateKeyAlgorithmValue
-  ) {
-    throw new TypeError(
-      "input.privateKeyAlgorithm must not contain surrounding whitespace",
-    );
-  }
-  const privateKeyAlgorithm = normalizeCryptoAlgorithm(
-    privateKeyAlgorithmValue ?? undefined,
+  const privateKeyAlgorithm = normalizePrivateKeyAlgorithm(
+    privateKeyAlgorithmValue,
+    "input.privateKeyAlgorithm",
+    CRYPTO_ALGORITHMS.ED25519,
   );
   if (privateKeyAlgorithm === CRYPTO_ALGORITHMS.ED25519) {
     if (privateKey.length !== 32 && privateKey.length !== 64) {
@@ -1927,7 +1973,9 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     }
   } else {
     // Parse the algorithm-specific key before creating any proof-side effects.
-    publicKeyFromPrivate(privateKey, { algorithm: privateKeyAlgorithm });
+    transactionContext(this).crypto.publicKeyFromPrivate(privateKey, {
+      algorithm: privateKeyAlgorithm,
+    });
   }
   const contractAddressValue = readInputField(
     record,
@@ -2157,7 +2205,8 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     deployedBytecode,
     "node-derived proved payload",
   );
-  const requiredTransfer = assertRequiredOverlayTransfer(
+  const requiredTransfer = assertRequiredOverlayTransfer.call(
+    this,
     derived.proved,
     callerRequiredTransfer,
     "node-derived proved payload",
@@ -2186,14 +2235,15 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     "proved payload",
   );
   assertIvmProofAttachmentBinding(proofJob.attachment, vkRef);
-  assertRequiredOverlayTransfer(
+  assertRequiredOverlayTransfer.call(
+    this,
     proofJob.proved,
     callerRequiredTransfer,
     "proved payload",
   );
 
   throwIfSubmissionAborted(signal);
-  const feeQuoteDraft = buildIvmProvedTransactionPayload({
+  const feeQuoteDraft = buildIvmProvedTransactionPayload.call(this, {
     networkId,
     authority,
     proved: proofJob.proved,
@@ -2218,7 +2268,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     "submitIvmProvedContractCall fee quote",
   );
   throwIfSubmissionAborted(signal);
-  const built = signQuotedIvmProvedTransactionPayload({
+  const built = signQuotedIvmProvedTransactionPayload.call(this, {
     networkId,
     payload: { payloadJson: feeQuotePayloadJson },
     attachment: feeQuoteAttachmentJson,
@@ -2270,7 +2320,7 @@ export function buildTimeTriggerAction(options) {
     repeats = null,
     metadata = null,
   } = options;
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.buildTimeTriggerAction !== "function") {
     throw new Error("native binding 'buildTimeTriggerAction' is unavailable");
   }
@@ -2317,7 +2367,7 @@ export function buildPrecommitTriggerAction(options) {
     );
   }
   const { authority, instructions, repeats = null, metadata = null } = options;
-  const native = resolveNativeBinding();
+  const native = resolveNativeBinding(this);
   if (!native || typeof native.buildPrecommitTriggerAction !== "function") {
     throw new Error(
       "native binding 'buildPrecommitTriggerAction' is unavailable",
@@ -2362,13 +2412,13 @@ export function buildMintAssetTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildMintAssetInstruction({
     assetHoldingId: assetHoldingId ?? assetId,
     quantity,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2400,13 +2450,13 @@ export function buildBurnAssetTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildBurnAssetInstruction({
     assetHoldingId: assetHoldingId ?? assetId,
     quantity,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2436,13 +2486,13 @@ export function buildBurnTriggerTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildBurnTriggerRepetitionsInstruction({
     triggerId,
     repetitions,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2472,13 +2522,13 @@ export function buildMintTriggerTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildMintTriggerRepetitionsInstruction({
     triggerId,
     repetitions,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2510,14 +2560,14 @@ export function buildTransferAssetTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildTransferAssetInstruction({
     sourceAssetHoldingId: sourceAssetHoldingId ?? sourceAssetId,
     quantity,
     destinationAccountId,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2603,10 +2653,10 @@ export function buildRegisterMultisigTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRegisterMultisigInstruction({ accountId, spec });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2779,7 +2829,7 @@ export function buildMintAndTransferTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   if (!mint || typeof mint !== "object") {
     throw new TypeError("mint options are required");
@@ -2817,7 +2867,7 @@ export function buildMintAndTransferTransaction(input) {
       }),
     );
   }
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2848,7 +2898,7 @@ export function buildRegisterDomainAndMintTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   if (!domain || typeof domain !== "object") {
     throw new TypeError("domain registration parameters are required");
@@ -2866,7 +2916,7 @@ export function buildRegisterDomainAndMintTransaction(input) {
     domain,
     mints: mintSpecs,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2897,7 +2947,7 @@ export function buildRegisterAccountAndTransferTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   if (!account || typeof account !== "object") {
     throw new TypeError("account registration parameters are required");
@@ -2915,7 +2965,7 @@ export function buildRegisterAccountAndTransferTransaction(input) {
     account,
     transfers: transferSpecs,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2946,14 +2996,14 @@ export function buildTransferAssetDefinitionTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildTransferAssetDefinitionInstruction({
     sourceAccountId,
     assetDefinitionId,
     destinationAccountId,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -2984,7 +3034,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   if (!assetDefinition || typeof assetDefinition !== "object") {
     throw new TypeError("assetDefinition registration parameters are required");
@@ -3012,7 +3062,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction(input) {
     assetDefinition,
     mints: mintSpecs,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3046,7 +3096,7 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   if (!assetDefinition || typeof assetDefinition !== "object") {
     throw new TypeError("assetDefinition registration parameters are required");
@@ -3102,7 +3152,7 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction(input) {
     }
   }
 
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3133,14 +3183,14 @@ export function buildTransferDomainTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildTransferDomainInstruction({
     sourceAccountId,
     domainId,
     destinationAccountId,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3171,14 +3221,14 @@ export function buildTransferNftTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildTransferNftInstruction({
     sourceAccountId,
     nftId,
     destinationAccountId,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3208,10 +3258,10 @@ export function buildRegisterRwaTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRegisterRwaInstruction({ rwa, rwaJson });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3243,7 +3293,7 @@ export function buildTransferRwaTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildTransferRwaInstruction({
     sourceAccountId,
@@ -3251,7 +3301,7 @@ export function buildTransferRwaTransaction(input) {
     quantity,
     destinationAccountId,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3281,10 +3331,10 @@ export function buildMergeRwasTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildMergeRwasInstruction({ merge, mergeJson });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3314,10 +3364,10 @@ export function buildRedeemRwaTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRedeemRwaInstruction({ rwaId, quantity });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3346,10 +3396,10 @@ export function buildFreezeRwaTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildFreezeRwaInstruction({ rwaId });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3378,10 +3428,10 @@ export function buildUnfreezeRwaTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildUnfreezeRwaInstruction({ rwaId });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3411,10 +3461,10 @@ export function buildHoldRwaTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildHoldRwaInstruction({ rwaId, quantity });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3444,10 +3494,10 @@ export function buildReleaseRwaTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildReleaseRwaInstruction({ rwaId, quantity });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3478,14 +3528,14 @@ export function buildForceTransferRwaTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildForceTransferRwaInstruction({
     rwaId,
     quantity,
     destinationAccountId,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3516,14 +3566,14 @@ export function buildSetRwaControlsTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildSetRwaControlsInstruction({
     rwaId,
     controls,
     controlsJson,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3554,10 +3604,10 @@ export function buildSetRwaKeyValueTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildSetRwaKeyValueInstruction({ rwaId, key, value });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3587,10 +3637,10 @@ export function buildRemoveRwaKeyValueTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRemoveRwaKeyValueInstruction({ rwaId, key });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3619,10 +3669,10 @@ export function buildCreateKaigiTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildCreateKaigiInstruction(call);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3651,10 +3701,10 @@ export function buildJoinKaigiTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildJoinKaigiInstruction(join);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3683,10 +3733,10 @@ export function buildLeaveKaigiTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildLeaveKaigiInstruction(leave);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3715,10 +3765,10 @@ export function buildEndKaigiTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildEndKaigiInstruction(end);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3753,10 +3803,10 @@ export function buildRecordKaigiUsageTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRecordKaigiUsageInstruction(usage);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3785,10 +3835,10 @@ export function buildSetKaigiRelayManifestTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildSetKaigiRelayManifestInstruction(manifest);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3817,10 +3867,10 @@ export function buildRegisterKaigiRelayTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRegisterKaigiRelayInstruction(relay);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3849,10 +3899,10 @@ export function buildUnregisterKaigiRelayTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildUnregisterKaigiRelayInstruction({ relayId });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3881,10 +3931,10 @@ export function buildReportKaigiRelayHealthTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildReportKaigiRelayHealthInstruction(report);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3913,10 +3963,10 @@ export function buildProposeDeployContractTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildProposeDeployContractInstruction(proposal);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3952,13 +4002,13 @@ export function buildProposeSccpRouteGovernanceTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildProposeSccpRouteGovernanceInstruction({
     networkId,
     action,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -3987,10 +4037,10 @@ export function buildCastZkBallotTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildCastZkBallotInstruction(ballot);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4019,10 +4069,10 @@ export function buildCastPlainBallotTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildCastPlainBallotInstruction(ballot);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4048,10 +4098,10 @@ export function buildRegisterZkAssetTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRegisterZkAssetInstruction(registration);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4077,11 +4127,11 @@ export function buildScheduleConfidentialPolicyTransitionTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction =
     buildScheduleConfidentialPolicyTransitionInstruction(transition);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4107,11 +4157,11 @@ export function buildCancelConfidentialPolicyTransitionTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction =
     buildCancelConfidentialPolicyTransitionInstruction(cancellation);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4137,10 +4187,10 @@ export function buildCreateElectionTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildCreateElectionInstruction(election);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4166,10 +4216,10 @@ export function buildSubmitBallotTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildSubmitBallotInstruction(ballot);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4195,10 +4245,10 @@ export function buildFinalizeElectionTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildFinalizeElectionInstruction(finalization);
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4227,10 +4277,10 @@ export function buildRegisterSmartContractCodeTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRegisterSmartContractCodeInstruction({ manifest });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4260,13 +4310,13 @@ export function buildRegisterSmartContractBytesTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRegisterSmartContractBytesInstruction({
     codeHash,
     code,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4296,13 +4346,13 @@ export function buildRemoveSmartContractBytesTransaction(input) {
     ttlMs = null,
     nonce = null,
     privateKey,
-    privateKeyAlgorithm = null,
+    privateKeyAlgorithm,
   } = input;
   const instruction = buildRemoveSmartContractBytesInstruction({
     codeHash,
     reason,
   });
-  return buildTransaction({
+  return buildTransaction.call(this, {
     networkId,
     authority,
     feePayment,
@@ -4342,13 +4392,14 @@ export async function submitSignedTransaction(
   }
   let txBuffer = toBuffer(signedTransaction);
   if (Object.prototype.hasOwnProperty.call(options, "privateKey")) {
-    txBuffer = resignSignedTransaction(
+    txBuffer = resignSignedTransaction.call(
+      this,
       options.networkId,
       txBuffer,
       options.privateKey,
     );
   }
-  const hashHex = hashSignedTransaction(txBuffer);
+  const hashHex = hashSignedTransaction.call(this, txBuffer);
   const submission = await client.submitTransaction(txBuffer);
 
   if (!options.waitForCommit) {
@@ -4365,6 +4416,134 @@ async function waitForAuthoritativeApplied(client, hashHex, options) {
     timeoutMs: options.timeoutMs ?? 30_000,
   };
   return client.waitForTransactionStatusTyped(hashHex, pollOptions);
+}
+
+/** @internal Source-level test facade; intentionally absent from package exports. */
+export function _createTransactionApi(nativeRuntime) {
+  const context = createTransactionContext(nativeRuntime);
+  const bind = (fn) => fn.bind(context);
+  return Object.freeze({
+    feePaymentIntentToNoritoJson: bind(feePaymentIntentToNoritoJson),
+    hashSignedTransaction: bind(hashSignedTransaction),
+    hashSignedTransactionPayload: bind(hashSignedTransactionPayload),
+    decodeSignedTransaction: bind(decodeSignedTransaction),
+    encodeContractArgumentRecord: bind(encodeContractArgumentRecord),
+    hashInstructionBatch: bind(hashInstructionBatch),
+    resignSignedTransaction: bind(resignSignedTransaction),
+    buildRegisterDomainTransaction: bind(buildRegisterDomainTransaction),
+    buildTransaction: bind(buildTransaction),
+    buildExecutableBatchTransaction: bind(buildExecutableBatchTransaction),
+    buildTransactionPayload: bind(buildTransactionPayload),
+    buildExecutableBatchTransactionPayload: bind(
+      buildExecutableBatchTransactionPayload,
+    ),
+    signQuotedTransactionPayload: bind(signQuotedTransactionPayload),
+    quoteAndSignTransaction: bind(quoteAndSignTransaction),
+    buildRegisterPinManifestInstruction: bind(
+      buildRegisterPinManifestInstruction,
+    ),
+    buildRegisterPinManifestTransaction: bind(
+      buildRegisterPinManifestTransaction,
+    ),
+    buildApplySccpRouteGovernanceInstruction: bind(
+      buildApplySccpRouteGovernanceInstruction,
+    ),
+    buildApplySccpRouteGovernanceTransaction: bind(
+      buildApplySccpRouteGovernanceTransaction,
+    ),
+    buildIvmProvedTransactionPayload: bind(buildIvmProvedTransactionPayload),
+    signQuotedIvmProvedTransactionPayload: bind(
+      signQuotedIvmProvedTransactionPayload,
+    ),
+    buildIvmProvedTransaction: bind(buildIvmProvedTransaction),
+    submitIvmProvedContractCall: bind(submitIvmProvedContractCall),
+    buildTimeTriggerAction: bind(buildTimeTriggerAction),
+    buildPrecommitTriggerAction: bind(buildPrecommitTriggerAction),
+    buildMintAssetTransaction: bind(buildMintAssetTransaction),
+    buildBurnAssetTransaction: bind(buildBurnAssetTransaction),
+    buildBurnTriggerTransaction: bind(buildBurnTriggerTransaction),
+    buildMintTriggerTransaction: bind(buildMintTriggerTransaction),
+    buildTransferAssetTransaction: bind(buildTransferAssetTransaction),
+    buildRegisterMultisigTransaction: bind(buildRegisterMultisigTransaction),
+    buildMintAndTransferTransaction: bind(buildMintAndTransferTransaction),
+    buildRegisterDomainAndMintTransaction: bind(
+      buildRegisterDomainAndMintTransaction,
+    ),
+    buildRegisterAccountAndTransferTransaction: bind(
+      buildRegisterAccountAndTransferTransaction,
+    ),
+    buildTransferAssetDefinitionTransaction: bind(
+      buildTransferAssetDefinitionTransaction,
+    ),
+    buildRegisterAssetDefinitionAndMintTransaction: bind(
+      buildRegisterAssetDefinitionAndMintTransaction,
+    ),
+    buildRegisterAssetDefinitionMintAndTransferTransaction: bind(
+      buildRegisterAssetDefinitionMintAndTransferTransaction,
+    ),
+    buildTransferDomainTransaction: bind(buildTransferDomainTransaction),
+    buildTransferNftTransaction: bind(buildTransferNftTransaction),
+    buildRegisterRwaTransaction: bind(buildRegisterRwaTransaction),
+    buildTransferRwaTransaction: bind(buildTransferRwaTransaction),
+    buildMergeRwasTransaction: bind(buildMergeRwasTransaction),
+    buildRedeemRwaTransaction: bind(buildRedeemRwaTransaction),
+    buildFreezeRwaTransaction: bind(buildFreezeRwaTransaction),
+    buildUnfreezeRwaTransaction: bind(buildUnfreezeRwaTransaction),
+    buildHoldRwaTransaction: bind(buildHoldRwaTransaction),
+    buildReleaseRwaTransaction: bind(buildReleaseRwaTransaction),
+    buildForceTransferRwaTransaction: bind(buildForceTransferRwaTransaction),
+    buildSetRwaControlsTransaction: bind(buildSetRwaControlsTransaction),
+    buildSetRwaKeyValueTransaction: bind(buildSetRwaKeyValueTransaction),
+    buildRemoveRwaKeyValueTransaction: bind(
+      buildRemoveRwaKeyValueTransaction,
+    ),
+    buildCreateKaigiTransaction: bind(buildCreateKaigiTransaction),
+    buildJoinKaigiTransaction: bind(buildJoinKaigiTransaction),
+    buildLeaveKaigiTransaction: bind(buildLeaveKaigiTransaction),
+    buildEndKaigiTransaction: bind(buildEndKaigiTransaction),
+    ...context.confidentialProofs,
+    buildRecordKaigiUsageTransaction: bind(buildRecordKaigiUsageTransaction),
+    buildSetKaigiRelayManifestTransaction: bind(
+      buildSetKaigiRelayManifestTransaction,
+    ),
+    buildRegisterKaigiRelayTransaction: bind(
+      buildRegisterKaigiRelayTransaction,
+    ),
+    buildUnregisterKaigiRelayTransaction: bind(
+      buildUnregisterKaigiRelayTransaction,
+    ),
+    buildReportKaigiRelayHealthTransaction: bind(
+      buildReportKaigiRelayHealthTransaction,
+    ),
+    buildProposeDeployContractTransaction: bind(
+      buildProposeDeployContractTransaction,
+    ),
+    buildProposeSccpRouteGovernanceTransaction: bind(
+      buildProposeSccpRouteGovernanceTransaction,
+    ),
+    buildCastZkBallotTransaction: bind(buildCastZkBallotTransaction),
+    buildCastPlainBallotTransaction: bind(buildCastPlainBallotTransaction),
+    buildRegisterZkAssetTransaction: bind(buildRegisterZkAssetTransaction),
+    buildScheduleConfidentialPolicyTransitionTransaction: bind(
+      buildScheduleConfidentialPolicyTransitionTransaction,
+    ),
+    buildCancelConfidentialPolicyTransitionTransaction: bind(
+      buildCancelConfidentialPolicyTransitionTransaction,
+    ),
+    buildCreateElectionTransaction: bind(buildCreateElectionTransaction),
+    buildSubmitBallotTransaction: bind(buildSubmitBallotTransaction),
+    buildFinalizeElectionTransaction: bind(buildFinalizeElectionTransaction),
+    buildRegisterSmartContractCodeTransaction: bind(
+      buildRegisterSmartContractCodeTransaction,
+    ),
+    buildRegisterSmartContractBytesTransaction: bind(
+      buildRegisterSmartContractBytesTransaction,
+    ),
+    buildRemoveSmartContractBytesTransaction: bind(
+      buildRemoveSmartContractBytesTransaction,
+    ),
+    submitSignedTransaction: bind(submitSignedTransaction),
+  });
 }
 
 function toBuffer(value, context = "signedTransaction") {

@@ -96,10 +96,6 @@ for (const entry of CURVE_REGISTRY) {
   CURVE_NAME_TO_ENTRY.set(entry.algorithm, entry);
 }
 
-export const CURVE_PUBLIC_KEY_LENGTH = new Map(
-  CURVE_REGISTRY.map((entry) => [entry.id, entry.publicKeyLength]),
-);
-
 export function getCurveEntryById(curveId) {
   return CURVE_ID_TO_ENTRY.get(Number(curveId)) ?? null;
 }

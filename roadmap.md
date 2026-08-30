@@ -30,17 +30,17 @@ Completed history lives in [`status.md`](./status.md).
   reviewed eager/deferred/combined budgets hard, benchmark cold import and
   maximum-response RSS, and remove remaining camel/snake, TTL, asset-definition,
   and transaction option aliases instead of preserving compatibility paths.
-- Replace process-global native-binding test overrides and mutable curve-policy
-  configuration with explicitly injected, immutable client/runtime contexts.
-  Move the remaining internal-only Norito, SoraFS, and canonical-auth helpers
-  out of public module namespaces, then generate declaration allowlists from
-  the same reviewed runtime export inventory so package conditions cannot drift.
-- Reduce the registry artifact by publishing one source-of-truth runtime tree
-  instead of duplicated `src`/`dist` implementation payloads, move the long
-  protocol inventory out of the SDK README into source-coupled references, and
-  split the serial unit profile into portable and native-qualified lanes. On a
-  same-revision host bridge, run the native SM2/privacy suite and the clean-pack
-  install corridor before release qualification.
+- Replace the remaining synchronous module-scoped Norito length-flag stack with
+  an explicit codec context, and move source-test runtime factories into
+  non-exported internal modules. Generate declaration allowlists from the same
+  reviewed runtime export inventory so root, browser, and subpath conditions
+  cannot drift.
+- Keep the registry artifact on its single `dist/` source-of-truth tree, move
+  the long protocol inventory out of the SDK README into source-coupled
+  references, and split the serial unit profile into portable and
+  native-qualified lanes. On a same-revision host bridge, run the native
+  SM2/privacy/Norito parity suites and four-validator integration corridor
+  before release qualification.
 
 ## C# SDK release qualification
 
@@ -220,9 +220,14 @@ Completed history lives in [`status.md`](./status.md).
   passed against the previously recorded module bytes. A later comment-only
   clarification changed the current exact module digest; because the release
   runner authenticates complete input bytes, rerun those tractable rows as well
-  as both full fault configurations. The earlier combined N=2 result is
-  superseded, and no historical focused result waives the frozen-input matrix
-  required by the release-evidence runner.
+  as both full fault configurations. The runner/report/verifier now also bind
+  each configuration to its exact model, source-seal the evidence-producing
+  scripts, replay strict canonical transcripts, and record the Java runtime
+  identity; preserve those bindings in the final archive and have the
+  independent release review match the Java digest to the declared builder
+  environment. The earlier combined N=2 result is superseded, and no historical
+  focused result waives the frozen-input matrix required by the
+  release-evidence runner.
 - Obtain independent review of the AIR, dummy selectors, asset/capsule and
   reimbursement bindings, hybrid cryptography, auditor/QC domains, and the
   cross-dataspace state machine. Archive the exact commit, manifests, raw

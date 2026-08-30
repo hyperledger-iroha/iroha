@@ -2,8 +2,8 @@ import type { Buffer } from "buffer";
 import type { BrowserFeePayment } from "./transaction-codec.js";
 import { OperatorSigningContext } from "./operator-request.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
-import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./src/blockProofTypes.js";
-import type { BufferEncoding } from "./src/nodeBufferTypes.js";
+import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./dist/blockProofTypes.js";
+import type { BufferEncoding } from "./dist/nodeBufferTypes.js";
 import type {
   ToriiBrowserExplorerAccountsOptions,
   ToriiBrowserExplorerAssetDefinition,
@@ -20,7 +20,7 @@ import type {
   ToriiBrowserExplorerOwnedDomainOptions,
   ToriiBrowserExplorerTransaction,
   ToriiBrowserExplorerTransactionHistoryOptions,
-} from "./src/toriiBrowserExplorerTypes.js";
+} from "./dist/toriiBrowserExplorerTypes.js";
 export type {
   ToriiBrowserExplorerAccountsOptions,
   ToriiBrowserExplorerAssetDefinition,
@@ -41,10 +41,10 @@ export type {
   ToriiBrowserExplorerOwnedDomainOptions,
   ToriiBrowserExplorerTransaction,
   ToriiBrowserExplorerTransactionHistoryOptions,
-} from "./src/toriiBrowserExplorerTypes.js";
-import type { SubscriptionActionResponse, SubscriptionAuthorityActionRequest, SubscriptionCancelActionRequest, SubscriptionChargeActionRequest, SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListItem, SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse, SubscriptionPlanListItem, SubscriptionPlanListResponse, SubscriptionUsageDraft, SubscriptionUsageRequest } from "./src/subscriptionTypes.js";
-import type { SorafsOrderbookSignedTransaction, SorafsOrderbookSubmissionReceipt, SorafsOrderbookTransactionSubmitOptions } from "./src/sorafsOrderbookSubmission.js";
-import { NetworkId } from "./src/networkId.js";
+} from "./dist/toriiBrowserExplorerTypes.js";
+import type { SubscriptionActionResponse, SubscriptionAuthorityActionRequest, SubscriptionCancelActionRequest, SubscriptionChargeActionRequest, SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListItem, SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse, SubscriptionPlanListItem, SubscriptionPlanListResponse, SubscriptionUsageDraft, SubscriptionUsageRequest } from "./dist/subscriptionTypes.js";
+import type { SorafsOrderbookSignedTransaction, SorafsOrderbookSubmissionReceipt, SorafsOrderbookTransactionSubmitOptions } from "./dist/sorafsOrderbookSubmission.js";
+import { NetworkId } from "./dist/networkId.js";
 export { NetworkId, OperatorSigningContext };
 export interface TairaTestnetProfile {
   readonly toriiBaseUrl: "https://taira.sora.org";
@@ -66,10 +66,10 @@ export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 export * from "./bootle-lantern-issuance.js";
 export * from "./atomic-private-settlement.js";
-export * from "./src/blockProofTypes.js";
-export * from "./src/toriiBrowserExplorerTypes.js";
-export type * from "./src/subscriptionTypes.js";
-export * from "./src/sorafsOrderbookSubmission.js";
+export * from "./dist/blockProofTypes.js";
+export * from "./dist/toriiBrowserExplorerTypes.js";
+export type * from "./dist/subscriptionTypes.js";
+export * from "./dist/sorafsOrderbookSubmission.js";
 
 export type JsonValue =
   | null
@@ -173,18 +173,22 @@ export function normalizeKagemushaOperationStatus(
   expectedOperationId: string,
 ): KagemushaOperationStatus;
 
+export const CRYPTO_ALGORITHMS: Readonly<{
+  ED25519: "ed25519";
+  SECP256K1: "secp256k1";
+  ML_DSA: "ml-dsa";
+  BLS_NORMAL: "bls_normal";
+  BLS_SMALL: "bls_small";
+  GOST_2012_256_A: "gost3410-2012-256-paramset-a";
+  GOST_2012_256_B: "gost3410-2012-256-paramset-b";
+  GOST_2012_256_C: "gost3410-2012-256-paramset-c";
+  GOST_2012_512_A: "gost3410-2012-512-paramset-a";
+  GOST_2012_512_B: "gost3410-2012-512-paramset-b";
+  SM2: "sm2";
+}>;
+
 export type CryptoAlgorithm =
-  | "ed25519"
-  | "secp256k1"
-  | "bls_normal"
-  | "bls_small"
-  | "ml-dsa"
-  | "gost3410-2012-256-paramset-a"
-  | "gost3410-2012-256-paramset-b"
-  | "gost3410-2012-256-paramset-c"
-  | "gost3410-2012-512-paramset-a"
-  | "gost3410-2012-512-paramset-b"
-  | "sm2";
+  (typeof CRYPTO_ALGORITHMS)[keyof typeof CRYPTO_ALGORITHMS];
 
 export type {
   PrivacyCapabilityReadinessV1,
@@ -245,8 +249,6 @@ export interface Sm2KeyPair extends CryptoKeyPair {
   distid: string;
 }
 
-export const CRYPTO_ALGORITHMS: Readonly<Record<string, CryptoAlgorithm>>;
-export const SUPPORTED_CRYPTO_ALGORITHMS: readonly CryptoAlgorithm[];
 export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
@@ -329,7 +331,7 @@ export class AccountAddress {
       | ArrayBufferView
       | number[]
       | string;
-    algorithm?: string;
+    algorithm?: CryptoAlgorithm;
   }): AccountAddress;
   static fromCanonicalBytes(
     bytes: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
@@ -4031,7 +4033,6 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_PRIVATE_KEY_LENGTH"
   | "SM2_PUBLIC_KEY_LENGTH"
   | "SM2_SIGNATURE_LENGTH"
-  | "SUPPORTED_CRYPTO_ALGORITHMS"
   | "buildKaigiRosterJoinProof"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
@@ -7425,7 +7426,7 @@ export interface RegisterDomainInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 /**
@@ -7444,7 +7445,7 @@ export interface TransactionAssemblyInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export type ExecutableBatchEntry =
@@ -7473,7 +7474,7 @@ export interface ExecutableBatchTransactionAssemblyInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export type ExecutableBatchTransactionPayloadDraftInput = Omit<
@@ -7501,7 +7502,7 @@ export interface QuotedTransactionPayloadSigningInput {
   payload: Record<string, unknown> | TransactionPayloadDraftResult;
   quotedFeePayment: BrowserFeePayment | Record<string, unknown> | string;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 /** Required signature-bound fee intent shared by all transaction builders. */
@@ -7585,7 +7586,7 @@ export interface IvmProvedTransactionAssemblyInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 /** Exact unsigned proved-IVM payload plus its envelope-only proof attachment. */
@@ -7606,7 +7607,7 @@ export interface QuotedIvmProvedTransactionPayloadSigningInput {
   attachment?: object | string;
   quotedFeePayment: BrowserFeePayment | Record<string, unknown> | string;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RegisterMultisigTransactionInput extends FeePaymentRequired {
@@ -7619,7 +7620,7 @@ export interface RegisterMultisigTransactionInput extends FeePaymentRequired {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RequiredIvmOverlayTransfer {
@@ -7654,7 +7655,7 @@ export type IvmProvedContractCallInput = IvmProvedContractCallInputBase &
     chainId?: never;
     chain_id?: never;
     privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-    privateKeyAlgorithm?: string | null;
+    privateKeyAlgorithm?: CryptoAlgorithm;
     vkRef: IvmVerifyingKeyRef;
     feePayment: BrowserFeePayment;
     requiredOverlayTransfer?: RequiredIvmOverlayTransfer | null;
@@ -7698,7 +7699,7 @@ export interface MintAssetInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface BurnAssetInput {
@@ -7711,7 +7712,7 @@ export interface BurnAssetInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface MintTriggerInput {
@@ -7724,7 +7725,7 @@ export interface MintTriggerInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface BurnTriggerInput {
@@ -7737,7 +7738,7 @@ export interface BurnTriggerInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface TransferAssetInput {
@@ -7751,7 +7752,7 @@ export interface TransferAssetInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface TransferDomainInput {
@@ -7765,7 +7766,7 @@ export interface TransferDomainInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface TransferAssetDefinitionInput {
@@ -7779,7 +7780,7 @@ export interface TransferAssetDefinitionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface TransferNftInput {
@@ -7793,7 +7794,7 @@ export interface TransferNftInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RwaParentRefInput {
@@ -7847,7 +7848,7 @@ export interface RegisterRwaInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface TransferRwaInput {
@@ -7862,7 +7863,7 @@ export interface TransferRwaInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface MergeRwasInput {
@@ -7875,7 +7876,7 @@ export interface MergeRwasInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RedeemRwaInput {
@@ -7888,7 +7889,7 @@ export interface RedeemRwaInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface FreezeRwaInput {
@@ -7900,7 +7901,7 @@ export interface FreezeRwaInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface UnfreezeRwaInput extends FreezeRwaInput {}
@@ -7915,7 +7916,7 @@ export interface HoldRwaInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface ReleaseRwaInput extends HoldRwaInput {}
@@ -7931,7 +7932,7 @@ export interface ForceTransferRwaInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface SetRwaControlsInput {
@@ -7945,7 +7946,7 @@ export interface SetRwaControlsInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface SetRwaKeyValueInput {
@@ -7959,7 +7960,7 @@ export interface SetRwaKeyValueInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RemoveRwaKeyValueInput {
@@ -7972,7 +7973,7 @@ export interface RemoveRwaKeyValueInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 /**
@@ -7993,7 +7994,7 @@ interface MintAndTransferInputBase {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 type MintAndTransferVariants = ExclusiveSingleOrMany<
@@ -8024,7 +8025,7 @@ interface RegisterDomainAndMintInputBase {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 type RegisterDomainMintOptions = ExclusiveSingleOrManyOptional<
@@ -8054,7 +8055,7 @@ interface RegisterAccountAndTransferInputBase {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 type RegisterAccountTransferOptions = ExclusiveSingleOrManyOptional<
@@ -8094,7 +8095,7 @@ interface RegisterAssetDefinitionAndMintInputBase {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 type RegisterAssetDefinitionMintOptions = ExclusiveSingleOrManyOptional<
@@ -10178,7 +10179,7 @@ export interface CreateKaigiTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface JoinKaigiTransactionInput {
@@ -10190,7 +10191,7 @@ export interface JoinKaigiTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface LeaveKaigiTransactionInput {
@@ -10202,7 +10203,7 @@ export interface LeaveKaigiTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface EndKaigiTransactionInput {
@@ -10214,7 +10215,7 @@ export interface EndKaigiTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface ConfidentialTransferProofInputV2 {
@@ -10264,7 +10265,7 @@ export interface RecordKaigiUsageTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface SetKaigiRelayManifestTransactionInput {
@@ -10276,7 +10277,7 @@ export interface SetKaigiRelayManifestTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RegisterKaigiRelayTransactionInput {
@@ -10288,7 +10289,7 @@ export interface RegisterKaigiRelayTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface UnregisterKaigiRelayTransactionInput {
@@ -10300,7 +10301,7 @@ export interface UnregisterKaigiRelayTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface ReportKaigiRelayHealthTransactionInput {
@@ -10312,7 +10313,7 @@ export interface ReportKaigiRelayHealthTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface ProposeDeployContractTransactionInput {
@@ -10324,7 +10325,7 @@ export interface ProposeDeployContractTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface ProposeSccpRouteGovernanceTransactionInput
@@ -10342,7 +10343,7 @@ export interface CastZkBallotTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface CastPlainBallotTransactionInput {
@@ -10354,7 +10355,7 @@ export interface CastPlainBallotTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RegisterZkAssetTransactionInput {
@@ -10366,7 +10367,7 @@ export interface RegisterZkAssetTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface ScheduleConfidentialPolicyTransitionTransactionInput {
@@ -10378,7 +10379,7 @@ export interface ScheduleConfidentialPolicyTransitionTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface CancelConfidentialPolicyTransitionTransactionInput {
@@ -10390,7 +10391,7 @@ export interface CancelConfidentialPolicyTransitionTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface CreateElectionTransactionInput {
@@ -10402,7 +10403,7 @@ export interface CreateElectionTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface SubmitBallotTransactionInput {
@@ -10414,7 +10415,7 @@ export interface SubmitBallotTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface FinalizeElectionTransactionInput {
@@ -10426,7 +10427,7 @@ export interface FinalizeElectionTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RegisterSmartContractCodeTransactionInput {
@@ -10438,7 +10439,7 @@ export interface RegisterSmartContractCodeTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RegisterSmartContractBytesTransactionInput {
@@ -10451,7 +10452,7 @@ export interface RegisterSmartContractBytesTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface RemoveSmartContractBytesTransactionInput {
@@ -10464,7 +10465,7 @@ export interface RemoveSmartContractBytesTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
+  privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
 export interface SubmitTransactionAndWaitOptions
@@ -10605,18 +10606,11 @@ export interface ToriiBrowserClientOptions {
   operatorSigningContext?: OperatorSigningContext;
   defaultHeaders?: Record<string, string>;
   timeoutMs?: NumericLike;
-  config?: {
-    toriiClient?: {
-      timeoutMs?: NumericLike;
-      defaultHeaders?: Record<string, string>;
-    };
-  };
 }
 
 export interface ToriiBrowserRequestOptions {
   signal?: AbortSignal;
   headers?: Record<string, string>;
-  successStatuses?: ReadonlyArray<number>;
 }
 
 export interface ToriiLedgerHeadersOptions {
@@ -11581,9 +11575,9 @@ export declare class ToriiClient {
     manifestPaths: DaManifestPersistedPaths;
     payloadPath: string;
     scoreboardPath: string | null;
-    proofSummaryPath: string;
-    proofSummaryArtifact: DaProofSummaryArtifact;
-    proofSummary: DaProofSummary;
+    proofSummaryPath: string | null;
+    proofSummaryArtifact: DaProofSummaryArtifact | null;
+    proofSummary: DaProofSummary | null;
     gatewayResult: SorafsGatewayFetchResult;
     outputDir: string;
   }>;
@@ -12300,7 +12294,7 @@ export declare class ToriiClient {
 
 export interface NoritoRpcClientOptions {
   fetchImpl?: typeof fetch;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
   defaultHeaders?: Record<string, string>;
   allowInsecure?: boolean;
   authToken?: string | null;
@@ -12330,7 +12324,6 @@ export declare class NoritoRpcClient {
     payload: ArrayBufferView | ArrayBuffer | Buffer,
     options?: NoritoRpcCallOptions,
   ): Promise<Uint8Array>;
-  close(): void;
 }
 
 export declare class NoritoRpcError extends Error {
@@ -12341,45 +12334,45 @@ export declare class NoritoRpcError extends Error {
 export function supportedCryptoAlgorithms(): CryptoAlgorithm[];
 
 export function normalizeCryptoAlgorithm(
-  algorithm?: string | null,
+  algorithm?: string,
 ): CryptoAlgorithm;
 
 export function generateKeyPair(options?: {
   seed?: ArrayBufferView | ArrayBuffer | Buffer;
-  algorithm?: string | null;
+  algorithm?: CryptoAlgorithm;
 }): CryptoKeyPair;
 
 export function loadKeyPair(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
-  options?: { algorithm?: string | null },
+  options?: { algorithm?: CryptoAlgorithm },
 ): CryptoKeyPair;
 
 export function publicKeyFromPrivate(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
-  options?: { algorithm?: string | null },
+  options?: { algorithm?: CryptoAlgorithm },
 ): Buffer;
 
 export function sign(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
-  options?: { algorithm?: string | null },
+  options?: { algorithm?: CryptoAlgorithm },
 ): Buffer;
 
 export function verify(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,
   signature: ArrayBufferView | ArrayBuffer | Buffer,
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
-  options?: { algorithm?: string | null },
+  options?: { algorithm?: CryptoAlgorithm },
 ): boolean;
 
 export function publicKeyMultihash(
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
-  options?: { algorithm?: string | null },
+  options?: { algorithm?: CryptoAlgorithm },
 ): string;
 
 export function privateKeyMultihash(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
-  options?: { algorithm?: string | null },
+  options?: { algorithm?: CryptoAlgorithm },
 ): string;
 
 export function generateSm2KeyPair(options?: { distid?: string }): Sm2KeyPair;
@@ -13000,7 +12993,7 @@ export function quoteAndSignTransaction(
   client: ToriiClient,
   input: TransactionPayloadDraftInput & {
     privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-    privateKeyAlgorithm?: string | null;
+    privateKeyAlgorithm?: CryptoAlgorithm;
   },
   options?: {
     canonicalAuth?: CanonicalRequestAuth;
@@ -13581,6 +13574,56 @@ export function buildSetAssetTransferAvailabilityInstruction(options: {
   reason?: string | null;
 }): SetAssetTransferAvailabilityInstruction;
 
+export interface SetAssetTransferBlacklistInstruction {
+  SetAssetTransferBlacklist: {
+    account_id: string;
+    asset_definition_id: string;
+    blacklisted: boolean;
+  };
+}
+
+/** Set or clear the outbound-transfer blacklist for one account and asset. */
+export function buildSetAssetTransferBlacklistInstruction(options: {
+  accountId: string;
+  assetDefinitionId: string;
+  blacklisted: boolean;
+}): SetAssetTransferBlacklistInstruction;
+
+/** Canonical app-API spelling for an outbound transfer-cap window. */
+export type AssetTransferControlWindow = "DAY" | "WEEK" | "MONTH";
+
+/** Exact Rust enum spelling carried by a native Norito instruction value. */
+export type AssetTransferControlWindowWire = "Day" | "Week" | "Month";
+
+export interface AssetTransferLimitInput {
+  window: AssetTransferControlWindow;
+  /** Null clears the cap for this window. */
+  capAmount: QuantityInput | null;
+}
+
+export interface AssetTransferLimit {
+  window: AssetTransferControlWindowWire;
+  cap_amount: string | null;
+}
+
+export interface SetAssetTransferControlInstruction {
+  SetAssetTransferControl: {
+    account_id: string;
+    asset_definition_id: string;
+    limits: AssetTransferLimit[];
+  };
+}
+
+/**
+ * Replace outbound transfer caps. Limits are unique and returned in canonical
+ * DAY/WEEK/MONTH order; an empty list clears every cap.
+ */
+export function buildSetAssetTransferControlInstruction(options: {
+  accountId: string;
+  assetDefinitionId: string;
+  limits: readonly AssetTransferLimitInput[];
+}): SetAssetTransferControlInstruction;
+
 /**
  * Build a `Mint::Asset` instruction payload with deterministic quantity
  * normalisation.
@@ -14095,8 +14138,6 @@ export function buildCommitContractDeploymentInstruction(
 export function buildRemoveSmartContractBytesInstruction(
   input: RemoveSmartContractBytesInstructionInput,
 ): object;
-
-export function encodeInstruction(instruction: object): Buffer;
 
 export const DEFAULT_TORII_CLIENT_CONFIG: {
   timeoutMs: number;

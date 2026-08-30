@@ -12,7 +12,6 @@ import { blake2b256 } from "./blake2b.js";
 import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import {
   canonicalCurveAlgorithm,
-  CURVE_PUBLIC_KEY_LENGTH,
   CurveId,
   getCurveEntryByAlgorithm,
   getCurveEntryById,
@@ -206,7 +205,7 @@ function assertEd25519NotSmallOrder(keyBytes, context) {
 function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
   const entry = ensureCurveIdEnabled(curveId, context);
   if (entry.id === CurveId.SM2) {
-    const rawSm2Length = CURVE_PUBLIC_KEY_LENGTH.get(entry.id);
+    const rawSm2Length = entry.publicKeyLength;
     if (keyBytes.length === rawSm2Length) {
       return;
     }
@@ -222,14 +221,7 @@ function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
       { details: { curveId: entry.id, length: keyBytes.length, expectedLength: rawSm2Length } },
     );
   }
-  const expectedLength = CURVE_PUBLIC_KEY_LENGTH.get(entry.id);
-  if (expectedLength === undefined) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_PUBLIC_KEY,
-      `no validation rule for curve id ${entry.id}`,
-      { details: { curveId: entry.id, length: keyBytes.length } },
-    );
-  }
+  const expectedLength = entry.publicKeyLength;
   if (keyBytes.length !== expectedLength) {
     const label = entry.algorithm ?? `curve id ${entry.id}`;
     throw new AccountAddressError(
@@ -269,7 +261,10 @@ function normalizeControllerPublicKeyForCurve(curveId, keyBytes, context = "publ
   if (curveId !== CurveId.SM2) {
     return keyBytes;
   }
-  const rawSm2Length = CURVE_PUBLIC_KEY_LENGTH.get(CurveId.SM2);
+  const rawSm2Length = ensureCurveIdEnabled(
+    CurveId.SM2,
+    context,
+  ).publicKeyLength;
   if (keyBytes.length !== rawSm2Length) {
     return keyBytes;
   }

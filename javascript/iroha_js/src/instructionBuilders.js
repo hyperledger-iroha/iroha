@@ -3746,6 +3746,178 @@ export function buildSetAssetTransferAvailabilityInstruction(options) {
 }
 
 /**
+ * Build the canonical outbound-transfer blacklist instruction.
+ *
+ * @param {{accountId: string, assetDefinitionId: string, blacklisted: boolean}} options
+ * @returns {{SetAssetTransferBlacklist: {
+ *   account_id: string,
+ *   asset_definition_id: string,
+ *   blacklisted: boolean,
+ * }}}
+ */
+export function buildSetAssetTransferBlacklistInstruction(options) {
+  const source = assertPlainObject(options, "setAssetTransferBlacklist");
+  assertAllowedFields(
+    source,
+    new Set(["accountId", "assetDefinitionId", "blacklisted"]),
+    "setAssetTransferBlacklist",
+  );
+  const accountLiteral = assertExactNonBlankString(
+    source.accountId,
+    "setAssetTransferBlacklist.accountId",
+  );
+  const assetDefinitionLiteral = assertExactNonBlankString(
+    source.assetDefinitionId,
+    "setAssetTransferBlacklist.assetDefinitionId",
+  );
+  if (typeof source.blacklisted !== "boolean") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "setAssetTransferBlacklist.blacklisted must be a boolean",
+      "setAssetTransferBlacklist.blacklisted",
+    );
+  }
+  return {
+    SetAssetTransferBlacklist: {
+      account_id: ensureCanonicalAccountId(
+        accountLiteral,
+        "setAssetTransferBlacklist.accountId",
+      ),
+      asset_definition_id: normalizeAssetDefinitionId(
+        assetDefinitionLiteral,
+        "setAssetTransferBlacklist.assetDefinitionId",
+      ),
+      blacklisted: source.blacklisted,
+    },
+  };
+}
+
+const ASSET_TRANSFER_CONTROL_WINDOW = Object.freeze({
+  DAY: Object.freeze({ wire: "Day", rank: 0 }),
+  WEEK: Object.freeze({ wire: "Week", rank: 1 }),
+  MONTH: Object.freeze({ wire: "Month", rank: 2 }),
+});
+
+function normalizeAssetTransferControlWindow(value, name) {
+  if (
+    typeof value !== "string" ||
+    !Object.prototype.hasOwnProperty.call(ASSET_TRANSFER_CONTROL_WINDOW, value)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be exactly "DAY", "WEEK", or "MONTH"`,
+      name,
+    );
+  }
+  return ASSET_TRANSFER_CONTROL_WINDOW[value];
+}
+
+/**
+ * Build the canonical complete replacement for calendar-window outbound caps.
+ *
+ * Limits are unique and emitted in DAY/WEEK/MONTH order. A null `capAmount`
+ * clears that window, while an empty list clears every transfer cap.
+ *
+ * @param {{
+ *   accountId: string,
+ *   assetDefinitionId: string,
+ *   limits: ReadonlyArray<{
+ *     window: "DAY"|"WEEK"|"MONTH",
+ *     capAmount: KotodamaQuantity|string|bigint|null,
+ *   }>,
+ * }} options
+ * @returns {{SetAssetTransferControl: {
+ *   account_id: string,
+ *   asset_definition_id: string,
+ *   limits: Array<{
+ *     window: "Day"|"Week"|"Month",
+ *     cap_amount: string|null,
+ *   }>,
+ * }}}
+ */
+export function buildSetAssetTransferControlInstruction(options) {
+  const source = assertPlainObject(options, "setAssetTransferControl");
+  assertAllowedFields(
+    source,
+    new Set(["accountId", "assetDefinitionId", "limits"]),
+    "setAssetTransferControl",
+  );
+  const accountLiteral = assertExactNonBlankString(
+    source.accountId,
+    "setAssetTransferControl.accountId",
+  );
+  const assetDefinitionLiteral = assertExactNonBlankString(
+    source.assetDefinitionId,
+    "setAssetTransferControl.assetDefinitionId",
+  );
+  if (!Array.isArray(source.limits)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "setAssetTransferControl.limits must be an array",
+      "setAssetTransferControl.limits",
+    );
+  }
+  for (let index = 0; index < source.limits.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(source.limits, index)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        "setAssetTransferControl.limits must not contain holes",
+        "setAssetTransferControl.limits",
+      );
+    }
+  }
+  const windows = new Set();
+  const limits = source.limits.map((limit, index) => {
+    const name = `setAssetTransferControl.limits[${index}]`;
+    const item = assertPlainObject(limit, name);
+    assertAllowedFields(item, new Set(["window", "capAmount"]), name);
+    if (!Object.prototype.hasOwnProperty.call(item, "capAmount")) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.capAmount is required; use null to clear the window`,
+        `${name}.capAmount`,
+      );
+    }
+    const window = normalizeAssetTransferControlWindow(
+      item.window,
+      `${name}.window`,
+    );
+    if (windows.has(window.wire)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.window duplicates ${item.window}`,
+        `${name}.window`,
+      );
+    }
+    windows.add(window.wire);
+    return {
+      rank: window.rank,
+      value: {
+        window: window.wire,
+        cap_amount:
+          item.capAmount === null
+            ? null
+            : asQuantity(item.capAmount, `${name}.capAmount`),
+      },
+    };
+  });
+  limits.sort((left, right) => left.rank - right.rank);
+  return {
+    SetAssetTransferControl: {
+      account_id: ensureCanonicalAccountId(
+        accountLiteral,
+        "setAssetTransferControl.accountId",
+      ),
+      asset_definition_id: normalizeAssetDefinitionId(
+        assetDefinitionLiteral,
+        "setAssetTransferControl.assetDefinitionId",
+      ),
+      limits: limits.map(({ value }) => value),
+    },
+  };
+}
+
+/**
  * Build a `Mint::Asset` instruction payload.
  * @param {{ assetHoldingId: string, quantity: KotodamaQuantity|string|bigint }} options
  * @returns {{Mint: {Asset: {object: string, destination: string}}}}
@@ -5977,13 +6149,3 @@ export function buildFinalizeElectionInstruction(options) {
 }
 
 export { normalizeAccountId, normalizeAssetId, normalizeAssetHoldingId, normalizeRwaId };
-
-/**
- * Helper that encodes a builder result to ensure structural validity.
- * Mostly used by tests; exposed for convenience.
- * @param {object} instruction
- * @returns {Buffer}
- */
-export function encodeInstruction(instruction) {
-  return noritoEncodeInstruction(instruction);
-}

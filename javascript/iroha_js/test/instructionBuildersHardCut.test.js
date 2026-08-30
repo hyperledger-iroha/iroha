@@ -4,7 +4,6 @@ import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import {
   buildRegisterAssetDefinitionInstruction,
-  encodeInstruction,
 } from "../src/instructionBuilders.js";
 import * as instructionBuilderExports from "../src/instructionBuilders.js";
 import { AccountAddress } from "../src/address.js";
@@ -123,7 +122,9 @@ function canonicalizeClone(value) {
 }
 
 function encodeAndDecode(instruction) {
-  return canonicalizeValue(noritoDecodeInstruction(encodeInstruction(instruction)));
+  return canonicalizeValue(
+    noritoDecodeInstruction(noritoEncodeInstruction(instruction)),
+  );
 }
 
 const LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64 = [
@@ -269,18 +270,19 @@ descriptorTest("public and pure-JS codecs reject every retired confidential inst
   for (const variant of RETIRED_GENERIC_CONFIDENTIAL_VARIANTS) {
     const instruction = retiredInstruction(variant);
     assertRetiredInstructionRejected(
-      () => encodeInstruction(instruction),
+      () => noritoEncodeInstruction(instruction),
       variant,
     );
     assertRetiredInstructionRejected(
-      () => withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
+      () => withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
+        noritoEncodeInstruction(instruction)),
       variant,
     );
   }
 
   assert.throws(
     () =>
-      withPureJsInstructionCodec(() =>
+      withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
         noritoDecodeInstruction(
           Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
         ),

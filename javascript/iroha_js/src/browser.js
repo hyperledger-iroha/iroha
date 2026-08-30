@@ -18,6 +18,8 @@ export {
 export {
   buildMintAssetInstruction,
   buildSetAssetTransferAvailabilityInstruction,
+  buildSetAssetTransferBlacklistInstruction,
+  buildSetAssetTransferControlInstruction,
   buildTransferAssetInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
@@ -99,8 +101,6 @@ export {
   ToriiBrowserClient,
   ToriiBrowserHttpError,
   ToriiBrowserStreamGapError,
-  ToriiBrowserClient as ToriiClient,
-  ToriiBrowserHttpError as ToriiHttpError,
 } from "./toriiBrowserClient.js";
 
 export {

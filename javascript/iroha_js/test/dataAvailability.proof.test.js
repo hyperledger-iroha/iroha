@@ -5,11 +5,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  deriveDaChunkerHandle,
-  generateDaProofSummary,
+  _createDataAvailabilityApi,
   buildDaProofSummaryArtifact,
   emitDaProofSummaryArtifact,
 } from "../src/dataAvailability.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
+
+function dataAvailabilityApi(binding) {
+  return _createDataAvailabilityApi(createNativeRuntime(binding));
+}
 
 function buildStubProofSummary() {
   return {
@@ -67,12 +71,15 @@ test("generateDaProofSummary normalises options and transforms native payloads",
     },
   };
 
-  const summary = generateDaProofSummary(manifestBytes, payloadBytes, {
+  const summary = dataAvailabilityApi(stubBinding).generateDaProofSummary(
+    manifestBytes,
+    payloadBytes,
+    {
     sampleCount: 5,
     sampleSeed: 7n,
     leafIndexes: [0, 1n],
-    __nativeBinding: stubBinding,
-  });
+    },
+  );
 
   assert.equal(summary.blob_hash_hex, "aa");
   assert.equal(summary.chunk_root_hex, "bb");
@@ -100,11 +107,17 @@ test("generateDaProofSummary validates empty inputs", () => {
     },
   };
   assert.throws(
-    () => generateDaProofSummary(Buffer.alloc(0), Buffer.from([1]), { __nativeBinding: stubBinding }),
+    () => dataAvailabilityApi(stubBinding).generateDaProofSummary(
+      Buffer.alloc(0),
+      Buffer.from([1]),
+    ),
     /manifestBytes must contain at least one byte/i,
   );
   assert.throws(
-    () => generateDaProofSummary(Buffer.from([1]), Buffer.alloc(0), { __nativeBinding: stubBinding }),
+    () => dataAvailabilityApi(stubBinding).generateDaProofSummary(
+      Buffer.from([1]),
+      Buffer.alloc(0),
+    ),
     /payloadBytes must contain at least one byte/i,
   );
 });
@@ -117,11 +130,14 @@ test("generateDaProofSummary rejects unsupported options", () => {
   };
   assert.throws(
     () =>
-      generateDaProofSummary(Buffer.from("manifest"), Buffer.from("payload"), {
+      dataAvailabilityApi(stubBinding).generateDaProofSummary(
+        Buffer.from("manifest"),
+        Buffer.from("payload"),
+        {
         sampleCount: 1,
         extra: true,
-        __nativeBinding: stubBinding,
-      }),
+        },
+      ),
     /generateDaProofSummary options contains unsupported fields: extra/,
   );
 });
@@ -143,12 +159,15 @@ test("generateDaProofSummary accepts snake_case proof options", () => {
     },
   };
 
-  const summary = generateDaProofSummary(manifestBytes, payloadBytes, {
+  const summary = dataAvailabilityApi(stubBinding).generateDaProofSummary(
+    manifestBytes,
+    payloadBytes,
+    {
     sample_count: 3,
     sample_seed: 9,
     leaf_indexes: [5],
-    __nativeBinding: stubBinding,
-  });
+    },
+  );
 
   assert.equal(summary.sample_count, 5);
   assert.equal(summary.sample_seed, 7);
@@ -165,14 +184,13 @@ test("deriveDaChunkerHandle enforces supported options", () => {
   };
 
   assert.deepEqual(
-    deriveDaChunkerHandle(manifestBytes, { __nativeBinding: stubBinding }),
+    dataAvailabilityApi(stubBinding).deriveDaChunkerHandle(manifestBytes),
     ["chunker"],
   );
 
   assert.throws(
     () =>
-      deriveDaChunkerHandle(manifestBytes, {
-        __nativeBinding: stubBinding,
+      dataAvailabilityApi(stubBinding).deriveDaChunkerHandle(manifestBytes, {
         extra: "nope",
       }),
     /deriveDaChunkerHandle options contains unsupported fields: extra/,

@@ -4,12 +4,13 @@ import { ed25519 } from "@noble/curves/ed25519";
 
 import { AccountAddress } from "../src/address.js";
 import {
-  encodeValidationFeeCurrentPolicyProofRequestV1,
+  createValidationFeeConsensusApi,
   normalizeValidationFeeLedgerBindingV1,
-  verifyValidationFeeCurrentPolicyProofV1,
 } from "../src/validationFeeConsensus.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
 import { ToriiClient } from "../src/toriiClient.js";
+import { TORII_TEST_NATIVE_BINDING } from "../src/toriiTestHooks.js";
 
 const binding = Object.freeze({
   schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
@@ -185,18 +186,36 @@ function completeVerifiedProjection() {
 }
 
 function withNativeBinding(native, body) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = native;
-  try {
-    return body();
-  } finally {
-    if (previous === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = previous;
-    }
-  }
+  return body(
+    createValidationFeeConsensusApi(createNativeRuntime(native)),
+  );
 }
+
+test("validation-fee consensus factories isolate immutable native runtimes", async () => {
+  const checkpoint = { height: 100, contextId: "03".repeat(32) };
+  const bindingA = {
+    connectNoritoBridgeAbiVersion: () => 23,
+    validationFeeCurrentPolicyProofRequestV1: () => Buffer.from([0xa1]),
+    validationFeeVerifyCurrentPolicyProofV1() {},
+  };
+  const apiA = createValidationFeeConsensusApi(createNativeRuntime(bindingA));
+  const apiB = createValidationFeeConsensusApi(createNativeRuntime({
+    connectNoritoBridgeAbiVersion: () => 23,
+    validationFeeCurrentPolicyProofRequestV1: () => Buffer.from([0xb2]),
+    validationFeeVerifyCurrentPolicyProofV1() {},
+  }));
+  bindingA.validationFeeCurrentPolicyProofRequestV1 = () => Buffer.from([0xff]);
+
+  const [requestA, requestB] = await Promise.all([
+    Promise.resolve().then(() =>
+      apiA.encodeValidationFeeCurrentPolicyProofRequestV1(checkpoint)),
+    Promise.resolve().then(() =>
+      apiB.encodeValidationFeeCurrentPolicyProofRequestV1(checkpoint)),
+  ]);
+  assert.equal(Object.isFrozen(apiA), true);
+  assert.deepEqual(requestA, Buffer.from([0xa1]));
+  assert.deepEqual(requestB, Buffer.from([0xb2]));
+});
 
 function verifyProjectionFixture(projection) {
   return withNativeBinding(
@@ -209,8 +228,8 @@ function verifyProjectionFixture(projection) {
         return JSON.stringify(projection);
       },
     },
-    () =>
-      verifyValidationFeeCurrentPolicyProofV1(
+    ({ verifyValidationFeeCurrentPolicyProofV1: verify }) =>
+      verify(
         Buffer.from([9]),
         binding,
         binding.checkpoint,
@@ -262,14 +281,14 @@ test("request encoder delegates only after strict checkpoint validation", () => 
       },
       validationFeeVerifyCurrentPolicyProofV1() {},
     },
-    () => {
+    ({ encodeValidationFeeCurrentPolicyProofRequestV1: encode }) => {
       assert.deepEqual(
-        encodeValidationFeeCurrentPolicyProofRequestV1(checkpoint),
+        encode(checkpoint),
         Buffer.from([1, 2, 3]),
       );
       assert.throws(
         () =>
-          encodeValidationFeeCurrentPolicyProofRequestV1({
+          encode({
             ...checkpoint,
             contextId: "00".repeat(32),
           }),
@@ -277,7 +296,7 @@ test("request encoder delegates only after strict checkpoint validation", () => 
       );
       assert.throws(
         () =>
-          encodeValidationFeeCurrentPolicyProofRequestV1({
+          encode({
             ...checkpoint,
             contextId: "02".repeat(32),
           }),
@@ -329,8 +348,8 @@ test("native verified projection remains bound to the release checkpoint", () =>
         return JSON.stringify(projection);
       },
     },
-    () => {
-      const verified = verifyValidationFeeCurrentPolicyProofV1(
+    ({ verifyValidationFeeCurrentPolicyProofV1: verify }) => {
+      const verified = verify(
         Buffer.from([9]),
         binding,
         binding.checkpoint,
@@ -342,7 +361,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
       projection.evaluated_block_hash = "de".repeat(32);
       assert.throws(
         () =>
-          verifyValidationFeeCurrentPolicyProofV1(
+          verify(
             Buffer.from([9]),
             binding,
             binding.checkpoint,
@@ -554,13 +573,54 @@ test("validation-fee proof path rejects a stale native bridge ABI", () => {
       },
       validationFeeVerifyCurrentPolicyProofV1() {},
     },
-    () => {
+    ({ encodeValidationFeeCurrentPolicyProofRequestV1: encode }) => {
       assert.throws(
-        () => encodeValidationFeeCurrentPolicyProofRequestV1(binding.checkpoint),
+        () => encode(binding.checkpoint),
         /ABI 23/u,
       );
     },
   );
+});
+
+test("Torii validation-fee proofs use the client native runtime", async () => {
+  const native = {
+    connectNoritoBridgeAbiVersion: () => 23,
+    validationFeeCurrentPolicyProofRequestV1(height, contextId) {
+      assert.equal(height, 100n);
+      assert.deepEqual(contextId, Buffer.from(binding.checkpoint.contextId, "hex"));
+      return Buffer.from([1, 2, 3]);
+    },
+    validationFeeVerifyCurrentPolicyProofV1(proofNorito) {
+      assert.deepEqual(proofNorito, Buffer.from([9]));
+      return JSON.stringify(completeVerifiedProjection());
+    },
+  };
+  const client = new ToriiClient("https://torii.invalid", {
+    fetchImpl: async () => assert.fail("overridden request path should be used"),
+    [TORII_TEST_NATIVE_BINDING]: native,
+  });
+  client._request = async (method, path, init) => {
+    assert.equal(method, "POST");
+    assert.equal(path, "/v1/validation-fee/policy/current/proof");
+    assert.deepEqual(init.body, Buffer.from([1, 2, 3]));
+    return new Response(Buffer.from([9]), {
+      status: 200,
+      headers: { "Content-Type": "application/x-norito" },
+    });
+  };
+
+  const page = await client.getValidationFeeCurrentPolicyProofPage(
+    binding,
+    null,
+    {
+      canonicalAuth: {
+        accountId: proposalOperator,
+        privateKey: Buffer.alloc(32, 0x31),
+      },
+    },
+  );
+  assert.equal(page.projection.evaluated_block_height, 127n);
+  assert.equal(page.promotedCheckpoint.height, 127n);
 });
 
 test("proof catch-up promotes only consecutive locally verified pages", async () => {

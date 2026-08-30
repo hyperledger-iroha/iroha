@@ -35,7 +35,10 @@ import {
   normalizeAssetHoldingId,
   normalizeAssetId,
 } from "./normalizers.js";
-import { getNativeBinding } from "./native.js";
+import {
+  defaultNativeRuntime,
+  resolveNativeRuntimeBinding,
+} from "./nativeRuntime.js";
 import {
   createNoritoContractCodecs,
   createNoritoProofValueCodecs,
@@ -83,6 +86,8 @@ const CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID =
   "zk::CancelConfidentialPolicyTransition";
 const SET_ASSET_TRANSFER_AVAILABILITY_VARIANT =
   "SetAssetTransferAvailability";
+const SET_ASSET_TRANSFER_BLACKLIST_VARIANT = "SetAssetTransferBlacklist";
+const SET_ASSET_TRANSFER_CONTROL_VARIANT = "SetAssetTransferControl";
 const SET_TRANSFER_REASON_CONTEXT = "SetAssetTransferAvailability.reason";
 const COMPLETE_ORDER_REVISION_CONTEXT = "CompleteReplicationOrder.expected_assignment_revision";
 const COMPLETE_ORDER_REVISION_MESSAGE = "CompleteReplicationOrder.expected_assignment_revision must be greater than zero";
@@ -121,6 +126,8 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "Rwa.*",
   "CancelAssetLock",
   SET_ASSET_TRANSFER_AVAILABILITY_VARIANT,
+  SET_ASSET_TRANSFER_BLACKLIST_VARIANT,
+  SET_ASSET_TRANSFER_CONTROL_VARIANT,
   "SoraFS.ReplicationOrder.*",
   "RecordSccpMessage",
 ];
@@ -137,6 +144,10 @@ const CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES = 85;
 const CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES = 148;
 const SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID =
   "iroha.asset.transfer.availability.set";
+const SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID =
+  "iroha.asset.transfer.blacklist.set";
+const SET_ASSET_TRANSFER_CONTROL_WIRE_ID =
+  "iroha.asset.transfer.control.set";
 const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const RECORD_SCCP_MESSAGE_WIRE_ID =
   "iroha_data_model::isi::bridge::RecordSccpMessage";
@@ -297,17 +308,6 @@ const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha.instruction.v1::kaigi::SetKaigiR
 const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::RegisterKaigiRelay";
 const UNREGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::UnregisterKaigiRelay";
 const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth";
-const KAIGI_WIRE_IDS = new Set([
-  CREATE_KAIGI_WIRE_ID,
-  JOIN_KAIGI_WIRE_ID,
-  LEAVE_KAIGI_WIRE_ID,
-  END_KAIGI_WIRE_ID,
-  RECORD_KAIGI_USAGE_WIRE_ID,
-  SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
-  REGISTER_KAIGI_RELAY_WIRE_ID,
-  UNREGISTER_KAIGI_RELAY_WIRE_ID,
-  REPORT_KAIGI_RELAY_HEALTH_WIRE_ID,
-]);
 const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
 const CAST_ZK_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastZkBallot";
 const CAST_PLAIN_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastPlainBallot";
@@ -331,6 +331,10 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_WIRE_ID,
   [SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID]:
     "iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability",
+  [SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID]:
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferBlacklist",
+  [SET_ASSET_TRANSFER_CONTROL_WIRE_ID]:
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl",
   [RECORD_SCCP_MESSAGE_WIRE_ID]: RECORD_SCCP_MESSAGE_WIRE_ID,
   [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
   [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
@@ -507,44 +511,12 @@ function normalizeInstructionJsonValue(value) {
   return value;
 }
 
-function resolveNative(method) {
-  const native = globalThis.__IROHA_NORITO_BINDING__ ?? getNativeBinding();
+function resolveNative(method, nativeRuntime) {
+  const native = resolveNativeRuntimeBinding(nativeRuntime);
   if (typeof native[method] !== JS_TYPE_FUNCTION) {
     throw new Error(`Native binding does not expose ${method}`);
   }
   return native;
-}
-
-function isNativeBindingUnavailable(error) {
-  const message =
-    error && typeof error.message === JS_TYPE_STRING ? error.message : String(error ?? "");
-  return (
-    message.includes("Native binding required") ||
-    message.includes("Native binding does not expose") ||
-    message.includes("process is not defined") ||
-    message.includes("require is not available") ||
-    message.includes("createRequire is not a function")
-  );
-}
-
-function isNativeBindingUnsupportedInstruction(error) {
-  const message =
-    error && typeof error.message === JS_TYPE_STRING ? error.message : String(error ?? "");
-  return (
-    message.includes("unsupported zk instruction variant") ||
-    message.includes("unsupported instruction") ||
-    message.includes("unsupported instruction variant") ||
-    message.includes("unknown instruction wire id") ||
-    message.includes("unknown instruction schema") ||
-    message.includes("unknown instruction `") ||
-    message.includes("invalid enum discriminant") ||
-    message.includes("(not registered)") ||
-    message.includes("instruction payload must use canonical Norito framing")
-  );
-}
-
-function shouldUsePureJsInstructionFallback(error) {
-  return isNativeBindingUnavailable(error) || isNativeBindingUnsupportedInstruction(error);
 }
 
 const {
@@ -583,80 +555,24 @@ function rejectRetiredGenericZkInstruction(instruction) {
   }
 }
 
-function encodeNormalizedInstruction(normalized) {
+function encodeNormalizedInstruction(normalized, nativeRuntime) {
   rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
-  let encoded;
-  if (kaigiInstructionNeedsLosslessPureCodec(normalized)) {
-    return encodePureJsInstruction(normalized);
-  }
   try {
-    const native = resolveNative("noritoEncodeInstruction");
-    encoded = native.noritoEncodeInstruction(JSON.stringify(normalized));
+    return encodePureJsInstruction(normalized);
   } catch (error) {
-    if (!shouldUsePureJsInstructionFallback(error)) {
-      throw error;
-    }
-    try {
-      encoded = encodePureJsInstruction(normalized);
-    } catch (fallbackError) {
-      if (!isPureJsUnsupportedInstructionError(fallbackError)) {
-        throw fallbackError;
-      }
+    if (!isPureJsUnsupportedInstructionError(error)) {
       throw error;
     }
   }
-  return encoded;
+  const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
+  return native.noritoEncodeInstruction(JSON.stringify(normalized));
 }
 
-function kaigiU64NeedsLosslessPureCodec(value) {
-  return typeof value === JS_TYPE_BIGINT || typeof value === JS_TYPE_STRING;
-}
-
-function kaigiManifestNeedsLosslessPureCodec(manifest) {
-  return isPlainObject(manifest) && kaigiU64NeedsLosslessPureCodec(manifest.expiry_ms);
-}
-
-function kaigiInstructionNeedsLosslessPureCodec(instruction) {
-  if (!isPlainObject(instruction) || !isPlainObject(instruction.Kaigi)) {
-    return false;
-  }
-  const kaigi = instruction.Kaigi;
-  if (isPlainObject(kaigi.CreateKaigi)) {
-    const call = kaigi.CreateKaigi.call;
-    return isPlainObject(call) && (
-      kaigiU64NeedsLosslessPureCodec(call.gas_rate_per_minute) ||
-      kaigiU64NeedsLosslessPureCodec(call.scheduled_start_ms) ||
-      kaigiManifestNeedsLosslessPureCodec(call.relay_manifest)
-    );
-  }
-  if (isPlainObject(kaigi.EndKaigi)) {
-    return kaigiU64NeedsLosslessPureCodec(kaigi.EndKaigi.ended_at_ms);
-  }
-  if (isPlainObject(kaigi.RecordKaigiUsage)) {
-    return kaigiU64NeedsLosslessPureCodec(kaigi.RecordKaigiUsage.duration_ms) ||
-      kaigiU64NeedsLosslessPureCodec(kaigi.RecordKaigiUsage.billed_gas);
-  }
-  if (isPlainObject(kaigi.SetKaigiRelayManifest)) {
-    return kaigiManifestNeedsLosslessPureCodec(
-      kaigi.SetKaigiRelayManifest.relay_manifest,
-    );
-  }
-  if (isPlainObject(kaigi.ReportKaigiRelayHealth)) {
-    return kaigiU64NeedsLosslessPureCodec(
-      kaigi.ReportKaigiRelayHealth.reported_at_ms,
-    );
-  }
-  return false;
-}
+class PureJsUnsupportedInstructionError extends Error {}
 
 function isPureJsUnsupportedInstructionError(error) {
-  const message =
-    error && typeof error.message === JS_TYPE_STRING ? error.message : String(error ?? "");
-  return (
-    message.startsWith("Internal Norito canonicalization supports ") ||
-    message.startsWith("Internal Norito decoder does not support ")
-  );
+  return error instanceof PureJsUnsupportedInstructionError;
 }
 
 /**
@@ -664,33 +580,38 @@ function isPureJsUnsupportedInstructionError(error) {
  * @param {object | string | ArrayBufferView | ArrayBuffer | Buffer} instruction
  * @returns {Buffer}
  */
-export function noritoEncodeInstruction(instruction) {
+function encodeInstruction(instruction, nativeRuntime) {
   if (isBinaryLike(instruction)) {
     return toBuffer(instruction);
   }
   if (typeof instruction === JS_TYPE_STRING) {
     const trimmed = instruction.trim();
+    let parsed;
     try {
-      const parsed = JSON.parse(trimmed);
-      const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
-        ? parseStrictGovernanceInstructionJson(trimmed, "governance instruction")
-        : parsed;
-      const normalized = normalizeInstructionJsonValue(exactParsed);
-      return encodeNormalizedInstruction(normalized);
+      parsed = JSON.parse(trimmed);
     } catch (error) {
-      if (error instanceof SyntaxError) {
-        const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
-        if (decoded) {
-          return decoded;
-        }
-        const native = resolveNative("noritoEncodeInstruction");
-        return native.noritoEncodeInstruction(instruction);
+      if (!(error instanceof SyntaxError)) {
+        throw error;
       }
-      throw error;
+      const decoded = tryDecodeBase64(trimmed) ?? tryDecodeHex(trimmed);
+      if (decoded) {
+        return decoded;
+      }
+      const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
+      return native.noritoEncodeInstruction(instruction);
     }
+    const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
+      ? parseStrictGovernanceInstructionJson(trimmed, "governance instruction")
+      : parsed;
+    const normalized = normalizeInstructionJsonValue(exactParsed);
+    return encodeNormalizedInstruction(normalized, nativeRuntime);
   }
   const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
-  return encodeNormalizedInstruction(normalized);
+  return encodeNormalizedInstruction(normalized, nativeRuntime);
+}
+
+export function noritoEncodeInstruction(instruction) {
+  return encodeInstruction(instruction, defaultNativeRuntime);
 }
 
 /**
@@ -1007,7 +928,7 @@ function rejectInlinePrivateKeyFields(request, context) {
  * @param {object} request
  * @returns {Buffer}
  */
-export function noritoEncodeMultisigProposeRequest(request) {
+function encodeMultisigProposeRequest(request, nativeRuntime) {
   if (!isPlainObject(request)) {
     throw new TypeError("MultisigProposeDto request must be an object");
   }
@@ -1085,6 +1006,7 @@ export function noritoEncodeMultisigProposeRequest(request) {
           encodeEmbeddedInstructionBox(
             instruction,
             `MultisigProposeDto.instructions[${index}]`,
+            nativeRuntime,
           ),
         ),
       ],
@@ -1105,6 +1027,10 @@ export function noritoEncodeMultisigProposeRequest(request) {
     ]),
   );
   return frameNoritoPayload(payload, MULTISIG_PROPOSE_DTO_SCHEMA_HASH, COMPACT_LEN_FLAG);
+}
+
+export function noritoEncodeMultisigProposeRequest(request) {
+  return encodeMultisigProposeRequest(request, defaultNativeRuntime);
 }
 
 function normalizeMultisigProposeValidationFeeMetadata(request) {
@@ -1418,8 +1344,12 @@ function encodeMultisigAccountSelectorFields(request, context) {
   ];
 }
 
-function encodeEmbeddedInstructionBox(instruction, context) {
-  const framed = Buffer.from(noritoEncodeInstruction(instruction));
+function encodeEmbeddedInstructionBox(
+  instruction,
+  context,
+  nativeRuntime = defaultNativeRuntime,
+) {
+  const framed = Buffer.from(encodeInstruction(instruction, nativeRuntime));
   const { wireId, payload, innerFlags, innerFrame } = decodeInstructionEnvelope(framed);
   const outerFlags = noritoLengthFlags & COMPACT_LEN_FLAG;
   return encodeInstructionBoxPayload(
@@ -1438,10 +1368,14 @@ function encodeEmbeddedInstructionBox(instruction, context) {
  * both its outer schema and its inner instruction schema are verified before
  * the archive crosses the signing boundary.
  */
-export function noritoEncodeInstructionBoxArchive(instruction) {
+function encodeInstructionBoxArchive(instruction, nativeRuntime) {
   return withNoritoLengthFlags(COMPACT_LEN_FLAG, () =>
-    encodeEmbeddedInstructionBox(instruction, "instruction"),
+    encodeEmbeddedInstructionBox(instruction, "instruction", nativeRuntime),
   );
+}
+
+export function noritoEncodeInstructionBoxArchive(instruction) {
+  return encodeInstructionBoxArchive(instruction, defaultNativeRuntime);
 }
 
 /**
@@ -1509,53 +1443,40 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
  * @param {{ parseJson?: boolean }} [options]
  * @returns {string | unknown}
  */
-export function noritoDecodeInstruction(bytes, options = {}) {
+function decodeInstruction(bytes, options, nativeRuntime) {
   const buffer = toBuffer(bytes);
   try {
-    const { wireId } = decodeInstructionEnvelope(buffer);
-    if (KAIGI_WIRE_IDS.has(wireId)) {
-      const decoded = decodePureJsInstruction(buffer);
-      validateDecodedInstructionProofAttachments(decoded);
-      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
+    const decoded = decodePureJsInstruction(buffer);
+    validateDecodedInstructionProofAttachments(decoded);
+    return options.parseJson === false ? JSON.stringify(decoded) : decoded;
+  } catch (error) {
+    if (!isPureJsUnsupportedInstructionError(error)) {
+      throw error;
     }
-  } catch {
-    // Let the native decoder below report malformed or non-instruction frames.
   }
   let json;
+  const native = resolveNative("noritoDecodeInstruction", nativeRuntime);
   try {
-    const native = resolveNative("noritoDecodeInstruction");
-    try {
-      json = native.noritoDecodeInstruction(buffer);
-    } catch (error) {
-      if (!isAlignmentError(error)) {
-        throw error;
-      }
-      const decoded =
-        tryDecodeWithAlignedBuffer(native, buffer) ??
-        tryDecodeWithRelocatedStorage(native, buffer);
-      if (decoded === null) {
-        throw error;
-      }
-      json = decoded;
-    }
+    json = native.noritoDecodeInstruction(buffer);
   } catch (error) {
-    if (!shouldUsePureJsInstructionFallback(error)) {
+    if (!isAlignmentError(error)) {
       throw error;
     }
-    try {
-      const decoded = decodePureJsInstruction(buffer);
-      validateDecodedInstructionProofAttachments(decoded);
-      return options.parseJson === false ? JSON.stringify(decoded) : decoded;
-    } catch (fallbackError) {
-      if (!isPureJsUnsupportedInstructionError(fallbackError)) {
-        throw fallbackError;
-      }
+    const decoded =
+      tryDecodeWithAlignedBuffer(native, buffer) ??
+      tryDecodeWithRelocatedStorage(native, buffer);
+    if (decoded === null) {
       throw error;
     }
+    json = decoded;
   }
   const decoded = JSON.parse(json);
   validateDecodedInstructionProofAttachments(decoded);
   return options.parseJson === false ? json : decoded;
+}
+
+export function noritoDecodeInstruction(bytes, options = {}) {
+  return decodeInstruction(bytes, options, defaultNativeRuntime);
 }
 
 function validateDecodedInstructionProofAttachments(instruction) {
@@ -1592,7 +1513,7 @@ function validateDecodedInstructionProofAttachments(instruction) {
  * @param {string} encodedAction
  * @returns {object}
  */
-export function inspectSubscriptionTriggerAction(encodedAction) {
+function inspectTriggerAction(encodedAction, nativeRuntime) {
   if (
     typeof encodedAction !== JS_TYPE_STRING ||
     encodedAction.length === 0 ||
@@ -1602,7 +1523,10 @@ export function inspectSubscriptionTriggerAction(encodedAction) {
       "inspectSubscriptionTriggerAction encodedAction must be a canonical non-empty string",
     );
   }
-  const native = resolveNative("inspectSubscriptionTriggerAction");
+  const native = resolveNative(
+    "inspectSubscriptionTriggerAction",
+    nativeRuntime,
+  );
   const payload = native.inspectSubscriptionTriggerAction(encodedAction);
   try {
     return JSON.parse(payload);
@@ -1613,6 +1537,26 @@ export function inspectSubscriptionTriggerAction(encodedAction) {
       }`,
     );
   }
+}
+
+export function inspectSubscriptionTriggerAction(encodedAction) {
+  return inspectTriggerAction(encodedAction, defaultNativeRuntime);
+}
+
+/** @internal Source-level test facade; intentionally absent from package exports. */
+export function _createNoritoInstructionApi(nativeRuntime) {
+  return Object.freeze({
+    inspectSubscriptionTriggerAction: (encodedAction) =>
+      inspectTriggerAction(encodedAction, nativeRuntime),
+    noritoDecodeInstruction: (bytes, options = {}) =>
+      decodeInstruction(bytes, options, nativeRuntime),
+    noritoEncodeInstruction: (instruction) =>
+      encodeInstruction(instruction, nativeRuntime),
+    noritoEncodeInstructionBoxArchive: (instruction) =>
+      encodeInstructionBoxArchive(instruction, nativeRuntime),
+    noritoEncodeMultisigProposeRequest: (request) =>
+      encodeMultisigProposeRequest(request, nativeRuntime),
+  });
 }
 
 function decodeBlockMerkleProofValue(payload, context) {
@@ -2830,6 +2774,36 @@ function encodePureJsInstructionPayload(instruction) {
     );
   }
   if (
+    Object.prototype.hasOwnProperty.call(
+      instruction,
+      SET_ASSET_TRANSFER_BLACKLIST_VARIANT,
+    )
+  ) {
+    assertOnlyObjectKeys(
+      instruction,
+      [SET_ASSET_TRANSFER_BLACKLIST_VARIANT],
+      "instruction",
+    );
+    return encodeSetAssetTransferBlacklistInstruction(
+      instruction.SetAssetTransferBlacklist,
+    );
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(
+      instruction,
+      SET_ASSET_TRANSFER_CONTROL_VARIANT,
+    )
+  ) {
+    assertOnlyObjectKeys(
+      instruction,
+      [SET_ASSET_TRANSFER_CONTROL_VARIANT],
+      "instruction",
+    );
+    return encodeSetAssetTransferControlInstruction(
+      instruction.SetAssetTransferControl,
+    );
+  }
+  if (
     isPlainObject(instruction.IssueReplicationOrder) ||
     isPlainObject(instruction.CompleteReplicationOrder) ||
     isPlainObject(instruction.ExpireReplicationOrder)
@@ -2940,7 +2914,7 @@ function encodePureJsInstructionPayload(instruction) {
   ) {
     return encodeSmartContractInstruction(instruction);
   }
-  throw new Error(
+  throw new PureJsUnsupportedInstructionError(
     `Internal Norito canonicalization supports ${SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS.join(", ")}. Received ${describeInstructionShape(instruction)}.`,
   );
 }
@@ -2972,6 +2946,10 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
       return decodeCancelAssetLockInstructionPayload(payload);
     case SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID:
       return decodeSetAssetTransferAvailabilityInstructionPayload(payload);
+    case SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID:
+      return decodeSetAssetTransferBlacklistInstructionPayload(payload);
+    case SET_ASSET_TRANSFER_CONTROL_WIRE_ID:
+      return decodeSetAssetTransferControlInstructionPayload(payload);
     case ISSUE_REPLICATION_ORDER_WIRE_ID:
     case COMPLETE_REPLICATION_ORDER_WIRE_ID:
     case EXPIRE_REPLICATION_ORDER_WIRE_ID:
@@ -3023,7 +3001,7 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
     case UPDATE_VERIFYING_KEY_WIRE_ID:
       return decodeVerifyingKeyInstructionPayload(wireId, payload);
     default:
-      throw new Error(
+      throw new PureJsUnsupportedInstructionError(
         `Internal Norito decoder does not support ${wireId}. Run \`npm run build:native\` for full instruction coverage.`,
       );
   }
@@ -3573,6 +3551,208 @@ function decodeSetAssetTransferAvailabilityInstructionPayload(payload) {
         "SetAssetTransferAvailability.outgoing",
       ),
       reason,
+    },
+  };
+}
+
+function encodeSetAssetTransferBlacklistInstruction(value) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("SetAssetTransferBlacklist must be an object");
+  }
+  const fields = ["account_id", "asset_definition_id", "blacklisted"];
+  assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_BLACKLIST_VARIANT);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`SetAssetTransferBlacklist.${field} is required`);
+    }
+  }
+  return encodeInstructionEnvelope(
+    SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID,
+    encodeStructValue([
+      [
+        encodeAccountIdValue(
+          value.account_id,
+          "SetAssetTransferBlacklist.account_id",
+        ),
+      ],
+      [
+        encodeAssetDefinitionIdValue(
+          value.asset_definition_id,
+          "SetAssetTransferBlacklist.asset_definition_id",
+        ),
+      ],
+      [
+        encodeBoolValue(
+          value.blacklisted,
+          "SetAssetTransferBlacklist.blacklisted",
+        ),
+      ],
+    ]),
+  );
+}
+
+function decodeSetAssetTransferBlacklistInstructionPayload(payload) {
+  const fields = decodeStructFields(payload, SET_ASSET_TRANSFER_BLACKLIST_VARIANT, [
+    "account_id",
+    "asset_definition_id",
+    "blacklisted",
+  ]);
+  return {
+    SetAssetTransferBlacklist: {
+      account_id: decodeAccountIdValue(
+        fields.account_id,
+        "SetAssetTransferBlacklist.account_id",
+      ),
+      asset_definition_id: decodeAssetDefinitionIdValue(
+        fields.asset_definition_id,
+        "SetAssetTransferBlacklist.asset_definition_id",
+      ),
+      blacklisted: decodeBoolValue(
+        fields.blacklisted,
+        "SetAssetTransferBlacklist.blacklisted",
+      ),
+    },
+  };
+}
+
+function encodeAssetTransferControlWindowValue(value, context) {
+  switch (value) {
+    case "Day":
+      return encodeEnumTagValue(0);
+    case "Week":
+      return encodeEnumTagValue(1);
+    case "Month":
+      return encodeEnumTagValue(2);
+    default:
+      throw new TypeError(`${context} must be exactly "Day", "Week", or "Month"`);
+  }
+}
+
+function decodeAssetTransferControlWindowValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  reader.assertEof();
+  switch (tag) {
+    case 0:
+      return "Day";
+    case 1:
+      return "Week";
+    case 2:
+      return "Month";
+    default:
+      throw new Error(`${context} uses unsupported transfer-control window tag ${tag}`);
+  }
+}
+
+function encodeAssetTransferLimitValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  const fields = ["window", "cap_amount"];
+  assertOnlyObjectKeys(value, fields, context);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`${context}.${field} is required`);
+    }
+  }
+  return encodeStructValue([
+    [encodeAssetTransferControlWindowValue(value.window, `${context}.window`)],
+    [
+      encodeOptionValue(
+        value.cap_amount,
+        encodeQuantityValue,
+        `${context}.cap_amount`,
+      ),
+    ],
+  ]);
+}
+
+function decodeAssetTransferLimitValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["window", "cap_amount"]);
+  return {
+    window: decodeAssetTransferControlWindowValue(
+      fields.window,
+      `${context}.window`,
+    ),
+    cap_amount: decodeOptionValue(
+      fields.cap_amount,
+      decodeQuantityValue,
+      `${context}.cap_amount`,
+    ),
+  };
+}
+
+function encodeSetAssetTransferControlInstruction(value) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("SetAssetTransferControl must be an object");
+  }
+  const fields = ["account_id", "asset_definition_id", "limits"];
+  assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_CONTROL_VARIANT);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`SetAssetTransferControl.${field} is required`);
+    }
+  }
+  if (!Array.isArray(value.limits)) {
+    throw new TypeError("SetAssetTransferControl.limits must be an array");
+  }
+  for (let index = 0; index < value.limits.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value.limits, index)) {
+      throw new TypeError("SetAssetTransferControl.limits must not contain holes");
+    }
+  }
+  return encodeInstructionEnvelope(
+    SET_ASSET_TRANSFER_CONTROL_WIRE_ID,
+    encodeStructValue([
+      [
+        encodeAccountIdValue(
+          value.account_id,
+          "SetAssetTransferControl.account_id",
+        ),
+      ],
+      [
+        encodeAssetDefinitionIdValue(
+          value.asset_definition_id,
+          "SetAssetTransferControl.asset_definition_id",
+        ),
+      ],
+      [
+        encodeNoritoVec(value.limits, (limit, index) =>
+          encodeAssetTransferLimitValue(
+            limit,
+            `SetAssetTransferControl.limits[${index}]`,
+          ),
+        ),
+      ],
+    ]),
+  );
+}
+
+function decodeSetAssetTransferControlInstructionPayload(payload) {
+  const fields = decodeStructFields(payload, SET_ASSET_TRANSFER_CONTROL_VARIANT, [
+    "account_id",
+    "asset_definition_id",
+    "limits",
+  ]);
+  return {
+    SetAssetTransferControl: {
+      account_id: decodeAccountIdValue(
+        fields.account_id,
+        "SetAssetTransferControl.account_id",
+      ),
+      asset_definition_id: decodeAssetDefinitionIdValue(
+        fields.asset_definition_id,
+        "SetAssetTransferControl.asset_definition_id",
+      ),
+      limits: decodeNoritoVec(
+        fields.limits,
+        (limit, index) =>
+          decodeAssetTransferLimitValue(
+            limit,
+            `SetAssetTransferControl.limits[${index}]`,
+          ),
+        "SetAssetTransferControl.limits",
+      ),
     },
   };
 }

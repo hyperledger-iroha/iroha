@@ -38,7 +38,6 @@ use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey, sha256,
     sha256_reader_bounded,
 };
-#[cfg(test)]
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
@@ -161,6 +160,30 @@ pub fn genesis_factory_with_post_topology(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
     )
 }
+
+/// Build a signed custom genesis with post-topology instructions and defer
+/// transaction execution to [`NetworkBuilder`].
+///
+/// Use this only as the return value of [`NetworkBuilder::with_genesis_block`]
+/// when the instructions require the builder's final pipeline, Nexus, or ZK
+/// configuration. The builder normalizes and pre-executes the block under that
+/// fully merged configuration before publishing identical prepared bytes to
+/// every peer. The returned block is not prepared genesis on its own.
+pub fn unexecuted_genesis_factory_with_post_topology(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+) -> GenesisBlock {
+    crate::config::genesis_unexecuted_with_keypair_and_post_topology(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+    )
+}
+
 fn test_domain_dataspace_id(domain: &DomainId) -> Result<DataSpaceId> {
     iroha_core::sns::dataspace_id_for_sns_alias(domain.dataspace().as_ref()).ok_or_else(|| {
         eyre!(
@@ -3927,6 +3950,8 @@ impl Network {
                 &consensus_handshake_meta,
                 &self.genesis_key_pair,
                 &self.chain_id(),
+                da_proof_policies.as_ref(),
+                confidential_policy_hash,
             );
             ensure_genesis_results_with_runtime_config(
                 &mut augmented,
@@ -6236,6 +6261,8 @@ fn normalize_genesis_consensus_handshake(
     consensus_handshake_meta: &Parameter,
     genesis_key_pair: &KeyPair,
     _fallback_chain_id: &ChainId,
+    da_proof_policies: Option<&DaProofPolicyBundle>,
+    confidential_policy_hash: Option<[u8; 32]>,
 ) -> GenesisBlock {
     let mut param_instructions = genesis_isi
         .iter()
@@ -6291,6 +6318,17 @@ fn normalize_genesis_consensus_handshake(
     let mut header = source.0.header();
     header.merkle_root = external_merkle.root();
     header.result_merkle_root = None;
+    let da_proof_policies = da_proof_policies
+        .cloned()
+        .or_else(|| source.0.da_proof_policies().cloned());
+    header.set_da_proof_policies_hash(da_proof_policies.as_ref().map(iroha_crypto::HashOf::new));
+    if let Some(zk_policy_hash) = confidential_policy_hash {
+        let mut confidential_features = header
+            .confidential_features()
+            .unwrap_or(iroha_data_model::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST);
+        confidential_features.zk_policy_hash = Some(zk_policy_hash);
+        header.set_confidential_features(Some(confidential_features));
+    }
     let signer_index = source
         .0
         .signatures()
@@ -6305,7 +6343,7 @@ fn normalize_genesis_consensus_handshake(
     let mut proposal =
         iroha_data_model::block::SignedBlock::presigned(proposal_signature, header, transactions);
     proposal.set_da_commitments(source.0.da_commitments().cloned());
-    proposal.set_da_proof_policies(source.0.da_proof_policies().cloned());
+    proposal.set_da_proof_policies(da_proof_policies);
     proposal.set_da_pin_intents(source.0.da_pin_intents().cloned());
     GenesisBlock(proposal)
 }
@@ -7672,6 +7710,8 @@ impl NetworkBuilder {
                     &consensus_handshake_parameter(&provisional_profile),
                     &genesis_key_pair,
                     &consensus_chain_id,
+                    da_proof_policies.as_ref(),
+                    confidential_policy_hash,
                 );
                 config::staged_genesis_policy_hashes(
                     &provisional,
@@ -7748,6 +7788,8 @@ impl NetworkBuilder {
                 &consensus_handshake_meta,
                 &genesis_key_pair,
                 &consensus_chain_id,
+                da_proof_policies.as_ref(),
+                confidential_policy_hash,
             );
             let (signed_block, final_staged_hash) = config::preexecute_genesis_with_runtime_config(
                 &final_custom,
@@ -14952,10 +14994,19 @@ mod tests {
                         .expect("callback topology mutex poisoned") = Some(topology.clone());
                     *callback_pops.lock().expect("callback pop mutex poisoned") =
                         Some(pops.clone());
-                    genesis_factory(Vec::new(), topology, pops)
+                    unexecuted_genesis_factory_with_post_topology(
+                        Vec::new(),
+                        Vec::new(),
+                        topology,
+                        pops,
+                    )
                 },
             ));
         let produced = network.genesis();
+        assert!(
+            produced.0.has_results(),
+            "NetworkBuilder must prepare an unexecuted custom genesis"
+        );
         let recorded = seen_topology
             .lock()
             .expect("topology mutex poisoned")
@@ -14966,7 +15017,16 @@ mod tests {
             .expect("pop mutex poisoned")
             .clone()
             .expect("topology pops should be recorded");
-        let expected = genesis_factory(Vec::new(), recorded, recorded_pops);
+        let expected = unexecuted_genesis_factory_with_post_topology(
+            Vec::new(),
+            Vec::new(),
+            recorded,
+            recorded_pops,
+        );
+        assert!(
+            !expected.0.has_results(),
+            "the custom-genesis helper must defer transaction execution"
+        );
         let produced_instructions = collect_non_handshake_instructions(&produced);
         let expected_instructions = collect_non_handshake_instructions(&expected);
         assert!(
@@ -15001,19 +15061,90 @@ mod tests {
     }
     #[test]
     fn with_genesis_block_respects_npos_consensus_mode() {
-        init_instruction_registry();
+        let worker = std::thread::Builder::new()
+            .name("deferred-custom-genesis-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                init_instruction_registry();
+        let mut npos = SumeragiNposParameters::default();
+        npos.epoch_seed = CryptoHash::new(chain_id().into_inner().as_bytes()).into();
+        npos.max_validators = 4;
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
                 .with_genesis_block(|topology, topology_entries| {
-                    genesis_factory_with_post_topology(
+                    let domain_id = DomainId::try_new("deferred_genesis", "universal")
+                        .expect("deferred-genesis domain id");
+                    let asset_definition_id = AssetDefinitionId::derive_from_components(
+                        domain_id.clone(),
+                        "private_credit".parse().expect("asset name"),
+                    );
+                    let scoped_asset_id = AssetId::with_scope(
+                        asset_definition_id.clone(),
+                        ALICE_ID.clone(),
+                        AssetBalanceScope::Dataspace(DataSpaceId::new(1)),
+                    );
+                    unexecuted_genesis_factory_with_post_topology(
                         Vec::new(),
-                        Vec::new(),
+                        vec![
+                            vec![
+                                Register::domain(Domain::new(domain_id.clone())).into(),
+                                Register::asset_definition(AssetDefinition::numeric(
+                                    asset_definition_id,
+                                    "deferred private credit".to_owned(),
+                                    AssetBalancePolicy::DataspaceRestricted,
+                                    Some(domain_id),
+                                ))
+                                .into(),
+                            ],
+                            vec![Mint::asset_quantity(1_u32, scoped_asset_id).into()],
+                        ],
                         topology,
                         topology_entries,
                     )
+                })
+                .with_genesis_instruction(InstructionBox::from(SetParameter::new(
+                    Parameter::Custom(npos.into_custom_parameter()),
+                )))
+                .with_config_layer(|layer| {
+                    let mut universal = Table::new();
+                    universal.insert("alias".into(), Value::String("universal".to_owned()));
+                    universal.insert("id".into(), Value::Integer(0));
+                    universal.insert("fault_tolerance".into(), Value::Integer(1));
+                    let mut private = Table::new();
+                    private.insert("alias".into(), Value::String("private-1".to_owned()));
+                    private.insert("id".into(), Value::Integer(1));
+                    private.insert(
+                        "manifest_hash".into(),
+                        Value::String(format!("01{}", "00".repeat(31))),
+                    );
+                    private.insert("fault_tolerance".into(), Value::Integer(1));
+                    let mut lane0 = Table::new();
+                    lane0.insert("index".into(), Value::Integer(0));
+                    lane0.insert("alias".into(), Value::String("global".to_owned()));
+                    lane0.insert("dataspace".into(), Value::String("universal".to_owned()));
+                    lane0.insert("visibility".into(), Value::String("public".to_owned()));
+                    lane0.insert("metadata".into(), Value::Table(Table::new()));
+                    let mut lane1 = Table::new();
+                    lane1.insert("index".into(), Value::Integer(1));
+                    lane1.insert("alias".into(), Value::String("private".to_owned()));
+                    lane1.insert("dataspace".into(), Value::String("private-1".to_owned()));
+                    lane1.insert("visibility".into(), Value::String("restricted".to_owned()));
+                    lane1.insert("metadata".into(), Value::Table(Table::new()));
+                    layer
+                        .write(["nexus", "lane_count"], 2_i64)
+                        .write(
+                            ["nexus", "dataspace_catalog"],
+                            Value::Array(vec![Value::Table(universal), Value::Table(private)]),
+                        )
+                        .write(
+                            ["nexus", "lane_catalog"],
+                            Value::Array(vec![Value::Table(lane0), Value::Table(lane1)]),
+                        )
+                        .write(["nexus", "staking", "max_validators"], 4_i64)
+                        .write(["zk", "stark", "enabled"], true);
                 }),
         );
         let profile = network.consensus_bootstrap_profile();
@@ -15022,14 +15153,44 @@ mod tests {
             "custom genesis should preserve requested NPoS consensus mode",
         );
         let produced = network.genesis();
+        assert!(
+            produced.0.results().all(|result| result.as_ref().is_ok()),
+            "deferred dataspace-scoped genesis transactions must pre-execute under the final catalog"
+        );
+        let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let peer = network.peers().first().expect("network should have peers");
+        let actual = resolve_actual_config(peer, &config_layers)
+            .expect("deferred-genesis final config should resolve");
+        let expected_policies = iroha_core::da::proof_policy_bundle(&actual.nexus.lane_config);
+        assert_eq!(
+            produced.0.da_proof_policies(),
+            Some(&expected_policies),
+            "custom genesis must bind the builder-resolved multi-lane DA policy"
+        );
+        assert_eq!(
+            produced
+                .0
+                .header()
+                .confidential_features()
+                .and_then(|digest| digest.zk_policy_hash),
+            Some(iroha_core::state::compute_genesis_confidential_policy_hash(
+                &actual.zk
+            )),
+            "custom genesis must bind the builder-resolved confidential policy"
+        );
         assert_exactly_one_consensus_handshake(&produced, &consensus_handshake_parameter(&profile));
         let metadata = consensus_handshake_metadata(&produced)
             .expect("custom genesis should include consensus handshake metadata");
-        assert_eq!(
-            metadata.mode,
-            SumeragiConsensusMode::Npos,
-            "custom genesis handshake metadata should advertise NPoS mode",
-        );
+                assert_eq!(
+                    metadata.mode,
+                    SumeragiConsensusMode::Npos,
+                    "custom genesis handshake metadata should advertise NPoS mode",
+                );
+            })
+            .expect("spawn deferred custom-genesis regression worker");
+        if let Err(payload) = worker.join() {
+            std::panic::resume_unwind(payload);
+        }
     }
     #[test]
     fn custom_genesis_binds_active_validator_projection_instead_of_normal_preview() {

@@ -220,7 +220,7 @@ export function createSorafsOrderbookSubmissionDeadline(
   callerSignal,
   timeoutMs,
   context,
-  { addAbortListener, removeAbortListener, isAborted },
+  { addAbortListener, removeAbortListener, isAborted, abortReason },
 ) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new TypeError(`${context} requires a positive finite client timeoutMs`);
@@ -229,7 +229,11 @@ export function createSorafsOrderbookSubmissionDeadline(
     throw new Error(`${context} requires AbortController for its bounded operation deadline`);
   }
   const controller = new AbortControllerConstructor();
-  const forwardAbort = () => Reflect.apply(abortControllerAbort, controller, []);
+  const forwardAbort = () => Reflect.apply(
+    abortControllerAbort,
+    controller,
+    [abortReason(callerSignal)],
+  );
   if (callerSignal) addAbortListener(callerSignal, forwardAbort);
   const timer = scheduleTimeout(() => {
     const error = new Error(`${context} exceeded its ${timeoutMs}ms operation deadline`);

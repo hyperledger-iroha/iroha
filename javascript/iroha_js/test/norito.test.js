@@ -8,6 +8,7 @@ import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 } from "@noble/hashes/sha2";
 import {
   encodeQuantityNoritoValue,
+  _createNoritoInstructionApi,
   noritoDecodeBlockProofs,
   noritoEncodeInstruction,
   noritoDecodeInstruction,
@@ -19,6 +20,7 @@ import {
   verifyBlockMerkleProof,
   verifyBlockProofs,
 } from "../src/norito.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 import {
   makeNativeTest,
   nativeBinding,
@@ -34,11 +36,47 @@ const UNAVAILABLE_NATIVE_BINDING = Object.freeze({
     throw new Error("Native binding required; test override is unavailable");
   },
 });
+const PURE_NORITO_API = _createNoritoInstructionApi(
+  createNativeRuntime(UNAVAILABLE_NATIVE_BINDING),
+);
+const {
+  noritoDecodeInstruction: pureNoritoDecodeInstruction,
+  noritoEncodeInstruction: pureNoritoEncodeInstruction,
+  noritoEncodeInstructionBoxArchive: pureNoritoEncodeInstructionBoxArchive,
+  noritoEncodeMultisigProposeRequest: pureNoritoEncodeMultisigProposeRequest,
+} = PURE_NORITO_API;
 const ACCOUNT_ID = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const SEED_11_ED25519_PUBLIC_KEY_HEX =
   "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";
 const MULTISIG_SIGNER_ID =
   "sorauﾛ1P738ｷﾈｹｵﾙﾍﾉﾂUｿﾚｹﾑbﾄ1xYﾆｷvWzﾒkﾒ5ﾛﾘuE1ﾌsﾛXB6V1Y";
+
+baseTest("Norito instruction APIs isolate immutable native runtimes", async () => {
+  const bindingA = {
+    label: "A",
+    inspectSubscriptionTriggerAction() {
+      return JSON.stringify({ label: this.label });
+    },
+  };
+  const bindingB = {
+    label: "B",
+    inspectSubscriptionTriggerAction() {
+      return JSON.stringify({ label: this.label });
+    },
+  };
+  const apiA = _createNoritoInstructionApi(createNativeRuntime(bindingA));
+  const apiB = _createNoritoInstructionApi(createNativeRuntime(bindingB));
+  bindingA.label = "mutated";
+  bindingB.inspectSubscriptionTriggerAction = () => JSON.stringify({ label: "mutated" });
+
+  const [resultA, resultB] = await Promise.all([
+    Promise.resolve().then(() => apiA.inspectSubscriptionTriggerAction("action-a")),
+    Promise.resolve().then(() => apiB.inspectSubscriptionTriggerAction("action-b")),
+  ]);
+  assert.equal(Object.isFrozen(apiA), true);
+  assert.deepEqual(resultA, { label: "A" });
+  assert.deepEqual(resultB, { label: "B" });
+});
 
 baseTest("encodeQuantityNoritoValue enforces the nominal Quantity boundary", () => {
   assert.ok(
@@ -713,17 +751,7 @@ function loadAssetIdFromFixture(name) {
 }
 
 function withMissingNativeBinding(callback) {
-  const previous = globalThis.__IROHA_NORITO_BINDING__;
-  globalThis.__IROHA_NORITO_BINDING__ = UNAVAILABLE_NATIVE_BINDING;
-  try {
-    return callback();
-  } finally {
-    if (previous === undefined) {
-      delete globalThis.__IROHA_NORITO_BINDING__;
-    } else {
-      globalThis.__IROHA_NORITO_BINDING__ = previous;
-    }
-  }
+  return callback();
 }
 
 function readU64Length(buffer, offset, label) {
@@ -835,7 +863,7 @@ baseTest("contract activation lifecycle instructions retain mandatory CAS revisi
     },
   ]) {
     const decoded = withMissingNativeBinding(() =>
-      noritoDecodeInstruction(noritoEncodeInstruction(instruction)),
+      pureNoritoDecodeInstruction(pureNoritoEncodeInstruction(instruction)),
     );
     assert.deepEqual(decoded, instruction);
   }
@@ -886,26 +914,26 @@ baseTest("pure instruction decoding is deterministic across process history", ()
   try {
     for (const instruction of instructions) {
       const encoded = withMissingNativeBinding(() =>
-        noritoEncodeInstruction(instruction),
+        pureNoritoEncodeInstruction(instruction),
       );
       poison.set(encoded.toString("hex"), {
         Log: { level: "ERROR", message: "forged cache entry" },
       });
       assert.deepEqual(
-        withMissingNativeBinding(() => noritoDecodeInstruction(encoded)),
+        withMissingNativeBinding(() => pureNoritoDecodeInstruction(encoded)),
         instruction,
       );
       assert.deepEqual(
         JSON.parse(
           withMissingNativeBinding(() =>
-            noritoDecodeInstruction(encoded, { parseJson: false }),
+            pureNoritoDecodeInstruction(encoded, { parseJson: false }),
           ),
         ),
         instruction,
       );
 
       const archive = withMissingNativeBinding(() =>
-        noritoEncodeInstructionBoxArchive(instruction),
+        pureNoritoEncodeInstructionBoxArchive(instruction),
       );
       assert.deepEqual(
         withMissingNativeBinding(() =>
@@ -917,12 +945,17 @@ baseTest("pure instruction decoding is deterministic across process history", ()
       const moduleUrl = pathToFileURL(
         path.join(repoRoot, "javascript", "iroha_js", "src", "norito.js"),
       ).href;
+      const nativeRuntimeUrl = pathToFileURL(
+        path.join(repoRoot, "javascript", "iroha_js", "src", "nativeRuntime.js"),
+      ).href;
       const script = `
-        globalThis.__IROHA_NORITO_BINDING__ = Object.freeze({
+        const { createNativeRuntime } = await import(${JSON.stringify(nativeRuntimeUrl)});
+        const { _createNoritoInstructionApi } = await import(${JSON.stringify(moduleUrl)});
+        const nativeRuntime = createNativeRuntime(Object.freeze({
           noritoEncodeInstruction() { throw new Error("Native binding required"); },
           noritoDecodeInstruction() { throw new Error("Native binding required"); },
-        });
-        const { noritoDecodeInstruction } = await import(${JSON.stringify(moduleUrl)});
+        }));
+        const { noritoDecodeInstruction } = _createNoritoInstructionApi(nativeRuntime);
         const decoded = noritoDecodeInstruction(
           Buffer.from(${JSON.stringify(encoded.toString("base64"))}, "base64"),
           { parseJson: false },
@@ -981,7 +1014,7 @@ baseTest("contract activation lifecycle instructions reject omitted CAS revision
     },
   ]) {
     assert.throws(
-      () => withMissingNativeBinding(() => noritoEncodeInstruction(instruction)),
+      () => withMissingNativeBinding(() => pureNoritoEncodeInstruction(instruction)),
       /expected_revision/u,
     );
   }
@@ -1001,23 +1034,23 @@ test("norito encode/decode supports asset definition registration", () => {
 
 baseTest("pure JS Norito codec supports asset definition registration without native binding", () => {
   withMissingNativeBinding(() => {
-    const encoded = noritoEncodeInstruction(REGISTER_ASSET);
-    const decoded = noritoDecodeInstruction(encoded);
+    const encoded = pureNoritoEncodeInstruction(REGISTER_ASSET);
+    const decoded = pureNoritoDecodeInstruction(encoded);
     assert.deepEqual(decoded, REGISTER_ASSET);
   });
 });
 
 baseTest("pure JS Norito asset definition codec preserves optional registration fields", () => {
   withMissingNativeBinding(() => {
-    const encoded = noritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS);
-    const decoded = noritoDecodeInstruction(encoded);
+    const encoded = pureNoritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS);
+    const decoded = pureNoritoDecodeInstruction(encoded);
     assert.deepEqual(decoded, REGISTER_ASSET_WITH_OPTIONAL_FIELDS);
   });
 });
 
 test("native Norito decoder accepts pure JS asset definition frames", () => {
   const encoded = withMissingNativeBinding(() =>
-    noritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS),
+    pureNoritoEncodeInstruction(REGISTER_ASSET_WITH_OPTIONAL_FIELDS),
   );
   assert.deepEqual(noritoDecodeInstruction(encoded), REGISTER_ASSET_WITH_OPTIONAL_FIELDS);
 });
@@ -1035,43 +1068,43 @@ baseTest("pure JS Norito asset definition codec rejects adversarial fields", () 
     const missingOwnership = withAssetPatch({});
     delete missingOwnership.Register.AssetDefinition.owning_domain;
     assert.throws(
-      () => noritoEncodeInstruction(missingOwnership),
+      () => pureNoritoEncodeInstruction(missingOwnership),
       /owning_domain is required/u,
     );
     const missingBalancePolicy = withAssetPatch({});
     delete missingBalancePolicy.Register.AssetDefinition.balance_scope_policy;
     assert.throws(
-      () => noritoEncodeInstruction(missingBalancePolicy),
+      () => pureNoritoEncodeInstruction(missingBalancePolicy),
       /balance_scope_policy is required/u,
     );
     assert.throws(
-      () => noritoEncodeInstruction(withAssetPatch({ mintable: "Limited(0)" })),
+      () => pureNoritoEncodeInstruction(withAssetPatch({ mintable: "Limited(0)" })),
       /positive unsigned 32-bit integer/,
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        pureNoritoEncodeInstruction(
           withAssetPatch({ mintable: { kind: "Limited", tokens: 5 } }),
         ),
       /must be a non-empty string/u,
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        pureNoritoEncodeInstruction(
           withAssetPatch({ mintable: { kind: "Limited", value: "5" } }),
         ),
       /must be a non-empty string/u,
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        pureNoritoEncodeInstruction(
           withAssetPatch({ balance_scope_policy: "ObserverScoped" }),
         ),
       /Global or DataspaceRestricted/,
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        pureNoritoEncodeInstruction(
           withAssetPatch({
             confidential_policy: { mode: "Convertible" },
           }),
@@ -1079,12 +1112,12 @@ baseTest("pure JS Norito asset definition codec rejects adversarial fields", () 
       /cannot carry confidential policy/,
     );
     assert.throws(
-      () => noritoEncodeInstruction(withAssetPatch({ logo: "https://example.invalid/logo.png" })),
+      () => pureNoritoEncodeInstruction(withAssetPatch({ logo: "https://example.invalid/logo.png" })),
       /sorafs:\/\/ URI/,
     );
     assert.throws(
       () =>
-        noritoEncodeInstruction(
+        pureNoritoEncodeInstruction(
           withAssetPatch({ id: "62Fk4FPcMuLvW5QjDGNF2a4jAmxM" }),
         ),
       /checksum is invalid/,
@@ -1133,7 +1166,7 @@ baseTest("noritoEncodeInstruction uses the pure JS codec for supported instructi
   };
   let encoded;
   withMissingNativeBinding(() => {
-    encoded = Buffer.from(noritoEncodeInstruction(instruction));
+    encoded = Buffer.from(pureNoritoEncodeInstruction(instruction));
   });
   assert.ok(encoded.length > 32);
   assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
@@ -1152,7 +1185,7 @@ baseTest("contract manifest codec preserves the canonical seiyaku name", () => {
   };
   let encoded;
   withMissingNativeBinding(() => {
-    encoded = Buffer.from(noritoEncodeInstruction(instruction));
+    encoded = Buffer.from(pureNoritoEncodeInstruction(instruction));
   });
   assert.deepEqual(noritoDecodeInstruction(encoded), {
     RegisterSmartContractCode: {
@@ -1181,7 +1214,7 @@ baseTest("contract manifest codec matches Rust V1 trigger bytes", () => {
     RegisterSmartContractCode: { manifest: fixture.manifest },
   };
   const encoded = withMissingNativeBinding(() =>
-    Buffer.from(noritoEncodeInstruction(instruction)),
+    Buffer.from(pureNoritoEncodeInstruction(instruction)),
   );
   const rustManifest = Buffer.from(fixture.manifest_compact_hex, "hex");
   assert.notEqual(
@@ -1200,7 +1233,7 @@ baseTest("contract manifest codec matches Rust V1 trigger bytes", () => {
     },
   };
   const signedEncoded = withMissingNativeBinding(() =>
-    Buffer.from(noritoEncodeInstruction(signedInstruction)),
+    Buffer.from(pureNoritoEncodeInstruction(signedInstruction)),
   );
   assert.notEqual(
     signedEncoded.indexOf(Buffer.from(fixture.signed_manifest_compact_hex, "hex")),
@@ -1301,7 +1334,7 @@ baseTest("contract manifest codec roundtrips every V1 descriptor field", () => {
   };
   const encoded = withMissingNativeBinding(() =>
     Buffer.from(
-      noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }),
+      pureNoritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }),
     ),
   );
   const decoded = noritoDecodeInstruction(encoded);
@@ -1318,7 +1351,7 @@ baseTest("contract manifest codec rejects noncanonical and retired layouts", () 
   );
   const encodeManifest = (manifest) =>
     withMissingNativeBinding(() =>
-      noritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }),
+      pureNoritoEncodeInstruction({ RegisterSmartContractCode: { manifest } }),
     );
 
   assert.throws(
@@ -1485,7 +1518,7 @@ baseTest("contract manifest codec validates every flat query schema and ordinary
   });
   const roundtrip = (returnType, nodes) => {
     const value = instruction(returnType, nodes);
-    const encoded = withMissingNativeBinding(() => noritoEncodeInstruction(value));
+    const encoded = withMissingNativeBinding(() => pureNoritoEncodeInstruction(value));
     assert.deepEqual(noritoDecodeInstruction(encoded), value);
   };
 
@@ -1518,7 +1551,7 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
   const leaf = (kind) => ({ kind: "Leaf", value: { kind, value: null } });
   const encodeNodes = (nodes) =>
     withMissingNativeBinding(() =>
-      noritoEncodeInstruction({
+      pureNoritoEncodeInstruction({
         RegisterSmartContractCode: {
           manifest: {
             ...fixture.manifest,
@@ -1623,7 +1656,7 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
     forged[capacityOffsets[0]] = invalidCapacity;
     rewriteNestedInstructionFrameCrcs(forged);
     assert.throws(
-      () => withMissingNativeBinding(() => noritoDecodeInstruction(forged)),
+      () => withMissingNativeBinding(() => pureNoritoDecodeInstruction(forged)),
       /capacity.*1\.\.64/u,
     );
   }
@@ -1644,7 +1677,7 @@ baseTest("contract manifest codec rejects malformed and forged flat schema tapes
   forgedViewWire[nameOffset + forgedName.length - 1] = "w".charCodeAt(0);
   rewriteNestedInstructionFrameCrcs(forgedViewWire);
   assert.throws(
-    () => withMissingNativeBinding(() => noritoDecodeInstruction(forgedViewWire)),
+    () => withMissingNativeBinding(() => pureNoritoDecodeInstruction(forgedViewWire)),
     /forged reserved query-view/u,
   );
 });
@@ -1673,7 +1706,7 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
   };
   const nativeBody = Buffer.from(noritoEncodeMultisigProposeRequest(request));
   const body = withMissingNativeBinding(() =>
-    Buffer.from(noritoEncodeMultisigProposeRequest(request)),
+    Buffer.from(pureNoritoEncodeMultisigProposeRequest(request)),
   );
   assert.deepEqual(body, nativeBody);
 
@@ -2028,16 +2061,16 @@ baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", 
 
 baseTest("noritoDecodeInstruction decodes supported canonical bytes without native binding", () => {
   const bytes = loadInstructionBytes("mint_asset_quantity.json");
-  const decoded = withMissingNativeBinding(() => noritoDecodeInstruction(bytes));
+  const decoded = withMissingNativeBinding(() => pureNoritoDecodeInstruction(bytes));
   assert.ok(decoded?.Mint?.Asset);
 });
 
 baseTest("noritoEncodeInstruction passes pre-encoded payloads through without native binding", () => {
   const payload = Buffer.from([1, 2, 3, 4]);
   withMissingNativeBinding(() => {
-    assert.strictEqual(noritoEncodeInstruction(payload), payload);
-    assert.deepEqual(noritoEncodeInstruction(payload.toString("base64")), payload);
-    assert.deepEqual(noritoEncodeInstruction(`0x${payload.toString("hex")}`), payload);
+    assert.strictEqual(pureNoritoEncodeInstruction(payload), payload);
+    assert.deepEqual(pureNoritoEncodeInstruction(payload.toString("base64")), payload);
+    assert.deepEqual(pureNoritoEncodeInstruction(`0x${payload.toString("hex")}`), payload);
   });
 });
 
@@ -2135,8 +2168,29 @@ baseTest("noritoEncodeInstruction requires native binding for unsupported instru
   };
   withMissingNativeBinding(() => {
     assert.throws(
-      () => noritoEncodeInstruction(instruction),
+      () => pureNoritoEncodeInstruction(instruction),
       /Native binding required/,
     );
   });
+});
+
+baseTest("noritoEncodeInstruction propagates native schema rejection exactly", () => {
+  const nativeError = new SyntaxError("unknown instruction schema: Log is disabled");
+  let calls = 0;
+  const api = _createNoritoInstructionApi(
+    createNativeRuntime({
+      noritoEncodeInstruction() {
+        calls += 1;
+        throw nativeError;
+      },
+    }),
+  );
+  assert.throws(
+    () =>
+      api.noritoEncodeInstruction({
+        Log: { level: "INFO", message: "must not be re-encoded" },
+      }),
+    (error) => error === nativeError,
+  );
+  assert.equal(calls, 1);
 });

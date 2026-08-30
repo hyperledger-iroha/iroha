@@ -25,7 +25,7 @@ import {
   browserSumeragiStatusFixture,
 } from "./sumeragiBrowserFixtures.js";
 
-const BASE_URL = "https://localhost:8080/v1/explorer";
+const BASE_URL = "https://localhost:8080";
 const QUERY_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
 const FOREIGN_QUERY_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa7));
 const BROWSER_OPERATOR_CONTEXT = new browserSdk.OperatorSigningContext(
@@ -240,7 +240,7 @@ function sseResponse(chunks, { close = true, onCancel } = {}) {
   );
 }
 
-test("ToriiBrowserClient strips API suffixes and calls snapshot-bound explorer block routes", async () => {
+test("ToriiBrowserClient calls snapshot-bound explorer block routes from a Torii root", async () => {
   const cursor = "Y3Vyc29y";
   const nextCursor = "bmV4dA";
   const snapshotHash = "ab".repeat(32);
@@ -274,6 +274,93 @@ test("ToriiBrowserClient strips API suffixes and calls snapshot-bound explorer b
     next_cursor: nextCursor,
     has_more: true,
   });
+});
+
+test("ToriiBrowserClient keeps transport configuration private and immutable", async () => {
+  let captured;
+  const defaultHeaders = {
+    Authorization: "Bearer browser-secret",
+    "X-Trace": "trace-1",
+  };
+  const client = new ToriiBrowserClient("https://torii.example", {
+    defaultHeaders,
+    fetchImpl: async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse({ status: "ok" });
+    },
+    timeoutMs: 5_000,
+  });
+
+  defaultHeaders.Authorization = "Bearer mutated";
+  defaultHeaders["X-Trace"] = "trace-2";
+
+  assert.deepEqual(Object.keys(client), []);
+  assert.equal(JSON.stringify(client), "{}");
+  assert.equal(client.defaultHeaders, undefined);
+  assert.equal(client.fetchImpl, undefined);
+  assert.equal(client.timeoutMs, undefined);
+  assert.equal(client.baseUrl, "https://torii.example");
+  assert.throws(() => {
+    client.baseUrl = "http://attacker.example";
+  }, TypeError);
+
+  await client.getExplorerHealth();
+  assert.equal(captured.url, "https://torii.example/v1/explorer/health");
+  assert.equal(captured.init.headers.Authorization, "Bearer browser-secret");
+  assert.equal(captured.init.headers["X-Trace"], "trace-1");
+});
+
+test("ToriiBrowserClient accepts only an exact credential-free HTTP root URL", () => {
+  const fetchImpl = async () => jsonResponse({ status: "ok" });
+  for (const baseUrl of [
+    { toString: () => "https://coerced.example" },
+    " ftp://torii.example",
+    "ftp://torii.example",
+    "https://user:password@torii.example",
+    "https://torii.example?target=other",
+    "https://torii.example#fragment",
+    "https://torii.example/v1",
+    "https://torii.example/v1/explorer",
+  ]) {
+    assert.throws(
+      () => new ToriiBrowserClient(baseUrl, { fetchImpl }),
+      /baseUrl/u,
+    );
+  }
+  assert.equal(
+    new ToriiBrowserClient(new URL("https://torii.example/proxy/"), { fetchImpl }).baseUrl,
+    "https://torii.example/proxy",
+  );
+});
+
+test("ToriiBrowserClient validates copied headers, timeouts, and option names", () => {
+  const fetchImpl = async () => jsonResponse({ status: "ok" });
+  for (const defaultHeaders of [
+    new Headers({ Authorization: "Bearer secret" }),
+    { Authorization: 1 },
+    { Authorization: "Bearer secret\r\nX-Injected: yes" },
+  ]) {
+    assert.throws(
+      () => new ToriiBrowserClient("https://torii.example", {
+        defaultHeaders,
+        fetchImpl,
+      }),
+      /defaultHeaders/u,
+    );
+  }
+  for (const timeoutMs of [true, [25], -1, 1.5, "01", "not-a-timeout"]) {
+    assert.throws(
+      () => new ToriiBrowserClient("https://torii.example", { fetchImpl, timeoutMs }),
+      /timeoutMs/u,
+    );
+  }
+  assert.throws(
+    () => new ToriiBrowserClient("https://torii.example", {
+      config: { toriiClient: { timeoutMs: 5_000 } },
+      fetchImpl,
+    }),
+    /unsupported option config/u,
+  );
 });
 
 test("ToriiBrowserClient protects credential headers with an exact insecure opt-in", () => {
@@ -488,7 +575,7 @@ test("ToriiBrowserClient signs every scoped Explorer and contract read over its 
     }
     return jsonResponse({});
   };
-  const client = new ToriiBrowserClient("https://localhost:8080/proxy/v1", {
+  const client = new ToriiBrowserClient("https://localhost:8080/proxy", {
     networkId: QUERY_NETWORK_ID,
     canonicalRequestAuth: {
       accountId: FIXTURE_ALICE_ID,
@@ -1378,7 +1465,7 @@ test("ToriiBrowserClient queryVisibleTransactions posts a browser-safe envelope"
     capturedInit = init;
     return jsonResponse({ items: [], total: 0 });
   };
-  const client = new ToriiBrowserClient("https://torii.example/v1", {
+  const client = new ToriiBrowserClient("https://torii.example", {
     fetchImpl,
     defaultHeaders: { Authorization: "Bearer jwt" },
     networkId: QUERY_NETWORK_ID,
@@ -2218,6 +2305,51 @@ test("ToriiBrowserClient transaction finality policy cannot be overridden", asyn
     await assert.rejects(
       client.submitTransactionAndWait(Uint8Array.from([1, 2]), options),
       new RegExp(`unsupported option ${field}`, "u"),
+    );
+  }
+  assert.equal(fetchCalls, 0);
+});
+
+test("ToriiBrowserClient route success statuses cannot be overridden", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse({ accepted: true }, { status: 500 });
+    },
+  });
+
+  assert.throws(
+    () => client.getAccount(FIXTURE_ALICE_ID, { successStatuses: [500] }),
+    /unsupported option successStatuses/u,
+  );
+  await assert.rejects(
+    client.submitMultisigPropose({}, { successStatuses: [500] }),
+    /unsupported option successStatuses/u,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("ToriiBrowserClient polling controls reject coercive integers", async () => {
+  const hash = "5b".repeat(32);
+  let fetchCalls = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return new Response(null, { status: 404 });
+    },
+  });
+
+  for (const options of [
+    { intervalMs: true },
+    { intervalMs: [1] },
+    { timeoutMs: true },
+    { timeoutMs: 1.5 },
+    { maxAttempts: [1] },
+  ]) {
+    await assert.rejects(
+      client.waitForTransactionStatus(hash, options),
+      /safe integer/u,
     );
   }
   assert.equal(fetchCalls, 0);

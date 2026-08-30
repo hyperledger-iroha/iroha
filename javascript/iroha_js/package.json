@@ -11,6 +11,7 @@
       "types": "./index.d.ts"
     },
     "./address": {
+      "browser": "./dist/public/address.js",
       "import": "./dist/public/address.js",
       "types": "./address.d.ts"
     },
@@ -268,9 +269,7 @@
     "native/iroha_js_host.checksums.json",
     "dist",
     "recipes/iso_bridge_builder.mjs",
-    "recipes/nexus_app_transfer.mjs",
-    "scripts",
-    "src"
+    "recipes/nexus_app_transfer.mjs"
   ],
   "browser": {
     "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",

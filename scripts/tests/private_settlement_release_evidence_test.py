@@ -31,9 +31,14 @@ FIXTURE_FORMAL_INPUT_PAYLOADS = {
     )
     for name in MODULE._FORMAL_INPUT_FILES
 }
+FIXTURE_FORMAL_EVIDENCE_CODE_PAYLOADS = {
+    source_path: f"# exact release fixture for {source_path}\n".encode("utf-8")
+    for source_path in MODULE._FORMAL_EVIDENCE_CODE_SOURCE_PATHS
+}
 FIXTURE_SOURCE_FILES = {
     "Cargo.lock": FIXTURE_SOURCE_LOCKFILE_PAYLOAD,
     **FIXTURE_FORMAL_INPUT_PAYLOADS,
+    **FIXTURE_FORMAL_EVIDENCE_CODE_PAYLOADS,
 }
 
 
@@ -96,6 +101,22 @@ FIXTURE_SOURCE_PATH_LIST_PAYLOAD = (
 FIXTURE_FORMAL_PACKAGE_SHA256 = MODULE._formal_package_sha256_from_source_payloads(
     FIXTURE_FORMAL_INPUT_PAYLOADS
 )
+FIXTURE_FORMAL_EVIDENCE_CODE_SHA256 = (
+    MODULE._formal_evidence_code_sha256_from_source_payloads(
+        FIXTURE_FORMAL_EVIDENCE_CODE_PAYLOADS
+    )
+)
+FIXTURE_JAVA_VERSION_OUTPUT = 'openjdk version "21.0.8" 2025-07-15 LTS\n'
+FIXTURE_JAVA_VERSION_PAYLOAD = FIXTURE_JAVA_VERSION_OUTPUT.encode("utf-8")
+FIXTURE_JAVA_RUNTIME = {
+    "binary_sha256": "c" * 64,
+    "binary_bytes": 123456,
+    "version_output": FIXTURE_JAVA_VERSION_OUTPUT,
+    "version_output_sha256": hashlib.sha256(
+        FIXTURE_JAVA_VERSION_PAYLOAD
+    ).hexdigest(),
+    "version_output_bytes": len(FIXTURE_JAVA_VERSION_PAYLOAD),
+}
 
 
 def fixture_source_seal(
@@ -138,6 +159,12 @@ def fixture_formal_transcript() -> bytes:
         f"tool_version={MODULE._PINNED_FORMAL_TOOL_VERSION}\n"
         f"tool_sha256={MODULE._PINNED_FORMAL_TOOL_SHA256}\n"
         f"model_sha256={FIXTURE_FORMAL_PACKAGE_SHA256}\n"
+        f"evidence_code_sha256={FIXTURE_FORMAL_EVIDENCE_CODE_SHA256}\n"
+        f"java_binary_sha256={FIXTURE_JAVA_RUNTIME['binary_sha256']}\n"
+        f"java_binary_bytes={FIXTURE_JAVA_RUNTIME['binary_bytes']}\n"
+        "java_version_output_sha256="
+        f"{FIXTURE_JAVA_RUNTIME['version_output_sha256']}\n"
+        f"java_version_output_bytes={FIXTURE_JAVA_RUNTIME['version_output_bytes']}\n"
         "seed=20260829\n"
         "fingerprint_index=0\n"
         "workers=1\n"
@@ -582,6 +609,10 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                         "tool_version": MODULE._PINNED_FORMAL_TOOL_VERSION,
                         "tool_sha256": MODULE._PINNED_FORMAL_TOOL_SHA256,
                         "model_sha256": FIXTURE_FORMAL_PACKAGE_SHA256,
+                        "evidence_code_sha256": (
+                            FIXTURE_FORMAL_EVIDENCE_CODE_SHA256
+                        ),
+                        "java_runtime": dict(FIXTURE_JAVA_RUNTIME),
                         "configurations": [
                             {
                                 "name": name,
@@ -1248,15 +1279,71 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             )
             self.assertRegex(report["bundle_binding_sha256"], r"^[0-9a-f]{64}$")
 
+    def test_bound_json_reader_rejects_duplicate_keys_and_nonfinite_numbers(
+        self,
+    ) -> None:
+        for payload, diagnostic in (
+            (b'{"outer":{"key":1,"key":2}}\n', "duplicate JSON key 'key'"),
+            (b'{"value":NaN}\n', "non-finite JSON number 'NaN'"),
+        ):
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "report.json"
+                path.write_bytes(payload)
+                with self.assertRaisesRegex(MODULE.EvidenceError, diagnostic):
+                    MODULE._read_bound_json_artifact(
+                        path,
+                        maximum_bytes=1024,
+                        expected_sha256=hashlib.sha256(payload).hexdigest(),
+                        expected_bytes=len(payload),
+                        label="fixture",
+                    )
+
+    def test_release_manifest_rejects_duplicate_keys_and_nonfinite_numbers(
+        self,
+    ) -> None:
+        for mutation, diagnostic in (
+            (
+                lambda payload: payload.replace(
+                    b'{"version":',
+                    b'{"doi":"10.1234/duplicate","version":',
+                    1,
+                ),
+                "duplicate JSON key 'doi'",
+            ),
+            (
+                lambda payload: payload.replace(
+                    b'"worktree_clean": true',
+                    b'"worktree_clean": NaN',
+                    1,
+                ),
+                "non-finite JSON number 'NaN'",
+            ),
+        ):
+            with (
+                self.subTest(diagnostic=diagnostic),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                manifest_path = self.make_bundle(Path(temporary))
+                payload = mutation(manifest_path.read_bytes())
+                manifest_path.write_bytes(payload)
+                with self.assertRaisesRegex(MODULE.EvidenceError, diagnostic):
+                    MODULE.verify_bundle(manifest_path)
+
     def test_formal_source_digest_matches_producer_framing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             formal_dir = Path(temporary)
             for source_path, payload in FIXTURE_FORMAL_INPUT_PAYLOADS.items():
                 (formal_dir / Path(source_path).name).write_bytes(payload)
+            for source_path, payload in FIXTURE_FORMAL_EVIDENCE_CODE_PAYLOADS.items():
+                (formal_dir / Path(source_path).name).write_bytes(payload)
             producer = MODULE._load_formal_tlc_report_validator()
             self.assertEqual(
                 producer.formal_package_sha256(formal_dir),
                 FIXTURE_FORMAL_PACKAGE_SHA256,
+            )
+            self.assertEqual(
+                producer.evidence_code_sha256(formal_dir),
+                FIXTURE_FORMAL_EVIDENCE_CODE_SHA256,
             )
 
     def test_configuration_manifest_requires_exact_four_validator_da_matrix(
@@ -1757,6 +1844,11 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 "0" * 64,
                 "model_sha256 differs from the validated source package",
             ),
+            (
+                "evidence_code_sha256",
+                "0" * 64,
+                "evidence_code_sha256 differs from the validated producer code",
+            ),
         )
         for field, value, diagnostic in cases:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
@@ -1794,10 +1886,34 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             ):
                 MODULE.verify_bundle(manifest_path)
 
+    def test_formal_report_binds_java_runtime_provenance_into_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.make_bundle(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "formal_model_report"
+            )
+            report = json.loads((root / artifact["path"]).read_text(encoding="utf-8"))
+            replacement = 'openjdk version "21.0.9" 2025-10-21 LTS\n'
+            replacement_payload = replacement.encode("utf-8")
+            report["java_runtime"]["version_output"] = replacement
+            report["java_runtime"]["version_output_sha256"] = hashlib.sha256(
+                replacement_payload
+            ).hexdigest()
+            report["java_runtime"]["version_output_bytes"] = len(replacement_payload)
+            self.rewrite_formal_report(root, manifest, report)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(MODULE.EvidenceError, "metadata differs"):
+                MODULE.verify_bundle(manifest_path)
+
     def test_formal_report_rejects_missing_and_reordered_configurations(self) -> None:
         for mutation, diagnostic in (
             ("missing", "configuration matrix is incomplete"),
             ("reordered", "lacks an exact positive/negative matrix"),
+            ("wrong_model", "lacks an exact positive/negative matrix"),
         ):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -1811,6 +1927,10 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                 report = json.loads((root / artifact["path"]).read_text(encoding="utf-8"))
                 if mutation == "missing":
                     report["configurations"].pop()
+                elif mutation == "wrong_model":
+                    report["configurations"][0]["model"] = (
+                        "AtomicPrivateSettlementV1CommitteeFaults.tla"
+                    )
                 else:
                     report["configurations"][0], report["configurations"][1] = (
                         report["configurations"][1],
@@ -1822,6 +1942,10 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     MODULE.verify_bundle(manifest_path)
 
     def test_formal_report_rejects_generic_or_forged_transcript(self) -> None:
+        baseline = fixture_formal_transcript()
+        first_sany = (
+            b"===== SANY AtomicPrivateSettlementV1.tla stdout (status 0) =====\n"
+        )
         cases = (
             ("generic", b"formal_model_report completed\n", "lacks the first SANY"),
             (
@@ -1832,6 +1956,41 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
                     1,
                 ),
                 "result for AtomicPrivateSettlementV1_3.cfg is invalid",
+            ),
+            (
+                "duplicate_header",
+                baseline.replace(first_sany, first_sany + first_sany, 1),
+                "unexpected section header",
+            ),
+            (
+                "missing_metadata_separator",
+                baseline.replace(b"workers=1\n===== SANY", b"workers=1===== SANY", 1),
+                "metadata differs",
+            ),
+            (
+                "leading_zero_control",
+                baseline.replace(b"seed=20260829\n", b"seed=020260829\n", 1),
+                "metadata differs",
+            ),
+            (
+                "sany_error",
+                baseline.replace(
+                    b"Semantic processing of module AtomicPrivateSettlementV1\n",
+                    b"Semantic processing of module AtomicPrivateSettlementV1\n"
+                    b"Semantic error: injected diagnostic\n",
+                    1,
+                ),
+                "no clean SANY result",
+            ),
+            (
+                "unrelated_negative_error",
+                baseline.replace(
+                    b"Error: Invariant Safety is violated.\n",
+                    b"Error: Invariant Safety is violated.\n"
+                    b"Error: unrelated TLC failure\n",
+                    1,
+                ),
+                "negative control emitted unexpected diagnostics",
             ),
         )
         for mutation, transcript_payload, diagnostic in cases:

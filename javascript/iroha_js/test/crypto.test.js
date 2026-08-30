@@ -4,13 +4,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  SUPPORTED_CRYPTO_ALGORITHMS,
+  CRYPTO_ALGORITHMS,
+  _createCryptoApi,
   generateKeyPair,
-  loadKeyPair,
   normalizeCryptoAlgorithm,
-  privateKeyMultihash,
   publicKeyFromPrivate,
-  publicKeyMultihash,
   normalizeRecoveryPhrase,
   validateRecoveryPhrase,
   generateRecoveryPhrase,
@@ -18,19 +16,12 @@ import {
   recoveryPhraseToEntropy,
   deriveEd25519SeedFromRecoveryPhrase,
   ed25519SeedToRecoveryPhrase,
-  sign,
   signEd25519,
-  supportedCryptoAlgorithms,
-  verify,
   verifyEd25519,
   deriveConfidentialKeyset,
   deriveConfidentialKeysetFromHex,
-  deriveConfidentialNullifierV2,
   ConfidentialMemoKeypairV1,
   CONFIDENTIAL_MEMO_SUITES_V1,
-  generateConfidentialMemoKeypairV1,
-  sealConfidentialMemoV1,
-  openConfidentialMemoV1,
   generateSm2KeyPair,
   deriveSm2KeyPairFromSeed,
   loadSm2KeyPair,
@@ -44,6 +35,7 @@ import {
   SM2_DEFAULT_DISTINGUISHED_ID,
   sm2FixtureFromSeed,
 } from "../src/crypto.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
 import { verifyEd25519 as verifyBrowserEd25519 } from "../src/crypto.browser.js";
 import { ed25519 } from "@noble/curves/ed25519";
@@ -63,38 +55,21 @@ const SM2_FIXTURE = hasSm2Binding()
 const MESSAGE = Buffer.from("hyperledger iroha");
 const nativeTest = makeNativeTest(test, { require: sm2RequiredMethods });
 
-function withNativeBinding(binding, fn) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = binding;
-  try {
-    return fn();
-  } finally {
-    if (previous === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = previous;
-    }
-  }
+function cryptoApiWithBinding(binding) {
+  return _createCryptoApi(createNativeRuntime(binding));
 }
 
 function withNativeDirectory(directory, fn) {
   const previousDirectory = process.env.IROHA_JS_NATIVE_DIR;
-  const previousBinding = globalThis.__IROHA_NATIVE_BINDING__;
-  delete globalThis.__IROHA_NATIVE_BINDING__;
   process.env.IROHA_JS_NATIVE_DIR = directory;
   __resetNativeStateForTests();
   try {
-    return fn();
+    return fn(_createCryptoApi(createNativeRuntime()));
   } finally {
     if (previousDirectory === undefined) {
       delete process.env.IROHA_JS_NATIVE_DIR;
     } else {
       process.env.IROHA_JS_NATIVE_DIR = previousDirectory;
-    }
-    if (previousBinding === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = previousBinding;
     }
     __resetNativeStateForTests();
   }
@@ -130,44 +105,49 @@ test("generateKeyPair rejects non-32-byte seed material", () => {
     () => generateKeyPair({ seed: Buffer.from("short seed") }),
     /seed must be exactly 32 bytes/,
   );
+  for (const seed of [null, "", 0, false]) {
+    assert.throws(
+      () => generateKeyPair({ seed }),
+      /seed must be a Buffer, string, or ArrayBuffer view|seed must be exactly 32 bytes/,
+    );
+  }
 });
 
 test("Ed25519 key generation and derivation remain available without the native host", () => {
   const seed = Buffer.from(Array.from({ length: 32 }, (_, index) => index + 1));
-  withNativeBinding(Object.create(null), () => {
-    const generated = generateKeyPair({ seed });
-    const expectedPublicKey = Buffer.from(ed25519.getPublicKey(seed));
+  const crypto = cryptoApiWithBinding(Object.create(null));
+  const generated = crypto.generateKeyPair({ seed });
+  const expectedPublicKey = Buffer.from(ed25519.getPublicKey(seed));
 
-    assert.deepEqual(supportedCryptoAlgorithms(), ["ed25519"]);
-    assert.equal(generated.algorithm, "ed25519");
-    assert.deepEqual(generated.privateKey, seed);
-    assert.deepEqual(generated.publicKey, expectedPublicKey);
-    assert.deepEqual(publicKeyFromPrivate(seed), expectedPublicKey);
-    assert.deepEqual(
-      publicKeyFromPrivate(Buffer.concat([seed, expectedPublicKey])),
-      expectedPublicKey,
-    );
+  assert.deepEqual(crypto.supportedCryptoAlgorithms(), ["ed25519"]);
+  assert.equal(generated.algorithm, "ed25519");
+  assert.deepEqual(generated.privateKey, seed);
+  assert.deepEqual(generated.publicKey, expectedPublicKey);
+  assert.deepEqual(crypto.publicKeyFromPrivate(seed), expectedPublicKey);
+  assert.deepEqual(
+    crypto.publicKeyFromPrivate(Buffer.concat([seed, expectedPublicKey])),
+    expectedPublicKey,
+  );
 
-    const signature = signEd25519(MESSAGE, generated.privateKey);
-    assert.equal(verifyEd25519(MESSAGE, signature, generated.publicKey), true);
-    assert.throws(
-      () =>
-        publicKeyFromPrivate(
-          Buffer.concat([seed, Buffer.alloc(32, 0xff)]),
-        ),
-      /mismatched public key/u,
-    );
-  });
+  const signature = signEd25519(MESSAGE, generated.privateKey);
+  assert.equal(verifyEd25519(MESSAGE, signature, generated.publicKey), true);
+  assert.throws(
+    () =>
+      crypto.publicKeyFromPrivate(
+        Buffer.concat([seed, Buffer.alloc(32, 0xff)]),
+      ),
+    /mismatched public key/u,
+  );
 });
 
 test("missing native files use the portable Ed25519 path", () => {
   const directory = mkdtempSync(join(tmpdir(), "iroha-js-missing-native-"));
   try {
-    withNativeDirectory(directory, () => {
+    withNativeDirectory(directory, (crypto) => {
       const seed = Buffer.alloc(32, 0x5a);
-      const generated = generateKeyPair({ seed });
+      const generated = crypto.generateKeyPair({ seed });
       assert.deepEqual(generated.publicKey, Buffer.from(ed25519.getPublicKey(seed)));
-      assert.deepEqual(publicKeyFromPrivate(seed), generated.publicKey);
+      assert.deepEqual(crypto.publicKeyFromPrivate(seed), generated.publicKey);
     });
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -193,13 +173,21 @@ test("a present native file with a bad checksum never falls back", () => {
         },
       })}\n`,
     );
-    withNativeDirectory(directory, () => {
+    withNativeDirectory(directory, (crypto) => {
       assert.throws(
-        () => generateKeyPair({ seed: Buffer.alloc(32, 0x5b) }),
+        () => crypto.generateKeyPair({ seed: Buffer.alloc(32, 0x5b) }),
         /checksum mismatch/u,
       );
       assert.throws(
-        () => publicKeyFromPrivate(Buffer.alloc(32, 0x5b)),
+        () => crypto.publicKeyFromPrivate(Buffer.alloc(32, 0x5b)),
+        /checksum mismatch/u,
+      );
+      assert.throws(
+        () => crypto.supportedCryptoAlgorithms(),
+        /checksum mismatch/u,
+      );
+      assert.throws(
+        () => crypto.isPrivacyNativeAvailable(),
         /checksum mismatch/u,
       );
     });
@@ -355,8 +343,9 @@ test("recovery phrase helpers reject malformed phrases and entropy", () => {
   assert.throws(() => ed25519SeedToRecoveryPhrase(Buffer.alloc(31)), /32-byte seed or 64-byte seed\+public/);
 });
 
-test("crypto algorithm labels cover Rust signing algorithms", () => {
-  assert.deepEqual(SUPPORTED_CRYPTO_ALGORITHMS, [
+test("crypto algorithm labels cover every known Rust signing algorithm", () => {
+  const knownAlgorithms = Object.values(CRYPTO_ALGORITHMS);
+  assert.deepEqual(new Set(knownAlgorithms), new Set([
     "ed25519",
     "secp256k1",
     "bls_normal",
@@ -368,8 +357,8 @@ test("crypto algorithm labels cover Rust signing algorithms", () => {
     "gost3410-2012-512-paramset-a",
     "gost3410-2012-512-paramset-b",
     "sm2",
-  ]);
-  for (const algorithm of SUPPORTED_CRYPTO_ALGORITHMS) {
+  ]));
+  for (const algorithm of knownAlgorithms) {
     assert.equal(normalizeCryptoAlgorithm(algorithm), algorithm);
   }
 });
@@ -380,6 +369,7 @@ test("crypto algorithm labels reject every noncanonical alias and Unicode confus
     ["dist", normalizeDistCryptoAlgorithm],
   ]) {
     for (const algorithm of [
+      null,
       "",
       "unknown",
       "ed",
@@ -476,24 +466,72 @@ test("generic crypto helpers delegate non-Ed25519 algorithms to native binding",
     },
   };
 
-  withNativeBinding(binding, () => {
-    assert.deepEqual(supportedCryptoAlgorithms(), [
-      "ed25519",
-      "gost3410-2012-256-paramset-a",
-    ]);
-    const algorithm = "gost3410-2012-256-paramset-a";
-    const keyPair = generateKeyPair({ algorithm, seed: Buffer.alloc(32, 0x73) });
-    assert.equal(keyPair.algorithm, "gost3410-2012-256-paramset-a");
-    assert.deepEqual(keyPair.privateKey, privateKey);
-    assert.deepEqual(keyPair.publicKey, publicKey);
-    assert.equal(keyPair.distid, null);
-    assert.deepEqual(loadKeyPair(privateKey, { algorithm }).publicKey, publicKey);
-    assert.deepEqual(publicKeyFromPrivate(privateKey, { algorithm }), publicKey);
-    assert.deepEqual(sign(MESSAGE, privateKey, { algorithm }), signature);
-    assert.equal(verify(MESSAGE, signature, publicKey, { algorithm }), true);
-    assert.equal(publicKeyMultihash(publicKey, { algorithm }), "gost-pub-mh");
-    assert.equal(privateKeyMultihash(privateKey, { algorithm }), "gost-priv-mh");
+  const crypto = cryptoApiWithBinding(binding);
+  assert.deepEqual(crypto.supportedCryptoAlgorithms(), [
+    "ed25519",
+    "gost3410-2012-256-paramset-a",
+  ]);
+  const algorithm = "gost3410-2012-256-paramset-a";
+  const keyPair = crypto.generateKeyPair({ algorithm, seed: Buffer.alloc(32, 0x73) });
+  assert.equal(keyPair.algorithm, "gost3410-2012-256-paramset-a");
+  assert.deepEqual(keyPair.privateKey, privateKey);
+  assert.deepEqual(keyPair.publicKey, publicKey);
+  assert.equal(keyPair.distid, null);
+  assert.deepEqual(crypto.loadKeyPair(privateKey, { algorithm }).publicKey, publicKey);
+  assert.deepEqual(crypto.publicKeyFromPrivate(privateKey, { algorithm }), publicKey);
+  assert.deepEqual(crypto.sign(MESSAGE, privateKey, { algorithm }), signature);
+  assert.equal(crypto.verify(MESSAGE, signature, publicKey, { algorithm }), true);
+  assert.equal(crypto.publicKeyMultihash(publicKey, { algorithm }), "gost-pub-mh");
+  assert.equal(crypto.privateKeyMultihash(privateKey, { algorithm }), "gost-priv-mh");
+});
+
+test("runtime-bound crypto APIs isolate parallel clients and snapshot nested dependencies", async () => {
+  const suite = CONFIDENTIAL_MEMO_SUITES_V1.ML_KEM_768_XCHACHA20_POLY1305;
+  const makeBinding = (marker) => ({
+    marker,
+    ed25519PublicKeyFromPrivate() {
+      return Buffer.alloc(32, this.marker);
+    },
+    generateConfidentialMemoKeypairV1(receivedSuite) {
+      return {
+        suite: receivedSuite,
+        publicKey: Buffer.alloc(1184, this.marker),
+        secretKey: Buffer.alloc(2400, this.marker),
+      };
+    },
+    openConfidentialMemoV1(receivedSuite, secretKey, envelope) {
+      assert.equal(receivedSuite, suite);
+      assert.equal(secretKey[0], this.marker);
+      assert.equal(envelope[0], 0x7a);
+      return Buffer.from([this.marker]);
+    },
   });
+  const bindingA = makeBinding(0x11);
+  const apiA = cryptoApiWithBinding(bindingA);
+  const apiB = cryptoApiWithBinding(makeBinding(0x22));
+
+  bindingA.marker = 0xee;
+  bindingA.ed25519PublicKeyFromPrivate = () => Buffer.alloc(32, 0xee);
+  bindingA.openConfidentialMemoV1 = () => Buffer.from([0xee]);
+
+  assert.equal(Object.isFrozen(apiA), true);
+  assert.equal(Object.isFrozen(apiB), true);
+  const seed = Buffer.alloc(32, 0x5c);
+  const [loadedA, loadedB] = await Promise.all([
+    Promise.resolve().then(() => apiA.loadKeyPair(seed)),
+    Promise.resolve().then(() => apiB.loadKeyPair(seed)),
+  ]);
+  assert.deepEqual(loadedA.publicKey, Buffer.alloc(32, 0x11));
+  assert.deepEqual(loadedB.publicKey, Buffer.alloc(32, 0x22));
+
+  const keypairA = apiA.generateConfidentialMemoKeypairV1({ suite });
+  const keypairB = apiB.generateConfidentialMemoKeypairV1({ suite });
+  const [openedA, openedB] = await Promise.all([
+    Promise.resolve().then(() => keypairA.open(Buffer.from([0x7a]))),
+    Promise.resolve().then(() => keypairB.open(Buffer.from([0x7a]))),
+  ]);
+  assert.deepEqual(openedA, Buffer.from([0x11]));
+  assert.deepEqual(openedB, Buffer.from([0x22]));
 });
 
 nativeTest("generateSm2KeyPair produces valid keys and signatures", () => {
@@ -607,11 +645,10 @@ test("deriveConfidentialKeyset delegates to native binding when available", () =
     fvk: Buffer.alloc(32, 0x05),
   };
 
-  withNativeBinding({ deriveConfidentialKeyset: () => expected }, () => {
-    const keyset = deriveConfidentialKeyset(seed);
-    assert.deepEqual(keyset.skSpend, expected.sk_spend);
-    assert.equal(keyset.nkHex, expected.nk.toString("hex"));
-  });
+  const crypto = cryptoApiWithBinding({ deriveConfidentialKeyset: () => expected });
+  const keyset = crypto.deriveConfidentialKeyset(seed);
+  assert.deepEqual(keyset.skSpend, expected.sk_spend);
+  assert.equal(keyset.nkHex, expected.nk.toString("hex"));
 });
 
 test("confidential memo SDK keeps ML-KEM secrets behind a typed destroyable keypair", () => {
@@ -641,27 +678,26 @@ test("confidential memo SDK keeps ML-KEM secrets behind a typed destroyable keyp
     },
   };
 
-  withNativeBinding(binding, () => {
-    const keypair = generateConfidentialMemoKeypairV1({ suite });
-    assert.ok(keypair instanceof ConfidentialMemoKeypairV1);
-    assert.equal("secretKey" in keypair, false);
-    assert.equal(keypair.publicKey.length, 1184);
-    const envelope = sealConfidentialMemoV1({
-      suite,
-      recipients: [keypair],
-      plaintext: Buffer.from("memo"),
-    });
-    assert.equal(envelope.toString("hex"), "495248434d31a55a");
-    assert.equal(
-      openConfidentialMemoV1({ keypair, envelope }).toString(),
-      "opened memo",
-    );
-    assert.equal(keypair.open(envelope).toString(), "opened memo");
-    keypair.destroy();
-    assert.equal(keypair.destroyed, true);
-    assert.throws(() => keypair.publicKey, /has been destroyed/u);
-    assert.throws(() => keypair.open(envelope), /has been destroyed/u);
+  const crypto = cryptoApiWithBinding(binding);
+  const keypair = crypto.generateConfidentialMemoKeypairV1({ suite });
+  assert.ok(keypair instanceof ConfidentialMemoKeypairV1);
+  assert.equal("secretKey" in keypair, false);
+  assert.equal(keypair.publicKey.length, 1184);
+  const envelope = crypto.sealConfidentialMemoV1({
+    suite,
+    recipients: [keypair],
+    plaintext: Buffer.from("memo"),
   });
+  assert.equal(envelope.toString("hex"), "495248434d31a55a");
+  assert.equal(
+    crypto.openConfidentialMemoV1({ keypair, envelope }).toString(),
+    "opened memo",
+  );
+  assert.equal(keypair.open(envelope).toString(), "opened memo");
+  keypair.destroy();
+  assert.equal(keypair.destroyed, true);
+  assert.throws(() => keypair.publicKey, /has been destroyed/u);
+  assert.throws(() => keypair.open(envelope), /has been destroyed/u);
 
   assert.deepEqual(calls[0], ["generate", suite]);
   assert.equal(calls[1][0], "seal");
@@ -688,32 +724,31 @@ test("confidential memo SDK rejects aliases, mixed suites, and raw secret keys",
       throw new Error("must not dispatch invalid input");
     },
   };
-  withNativeBinding(binding, () => {
-    assert.throws(
-      () => generateConfidentialMemoKeypairV1({ suite, version: 1 }),
-      /unknown field version/u,
-    );
-    const keypair = generateConfidentialMemoKeypairV1({ suite });
-    assert.throws(
-      () => sealConfidentialMemoV1({
-        suite,
-        recipients: [{
-          suite: CONFIDENTIAL_MEMO_SUITES_V1.ML_KEM_1024_XCHACHA20_POLY1305,
-          publicKey: Buffer.alloc(1568, 3),
-        }],
-        plaintext: Buffer.from("memo"),
-      }),
-      /does not match the memo suite/u,
-    );
-    assert.throws(
-      () => openConfidentialMemoV1({
-        keypair: { suite, secretKey: Buffer.alloc(2400, 2) },
-        envelope: Buffer.alloc(1),
-      }),
-      /live ConfidentialMemoKeypairV1/u,
-    );
-    keypair.destroy();
-  });
+  const crypto = cryptoApiWithBinding(binding);
+  assert.throws(
+    () => crypto.generateConfidentialMemoKeypairV1({ suite, version: 1 }),
+    /unknown field version/u,
+  );
+  const keypair = crypto.generateConfidentialMemoKeypairV1({ suite });
+  assert.throws(
+    () => crypto.sealConfidentialMemoV1({
+      suite,
+      recipients: [{
+        suite: CONFIDENTIAL_MEMO_SUITES_V1.ML_KEM_1024_XCHACHA20_POLY1305,
+        publicKey: Buffer.alloc(1568, 3),
+      }],
+      plaintext: Buffer.from("memo"),
+    }),
+    /does not match the memo suite/u,
+  );
+  assert.throws(
+    () => crypto.openConfidentialMemoV1({
+      keypair: { suite, secretKey: Buffer.alloc(2400, 2) },
+      envelope: Buffer.alloc(1),
+    }),
+    /live ConfidentialMemoKeypairV1/u,
+  );
+  keypair.destroy();
 });
 
 test("deriveConfidentialNullifierV2 binds the exact NetworkId bytes", () => {
@@ -732,14 +767,13 @@ test("deriveConfidentialNullifierV2 binds the exact NetworkId bytes", () => {
     rhoHex: "31".repeat(32),
   };
 
-  withNativeBinding(binding, () => {
-    deriveConfidentialNullifierV2({ ...input, networkId: firstNetworkId });
-    deriveConfidentialNullifierV2({ ...input, networkId: secondNetworkId });
-    assert.throws(
-      () => deriveConfidentialNullifierV2({ ...input, networkId: "sora" }),
-      /networkId must be a NetworkId/u,
-    );
-  });
+  const crypto = cryptoApiWithBinding(binding);
+  crypto.deriveConfidentialNullifierV2({ ...input, networkId: firstNetworkId });
+  crypto.deriveConfidentialNullifierV2({ ...input, networkId: secondNetworkId });
+  assert.throws(
+    () => crypto.deriveConfidentialNullifierV2({ ...input, networkId: "sora" }),
+    /networkId must be a NetworkId/u,
+  );
 
   assert.deepEqual(calls[0][0], Buffer.from(firstNetworkId.toBytes()));
   assert.deepEqual(calls[1][0], Buffer.from(secondNetworkId.toBytes()));
@@ -748,15 +782,15 @@ test("deriveConfidentialNullifierV2 binds the exact NetworkId bytes", () => {
 
 test("buildKaigiRosterJoinProof fails closed before native dispatch", () => {
   let called = false;
-  withNativeBinding({ buildKaigiRosterJoinProof: () => { called = true; } }, () => {
-    assert.throws(
-      () => buildKaigiRosterJoinProof({
-        seed: Buffer.from("seed"),
-        rosterRootHex: "44".repeat(32),
-      }),
-      /binds the signed participant authority/u,
-    );
-  });
+  const binding = { buildKaigiRosterJoinProof: () => { called = true; } };
+  const crypto = cryptoApiWithBinding(binding);
+  assert.throws(
+    () => crypto.buildKaigiRosterJoinProof({
+      seed: Buffer.from("seed"),
+      rosterRootHex: "44".repeat(32),
+    }),
+    /binds the signed participant authority/u,
+  );
   assert.equal(called, false);
 });
 

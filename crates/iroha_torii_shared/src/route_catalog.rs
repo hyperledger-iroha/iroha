@@ -2574,6 +2574,9 @@ pub mod sumeragi {
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_feature_gate(FeatureGate::Feature("telemetry"))
         .with_projections(RouteProjections::OPENAPI)
+        .with_path_policy(PathPolicy::ProtocolException {
+            reason: "SSE transport endpoint; stream contract is not an ordinary resource",
+        })
         .with_implicit_head(true)
     }
     /// Count persisted consensus evidence records as an authenticated operator.

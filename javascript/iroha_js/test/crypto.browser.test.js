@@ -14,6 +14,9 @@ import * as distBrowserFacade from "../dist/browser.js";
 import * as srcPrivacyCapabilities from "../src/privacyCapabilities.js";
 import * as distPrivacyCapabilities from "../dist/privacyCapabilities.js";
 
+const RETIRED_STATIC_CRYPTO_CAPABILITY_LIST =
+  ["SUPPORTED", "CRYPTO", "ALGORITHMS"].join("_");
+
 test("browser crypto bundle exposes Kaigi roster proof helper and omits retired ZK-ACE helpers", () => {
   assert.throws(
     () => buildKaigiRosterJoinProof({ seed: Buffer.from("seed") }),
@@ -41,7 +44,10 @@ test("browser crypto advertises only algorithms it can execute locally", () => {
     ["src", srcBrowserCrypto],
     ["dist", distBrowserCrypto],
   ]) {
+    assert.equal(RETIRED_STATIC_CRYPTO_CAPABILITY_LIST in crypto, false, label);
+    assert.equal("_createCryptoApi" in crypto, false, label);
     for (const algorithm of [
+      null,
       "",
       "ed",
       "eddsa",
@@ -93,6 +99,14 @@ test("browser crypto advertises only algorithms it can execute locally", () => {
     () => generateKeyPair({ seed: Buffer.alloc(16, 7) }),
     /seed must be exactly 32 bytes/,
   );
+  for (const crypto of [srcBrowserCrypto, distBrowserCrypto]) {
+    for (const seed of [null, "", 0, false]) {
+      assert.throws(
+        () => crypto.generateKeyPair({ seed }),
+        /seed must be a Buffer, string, or ArrayBuffer view|seed must be exactly 32 bytes/,
+      );
+    }
+  }
   assert.throws(
     () => generateKeyPair({ algorithm: "ml-dsa", seed: Buffer.alloc(32, 7) }),
     /generateKeyPair\(ml-dsa\) is unavailable in browser-only crypto builds/,

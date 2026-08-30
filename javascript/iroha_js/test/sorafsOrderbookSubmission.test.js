@@ -142,18 +142,28 @@ test("orderbook submit snapshots bytes and sends one exact authenticated Norito 
 
 test("orderbook submit binds snapshotted native callables to their native receiver", async () => {
   const native = nativeBinding();
+  native.state = "first";
   const inspect = native.inspectSorafsOrderbookSubmissionForDiscriminantV1;
   const verify = native.verifySorafsOrderbookSubmissionReceiptV1;
   native.inspectSorafsOrderbookSubmissionForDiscriminantV1 = function (...args) {
-    assert.equal(this, native);
+    assert.notEqual(this, native);
+    assert.equal(Object.isFrozen(this), true);
+    assert.equal(Object.getPrototypeOf(this), null);
+    assert.equal(this.state, "first");
     return Reflect.apply(inspect, this, args);
   };
   native.verifySorafsOrderbookSubmissionReceiptV1 = function (...args) {
-    assert.equal(this, native);
+    assert.notEqual(this, native);
+    assert.equal(Object.isFrozen(this), true);
+    assert.equal(this.state, "first");
     return Reflect.apply(verify, this, args);
   };
-  const receipt = await client(async () => acceptedResponse(), native)
-    .submitSorafsOrderbookOrder(Buffer.of(1), { expectedReceiptSigner: SIGNER });
+  const sdk = client(async () => acceptedResponse(), native);
+  native.state = "mutated";
+  const receipt = await sdk.submitSorafsOrderbookOrder(
+    Buffer.of(1),
+    { expectedReceiptSigner: SIGNER },
+  );
   assert.equal(receipt.payload.signer, SIGNER);
 });
 
@@ -257,6 +267,47 @@ test("orderbook deadline races a custom fetch that ignores AbortSignal", async (
     (error) => error instanceof SorafsOrderbookSubmissionAmbiguousError,
   );
   assert.equal(fetches, 1);
+});
+
+test("orderbook submission preserves caller abort reasons before dispatch", async () => {
+  let fetches = 0;
+  const reason = new Error("caller cancelled preflight");
+  const controller = new AbortController();
+  controller.abort(reason);
+
+  await assert.rejects(
+    client(async () => { fetches += 1; }, nativeBinding())
+      .submitSorafsOrderbookOrder(Buffer.of(1), {
+        expectedReceiptSigner: SIGNER,
+        signal: controller.signal,
+      }),
+    (error) => error === reason,
+  );
+  assert.equal(fetches, 0);
+});
+
+test("orderbook submission preserves caller abort reasons after dispatch", async () => {
+  let markDispatched;
+  const dispatched = new Promise((resolve) => { markDispatched = resolve; });
+  const controller = new AbortController();
+  const reason = new Error("caller cancelled dispatched request");
+  const pending = client(() => {
+    markDispatched();
+    return new Promise(() => {});
+  }, nativeBinding()).submitSorafsOrderbookOrder(Buffer.of(1), {
+    expectedReceiptSigner: SIGNER,
+    signal: controller.signal,
+  });
+
+  await dispatched;
+  controller.abort(reason);
+  await assert.rejects(
+    pending,
+    (error) => (
+      error instanceof SorafsOrderbookSubmissionAmbiguousError &&
+      error.cause === reason
+    ),
+  );
 });
 
 test("orderbook deadline cancels a response that arrives after ambiguity", async () => {

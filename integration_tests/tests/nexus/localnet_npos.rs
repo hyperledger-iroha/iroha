@@ -6,7 +6,7 @@ use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
 use iroha_test_network::chain_id;
 use std::num::NonZeroU64;
 const LOCALNET_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 3_600;
-pub(super) fn npos_override_transactions(max_validators: usize) -> Vec<Vec<InstructionBox>> {
+pub(super) fn npos_override_instruction(max_validators: usize) -> InstructionBox {
     let mut npos = SumeragiNposParameters::default();
     let chain_hash = CryptoHash::new(chain_id().into_inner().as_bytes());
     npos.epoch_seed = <[u8; 32]>::from(chain_hash);
@@ -14,9 +14,12 @@ pub(super) fn npos_override_transactions(max_validators: usize) -> Vec<Vec<Instr
         .expect("localnet NPoS epoch length must be nonzero");
     npos.max_validators =
         u32::try_from(max_validators).expect("localnet max_validators exceeds u32");
-    vec![vec![InstructionBox::from(SetParameter::new(
-        Parameter::Custom(npos.into_custom_parameter()),
-    ))]]
+    InstructionBox::from(SetParameter::new(Parameter::Custom(
+        npos.into_custom_parameter(),
+    )))
+}
+pub(super) fn npos_override_transactions(max_validators: usize) -> Vec<Vec<InstructionBox>> {
+    vec![vec![npos_override_instruction(max_validators)]]
 }
 #[test]
 fn npos_override_transactions_publish_expected_schedule() {

@@ -54,6 +54,21 @@ export MOBILE_SDK_RUSTUP_BINARY="$TEST_RUSTUP_BINARY"
 
 command -v zip >/dev/null 2>&1 || fail "zip command is required"
 
+test_git_worktree_source_authentication_contract() {
+  grep -Fq 'has_local_git_metadata() {' "$CHECK_SCRIPT" \
+    || fail "artifact checker must centralize Git metadata detection"
+  grep -Fq '[[ ! -L "$metadata" && ( -d "$metadata" || -f "$metadata" ) ]]' "$CHECK_SCRIPT" \
+    || fail "artifact checker must accept non-symbolic Git directories and worktree gitfiles"
+  if [[ "$(grep -Fc 'has_local_git_metadata; then' "$CHECK_SCRIPT")" != "2" ]]; then
+    fail "artifact checker must authenticate both Apple and Android sources in linked worktrees"
+  fi
+  if grep -Fq '[[ -d "$ROOT_DIR/.git" ]]' "$CHECK_SCRIPT"; then
+    fail "artifact checker retained directory-only Git metadata detection"
+  fi
+}
+
+test_git_worktree_source_authentication_contract
+
 # shellcheck source=tests/mobile_sdk_build_source_seal_test.sh
 source "$SCRIPT_DIR/tests/mobile_sdk_build_source_seal_test.sh"
 

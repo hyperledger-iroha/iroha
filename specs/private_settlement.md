@@ -387,6 +387,18 @@ protocol limits are configuration errors.
   full bounded-fault configurations, paper-primary N=3 fault configuration,
   N=4 clean path, and N=3 expiry/replay configuration. The corrected full N=2
   and paper-primary N=3 runs remain unclaimed in repository evidence.
+- Complete formal-release evidence is fail-closed over one exact ordered
+  `(configuration, expected outcome, model)` matrix. Its source-sealed digest
+  binds both TLA+ models, every configuration, and a separate evidence-code
+  digest for the report producer, runner, result-contract helper, and Java
+  resolver. The archived transcript uses canonical metadata and exact ordered
+  model-qualified sections; the DOI verifier independently replays SANY and
+  TLC parsing, rejects injected/reordered headers, noncanonical run controls,
+  unexpected diagnostics, duplicate JSON keys, and report/transcript row
+  drift. The report also records the resolved Java executable byte digest and
+  bounded version output. Independent release review must match that runtime
+  identity to the declared builder environment; recording it is not itself a
+  trusted-runtime attestation.
 - Independent review must cover the revised AIR, dummy selectors, asset/capsule
   bindings, reimbursement relation, hybrid encryption, approval/QC domains,
   and state machine.

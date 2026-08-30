@@ -192,6 +192,44 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
                 tlc_version="2.19",
             )
 
+        unrelated_failure = negative_log().replace(
+            MODULE.SAFETY_VIOLATION_MARKER,
+            MODULE.SAFETY_VIOLATION_MARKER + "\nError: unrelated TLC failure",
+        )
+        with self.assertRaisesRegex(MODULE.ReportError, "unexpected diagnostics"):
+            MODULE.parse_run(
+                name="unrelated-negative-error.cfg",
+                model="Negative.tla",
+                expected_outcome="safety_violation",
+                stdout=unrelated_failure,
+                stderr="",
+                status=12,
+                seed=20260829,
+                fingerprint_index=0,
+                workers="4",
+                tlc_version="2.19",
+            )
+
+        reordered = positive_log().replace(
+            "The depth of the complete state graph search is 42.\n"
+            f"{MODULE.SUCCESS_MARKER}\n",
+            f"{MODULE.SUCCESS_MARKER}\n"
+            "The depth of the complete state graph search is 42.\n",
+        )
+        with self.assertRaisesRegex(MODULE.ReportError, "out of order"):
+            MODULE.parse_run(
+                name="reordered.cfg",
+                model="Positive.tla",
+                expected_outcome="pass",
+                stdout=reordered,
+                stderr="",
+                status=0,
+                seed=20260829,
+                fingerprint_index=0,
+                workers="4",
+                tlc_version="2.19",
+            )
+
     def test_formal_package_digest_binds_models_configs_and_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             formal_dir = Path(directory)
@@ -215,6 +253,11 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
             self._write_formal_inputs(formal_dir)
             logs_dir.mkdir()
             sany_dir.mkdir()
+            java_version_path = root / "java-version.log"
+            java_version_path.write_text(
+                'openjdk version "21.0.8" 2025-07-15 LTS\n',
+                encoding="utf-8",
+            )
             for model in (MODULE.COUNT_MODEL, MODULE.INDEXED_MODEL):
                 prefix = sany_dir / model
                 prefix.with_suffix(prefix.suffix + ".stdout.log").write_text(
@@ -248,6 +291,9 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
                 commit="a" * 40,
                 tool_version="TLC 2.19 / TLA+ tools 1.7.4",
                 tool_sha256="b" * 64,
+                java_binary_sha256="c" * 64,
+                java_binary_bytes=123456,
+                java_version_output_path=java_version_path,
                 seed=20260829,
                 fingerprint_index=0,
                 workers="4",
@@ -263,6 +309,8 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
                     "tool_version",
                     "tool_sha256",
                     "model_sha256",
+                    "evidence_code_sha256",
+                    "java_runtime",
                     "configurations",
                     "passed",
                     "transcript",
@@ -280,6 +328,11 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
             self.assertIn(b"fingerprint_index=0\n", transcript)
             self.assertIn(b"workers=4\n", transcript)
             self.assertIn(b"===== SANY AtomicPrivateSettlementV1.tla", transcript)
+            self.assertEqual(report["java_runtime"]["binary_sha256"], "c" * 64)
+            self.assertEqual(
+                report["java_runtime"]["version_output"],
+                'openjdk version "21.0.8" 2025-07-15 LTS\n',
+            )
 
             failed_sany = sany_dir / MODULE.COUNT_MODEL
             failed_sany.with_suffix(failed_sany.suffix + ".status").write_text(
@@ -293,6 +346,9 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
                     commit="a" * 40,
                     tool_version="TLC 2.19 / TLA+ tools 1.7.4",
                     tool_sha256="b" * 64,
+                    java_binary_sha256="c" * 64,
+                    java_binary_bytes=123456,
+                    java_version_output_path=java_version_path,
                     seed=20260829,
                     fingerprint_index=0,
                     workers="4",
@@ -300,6 +356,55 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
                 )
             failed_sany.with_suffix(failed_sany.suffix + ".status").write_text(
                 "0\n", encoding="ascii"
+            )
+            failed_sany.with_suffix(failed_sany.suffix + ".stdout.log").write_text(
+                f"{MODULE.SANY_VERSION_MARKER}\n"
+                f"Semantic processing of module {Path(MODULE.COUNT_MODEL).stem}\n"
+                "Semantic error: injected diagnostic\n",
+                encoding="utf-8",
+            )
+
+            java_version_path.write_text("fabricated runtime\n", encoding="utf-8")
+            with self.assertRaisesRegex(MODULE.ReportError, "Java version output"):
+                MODULE.build_report(
+                    formal_dir=formal_dir,
+                    logs_dir=logs_dir,
+                    sany_dir=sany_dir,
+                    commit="a" * 40,
+                    tool_version="TLC 2.19 / TLA+ tools 1.7.4",
+                    tool_sha256="b" * 64,
+                    java_binary_sha256="c" * 64,
+                    java_binary_bytes=123456,
+                    java_version_output_path=java_version_path,
+                    seed=20260829,
+                    fingerprint_index=0,
+                    workers="4",
+                    transcript_artifact_path="evidence/logs/formal_model_report.log",
+                )
+            java_version_path.write_text(
+                'openjdk version "21.0.8" 2025-07-15 LTS\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(MODULE.ReportError, "clean semantic result"):
+                MODULE.build_report(
+                    formal_dir=formal_dir,
+                    logs_dir=logs_dir,
+                    sany_dir=sany_dir,
+                    commit="a" * 40,
+                    tool_version="TLC 2.19 / TLA+ tools 1.7.4",
+                    tool_sha256="b" * 64,
+                    java_binary_sha256="c" * 64,
+                    java_binary_bytes=123456,
+                    java_version_output_path=java_version_path,
+                    seed=20260829,
+                    fingerprint_index=0,
+                    workers="4",
+                    transcript_artifact_path="evidence/logs/formal_model_report.log",
+                )
+            failed_sany.with_suffix(failed_sany.suffix + ".stdout.log").write_text(
+                f"{MODULE.SANY_VERSION_MARKER}\n"
+                f"Semantic processing of module {Path(MODULE.COUNT_MODEL).stem}\n",
+                encoding="utf-8",
             )
 
             report_path = root / "formal_model_report.json"
@@ -328,9 +433,28 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
                     commit="a" * 40,
                     tool_version="TLC 2.19 / TLA+ tools 1.7.4",
                     tool_sha256="b" * 64,
+                    java_binary_sha256="c" * 64,
+                    java_binary_bytes=123456,
+                    java_version_output_path=java_version_path,
                     seed=20260829,
                     fingerprint_index=0,
                     workers="auto",
+                    transcript_artifact_path="evidence/logs/formal_model_report.log",
+                )
+            with self.assertRaisesRegex(MODULE.ReportError, "explicit positive worker"):
+                MODULE.build_report(
+                    formal_dir=formal_dir,
+                    logs_dir=logs_dir,
+                    sany_dir=sany_dir,
+                    commit="a" * 40,
+                    tool_version="TLC 2.19 / TLA+ tools 1.7.4",
+                    tool_sha256="b" * 64,
+                    java_binary_sha256="c" * 64,
+                    java_binary_bytes=123456,
+                    java_version_output_path=java_version_path,
+                    seed=20260829,
+                    fingerprint_index=0,
+                    workers="04",
                     transcript_artifact_path="evidence/logs/formal_model_report.log",
                 )
 
@@ -345,7 +469,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
             capture_output=True,
         )
         observed = [tuple(line.split("\t")) for line in result.stdout.splitlines()]
-        expected = [(name, outcome) for name, outcome, _ in MODULE.CONFIGURATIONS]
+        expected = list(MODULE.CONFIGURATIONS)
         self.assertEqual(observed, expected)
         self.assertEqual(result.stderr, "")
 
@@ -359,6 +483,18 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         )
         self.assertEqual(complete.returncode, 2)
         self.assertIn("explicit --workers count", complete.stderr)
+
+        for option in ("--seed", "--fingerprint-index"):
+            noncanonical = subprocess.run(
+                ["bash", str(RUNNER), "--workers", "1", option, "00"],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(noncanonical.returncode, 2)
+            self.assertIn("unsigned integer", noncanonical.stderr)
 
     def test_runner_pins_the_candidate_before_invoking_the_toolchain(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
@@ -378,6 +514,11 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
             (formal_dir / name).write_text(f"---- MODULE {name} ----\n", encoding="utf-8")
         for name, _, _ in MODULE.CONFIGURATIONS:
             (formal_dir / name).write_text(f"CONSTANT Config = {name}\n", encoding="utf-8")
+        for source_path in MODULE.EVIDENCE_CODE_SOURCE_PATHS:
+            (formal_dir / Path(source_path).name).write_text(
+                f"# frozen evidence code for {source_path}\n",
+                encoding="utf-8",
+            )
 
 
 if __name__ == "__main__":

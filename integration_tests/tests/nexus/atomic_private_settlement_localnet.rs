@@ -7,7 +7,7 @@
 //! The included release-harness entrypoint parameterizes the same production
 //! workflow across N=2,3,4,8,16 and publishes only measured process evidence.
 
-use super::localnet_npos::npos_override_transactions;
+use super::localnet_npos::npos_override_instruction;
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -26,7 +26,6 @@ use iroha::{
             BlockHeader,
             consensus::{NativeAmxReceipt, SumeragiDiagnosticsStatus},
         },
-        da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         isi::{
             Grant, InstructionBox, Log, Mint, Register,
@@ -42,8 +41,7 @@ use iroha::{
         },
         metadata::Metadata,
         nexus::{
-            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId,
-            LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility,
+            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId, LaneId,
             PrivateSettlementAuditAadV1, PrivateSettlementAuditEncryptionOpeningV1,
             PrivateSettlementAuditNoteOpeningV1, PrivateSettlementAuditOutputRoleV1,
             PrivateSettlementAuditOutputV1, PrivateSettlementAuditPayerAuthorizationBodyV1,
@@ -65,18 +63,16 @@ use iroha::{
         permission::Permission,
         prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId},
         privacy::{
-            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCapabilityActivationStateV1,
-            PrivacyCommitmentV1, PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1,
-            PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyProposedLifecycleV1, PrivacyProtocolIdV1,
-            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootV1,
+            PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
+            PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+            PrivacyRecipientIdV1, PrivacyRootV1,
         },
         query::block::prelude::FindBlocks,
         transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
     },
 };
-use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::{
-    da::proof_policy_bundle,
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_engines::{
         atomic_private_settlement::{
@@ -103,12 +99,11 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_primitives::numeric::Quantity;
 use iroha_test_network::{
-    Network, NetworkBuilder, NetworkPeer, genesis_factory_with_post_topology,
+    Network, NetworkBuilder, NetworkPeer, unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use reqwest::Url;
 use std::{
-    num::NonZeroU32,
     ops::Range,
     thread,
     time::{Duration, Instant},
@@ -122,6 +117,7 @@ const VALIDATOR_STAKE: u64 = 2_000;
 const PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT: u64 = 2;
 const MAX_EXPIRY_BLOCKS: u64 = 4_096;
 const SIDECAR_RETENTION_BLOCKS: u64 = 4_096;
+const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const TRANSPARENT_CONTROL_SEED_BALANCE: u64 = 10_000;
 const TRANSPARENT_CONTROL_OUTPUT_BASELINE: u64 = 1;
 const TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
@@ -278,40 +274,10 @@ fn transparent_control_asset_id(asset_ordinal: usize, owner_ordinal: usize) -> A
     )
 }
 
-fn lane_catalog(shape: TopologyShape) -> LaneCatalog {
-    let lanes = (0..shape.lane_count())
-        .map(|lane| ModelLaneConfig {
-            id: LaneId::new(u32::try_from(lane).expect("lane fits u32")),
-            dataspace_id: DataSpaceId::new(u64::try_from(lane).expect("dataspace fits u64")),
-            alias: if lane == 0 {
-                "lane-global".to_owned()
-            } else {
-                format!("lane-private-{lane}")
-            },
-            visibility: if lane == 0 {
-                LaneVisibility::Public
-            } else {
-                LaneVisibility::Restricted
-            },
-            ..ModelLaneConfig::default()
-        })
-        .collect();
-    LaneCatalog::new(
-        NonZeroU32::new(u32::try_from(shape.lane_count()).expect("lane count fits u32"))
-            .expect("non-zero lane count"),
-        lanes,
-    )
-    .expect("release lane catalog")
-}
-
-fn da_policy_bundle(shape: TopologyShape) -> DaProofPolicyBundle {
-    proof_policy_bundle(&ActualLaneConfig::from_catalog(&lane_catalog(shape)))
-}
-
 fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
     assert_eq!(topology.len(), shape.peer_count());
     let stake_definition = stake_asset_definition_id();
-    let mut instructions = vec![
+    let mut universal = vec![
         Register::domain(Domain::new(
             DomainId::try_new("nexus", "universal").expect("nexus domain"),
         ))
@@ -331,7 +297,7 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
     ];
     for ordinal in 0..shape.participants {
         let definition = cbdc_asset_definition_id(ordinal);
-        instructions.push(
+        universal.push(
             Register::asset_definition(AssetDefinition::numeric(
                 definition,
                 format!("CBDC {}", ordinal + 1),
@@ -340,9 +306,23 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
             ))
             .into(),
         );
+    }
+    for (index, _) in topology.iter().enumerate() {
+        let validator = AccountId::new(validator_authority_keypair(index).public_key().clone());
+        universal.push(Register::account(Account::new(validator.clone())).into());
+        universal.push(
+            Mint::asset_quantity(
+                VALIDATOR_STAKE,
+                AssetId::new(stake_definition.clone(), validator),
+            )
+            .into(),
+        );
+    }
+    let mut transactions = vec![universal];
+    for ordinal in 0..shape.participants {
         let control_domain = transparent_control_domain_id(ordinal);
-        instructions.push(Register::domain(Domain::new(control_domain.clone())).into());
-        instructions.push(
+        transactions.push(vec![
+            Register::domain(Domain::new(control_domain.clone())).into(),
             Register::asset_definition(AssetDefinition::numeric(
                 transparent_control_asset_definition_id(ordinal),
                 format!("Transparent control CBDC {}", ordinal + 1),
@@ -350,65 +330,72 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
                 Some(control_domain),
             ))
             .into(),
-        );
-        instructions
-            .push(Register::account(Account::new(transparent_control_account_id(ordinal))).into());
+            Register::account(Account::new(transparent_control_account_id(ordinal))).into(),
+        ]);
     }
-    instructions.push(
-        Mint::asset_quantity(
-            TRANSPARENT_CONTROL_SEED_BALANCE,
-            transparent_control_asset_id(0, 0),
-        )
-        .into(),
-    );
-    for ordinal in 1..shape.participants {
-        instructions.push(
-            Mint::asset_quantity(
-                TRANSPARENT_CONTROL_OUTPUT_BASELINE,
-                transparent_control_asset_id(0, ordinal),
-            )
-            .into(),
-        );
-        instructions.push(
-            Mint::asset_quantity(
-                TRANSPARENT_CONTROL_OUTPUT_BASELINE,
-                transparent_control_asset_id(ordinal, 0),
-            )
-            .into(),
-        );
-        instructions.push(
-            Mint::asset_quantity(
-                TRANSPARENT_CONTROL_SEED_BALANCE,
-                transparent_control_asset_id(ordinal, ordinal),
-            )
-            .into(),
-        );
+    // Keep each restricted balance mutation in its authoritative dataspace.
+    for asset_ordinal in 0..shape.participants {
+        let mut mints = Vec::new();
+        if asset_ordinal == 0 {
+            mints.push(
+                Mint::asset_quantity(
+                    TRANSPARENT_CONTROL_SEED_BALANCE,
+                    transparent_control_asset_id(0, 0),
+                )
+                .into(),
+            );
+            for owner_ordinal in 1..shape.participants {
+                mints.push(
+                    Mint::asset_quantity(
+                        TRANSPARENT_CONTROL_OUTPUT_BASELINE,
+                        transparent_control_asset_id(0, owner_ordinal),
+                    )
+                    .into(),
+                );
+            }
+        } else {
+            mints.push(
+                Mint::asset_quantity(
+                    TRANSPARENT_CONTROL_OUTPUT_BASELINE,
+                    transparent_control_asset_id(asset_ordinal, 0),
+                )
+                .into(),
+            );
+            mints.push(
+                Mint::asset_quantity(
+                    TRANSPARENT_CONTROL_SEED_BALANCE,
+                    transparent_control_asset_id(asset_ordinal, asset_ordinal),
+                )
+                .into(),
+            );
+        }
+        transactions.push(mints);
     }
-    for (index, peer) in topology.iter().enumerate() {
-        let validator = AccountId::new(validator_authority_keypair(index).public_key().clone());
-        let lane = LaneId::new(u32::try_from(index / VALIDATORS_PER_LANE).expect("lane fits u32"));
-        instructions.push(Register::account(Account::new(validator.clone())).into());
-        instructions.push(
-            Mint::asset_quantity(
-                VALIDATOR_STAKE,
-                AssetId::new(stake_definition.clone(), validator.clone()),
-            )
-            .into(),
-        );
-        instructions.push(
-            RegisterPublicLaneValidator::new(
-                lane,
-                validator.clone(),
-                peer.clone(),
-                validator.clone(),
-                Quantity::from(VALIDATOR_STAKE),
-                Metadata::default(),
-            )
-            .into(),
-        );
-        instructions.push(ActivatePublicLaneValidator::new(lane, validator).into());
+    // Staking uses one globally scoped stake asset, so all lane registrations
+    // remain together in the targetless transaction routed through universal.
+    let mut authority_registration =
+        Vec::with_capacity(shape.lane_count() * VALIDATORS_PER_LANE * 2);
+    for lane_ordinal in 0..shape.lane_count() {
+        let lane = LaneId::new(u32::try_from(lane_ordinal).expect("lane fits u32"));
+        for index in lane_ordinal * VALIDATORS_PER_LANE..(lane_ordinal + 1) * VALIDATORS_PER_LANE {
+            let peer = topology.get(index).expect("lane validator peer");
+            let validator = AccountId::new(validator_authority_keypair(index).public_key().clone());
+            authority_registration.push(
+                RegisterPublicLaneValidator::new(
+                    lane,
+                    validator.clone(),
+                    peer.clone(),
+                    validator.clone(),
+                    Quantity::from(VALIDATOR_STAKE),
+                    Metadata::default(),
+                )
+                .into(),
+            );
+            authority_registration.push(ActivatePublicLaneValidator::new(lane, validator).into());
+        }
     }
-    vec![instructions]
+    transactions.push(authority_registration);
+    transactions
 }
 
 fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
@@ -420,19 +407,17 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         .with_peers(shape.peer_count())
         .with_block_cadence(Duration::from_millis(50))
         .with_peer_startup_timeout(Duration::from_secs(20 * 60))
+        .with_npos_consensus()
         .without_npos_genesis_bootstrap()
         .with_genesis_block(move |topology, topology_entries| {
-            let mut genesis = genesis_factory_with_post_topology(
-                npos_override_transactions(VALIDATORS_PER_LANE),
+            unexecuted_genesis_factory_with_post_topology(
+                Vec::new(),
                 genesis_post_topology(shape, topology.as_ref()),
                 topology,
                 topology_entries,
-            );
-            genesis
-                .0
-                .set_da_proof_policies(Some(da_policy_bundle(shape)));
-            genesis
+            )
         })
+        .with_genesis_instruction(npos_override_instruction(VALIDATORS_PER_LANE))
         .with_config_layer(move |layer| {
             let lanes = (0..shape.lane_count())
                 .map(|lane| {
@@ -517,6 +502,10 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
             routing.insert("rules".into(), TomlValue::Array(routing_rules));
             layer
                 .write(["nexus", "lane_count"], shape.lane_count() as i64)
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
+                )
                 .write(["nexus", "lane_catalog"], TomlValue::Array(lanes))
                 .write(["nexus", "dataspace_catalog"], TomlValue::Array(dataspaces))
                 .write(["nexus", "routing_policy"], TomlValue::Table(routing))
@@ -737,7 +726,11 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
             .iter()
             .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
             .ok_or_else(|| eyre!("IVM private-note capability row is absent"))?;
-        if row.activation_state == PrivacyCapabilityActivationStateV1::Active {
+        if matches!(
+            row.activation,
+            Some(activation)
+                if matches!(activation.lifecycle, PrivacyProtocolLifecycleV1::Active(_))
+        ) {
             ensure!(
                 row.is_network_available(),
                 "active IVM profile is not network-available"

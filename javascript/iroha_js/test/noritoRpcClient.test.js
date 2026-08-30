@@ -29,6 +29,185 @@ test("call posts Norito payload with default headers", async () => {
   assert.equal(calls[0].init.redirect, "error");
 });
 
+test("client keeps transport state private and snapshots credential headers", async () => {
+  let headers;
+  const defaultHeaders = {
+    Authorization: "Bearer header-token",
+    "X-Trace": "trace-1",
+  };
+  const client = new NoritoRpcClient(BASE_URL, {
+    apiToken: "api-secret",
+    authToken: "auth-secret",
+    defaultHeaders,
+    fetchImpl: async (_url, init) => {
+      headers = init.headers;
+      return createResponse({ status: 200 });
+    },
+  });
+
+  defaultHeaders.Authorization = "Bearer mutated";
+  defaultHeaders["X-Trace"] = "trace-2";
+
+  assert.deepEqual(Object.keys(client), []);
+  assert.equal(JSON.stringify(client), "{}");
+  assert.equal(client._authToken, undefined);
+  assert.equal(client._defaultHeaders, undefined);
+  assert.equal(client.close, undefined);
+  assert.equal(client.baseUrl, BASE_URL);
+
+  await client.call("/v1/pipeline/submit", new Uint8Array([1]));
+  assert.equal(headers.Authorization, "Bearer auth-secret");
+  assert.equal(headers["X-API-Token"], "api-secret");
+  assert.equal(headers["X-Trace"], "trace-1");
+});
+
+test("per-call token options override or remove constructor credentials", async () => {
+  const calls = [];
+  const client = new NoritoRpcClient(BASE_URL, {
+    apiToken: "default-api",
+    authToken: "default-auth",
+    fetchImpl: async (_url, init) => {
+      calls.push(init.headers);
+      return createResponse({ status: 200 });
+    },
+  });
+
+  await client.call("/v1/override", new Uint8Array([1]), {
+    apiToken: null,
+    authToken: "request-auth",
+  });
+  assert.equal(calls[0].Authorization, "Bearer request-auth");
+  assert.equal(calls[0]["X-API-Token"], undefined);
+});
+
+test("call snapshots every supported caller-owned payload container", async () => {
+  const captured = [];
+  const client = new NoritoRpcClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      captured.push(init.body);
+      return createResponse({ status: 200 });
+    },
+  });
+  const buffer = Buffer.from([1, 2, 3]);
+  const bytes = new Uint8Array([4, 5, 6]);
+  const arrayBuffer = Uint8Array.from([7, 8, 9]).buffer;
+  const dataViewBytes = new Uint8Array([10, 11, 12]);
+  const dataView = new DataView(dataViewBytes.buffer);
+
+  const calls = [
+    client.call("/buffer", buffer),
+    client.call("/bytes", bytes),
+    client.call("/array-buffer", arrayBuffer),
+    client.call("/data-view", dataView),
+  ];
+  buffer.fill(99);
+  bytes.fill(99);
+  new Uint8Array(arrayBuffer).fill(99);
+  dataViewBytes.fill(99);
+  await Promise.all(calls);
+
+  assert.deepEqual(captured.map((body) => [...body]), [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9],
+    [10, 11, 12],
+  ]);
+});
+
+test("constructor rejects coercive security and timeout options", () => {
+  const fetchImpl = async () => createResponse({ status: 200 });
+  for (const allowInsecure of [null, 0, 1, "true"]) {
+    assert.throws(
+      () => new NoritoRpcClient(BASE_URL, { allowInsecure, fetchImpl }),
+      /allowInsecure must be a boolean/u,
+    );
+  }
+  for (const timeoutMs of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "5"]) {
+    assert.throws(
+      () => new NoritoRpcClient(BASE_URL, { fetchImpl, timeoutMs }),
+      /timeoutMs must be a non-negative safe integer or null/u,
+    );
+  }
+  assert.throws(
+    () => new NoritoRpcClient(BASE_URL, { authToken: 42, fetchImpl }),
+    /authToken must be a string or null/u,
+  );
+  assert.throws(
+    () =>
+      new NoritoRpcClient(BASE_URL, {
+        fetchImpl,
+        insecureTransportTelemetryHook: "log",
+      }),
+    /insecureTransportTelemetryHook must be a function/u,
+  );
+});
+
+test("constructor accepts only exact credential-free HTTP roots and headers", () => {
+  const fetchImpl = async () => createResponse({ status: 200 });
+  for (const baseUrl of [
+    " https://torii.example",
+    "ftp://torii.example",
+    "https://user:password@torii.example",
+    "https://torii.example?target=other",
+    "https://torii.example#fragment",
+  ]) {
+    assert.throws(
+      () => new NoritoRpcClient(baseUrl, { fetchImpl }),
+      /baseUrl/u,
+    );
+  }
+  assert.throws(
+    () => new NoritoRpcClient(BASE_URL, {
+      defaultHeaders: { Authorization: "Bearer secret\r\nX-Injected: yes" },
+      fetchImpl,
+    }),
+    /single-line string/u,
+  );
+  assert.equal(
+    new NoritoRpcClient("https://torii.example/proxy/", { fetchImpl }).baseUrl,
+    "https://torii.example/proxy",
+  );
+});
+
+test("call rejects coercive options before dispatch", async () => {
+  let calls = 0;
+  const client = new NoritoRpcClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      return createResponse({ status: 200 });
+    },
+  });
+
+  await assert.rejects(
+    () => client.call("/timeout", new Uint8Array([1]), { timeoutMs: "5" }),
+    /timeoutMs must be a non-negative safe integer or null/u,
+  );
+  await assert.rejects(
+    () =>
+      client.call("/absolute", new Uint8Array([1]), {
+        allowAbsoluteUrl: 1,
+      }),
+    /allowAbsoluteUrl must be a boolean/u,
+  );
+  await assert.rejects(
+    () => client.call("/method", new Uint8Array([1]), { method: 1 }),
+    /method must be a non-empty HTTP token/u,
+  );
+  await assert.rejects(
+    () => client.call("ftp://other.example/rpc", new Uint8Array([1]), {
+      allowAbsoluteUrl: true,
+    }),
+    /must use http or https/u,
+  );
+  await assert.rejects(
+    () => client.call("/headers", new Uint8Array([1]), {
+      headers: { "X-Test": "value\nX-Injected: yes" },
+    }),
+    /single-line string/u,
+  );
+  assert.equal(calls, 0);
+});
+
 test("call merges params, headers, and method overrides", async () => {
   let initCapture;
   let urlCapture;

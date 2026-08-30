@@ -1,34 +1,24 @@
 import assert from "node:assert/strict";
 import {
-  noritoDecodeInstruction,
-  noritoEncodeInstruction,
+  _createNoritoInstructionApi,
 } from "../../src/norito.js";
+import { createNativeRuntime } from "../../src/nativeRuntime.js";
 import { nativeBinding } from "./native.js";
 
-/** Run a callback with the native instruction codec disabled. */
-export function withPureJsInstructionCodec(body) {
-  const hadBinding = Object.prototype.hasOwnProperty.call(
-    globalThis,
-    "__IROHA_NORITO_BINDING__",
-  );
-  const previous = globalThis.__IROHA_NORITO_BINDING__;
-  globalThis.__IROHA_NORITO_BINDING__ = {
+const PURE_INSTRUCTION_API = _createNoritoInstructionApi(
+  createNativeRuntime({
     noritoEncodeInstruction() {
       throw new Error("unsupported instruction");
     },
     noritoDecodeInstruction() {
       throw new Error("unsupported instruction");
     },
-  };
-  try {
-    return body();
-  } finally {
-    if (hadBinding) {
-      globalThis.__IROHA_NORITO_BINDING__ = previous;
-    } else {
-      delete globalThis.__IROHA_NORITO_BINDING__;
-    }
-  }
+  }),
+);
+
+/** Run a callback with an explicit pure-JS instruction codec. */
+export function withPureJsInstructionCodec(body) {
+  return body(PURE_INSTRUCTION_API);
 }
 
 /** Convert any supported binary container into an ordinary byte array. */
@@ -39,7 +29,8 @@ export function toByteArray(bytes) {
 /** Assert native/pure-JS instruction byte and decode parity. */
 export function assertNativeAndPureInstructionParity(instruction, context) {
   const pureEncoded = Buffer.from(
-    withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
+    withPureJsInstructionCodec(({ noritoEncodeInstruction }) =>
+      noritoEncodeInstruction(instruction)),
   );
   const nativeEncoded = Buffer.from(
     nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
@@ -51,7 +42,8 @@ export function assertNativeAndPureInstructionParity(instruction, context) {
     `${context} native decode`,
   );
   assert.deepEqual(
-    withPureJsInstructionCodec(() => noritoDecodeInstruction(nativeEncoded)),
+    withPureJsInstructionCodec(({ noritoDecodeInstruction }) =>
+      noritoDecodeInstruction(nativeEncoded)),
     instruction,
     `${context} pure decode`,
   );

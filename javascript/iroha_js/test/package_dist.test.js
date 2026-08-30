@@ -9,9 +9,12 @@ import { build as buildWithEsbuild } from "esbuild";
 
 import * as packageExports from "../dist/index.js";
 import * as packageTransactionExports from "../dist/transaction.js";
+import * as packageCryptoExports from "../dist/public/crypto.js";
 import { NexusAppClient as PackageNexusAppClient } from "../dist/nexusApp.js";
 import * as packagePrivacyCapabilitiesExports from "../dist/privacyCapabilities.js";
 import * as packageSccpExports from "../dist/sccp.js";
+import { _createCryptoApi } from "../dist/crypto.js";
+import { createNativeRuntime } from "../dist/nativeRuntime.js";
 import {
   findForbiddenBrowserInputs,
   hasForbiddenGlobalBufferMutation,
@@ -19,6 +22,8 @@ import {
 
 const packageRootUrl = new URL("../", import.meta.url);
 const packageRootPath = fileURLToPath(packageRootUrl);
+const RETIRED_STATIC_CRYPTO_CAPABILITY_LIST =
+  ["SUPPORTED", "CRYPTO", "ALGORITHMS"].join("_");
 
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -38,22 +43,10 @@ const {
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
   PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
-  isPrivacyNativeAvailable,
-  privacyCompiledProfileCatalogV1,
 } = packageExports;
 
-function withNativeBinding(binding, fn) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = binding;
-  try {
-    return fn();
-  } finally {
-    if (previous === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = previous;
-    }
-  }
+function withCryptoApi(binding, fn) {
+  return fn(_createCryptoApi(createNativeRuntime(binding)));
 }
 
 function privacyNoritoFrame(schemaByte) {
@@ -245,6 +238,8 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "buildTransaction",
     "buildCancelAssetLockInstruction",
     "buildSetAssetTransferAvailabilityInstruction",
+    "buildSetAssetTransferBlacklistInstruction",
+    "buildSetAssetTransferControlInstruction",
     "CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1",
     "encodeCancelAssetLockV1",
     "decodeCancelAssetLockV1",
@@ -591,6 +586,7 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/kotodamaIdentifiers.js",
       "dist/multisig.js",
       "dist/native.browser.js",
+      "dist/nativeRuntime.js",
       "dist/networkId.js",
       "dist/nexusApp.js",
       "dist/norito.js",
@@ -723,17 +719,28 @@ test("package dist entrypoint exports only the canonical local privacy catalog b
     256 * 1024,
   );
   assert.equal(Number.isInteger(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION), true);
+  for (const surface of [
+    packageExports,
+    packageExports.Crypto,
+    packageCryptoExports,
+  ]) {
+    assert.equal("_createCryptoApi" in surface, false);
+    assert.equal(RETIRED_STATIC_CRYPTO_CAPABILITY_LIST in surface, false);
+  }
+  assert.equal("_createTransactionApi" in packageExports, false);
+  assert.equal("_createNoritoInstructionApi" in packageExports, false);
+  assert.equal("_createNoritoInstructionApi" in packageExports.Norito, false);
 });
 
 test("package dist privacy native availability clears probed local catalog output", () => {
   const acceptedOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return acceptedOutput;
       },
     }),
-    () => assert.equal(isPrivacyNativeAvailable(), true),
+    (crypto) => assert.equal(crypto.isPrivacyNativeAvailable(), true),
   );
   assert.deepEqual(
     acceptedOutput,
@@ -742,7 +749,7 @@ test("package dist privacy native availability clears probed local catalog outpu
 
   const rejectedOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   rejectedOutput[0] = 0x00;
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return rejectedOutput;
@@ -751,7 +758,7 @@ test("package dist privacy native availability clears probed local catalog outpu
         return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
       },
     }),
-    () => assert.equal(isPrivacyNativeAvailable(), false),
+    (crypto) => assert.equal(crypto.isPrivacyNativeAvailable(), false),
   );
   assert.deepEqual(
     rejectedOutput,
@@ -768,10 +775,10 @@ test("package dist privacy availability admits the local compiled-profile catalo
     },
   });
 
-  withNativeBinding(binding, () => {
-    assert.equal(isPrivacyNativeAvailable(), true);
+  withCryptoApi(binding, (crypto) => {
+    assert.equal(crypto.isPrivacyNativeAvailable(), true);
     assert.deepEqual(
-      privacyCompiledProfileCatalogV1(),
+      crypto.privacyCompiledProfileCatalogV1(),
       PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE,
     );
   });
@@ -789,19 +796,19 @@ test("package dist privacy availability admits the local compiled-profile catalo
 
 test("package dist privacy compiled-profile catalog wrapper sanitizes native exceptions", () => {
   const witness = "package-dist-private-witness-never-echo";
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         throw new Error("native panic included " + witness);
       },
     }),
-    () => {
-      const error = captureThrown(() => privacyCompiledProfileCatalogV1());
+    (crypto) => {
+      const error = captureThrown(() => crypto.privacyCompiledProfileCatalogV1());
       assert.equal(error.message, "native privacyCompiledProfileCatalogV1 failed");
       assert.equal(error.cause, undefined);
       assert.equal(String(error).includes(witness), false);
       assert.equal(String(error.stack).includes(witness), false);
-      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.equal(crypto.isPrivacyNativeAvailable(), false);
     },
   );
 });
@@ -814,7 +821,7 @@ test("package dist privacy compiled-profile catalog bridge rejects invalid ABI v
     Number.MAX_SAFE_INTEGER,
   ]) {
     let dispatched = false;
-    withNativeBinding(
+    withCryptoApi(
       completePrivacyCompiledProfileCatalogBinding({
         connectNoritoBridgeAbiVersion() {
           return abiVersion;
@@ -824,10 +831,10 @@ test("package dist privacy compiled-profile catalog bridge rejects invalid ABI v
           return Uint8Array.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
         },
       }),
-      () => {
-        assert.equal(isPrivacyNativeAvailable(), false);
+      (crypto) => {
+        assert.equal(crypto.isPrivacyNativeAvailable(), false);
         assert.throws(
-          () => privacyCompiledProfileCatalogV1(),
+          () => crypto.privacyCompiledProfileCatalogV1(),
           /requires the iroha_js_host native binding built with privacy FFI support/u,
         );
       },
@@ -847,7 +854,7 @@ test("package dist privacy compiled-profile catalog wrapper respects sliced nati
   ]);
   let published;
 
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return new DataView(
@@ -857,8 +864,8 @@ test("package dist privacy compiled-profile catalog wrapper respects sliced nati
         );
       },
     }),
-    () => {
-      published = privacyCompiledProfileCatalogV1();
+    (crypto) => {
+      published = crypto.privacyCompiledProfileCatalogV1();
     },
   );
 
@@ -871,25 +878,25 @@ test("package dist privacy compiled-profile catalog wrapper respects sliced nati
 
 test("package dist privacy compiled-profile catalog wrapper accepts maximum Norito header padding", () => {
   const paddedArchive = privacyNoritoFrameWithPadding(0x50, 64);
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return Buffer.from(paddedArchive);
       },
     }),
-    () => assert.deepEqual(privacyCompiledProfileCatalogV1(), paddedArchive),
+    (crypto) => assert.deepEqual(crypto.privacyCompiledProfileCatalogV1(), paddedArchive),
   );
 });
 
 test("package dist privacy compiled-profile catalog wrapper accepts complete field-bitset flags", () => {
   const flaggedArchive = privacyNoritoFrameWithFlags(0x50, 0x26);
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return Buffer.from(flaggedArchive);
       },
     }),
-    () => assert.deepEqual(privacyCompiledProfileCatalogV1(), flaggedArchive),
+    (crypto) => assert.deepEqual(crypto.privacyCompiledProfileCatalogV1(), flaggedArchive),
   );
 });
 
@@ -897,14 +904,14 @@ test("package dist privacy compiled-profile catalog wrapper defensively copies n
   const nativeOutput = Buffer.from(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE);
   let published;
 
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return nativeOutput;
       },
     }),
-    () => {
-      published = privacyCompiledProfileCatalogV1();
+    (crypto) => {
+      published = crypto.privacyCompiledProfileCatalogV1();
     },
   );
 
@@ -999,7 +1006,7 @@ test("package declarations expose the Exact12 manifest without retired privacy t
 
 test("package dist privacy compiled-profile catalog wrapper rejects malformed Norito output archives", () => {
   for (const malformedArchive of malformedPrivacyNativeOutputArchives(0x50)) {
-    withNativeBinding(
+    withCryptoApi(
       completePrivacyCompiledProfileCatalogBinding({
         privacyCompiledProfileCatalogV1() {
           return Buffer.from(malformedArchive);
@@ -1008,9 +1015,9 @@ test("package dist privacy compiled-profile catalog wrapper rejects malformed No
           return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
         },
       }),
-      () => {
+      (crypto) => {
         assert.throws(
-          () => privacyCompiledProfileCatalogV1(),
+          () => crypto.privacyCompiledProfileCatalogV1(),
           /native privacyCompiledProfileCatalogV1 returned an invalid typed privacy compiled-profile catalog/u,
         );
       },
@@ -1023,15 +1030,15 @@ test("package dist privacy compiled-profile catalog wrapper rejects oversized na
     PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1,
     0x7f,
   );
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return oversized;
       },
     }),
-    () => {
+    (crypto) => {
       assert.throws(
-        () => privacyCompiledProfileCatalogV1(),
+        () => crypto.privacyCompiledProfileCatalogV1(),
         /native privacyCompiledProfileCatalogV1 returned oversized output/u,
       );
     },
@@ -1052,21 +1059,21 @@ test("package dist privacy native availability rejects every unsafe local catalo
     ),
   ];
   for (const privacyCompiledProfileCatalogOverride of overrides) {
-    withNativeBinding(
+    withCryptoApi(
       completePrivacyCompiledProfileCatalogBinding({
         privacyCompiledProfileCatalogV1: privacyCompiledProfileCatalogOverride,
         privacyValidateCompiledProfileCatalogV1() {
           return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
         },
       }),
-      () => assert.equal(isPrivacyNativeAvailable(), false),
+      (crypto) => assert.equal(crypto.isPrivacyNativeAvailable(), false),
     );
   }
 });
 
 test("package dist privacy compiled-profile catalog wrapper rejects wrong result schemas", () => {
   const wrongSchemaArchive = privacyNoritoFrameWithSchemaOverride(0x50, 21, 0x42);
-  withNativeBinding(
+  withCryptoApi(
     completePrivacyCompiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return Buffer.from(wrongSchemaArchive);
@@ -1075,10 +1082,10 @@ test("package dist privacy compiled-profile catalog wrapper rejects wrong result
         return PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1.SCHEMA_MISMATCH;
       },
     }),
-    () => {
-      assert.equal(isPrivacyNativeAvailable(), false);
+    (crypto) => {
+      assert.equal(crypto.isPrivacyNativeAvailable(), false);
       assert.throws(
-        () => privacyCompiledProfileCatalogV1(),
+        () => crypto.privacyCompiledProfileCatalogV1(),
         /native privacyCompiledProfileCatalogV1 returned an invalid typed privacy compiled-profile catalog/u,
       );
     },

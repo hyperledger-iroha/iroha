@@ -99,8 +99,12 @@ browser exports (`/browser`, `/transaction-codec`, `/canonical-request`,
 Node Ed25519 fallback without a native host. Applications that need native-only
 APIs must
 provide a separately built and checksum-verified host through
-`IROHA_JS_NATIVE_DIR`. The registry artifact includes only two portable,
-offline examples: `recipes/iso_bridge_builder.mjs` and
+`IROHA_JS_NATIVE_DIR` before the first native-dependent call. The verified host
+surface is then captured as an immutable runtime dependency; later environment
+changes and mutable `globalThis` overrides cannot retarget it. The registry
+publishes one executable tree, `dist/`; development
+`src/` and `scripts/` copies stay in the source checkout. The registry artifact includes only
+two portable, offline examples: `recipes/iso_bridge_builder.mjs` and
 `recipes/nexus_app_transfer.mjs`. The wider recipe catalog is kept in the
 source repository where its native and live-service prerequisites are
 available.
@@ -1005,7 +1009,7 @@ import {
   NetworkId,
   ToriiClient,
   NoritoRpcClient,
-  SUPPORTED_CRYPTO_ALGORITHMS,
+  supportedCryptoAlgorithms,
   generateKeyPair,
   sign,
   verify,
@@ -1057,7 +1061,7 @@ const vaultLotId = normalizeRwaId(
 const message = Buffer.from("test");
 const signature = signEd25519(message, privateKey);
 console.log(verifyEd25519(message, signature, publicKey)); // true
-console.log(SUPPORTED_CRYPTO_ALGORITHMS);
+console.log(supportedCryptoAlgorithms());
 
 // Native builds also expose generic helpers for secp256k1, ML-DSA-65,
 // GOST R 34.10-2012 parameter sets, BLS normal/small, and SM2.
@@ -1085,6 +1089,9 @@ console.log(meta.contentType, meta.size, meta.createdMs);
 
 When you pass `authToken` or `apiToken` credentials, prefer an `https://` Torii base URL; the
 client will reject insecure schemes unless you opt into `allowInsecure: true` for local/dev use.
+The client copies default canonical-auth key bytes and keeps credentials,
+origins, retry policy, and validation caches in private state; underscored
+properties are not a supported configuration or inspection surface.
 
 const instruction = buildRegisterDomainInstruction({
   domainId: "wonderland",
@@ -1093,9 +1100,8 @@ const instruction = buildRegisterDomainInstruction({
 const encoded = noritoEncodeInstruction(instruction);
 const decoded = noritoDecodeInstruction(encoded);
 console.log(decoded.Register.Domain.id); // "wonderland"
-// Note: `noritoDecodeInstruction` throws when the payload cannot be decoded
-// (for example, current builds reject Kaigi relay manifests until the runtime
-// canonicalises them), so wrap it in a try/catch in production code.
+// `noritoDecodeInstruction` throws on malformed bytes and when neither the
+// portable codec nor the native runtime owns a wire ID, so handle decode errors.
 
 const registerAccountInstruction = buildRegisterAccountInstruction({
   accountId: newAccountId,
@@ -1115,6 +1121,10 @@ const sampleHashHex =
   receipt?.payload?.tx_hash ?? "ab".repeat(32); // marked 32-byte Iroha hash as lowercase hex
 const status = await torii.getTransactionStatus(sampleHashHex);
 console.log(status?.status.kind); // e.g. "Applied"
+
+// A 204 or empty response has no receipt. A non-empty application/x-norito
+// response must decode successfully; missing native support, malformed bytes,
+// and invalid decoder JSON reject the submission promise instead of returning null.
 
 // Normalised helper exposes canonical fields (`kind`, `hashHex`, `status.kind`, etc.)
 const typedStatus = await torii.getTransactionStatusTyped(sampleHashHex);
@@ -1322,12 +1332,15 @@ The script writes the report to
 prints the top contributors to stdout:
 
 ```
-[bundle-size] @iroha/iroha-js@0.0.2
-  files: 46 (total 1 MB)
-  tarball: 229 KB (b4ee…)
+[bundle-size] @iroha/iroha-js@0.0.3
+  files: 161 (total 4.4 MB)
+  tarball: 873 KB (<sha256>)
   top files:
-     1. src/toriiClient.js — 494 KB (41.5% of total)
-     2. src/instructionBuilders.js — 60 KB (5.0% of total)
+     1. dist/toriiClient.js — 1.1 MB (25.51% of total)
+     2. index.d.ts — 433 KB (9.62% of total)
+     3. dist/norito.js — 312 KB (6.93% of total)
+     4. README.md — 202 KB (4.48% of total)
+     5. dist/instructionBuilders.js — 189 KB (4.19% of total)
 ```
 
 Pass `-- --out /tmp/report.json` to control the output path or
@@ -1581,9 +1594,8 @@ console.log(Buffer.from(kaigiJoinTx.hash).toString("hex"));
 
 ## Norito RPC client
 
-The [`NoritoRpcClient`](./src/noritoRpcClient.js) mirrors the Python helper so
-you can talk to the binary Norito-RPC surface without sprinkling manual fetch
-calls throughout your code. It automatically sets the required
+The `NoritoRpcClient` provides the binary Norito-RPC transport without requiring
+manual Fetch calls throughout your code. It automatically sets the required
 `Content-Type: application/x-norito` header, defaults `Accept` to the same
 media type, and lets you provide shared headers (authorization tokens, custom
 trace identifiers, etc.) when the client is constructed.
@@ -1637,7 +1649,14 @@ try {
 Pass a custom `fetchImpl`, per-request headers, alternate HTTP methods, or an
 AbortSignal when integrating with higher-level transports. The helper returns
 `Uint8Array` so you can feed the response straight into the Norito decode
-utilities or persist it for parity fixtures.
+utilities or persist it for parity fixtures. Constructor credentials, headers,
+origin policy, Fetch implementation, and timeout are private snapshots; object
+inspection does not expose them. Each supported binary payload container is
+copied before Fetch sees it, so later caller mutation cannot change an in-flight
+request. A per-call `authToken` or `apiToken` replaces its constructor value;
+passing `null` or an empty string removes that credential for the call. Timeout
+values must be non-negative safe integers; constructor `null` means no default
+deadline.
 
 Every `NoritoRpcClient.call(...)` dispatch is one-shot because its binary body
 may be a signed query with a consumable nonce. The client passes
@@ -4239,6 +4258,13 @@ the global-reader metrics route is expected to reject the request. The public
 Explorer health call is never signed by this context. Incomplete contexts,
 caller-precomputed canonical headers, and redirects are rejected.
 
+Pass the Torii root itself (for example, `https://torii.example`), not a `/v1`
+or `/v1/explorer` endpoint. The browser client accepts only an exact `string` or
+`URL` using HTTP(S), rejects embedded URL credentials, queries, and fragments,
+and snapshots its headers and timeout before any request. Browser code imports
+the canonical `ToriiBrowserClient` and `ToriiBrowserHttpError` names; the
+pre-release `ToriiClient` and `ToriiHttpError` browser aliases are not exposed.
+
 ```js
 import { NetworkId } from "@iroha/iroha-js/browser";
 import { ToriiBrowserClient } from "@iroha/iroha-js/torii-browser";
@@ -4676,6 +4702,9 @@ rejected.
   See `specs/sdk/js/publishing.md` for the full workflow.
 
 - `ToriiClient` accepts `timeoutMs`, `maxRetries`, `backoffInitialMs`, `backoffMultiplier`, `maxBackoffMs`, `retryStatuses`, and `retryMethods`, mirroring the retry knobs exposed in `iroha_config`.
+- `ToriiBrowserClient` accepts its exact transport options directly. It does not
+  accept the Node client's nested `config` object, and endpoint success statuses
+  are fixed by the SDK rather than caller-configurable.
 - Retry settings never apply to signed transaction or batch submission, or to a request carrying `canonicalAuth`/`X-Iroha-Nonce`: those final dispatches always use `redirect: "error"` and make exactly one Fetch call. `ToriiBrowserClient` applies the same redirect policy to signed transactions, canonical nonce-bearing requests, and configured dataspace-visible reads. Pre-dispatch validation reads, such as the node-capabilities check, retain the normal safe retry policy. A custom `fetchImpl` must preserve this one-shot boundary whenever it receives `redirect: "error"`; it must not follow 307/308 responses or replay the request after a network error, timeout, or retryable status.
 - Attach `retryTelemetryHook` to capture deterministic per-attempt telemetry for dashboards and SLO drills; events include phase (`response`/`network`/`timeout`), attempt numbers, method/URL, status or error metadata, backoffMs, profile name when set, durationMs for the attempt, and timestampMs so logs can be correlated with Torii-side traces.
 - Authentication headers can be supplied via `authToken` (maps to `Authorization: Bearer ...`) or `apiToken` (maps to `X-API-Token`). Requests that carry auth headers, `canonicalAuth`, or raw `private_key*` JSON fields pin to the client's base scheme/host; cross-host overrides are rejected, insecure `http`/`ws` requires `allowInsecure: true` (dev-only), and `insecureTransportTelemetryHook` captures any downgraded transports. Cross-host requests without sensitive material require `allowAbsoluteUrl: true`.

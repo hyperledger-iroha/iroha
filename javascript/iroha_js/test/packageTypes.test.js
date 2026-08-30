@@ -61,9 +61,6 @@ function createPackedLayout({ includeNodeTypes }) {
   fs.cpSync(path.join(PACKAGE_ROOT, "dist"), path.join(packagePath, "dist"), {
     recursive: true,
   });
-  fs.cpSync(path.join(PACKAGE_ROOT, "src"), path.join(packagePath, "src"), {
-    recursive: true,
-  });
   fs.symlinkSync(
     path.join(PACKAGE_ROOT, "node_modules", "buffer"),
     path.join(nodeModules, "buffer"),
@@ -121,6 +118,58 @@ test("retired generic confidential declarations are absent from the published su
   ].map((parts) => parts.join(""));
   for (const retired of retiredDeclarations) {
     assert.doesNotMatch(declarations, new RegExp(`\\b${retired}\\b`, "u"), retired);
+  }
+});
+
+test("algorithm options use omission rather than a nullable compatibility sentinel", () => {
+  const declarations = fs.readFileSync(path.join(PACKAGE_ROOT, "index.d.ts"), "utf8");
+  assert.doesNotMatch(
+    declarations,
+    /(?:privateKeyAlgorithm|algorithm)\?: string \| null/u,
+  );
+});
+
+test("first-release HTTP client declarations omit compatibility escape hatches", () => {
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const declarationText = fs.readFileSync(declarationPath, "utf8");
+  const source = ts.createSourceFile(
+    declarationPath,
+    declarationText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declaration = (kind, name) => {
+    const node = source.statements.find(
+      (statement) => kind(statement) && statement.name?.text === name,
+    );
+    assert.ok(node, `missing ${name} declaration`);
+    return node;
+  };
+  const memberNames = (node) =>
+    node.members.map((member) => member.name?.getText(source)).filter(Boolean);
+
+  assert.equal(
+    memberNames(declaration(ts.isClassDeclaration, "NoritoRpcClient")).includes("close"),
+    false,
+  );
+  assert.equal(
+    memberNames(
+      declaration(ts.isInterfaceDeclaration, "ToriiBrowserClientOptions"),
+    ).includes("config"),
+    false,
+  );
+  assert.equal(
+    memberNames(
+      declaration(ts.isInterfaceDeclaration, "ToriiBrowserRequestOptions"),
+    ).includes("successStatuses"),
+    false,
+  );
+
+  for (const browserDeclaration of ["browser.d.ts", "torii-browser.d.ts"]) {
+    const text = fs.readFileSync(path.join(PACKAGE_ROOT, browserDeclaration), "utf8");
+    assert.doesNotMatch(text, /ToriiBrowserClient as ToriiClient/u);
+    assert.doesNotMatch(text, /ToriiBrowserHttpError as ToriiHttpError/u);
   }
 });
 
@@ -258,7 +307,6 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "privacy-capabilities.d.ts",
     "repo-agreement.d.ts",
     "sumeragi-typed.d.ts",
-    "src/index.js",
     "dist/index.js",
     "dist/atomicPrivateSettlement.js",
     "dist/ivmArtifact.js",
@@ -272,12 +320,20 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     ...requiredLazyPaths,
     "nexus-app.d.ts",
     ...PORTABLE_RECIPES,
-    "scripts/build-dist.mjs",
   ];
   const metadata = {
     files: requiredPaths.map((entry) => ({ path: entry })),
   };
   assert.doesNotThrow(() => validatePackPaths(metadata));
+  for (const unpublishedPath of ["src/index.js", "scripts/build-dist.mjs"]) {
+    assert.throws(
+      () => validatePackPaths({
+        files: [...metadata.files, { path: unpublishedPath }],
+      }),
+      /unpublished development path/u,
+      unpublishedPath,
+    );
+  }
 
   for (const requiredPath of [
     "index.d.ts",
@@ -334,13 +390,18 @@ test("runtime namespace declarations expose exactly their module exports", async
 
   for (const [namespaceName, moduleName, internalNames = []] of [
     ["Torii", "toriiClient"],
-    ["Norito", "norito", ["_canonicalAccountIdNoritoValue"]],
+    [
+      "Norito",
+      "norito",
+      ["_canonicalAccountIdNoritoValue", "_createNoritoInstructionApi"],
+    ],
     [
       "Crypto",
       "crypto",
       [
         "CONFIDENTIAL_MEMO_SUITES_V1",
         "ConfidentialMemoKeypairV1",
+        "_createCryptoApi",
         "generateConfidentialMemoKeypairV1",
         "openConfidentialMemoV1",
         "sealConfidentialMemoV1",
@@ -668,6 +729,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         ...imports,
         `import * as RootSdk from ${JSON.stringify(PACKAGE_NAME)};`,
         `import { Crypto, Norito, NumericV1, SorafsOrderbookSubmissionAmbiguousError, Torii, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type CanonicalRequestAuth, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsOrderbookSubmissionReceipt, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { buildSetAssetTransferBlacklistInstruction, buildSetAssetTransferControlInstruction, type AssetTransferControlWindow, type AssetTransferLimitInput, type SetAssetTransferBlacklistInstruction, type SetAssetTransferControlInstruction } from ${JSON.stringify(PACKAGE_NAME)};`,
         `import { decodePrivacyExact12CapabilityManifestV1, getPrivacyExact12CapabilityManifestV1, type PrivacyExact12CapabilityManifestV1 } from ${JSON.stringify(`${PACKAGE_NAME}/privacy-capabilities`)};`,
         'const algorithm: CryptoAlgorithm = "ed25519";',
         "const cancelAssetLockMaxLockIdUtf8BytesV1: 4096 = CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1;",
@@ -684,6 +746,16 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         'const setAvailability: SetAssetTransferAvailabilityInstruction = buildSetAssetTransferAvailabilityInstruction({ accountId: "i105...", assetDefinitionId: "asset...", expectedRevision: 0, incoming: availability, outgoing: "Enabled" });',
         '// @ts-expect-error availability spellings are exact.',
         'buildSetAssetTransferAvailabilityInstruction({ accountId: "i105...", assetDefinitionId: "asset...", expectedRevision: 0, incoming: "disabled", outgoing: "Enabled" });',
+        'const setBlacklist: SetAssetTransferBlacklistInstruction = buildSetAssetTransferBlacklistInstruction({ accountId: "i105...", assetDefinitionId: "asset...", blacklisted: true });',
+        'const controlWindow: AssetTransferControlWindow = "DAY";',
+        'const controlLimits: readonly AssetTransferLimitInput[] = [{ window: controlWindow, capAmount: "100" }, { window: "WEEK", capAmount: null }];',
+        'const setControl: SetAssetTransferControlInstruction = buildSetAssetTransferControlInstruction({ accountId: "i105...", assetDefinitionId: "asset...", limits: controlLimits });',
+        '// @ts-expect-error blacklist state is an exact boolean.',
+        'buildSetAssetTransferBlacklistInstruction({ accountId: "i105...", assetDefinitionId: "asset...", blacklisted: "true" });',
+        '// @ts-expect-error control window spellings are exact.',
+        'buildSetAssetTransferControlInstruction({ accountId: "i105...", assetDefinitionId: "asset...", limits: [{ window: "day", capAmount: "1" }] });',
+        '// @ts-expect-error transfer cap quantities reject lossy JavaScript numbers.',
+        'buildSetAssetTransferControlInstruction({ accountId: "i105...", assetDefinitionId: "asset...", limits: [{ window: "DAY", capAmount: 1 }] });',
         "const toriiConstructor: typeof ToriiClient = Torii.ToriiClient;",
         "declare const signedOrderbookTransaction: Uint8Array;",
         "const orderbookReceipt: Promise<SorafsOrderbookSubmissionReceipt> = new ToriiClient('https://torii.example').submitSorafsOrderbookOrder(signedOrderbookTransaction, { expectedReceiptSigner: 'ed0120...' });",
@@ -766,6 +838,18 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "void Torii.generateKeyPair;",
         "// @ts-expect-error Crypto does not expose Torii clients.",
         "void Crypto.ToriiClient;",
+        "// @ts-expect-error The source-only crypto runtime factory is not public.",
+        "void RootSdk._createCryptoApi;",
+        "// @ts-expect-error The Crypto namespace omits source-only runtime factories.",
+        "void Crypto._createCryptoApi;",
+        "// @ts-expect-error The crypto subpath omits source-only runtime factories.",
+        `void export${cryptoIndex}._createCryptoApi;`,
+        "// @ts-expect-error Source-only transaction runtime factories are not public.",
+        "void RootSdk._createTransactionApi;",
+        "// @ts-expect-error The Norito namespace omits source-only runtime factories.",
+        "void Norito._createNoritoInstructionApi;",
+        "// @ts-expect-error The Norito subpath omits source-only runtime factories.",
+        `void export${noritoIndex}._createNoritoInstructionApi;`,
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
         `void [${bindings.join(", ")}];`,
@@ -798,7 +882,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
 });
 
 test("dedicated browser declarations compile without ambient Node types", () => {
-  for (const declaration of ["index.d.ts", "src/blockProofTypes.d.ts"]) {
+  for (const declaration of ["index.d.ts", "dist/blockProofTypes.d.ts"]) {
     const source = fs.readFileSync(path.join(PACKAGE_ROOT, declaration), "utf8");
     assert.doesNotMatch(source, /reference types=["']node["']/u, declaration);
     assert.doesNotMatch(source, /["']node:/u, declaration);

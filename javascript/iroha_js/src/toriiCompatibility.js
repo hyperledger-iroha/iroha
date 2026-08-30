@@ -39,19 +39,18 @@ export class ToriiDataModelMismatchError extends Error {
 
 /**
  * Cache and coalesce the node-capability probe required before transaction
- * admission. The state fields remain owned by ToriiClient so its internal
- * object shape and compatibility cache lifecycle remain unchanged.
+ * admission. The private state record is owned by ToriiClient.
  */
 export function ensureNodeDataModelCompatibility(state, fetchCapabilities) {
   const expected = EXPECTED_DATA_MODEL_VERSION;
-  if (state._dataModelValidation.status === "matched") {
+  if (state.dataModelValidation.status === "matched") {
     return;
   }
-  if (state._dataModelValidation.status === "mismatched") {
-    throw new ToriiDataModelMismatchError(expected, state._dataModelValidation.actual);
+  if (state.dataModelValidation.status === "mismatched") {
+    throw new ToriiDataModelMismatchError(expected, state.dataModelValidation.actual);
   }
-  if (state._dataModelValidationPromise) {
-    return state._dataModelValidationPromise;
+  if (state.dataModelValidationPromise) {
+    return state.dataModelValidationPromise;
   }
   const promise = (async () => {
     let capabilities;
@@ -59,23 +58,23 @@ export function ensureNodeDataModelCompatibility(state, fetchCapabilities) {
       capabilities = await fetchCapabilities();
     } catch (error) {
       if (error instanceof ValidationError) {
-        state._dataModelValidation = { status: "mismatched", actual: null };
+        state.dataModelValidation = { status: "mismatched", actual: null };
         throw new ToriiDataModelMismatchError(expected, null, error);
       }
       throw error;
     }
     const actual = capabilities.dataModelVersion;
     if (actual !== expected) {
-      state._dataModelValidation = { status: "mismatched", actual };
+      state.dataModelValidation = { status: "mismatched", actual };
       throw new ToriiDataModelMismatchError(expected, actual);
     }
-    state._dataModelValidation = { status: "matched", actual };
+    state.dataModelValidation = { status: "matched", actual };
   })();
-  state._dataModelValidationPromise = promise;
+  state.dataModelValidationPromise = promise;
   promise
     .finally(() => {
-      if (state._dataModelValidationPromise === promise) {
-        state._dataModelValidationPromise = null;
+      if (state.dataModelValidationPromise === promise) {
+        state.dataModelValidationPromise = null;
       }
     })
     .catch(() => {

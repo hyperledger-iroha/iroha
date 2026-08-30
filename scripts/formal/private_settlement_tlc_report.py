@@ -20,6 +20,14 @@ SANY_VERSION_MARKER: Final = "****** SANY2 Version 2.1 created 24 February 2014"
 
 COUNT_MODEL: Final = "AtomicPrivateSettlementV1.tla"
 INDEXED_MODEL: Final = "AtomicPrivateSettlementV1CommitteeFaults.tla"
+EVIDENCE_CODE_SOURCE_PATHS: Final[tuple[str, ...]] = (
+    "scripts/formal/private_settlement_tlc_report.py",
+    "scripts/formal/run_atomic_private_settlement_tlc.sh",
+    "scripts/formal/sumeragi_v2_tlc_result_contract.sh",
+    "scripts/formal/resolve_java.sh",
+)
+EVIDENCE_CODE_DOMAIN: Final = b"iroha-aps-formal-evidence-code-v1\0"
+MAX_JAVA_VERSION_OUTPUT_BYTES: Final = 64 * 1024
 
 CONFIGURATIONS: Final[tuple[tuple[str, str, str], ...]] = (
     ("AtomicPrivateSettlementV1_3.cfg", "pass", COUNT_MODEL),
@@ -140,6 +148,20 @@ def _positive_int(raw: str, *, label: str) -> int:
     if value <= 0:
         raise ReportError(f"{label} must be positive")
     return value
+
+
+def validate_sany(*, model: str, stdout: str, stderr: str, status: int) -> None:
+    """Require one clean SANY semantic pass for the named model."""
+
+    semantic_marker = f"Semantic processing of module {Path(model).stem}"
+    if (
+        status != 0
+        or stderr
+        or stdout.splitlines().count(SANY_VERSION_MARKER) != 1
+        or stdout.splitlines().count(semantic_marker) != 1
+        or _SANY_FAILURE_DIAGNOSTIC.search(stdout)
+    ):
+        raise ReportError(f"{model}: SANY did not produce one clean semantic result")
 
 
 def parse_run(
@@ -266,6 +288,58 @@ def formal_package_sha256(formal_dir: Path) -> str:
     return digest.hexdigest()
 
 
+def evidence_code_sha256(evidence_dir: Path) -> str:
+    """Hash the frozen producer, runner, and helper scripts with source paths."""
+
+    digest = hashlib.sha256(EVIDENCE_CODE_DOMAIN)
+    for source_path in EVIDENCE_CODE_SOURCE_PATHS:
+        path = evidence_dir / Path(source_path).name
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise ReportError(f"cannot read formal evidence code {path}: {error}") from error
+        encoded_path = source_path.encode("utf-8")
+        digest.update(len(encoded_path).to_bytes(8, "big"))
+        digest.update(encoded_path)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def java_runtime_record(
+    *,
+    binary_sha256: str,
+    binary_bytes: int,
+    version_output_path: Path,
+) -> dict[str, object]:
+    """Validate and bind the Java executable identity reported by the runner."""
+
+    if re.fullmatch(r"[0-9a-f]{64}", binary_sha256) is None:
+        raise ReportError("Java binary SHA-256 is not canonical")
+    if isinstance(binary_bytes, bool) or binary_bytes <= 0:
+        raise ReportError("Java binary byte count must be positive")
+    try:
+        version_payload = version_output_path.read_bytes()
+        version_output = version_payload.decode("utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ReportError(f"cannot read Java version output: {error}") from error
+    if (
+        not version_payload
+        or len(version_payload) > MAX_JAVA_VERSION_OUTPUT_BYTES
+        or "\0" in version_output
+        or re.search(r'(?m)^(?:openjdk|java) version "[0-9][^"]*"', version_output)
+        is None
+    ):
+        raise ReportError("Java version output is not one bounded runtime identity")
+    return {
+        "binary_sha256": binary_sha256,
+        "binary_bytes": binary_bytes,
+        "version_output": version_output,
+        "version_output_sha256": hashlib.sha256(version_payload).hexdigest(),
+        "version_output_bytes": len(version_payload),
+    }
+
+
 def _read_run(
     logs_dir: Path,
     name: str,
@@ -328,15 +402,12 @@ def _read_sany(sany_dir: Path, model: str) -> bytes:
         stderr_bytes.decode("utf-8")
     except (OSError, UnicodeError, ValueError) as error:
         raise ReportError(f"cannot read SANY artifacts for {model}: {error}") from error
-    semantic_marker = f"Semantic processing of module {Path(model).stem}"
-    if (
-        status != 0
-        or stderr_bytes
-        or stdout.splitlines().count(SANY_VERSION_MARKER) != 1
-        or stdout.splitlines().count(semantic_marker) != 1
-        or _SANY_FAILURE_DIAGNOSTIC.search(stdout)
-    ):
-        raise ReportError(f"{model}: SANY did not produce one clean semantic result")
+    validate_sany(
+        model=model,
+        stdout=stdout,
+        stderr=stderr_bytes.decode("utf-8"),
+        status=status,
+    )
     return (
         f"===== SANY {model} stdout (status {status}) =====\n".encode("ascii")
         + stdout_bytes
@@ -354,6 +425,9 @@ def build_report(
     commit: str,
     tool_version: str,
     tool_sha256: str,
+    java_binary_sha256: str,
+    java_binary_bytes: int,
+    java_version_output_path: Path,
     seed: int,
     fingerprint_index: int,
     workers: str,
@@ -392,6 +466,12 @@ def build_report(
         raise ReportError("transcript artifact path must be safe and relative")
 
     package_digest = formal_package_sha256(formal_dir)
+    evidence_code_digest = evidence_code_sha256(formal_dir)
+    runtime = java_runtime_record(
+        binary_sha256=java_binary_sha256,
+        binary_bytes=java_binary_bytes,
+        version_output_path=java_version_output_path,
+    )
     summaries: list[RunSummary] = []
     metadata = (
         "===== AtomicPrivateSettlementV1 TLC release run =====\n"
@@ -399,6 +479,11 @@ def build_report(
         f"tool_version={tool_version}\n"
         f"tool_sha256={tool_sha256}\n"
         f"model_sha256={package_digest}\n"
+        f"evidence_code_sha256={evidence_code_digest}\n"
+        f"java_binary_sha256={runtime['binary_sha256']}\n"
+        f"java_binary_bytes={runtime['binary_bytes']}\n"
+        f"java_version_output_sha256={runtime['version_output_sha256']}\n"
+        f"java_version_output_bytes={runtime['version_output_bytes']}\n"
         f"seed={seed}\n"
         f"fingerprint_index={fingerprint_index}\n"
         f"workers={workers}\n"
@@ -429,6 +514,8 @@ def build_report(
         "tool_version": tool_version,
         "tool_sha256": tool_sha256,
         "model_sha256": package_digest,
+        "evidence_code_sha256": evidence_code_digest,
+        "java_runtime": runtime,
         "configurations": [summary.as_json() for summary in summaries],
         "passed": True,
         "transcript": {
@@ -470,6 +557,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--commit", required=True)
     parser.add_argument("--tool-version", required=True)
     parser.add_argument("--tool-sha256", required=True)
+    parser.add_argument("--java-binary-sha256", required=True)
+    parser.add_argument("--java-binary-bytes", required=True, type=int)
+    parser.add_argument("--java-version-output", required=True, type=Path)
     parser.add_argument("--seed", required=True, type=int)
     parser.add_argument("--fingerprint-index", required=True, type=int)
     parser.add_argument("--workers", required=True)
@@ -491,6 +581,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             commit=args.commit,
             tool_version=args.tool_version,
             tool_sha256=args.tool_sha256,
+            java_binary_sha256=args.java_binary_sha256,
+            java_binary_bytes=args.java_binary_bytes,
+            java_version_output_path=args.java_version_output,
             seed=args.seed,
             fingerprint_index=args.fingerprint_index,
             workers=args.workers,

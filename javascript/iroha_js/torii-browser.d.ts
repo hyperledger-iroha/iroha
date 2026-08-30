@@ -5,6 +5,4 @@ export {
   ToriiBrowserClient,
   ToriiBrowserHttpError,
   ToriiBrowserStreamGapError,
-  ToriiBrowserClient as ToriiClient,
-  ToriiBrowserHttpError as ToriiHttpError,
 } from "./index.js";

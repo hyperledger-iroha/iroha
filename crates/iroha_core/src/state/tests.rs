@@ -969,6 +969,48 @@ fn test_nexus_fixture_constructor_opens_custom_primary_without_archiving_default
         "opening a fixture at its authoritative primary must not archive synthetic default geometry"
     );
 }
+#[test]
+fn test_nexus_fixture_constructor_matches_configured_primary_replay_lineage() {
+    let secondary = LaneConfig {
+        id: LaneId::new(1),
+        alias: "secondary".to_owned(),
+        ..LaneConfig::default()
+    };
+    let configured_catalog =
+        LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), secondary])
+            .expect("two-lane configured catalog");
+    let primary_replay_catalog = LaneCatalog::new(
+        configured_catalog.lane_count(),
+        vec![configured_catalog.lanes()[0].clone()],
+    )
+    .expect("configured primary replay catalog");
+    let expected_primary =
+        derive_static_lane_incarnations(&primary_replay_catalog)[&LaneId::SINGLE];
+    let complete_static = derive_static_lane_incarnations(&configured_catalog);
+    assert_ne!(
+        expected_primary,
+        complete_static[&LaneId::SINGLE],
+        "the regression requires a catalog whose primary-only and complete static identities differ"
+    );
+
+    let state = State::new_with_pre_genesis_nexus_for_testing(
+        World::default(),
+        iroha_config::parameters::actual::Nexus {
+            lane_catalog: configured_catalog,
+            ..Default::default()
+        },
+        LiveQueryStore::start_test(),
+    );
+    let lineage = state.lane_incarnation_lineage_snapshot();
+    assert_eq!(lineage.len(), 2);
+    assert_eq!(lineage[&LaneId::SINGLE].generation, 0);
+    assert_eq!(lineage[&LaneId::SINGLE].incarnation, expected_primary);
+    assert_eq!(lineage[&LaneId::new(1)].generation, 0);
+    assert_eq!(
+        lineage[&LaneId::new(1)].incarnation,
+        complete_static[&LaneId::new(1)]
+    );
+}
 state_test! { sync insert_domain_for_testing_replaces_owner_index_without_empty_bucket
     let domain_id = DomainId::try_new("fixture", "universal").expect("valid domain id");
     let mut world = World::new();

@@ -125,7 +125,7 @@ pub use iroha_torii_shared::private_settlement_api::{
 
 /// Exact public-map count vector returned by the non-shipping APS evidence route.
 #[cfg(feature = "test-network-private-settlement-evidence")]
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PrivateSettlementTestNetworkStateCountsV1 {
     /// Governed audit-policy records.
@@ -161,7 +161,7 @@ pub struct PrivateSettlementTestNetworkStateCountsV1 {
 /// This DTO is unavailable in ordinary shipping builds and contains no map
 /// keys, plaintext, ciphertext, commitment values, or reservation owners.
 #[cfg(feature = "test-network-private-settlement-evidence")]
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
     /// Evidence format version.

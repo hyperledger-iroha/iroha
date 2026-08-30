@@ -4,7 +4,8 @@ import { Buffer } from "node:buffer";
 
 import { AccountAddress } from "../src/address.js";
 import { isCanonicalGovernanceSelectorV1 } from "../src/governanceSelector.js";
-import { noritoEncodeInstruction } from "../src/norito.js";
+import { _createNoritoInstructionApi } from "../src/norito.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 
 const TEST_ACCOUNT = AccountAddress.fromAccount({
   publicKey: Buffer.from(
@@ -101,22 +102,10 @@ const SELECTOR_INSTRUCTIONS = [
   ],
 ];
 
-function withInstructionBinding(binding, body) {
-  const hadBinding = Object.prototype.hasOwnProperty.call(
-    globalThis,
-    "__IROHA_NORITO_BINDING__",
-  );
-  const previous = globalThis.__IROHA_NORITO_BINDING__;
-  globalThis.__IROHA_NORITO_BINDING__ = binding;
-  try {
-    return body();
-  } finally {
-    if (hadBinding) {
-      globalThis.__IROHA_NORITO_BINDING__ = previous;
-    } else {
-      delete globalThis.__IROHA_NORITO_BINDING__;
-    }
-  }
+function instructionEncoder(binding) {
+  return _createNoritoInstructionApi(
+    createNativeRuntime(binding),
+  ).noritoEncodeInstruction;
 }
 
 test("governance selector grammar accepts 1 and 128 ASCII bytes", () => {
@@ -140,46 +129,43 @@ test("raw governance instructions reject noncanonical selectors before dispatch"
         return Buffer.from([0]);
       },
     };
-    withInstructionBinding(binding, () => {
-      for (const [instructionName, instruction] of SELECTOR_INSTRUCTIONS) {
-        for (const [selectorLabel, selector] of INVALID_SELECTORS) {
-          for (const representation of ["object", "JSON text"]) {
-            const payload = instruction(selector);
-            const input = representation === "object" ? payload : JSON.stringify(payload);
-            assert.throws(
-              () => noritoEncodeInstruction(input),
-              /must be 1-128 RFC 3986 unreserved ASCII characters/u,
-              `${nativeMode} ${instructionName} ${selectorLabel} ${representation}`,
-            );
-            assert.equal(
-              nativeCalls,
-              0,
-              `${nativeMode} dispatched ${instructionName} ${selectorLabel} ${representation}`,
-            );
-          }
+    const noritoEncodeInstruction = instructionEncoder(binding);
+    for (const [instructionName, instruction] of SELECTOR_INSTRUCTIONS) {
+      for (const [selectorLabel, selector] of INVALID_SELECTORS) {
+        for (const representation of ["object", "JSON text"]) {
+          const payload = instruction(selector);
+          const input = representation === "object" ? payload : JSON.stringify(payload);
+          assert.throws(
+            () => noritoEncodeInstruction(input),
+            /must be 1-128 RFC 3986 unreserved ASCII characters/u,
+            `${nativeMode} ${instructionName} ${selectorLabel} ${representation}`,
+          );
+          assert.equal(
+            nativeCalls,
+            0,
+            `${nativeMode} dispatched ${instructionName} ${selectorLabel} ${representation}`,
+          );
         }
       }
-    });
+    }
   }
 });
 
-test("pure-JS raw instruction encoding accepts selector boundary lengths", () => {
+test("pure-JS raw instruction encoding owns selector boundary lengths", () => {
   let nativeCalls = 0;
-  withInstructionBinding(
+  const noritoEncodeInstruction = instructionEncoder(
     {
       noritoEncodeInstruction() {
         nativeCalls += 1;
         throw new Error("unsupported instruction");
       },
     },
-    () => {
-      for (const selector of VALID_SELECTORS) {
-        for (const [instructionName, instruction] of SELECTOR_INSTRUCTIONS) {
-          const encoded = noritoEncodeInstruction(instruction(selector));
-          assert.ok(encoded.length > 0, `${instructionName} ${selector.length}`);
-        }
-      }
-    },
   );
-  assert.equal(nativeCalls, VALID_SELECTORS.length * SELECTOR_INSTRUCTIONS.length);
+  for (const selector of VALID_SELECTORS) {
+    for (const [instructionName, instruction] of SELECTOR_INSTRUCTIONS) {
+      const encoded = noritoEncodeInstruction(instruction(selector));
+      assert.ok(encoded.length > 0, `${instructionName} ${selector.length}`);
+    }
+  }
+  assert.equal(nativeCalls, 0);
 });

@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 
-import { SorafsGatewayFetchError, sorafsGatewayFetch } from "../src/sorafs.js";
+import {
+  _createSorafsGatewayApi,
+  SorafsGatewayFetchError,
+  sorafsGatewayFetch as defaultSorafsGatewayFetch,
+} from "../src/sorafs.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 const test = baseTest;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,6 +19,55 @@ const MANIFEST_HEX = "aa".repeat(32);
 const PROVIDER_ID_HEX = "bb".repeat(32);
 const SECOND_PROVIDER_ID_HEX = "cc".repeat(32);
 const GATEWAY_PUBLIC_KEY_HEX = "dd".repeat(32);
+
+function sorafsGatewayFetchWithBinding(
+  binding,
+  manifestIdHex,
+  chunkerHandle,
+  planJson,
+  providers,
+  options = {},
+) {
+  return _createSorafsGatewayApi(createNativeRuntime(binding))
+    .sorafsGatewayFetch(
+      manifestIdHex,
+      chunkerHandle,
+      planJson,
+      providers,
+      options,
+    );
+}
+
+function sorafsGatewayFetch(
+  manifestIdHex,
+  chunkerHandle,
+  planJson,
+  providers,
+  options = {},
+) {
+  if (
+    options !== null &&
+    typeof options === "object" &&
+    Object.prototype.hasOwnProperty.call(options, "__nativeBinding")
+  ) {
+    const { __nativeBinding, ...publicOptions } = options;
+    return sorafsGatewayFetchWithBinding(
+      __nativeBinding,
+      manifestIdHex,
+      chunkerHandle,
+      planJson,
+      providers,
+      publicOptions,
+    );
+  }
+  return defaultSorafsGatewayFetch(
+    manifestIdHex,
+    chunkerHandle,
+    planJson,
+    providers,
+    options,
+  );
+}
 
 function createStubResult() {
   return {

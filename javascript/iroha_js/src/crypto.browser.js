@@ -12,13 +12,11 @@ import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 import {
   CRYPTO_ALGORITHMS,
   normalizeCryptoAlgorithm,
-  SUPPORTED_CRYPTO_ALGORITHMS,
 } from "./cryptoAlgorithms.js";
 
 export {
   CRYPTO_ALGORITHMS,
   normalizeCryptoAlgorithm,
-  SUPPORTED_CRYPTO_ALGORITHMS,
 };
 
 const ED25519_SEED_LENGTH = 32;
@@ -117,7 +115,7 @@ export function supportedCryptoAlgorithms() {
 
 /**
  * Generate an Ed25519 key pair. Seed material is hashed to 32 bytes when needed.
- * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: string}} [options]
+ * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: import("../index.js").CryptoAlgorithm}} [options]
  * @returns {{algorithm: "ed25519", publicKey: Buffer, privateKey: Buffer}}
  */
 export function generateKeyPair(options = {}) {
@@ -125,7 +123,10 @@ export function generateKeyPair(options = {}) {
   if (algorithm !== CRYPTO_ALGORITHMS.ED25519) {
     return unsupported(`generateKeyPair(${algorithm})`);
   }
-  const seed = options.seed ? normalizeSeed(options.seed) : Buffer.from(ed25519.utils.randomPrivateKey());
+  const seed =
+    options.seed === undefined
+      ? Buffer.from(ed25519.utils.randomPrivateKey())
+      : normalizeSeed(options.seed);
   return {
     algorithm: "ed25519",
     publicKey: Buffer.from(ed25519.getPublicKey(seed)),
@@ -136,7 +137,7 @@ export function generateKeyPair(options = {}) {
 /**
  * Derive the public key for a given private key (32-byte seed or 64-byte seed+public concatenation).
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
- * @param {{algorithm?: string}} [options]
+ * @param {{algorithm?: import("../index.js").CryptoAlgorithm}} [options]
  * @returns {Buffer}
  */
 export function publicKeyFromPrivate(privateKey, options = {}) {

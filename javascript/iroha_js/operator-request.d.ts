@@ -1,5 +1,5 @@
 import type { Buffer } from "buffer";
-import type { NetworkId } from "./src/networkId.js";
+import type { NetworkId } from "./dist/networkId.js";
 
 /** Exact-network signer used for fresh, one-shot Torii operator requests. */
 export class OperatorSigningContext {

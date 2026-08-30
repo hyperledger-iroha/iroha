@@ -1249,7 +1249,7 @@ fn read_bound_real_process_request() -> Result<(RealProcessBoundRequestV1, Strin
     );
     let mut file = File::open(&path).wrap_err("open real-process request")?;
     let mut raw = Vec::new();
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(u64::try_from(HARNESS_MAX_JSON_BYTES + 1).expect("bound fits u64"))
         .read_to_end(&mut raw)
         .wrap_err("read real-process request")?;
@@ -1655,7 +1655,7 @@ fn read_stable_leakage_source(path: &Path) -> Result<Vec<u8>> {
         "leakage source changed before open"
     );
     let mut bytes = Vec::new();
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(u64::try_from(LEAKAGE_MAX_SOURCE_BYTES + 1).expect("bound fits u64"))
         .read_to_end(&mut bytes)?;
     let after = file.metadata()?;
@@ -1947,8 +1947,8 @@ fn submit_leakage_carrier_with_event(
                         return Ok((
                             norito::json!({
                                 "peer_index": 0,
-                                "source_sha256": sha256_hex(&source),
-                                "source_bytes": source.len(),
+                                "source_sha256": (sha256_hex(&source)),
+                                "source_bytes": (source.len()),
                             }),
                             source,
                         ));
@@ -1993,8 +1993,8 @@ fn leakage_query_records(
             Ok((
                 norito::json!({
                     "peer_index": peer_index,
-                    "source_sha256": sha256_hex(&encoded),
-                    "source_bytes": encoded.len(),
+                    "source_sha256": (sha256_hex(&encoded)),
+                    "source_bytes": (encoded.len()),
                 }),
                 encoded,
             ))
@@ -2044,12 +2044,12 @@ fn leakage_telemetry_records(
         .map(|(peer_index, (source, status, metrics))| {
             norito::json!({
                 "peer_index": peer_index,
-                "status_sha256": sha256_hex(status),
-                "status_bytes": status.len(),
-                "metrics_sha256": sha256_hex(metrics),
-                "metrics_bytes": metrics.len(),
-                "source_sha256": sha256_hex(source),
-                "source_bytes": source.len(),
+                "status_sha256": (sha256_hex(status)),
+                "status_bytes": (status.len()),
+                "metrics_sha256": (sha256_hex(metrics)),
+                "metrics_bytes": (metrics.len()),
+                "source_sha256": (sha256_hex(source)),
+                "source_bytes": (source.len()),
             })
         })
         .collect();
@@ -2092,11 +2092,11 @@ fn leakage_operator_log_records(
             source.extend_from_slice(&stderr);
             sources.push(source);
             Ok(norito::json!({
-                "peer_index": snapshot.index,
-                "stdout_sha256": sha256_hex(&stdout),
-                "stderr_sha256": sha256_hex(&stderr),
-                "stdout_bytes": stdout.len(),
-                "stderr_bytes": stderr.len(),
+                "peer_index": (snapshot.index),
+                "stdout_sha256": (sha256_hex(&stdout)),
+                "stderr_sha256": (sha256_hex(&stderr)),
+                "stdout_bytes": (stdout.len()),
+                "stderr_bytes": (stderr.len()),
             }))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -2375,7 +2375,7 @@ fn read_owner_only_bounded(path: &Path) -> Result<Vec<u8>> {
         "owner-only file changed before open"
     );
     let mut bytes = Vec::new();
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(u64::try_from(HARNESS_MAX_JSON_BYTES + 1).expect("bound fits u64"))
         .read_to_end(&mut bytes)?;
     let after = file.metadata()?;
@@ -5224,10 +5224,10 @@ fn materialize_fault_campaign_payload(
                 "healed": true,
                 "converged": true,
                 "partial_visibility_observed": false,
-                "control_transcript_sha256": control_sha.clone(),
-                "control_transcript_record": make_reference("loss_trials", index),
-                "observation_capture_sha256": observation_sha.clone(),
-                "observation_capture_record": make_reference("loss_trials", index),
+                "control_transcript_sha256": (control_sha.clone()),
+                "control_transcript_record": (make_reference("loss_trials", index)),
+                "observation_capture_sha256": (observation_sha.clone()),
+                "observation_capture_record": (make_reference("loss_trials", index)),
             })
         })
         .collect::<Vec<_>>();
@@ -5247,10 +5247,10 @@ fn materialize_fault_campaign_payload(
             "healed": true,
             "converged": true,
             "partial_visibility_observed": false,
-            "control_transcript_sha256": control_sha.clone(),
-            "control_transcript_record": make_reference("phase_cut_partitions", index),
-            "observation_capture_sha256": observation_sha.clone(),
-            "observation_capture_record": make_reference("phase_cut_partitions", index),
+            "control_transcript_sha256": (control_sha.clone()),
+            "control_transcript_record": (make_reference("phase_cut_partitions", index)),
+            "observation_capture_sha256": (observation_sha.clone()),
+            "observation_capture_record": (make_reference("phase_cut_partitions", index)),
         })
     })
     .collect::<Vec<_>>();
@@ -5272,20 +5272,20 @@ fn materialize_fault_campaign_payload(
             "durable_state_reconciled": true,
             "converged": true,
             "partial_visibility_observed": false,
-            "control_transcript_sha256": control_sha.clone(),
-            "control_transcript_record": make_reference("crash_recoveries", index),
-            "observation_capture_sha256": observation_sha.clone(),
-            "observation_capture_record": make_reference("crash_recoveries", index),
+            "control_transcript_sha256": (control_sha.clone()),
+            "control_transcript_record": (make_reference("crash_recoveries", index)),
+            "observation_capture_sha256": (observation_sha.clone()),
+            "observation_capture_record": (make_reference("crash_recoveries", index)),
         })
     })
     .collect::<Vec<_>>();
     Ok(norito::json!({
-        "committee_validator_restarts": (0..request.participants).collect::<Vec<_>>(),
+        "committee_validator_restarts": ((0..request.participants).collect::<Vec<_>>()),
         "maximum_simultaneously_unavailable_per_committee": 1,
         "quorum_progress_with_one_unavailable": true,
         "coordinator_restarted": true,
         "global_node_restarted": true,
-        "prepare_qc_normalization": norito::json::to_value(normalization)?,
+        "prepare_qc_normalization": (norito::json::to_value(normalization)?),
         "loss_trials": loss_trials,
         "phase_cut_partitions": phase_cut_partitions,
         "crash_recoveries": crash_recoveries,
@@ -5294,7 +5294,7 @@ fn materialize_fault_campaign_payload(
             "partial_visible_observations": 0,
             "partial_spendable_observations": 0,
             "aborted_private_state_changes": 0,
-            "successful_leg_applications": request.participants,
+            "successful_leg_applications": (request.participants),
             "each_leg_applied_exactly_once": true,
             "invalid_leg_state_byte_identical": true,
             "replay_rejected": true,
@@ -5561,7 +5561,7 @@ impl TransparentControlAtomicityObserver {
             }
             client_groups[group].push((index, client));
         }
-        let mut handles = Vec::with_capacity(client_groups.len());
+        let mut handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(client_groups.len());
         for (group, clients) in client_groups.into_iter().enumerate() {
             let thread_stop = Arc::clone(&stop);
             let thread_active = Arc::clone(&active);
@@ -6209,7 +6209,7 @@ fn run_real_process_transparent_control_benchmark(
     // commits or rejects the complete DvP batch atomically.
     let replay = fresh_transparent_control_replay(&authority, &settlements, entrypoint_hash)?;
     let replay_entrypoint = replay.hash_as_entrypoint();
-    authority
+    let _replay_error = authority
         .submit_transaction_blocking(&replay)
         .expect_err("a fresh carrier reusing committed settlement ids was accepted");
     wait_for_transparent_control_balances(
@@ -6386,7 +6386,7 @@ fn run_real_process_leakage_campaign(
     };
     write_leakage_port_manifest(&network, shape)?;
     verify_controller_readiness(&network, &runtime)?;
-    let coordinator = CoordinatorProcessV1::start(&network.client())?;
+    let mut coordinator = CoordinatorProcessV1::start(&network.client())?;
     let inventory =
         collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
     let sponsor = network.client();
@@ -7428,11 +7428,11 @@ fn fault_observation_fixture(
             "governance": 1,
             "pools": 1,
             "roots": roots,
-            "nullifiers": if finalized { 4 } else { 0 },
-            "commitments": if finalized { 6 } else { 0 },
-            "encrypted_outputs": if finalized { 6 } else { 0 },
-            "replay_markers": if finalized { 1 } else { 0 },
-            "receipts": if finalized { 1 } else { 0 },
+            "nullifiers": (if finalized { 4 } else { 0 }),
+            "commitments": (if finalized { 6 } else { 0 }),
+            "encrypted_outputs": (if finalized { 6 } else { 0 }),
+            "replay_markers": (if finalized { 1 } else { 0 }),
+            "receipts": (if finalized { 1 } else { 0 }),
             "abort_markers": 0,
             "staged_pool_heads": 0,
             "staged_nullifiers": 0,

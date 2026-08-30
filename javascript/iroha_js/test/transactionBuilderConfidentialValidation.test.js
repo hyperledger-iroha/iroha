@@ -1,10 +1,9 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildConfidentialTransferProofV2,
-  buildConfidentialUnshieldProofV2,
-  buildConfidentialUnshieldProofV3,
-} from "../src/transaction.js";
+  createConfidentialProofBuilders,
+} from "../src/confidentialProofBuilders.js";
+import { createNativeRuntime } from "../src/nativeRuntime.js";
 import { NetworkId } from "../src/networkId.js";
 
 const NETWORK_ID = NetworkId.parse(
@@ -60,7 +59,11 @@ baseTest("confidential proof builders require exact NetworkId and reject malform
         throw new Error("unshield v3 publicAmount should fail before native call");
       },
     },
-    () => {
+    ({
+      buildConfidentialTransferProofV2,
+      buildConfidentialUnshieldProofV2,
+      buildConfidentialUnshieldProofV3,
+    }) => {
       buildConfidentialTransferProofV2(baseRequest);
       assert.equal(calls.length, 1);
       assert.deepEqual(calls[0][0], NETWORK_ID_BYTES);
@@ -476,7 +479,7 @@ baseTest("confidential proof builders reject noncanonical native result shapes",
 
   withNativeBinding(
     { buildConfidentialTransferProofV2: () => result },
-    () => {
+    ({ buildConfidentialTransferProofV2 }) => {
       for (const [label, replacement, message] of [
         [
           "missing nullifiers",
@@ -549,13 +552,61 @@ baseTest("confidential proof builders reject noncanonical native result shapes",
   );
 });
 
+baseTest("confidential proof builder factories isolate immutable native runtimes", async () => {
+  const backend = "halo2/ipa";
+  const request = {
+    networkId: NETWORK_ID,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    spendKey: Buffer.alloc(32, 0x42),
+    treeCommitments: [Buffer.alloc(32, 0x55)],
+    inputs: [{
+      amount: "7",
+      rhoHex: Buffer.alloc(32, 0x51).toString("hex"),
+      diversifierHex: Buffer.alloc(32, 0x52).toString("hex"),
+      leafIndex: 0,
+    }],
+    outputs: [{
+      amount: "7",
+      rhoHex: Buffer.alloc(32, 0x53).toString("hex"),
+      ownerTagHex: Buffer.alloc(32, 0x54).toString("hex"),
+    }],
+    rootHintHex: Buffer.alloc(32, 0x56).toString("hex"),
+    verifyingKey: {
+      id: { backend },
+      record: {
+        circuit_id: "confidential-transfer-v2",
+        backend,
+        inline_key: { backend, bytes_b64: "AQID" },
+      },
+    },
+  };
+  const result = (byte) => ({
+    nullifiers: [],
+    outputCommitments: [],
+    root: Buffer.alloc(32, byte),
+    proof: Buffer.from([byte]),
+  });
+  const bindingA = {
+    buildConfidentialTransferProofV2: () => result(0xa1),
+  };
+  const apiA = createConfidentialProofBuilders(createNativeRuntime(bindingA));
+  const apiB = createConfidentialProofBuilders(createNativeRuntime({
+    buildConfidentialTransferProofV2: () => result(0xb2),
+  }));
+  bindingA.buildConfidentialTransferProofV2 = () => result(0xff);
+
+  const [proofA, proofB] = await Promise.all([
+    Promise.resolve().then(() => apiA.buildConfidentialTransferProofV2(request)),
+    Promise.resolve().then(() => apiB.buildConfidentialTransferProofV2(request)),
+  ]);
+  assert.equal(Object.isFrozen(apiA), true);
+  assert.equal(proofA.root[0], 0xa1);
+  assert.equal(proofB.root[0], 0xb2);
+});
+
 
 function withNativeBinding(binding, fn) {
-  const previous = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = binding;
-  try {
-    return fn();
-  } finally {
-    globalThis.__IROHA_NATIVE_BINDING__ = previous;
-  }
+  return fn(
+    createConfidentialProofBuilders(createNativeRuntime(binding)),
+  );
 }

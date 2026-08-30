@@ -26340,29 +26340,6 @@ impl State {
         ivm::zk::set_prover_threads(s.pipeline.ivm_prover_threads);
         Ok(s)
     }
-    pub(crate) fn reseed_static_lane_incarnations(&mut self) {
-        let incarnations = derive_static_lane_incarnations(&self.nexus.get_mut().lane_catalog);
-        let activation_heights = incarnations
-            .keys()
-            .copied()
-            .map(|lane_id| (lane_id, 0))
-            .collect();
-        *self.lane_incarnation_lineage.get_mut() = incarnations
-            .iter()
-            .map(|(&lane_id, &incarnation)| {
-                (
-                    lane_id,
-                    LaneIncarnationLineage {
-                        generation: 0,
-                        incarnation,
-                        activation_height: 0,
-                    },
-                )
-            })
-            .collect();
-        *self.lane_incarnations.get_mut() = incarnations;
-        *self.lane_incarnation_activation_heights.get_mut() = activation_heights;
-    }
     /// Synchronize Kura lane storage and manifests after an in-process test catalog mutation.
     pub(crate) fn install_active_lane_markers_for_tests(&self) {
         let nexus = self.nexus.read();
@@ -26738,11 +26715,14 @@ impl State {
     /// Create an isolated State whose Kura is opened at the supplied authoritative
     /// pre-genesis Nexus geometry.
     ///
-    /// This is intentionally separate from [`Self::set_nexus`]: installing a
-    /// fixture's initial catalog is not a runtime lifecycle transition and must
-    /// not archive a synthetic default-primary segment. Unlike the ordinary test
-    /// convenience constructors, this preserves the supplied Nexus fee and
-    /// governance settings exactly so genesis pre-execution matches peer startup.
+    /// The fixture follows the consensus-relevant production fresh-start
+    /// sequence: Kura authenticates the complete configured catalog while
+    /// opening only its physical primary, State anchors that primary, and then
+    /// the remaining configured lanes are published through
+    /// [`Self::set_nexus_from_config`].
+    /// This distinction is consensus-critical because generation-zero lane zero
+    /// is derived from the primary replay geometry, while secondary lanes are
+    /// derived when the complete configured catalog is installed.
     #[must_use]
     pub fn new_with_pre_genesis_nexus_for_testing(
         mut world: World,
@@ -26754,7 +26734,28 @@ impl State {
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         crate::sns::try_seed_default_namespace_policies(&mut world, &nexus.fees.fee_asset_id)
             .expect("pre-genesis test world must use current SNS namespace policies");
-        let kura = Kura::blank_kura_for_testing_with_lane_config(&nexus.lane_config);
+        let kura_config = iroha_config::parameters::actual::Kura {
+            init_mode: iroha_config::kura::InitMode::Strict,
+            // The authenticated temporary constructor replaces this placeholder.
+            store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            lane_history_retention:
+                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        };
+        let kura = Kura::new_temporary_with_configured_lane_catalog(
+            &kura_config,
+            &nexus.lane_config,
+            &nexus.configured_lane_catalog,
+        )
+        .expect("initialize authenticated temporary Kura for pre-genesis fixture");
+        let configured_lane_catalog = nexus.configured_lane_catalog.clone();
         let mut state = Self::try_new_with_chain(
             world,
             kura,
@@ -26764,7 +26765,16 @@ impl State {
             <_>::default(),
         )
         .expect("test fixture durable State startup journals must validate");
-        state.install_pre_genesis_nexus_for_testing(nexus);
+        state
+            .prepare_configured_primary_geometry_anchor(&configured_lane_catalog)
+            .expect("anchor configured primary geometry for pre-genesis fixture");
+        state
+            .restore_kura_lane_segments_before_startup_replay()
+            .expect("restore configured primary geometry for pre-genesis fixture");
+        state
+            .set_nexus_from_config(nexus)
+            .expect("install configured Nexus geometry for pre-genesis fixture");
+        state.install_active_lane_markers_for_tests();
         state
     }
     /// Create a test State whose isolated Kura is opened at the supplied pre-genesis Nexus
@@ -26778,53 +26788,6 @@ impl State {
         let mut state = Self::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
         state.configure_test_runtime_defaults();
         state
-    }
-    /// Bind an already configured test Kura to its matching pre-genesis Nexus fixture.
-    ///
-    /// The caller must have opened Kura with the same lane geometry. This helper
-    /// is for tests that need a named store root or custom retention policy.
-    pub(crate) fn install_pre_genesis_nexus_for_testing(
-        &mut self,
-        mut nexus: iroha_config::parameters::actual::Nexus,
-    ) {
-        assert_eq!(
-            self.committed_height(),
-            0,
-            "a pre-genesis Nexus fixture cannot replace committed state"
-        );
-        assert_eq!(
-            self.kura
-                .exact_durable_blocks_count()
-                .expect("read test Kura durable height"),
-            0,
-            "a pre-genesis Nexus fixture cannot replace durable Kura state"
-        );
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
-        let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
-        crate::sns::ensure_default_namespace_policies_match_configured(
-            &self.world.view(),
-            &configured_fee_asset_id,
-        )
-        .expect("test Nexus configuration must match current SNS namespace policies");
-        let autoscale_history_cap = autoscale_sample_history_cap(&nexus.autoscale);
-        *self.nexus.get_mut() = nexus;
-        self.reseed_static_lane_incarnations();
-        self.install_active_lane_markers_for_tests();
-        trim_autoscale_sample_history(
-            self.autoscale_sample_history.get_mut(),
-            autoscale_history_cap,
-        );
-        self.nexus_storage_budget_last_check_height
-            .store(0, Ordering::Relaxed);
-        let _ = self.refresh_axt_policies_from_directory();
-        #[cfg(feature = "telemetry")]
-        {
-            let nexus = self.nexus.get_mut();
-            self.telemetry
-                .set_nexus_catalogs(&nexus.lane_catalog, &nexus.dataspace_catalog);
-        }
     }
     fn configure_test_runtime_defaults(&mut self) {
         // Make pipeline settings conservative and single-threaded for tests to reduce

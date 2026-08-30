@@ -203,7 +203,6 @@ export {
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
 export {
   CRYPTO_ALGORITHMS,
-  SUPPORTED_CRYPTO_ALGORITHMS,
   supportedCryptoAlgorithms,
   normalizeCryptoAlgorithm,
   generateKeyPair,
@@ -447,6 +446,8 @@ export {
   buildBurnAssetInstruction,
   buildCancelAssetLockInstruction,
   buildSetAssetTransferAvailabilityInstruction,
+  buildSetAssetTransferBlacklistInstruction,
+  buildSetAssetTransferControlInstruction,
   ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1,
   CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
   KAIGI_MAX_PARTICIPANTS_V1,
@@ -524,7 +525,6 @@ export {
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
   buildFinalizeElectionInstruction,
-  encodeInstruction,
   normalizeAccountId,
   normalizeAssetId,
   normalizeAssetHoldingId,
@@ -645,9 +645,13 @@ import * as noritoNamespace from "./norito.js";
 import * as cryptoNamespace from "./crypto.js";
 
 export const Torii = toriiNamespace;
-const { _canonicalAccountIdNoritoValue: _internalAccountIdCodec, ...publicNoritoNamespace } =
-  noritoNamespace;
 const {
+  _canonicalAccountIdNoritoValue: _internalAccountIdCodec,
+  _createNoritoInstructionApi: _internalNoritoInstructionApi,
+  ...publicNoritoNamespace
+} = noritoNamespace;
+const {
+  _createCryptoApi: _internalCryptoApi,
   CONFIDENTIAL_MEMO_SUITES_V1: _nativeMemoSuites,
   ConfidentialMemoKeypairV1: _nativeMemoKeypair,
   generateConfidentialMemoKeypairV1: _generateNativeMemoKeypair,

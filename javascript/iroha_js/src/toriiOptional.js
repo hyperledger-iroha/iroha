@@ -61,6 +61,7 @@ export {
 export {
   VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
   VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+  createValidationFeeConsensusApi,
   encodeValidationFeeCurrentPolicyProofRequestV1,
   normalizeValidationFeeCheckpointV1,
   normalizeValidationFeeLedgerBindingV1,
@@ -75,6 +76,7 @@ export {
   VALIDATION_FEE_HIJIRI_QUOTE_PATH,
   VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION,
   VALIDATION_FEE_HIJIRI_QUOTE_SCHEMA,
+  createValidationFeeHijiriQuoteApi,
   encodeValidationFeeHijiriQuoteRequestV1,
   verifyValidationFeeHijiriQuoteResponseV1,
 } from "./validationFeeHijiriQuote.js";

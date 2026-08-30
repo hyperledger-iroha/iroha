@@ -2,19 +2,10 @@ import { Buffer } from "node:buffer";
 
 function isSecureProtocol(protocol) {
   const normalized = typeof protocol === "string" ? protocol.toLowerCase() : "";
-  return normalized === "https:" || normalized === "wss:";
+  return normalized === "https:";
 }
 
 function isAbsoluteUrl(candidate) {
-  if (!candidate) {
-    return false;
-  }
-  if (candidate instanceof URL) {
-    return true;
-  }
-  if (typeof candidate !== "string") {
-    return false;
-  }
   return /^[a-z][a-z0-9+.-]*:\/\//iu.test(candidate);
 }
 
@@ -33,17 +24,44 @@ function headersContainCredentials(headers) {
   );
 }
 
-function applyCredentialHeaders(headers, authToken, apiToken) {
-  if (!headers || typeof headers !== "object") {
-    return;
-  }
-  if (apiToken) {
-    if (!hasHeader(headers, "x-api-token")) {
-      headers["X-API-Token"] = String(apiToken);
+function deleteHeader(headers, name) {
+  const target = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === target) {
+      delete headers[key];
     }
   }
-  if (authToken && !hasHeader(headers, "authorization")) {
-    headers.Authorization = `Bearer ${authToken}`;
+}
+
+function setHeader(headers, name, value) {
+  if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(name)) {
+    throw new TypeError(`invalid HTTP header name: ${name}`);
+  }
+  if (typeof value !== "string" || /[\0\r\n]/u.test(value)) {
+    throw new TypeError(`HTTP header ${name} must be a single-line string`);
+  }
+  Object.defineProperty(headers, name, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
+function applyCredentialOverride(
+  headers,
+  headerName,
+  options,
+  optionName,
+  format,
+) {
+  if (!Object.hasOwn(options, optionName)) {
+    return;
+  }
+  const token = normalizeOptionalToken(options[optionName], `options.${optionName}`);
+  deleteHeader(headers, headerName);
+  if (token !== null) {
+    setHeader(headers, headerName, format(token));
   }
 }
 
@@ -57,51 +75,89 @@ export class NoritoRpcError extends Error {
 }
 
 export class NoritoRpcClient {
+  #allowInsecure;
+  #baseHost;
+  #baseProtocol;
+  #baseUrl;
+  #defaultHeaders;
+  #fetch;
+  #insecureTelemetryHook;
+  #timeoutMs;
+
   /**
    * @param {string} baseUrl Base Torii URL (e.g. http://localhost:8080).
    * @param {object} [options]
    * @param {typeof fetch} [options.fetchImpl] Custom fetch implementation. It must honor
    * `redirect: "error"` and must not retry a dispatched request body.
    * @param {Record<string, string>} [options.defaultHeaders]
-   * @param {number} [options.timeoutMs]
+   * @param {number | null} [options.timeoutMs]
    * @param {boolean} [options.allowInsecure] Allow insecure http/ws when credentials are present (dev only).
-   * @param {string} [options.authToken] Bearer token attached as Authorization when provided.
-   * @param {string} [options.apiToken] API token attached as X-API-Token when provided.
+   * @param {string | null} [options.authToken] Bearer token attached as Authorization when provided.
+   * @param {string | null} [options.apiToken] API token attached as X-API-Token when provided.
    * @param {(event: import("../index.d.ts").InsecureTransportTelemetryEvent) => void} [options.insecureTransportTelemetryHook]
    */
   constructor(baseUrl, options = {}) {
-    if (!baseUrl) {
-      throw new Error("baseUrl is required");
+    if (
+      typeof baseUrl !== "string" ||
+      baseUrl.length === 0 ||
+      baseUrl.trim() !== baseUrl
+    ) {
+      throw new TypeError("baseUrl must be a non-empty string");
     }
-    this._baseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-    const parsedBase = new URL(
-      this._baseUrl.endsWith("/") ? this._baseUrl : `${this._baseUrl}/`,
+    requireOptionsObject(options, "NoritoRpcClient options");
+
+    const parsedBase = new URL(baseUrl);
+    if (parsedBase.protocol !== "http:" && parsedBase.protocol !== "https:") {
+      throw new TypeError("baseUrl must use http or https");
+    }
+    if (parsedBase.username !== "" || parsedBase.password !== "") {
+      throw new TypeError("baseUrl must not contain credentials");
+    }
+    if (parsedBase.search !== "" || parsedBase.hash !== "") {
+      throw new TypeError("baseUrl must not contain a query or fragment");
+    }
+    const basePath = parsedBase.pathname.replace(/\/+$/u, "");
+    this.#baseUrl = `${parsedBase.origin}${basePath}`;
+    this.#baseHost = parsedBase.host;
+    this.#baseProtocol = parsedBase.protocol.toLowerCase();
+    this.#allowInsecure = normalizeBooleanOption(
+      options.allowInsecure,
+      "options.allowInsecure",
+      false,
     );
-    this._baseOrigin = `${parsedBase.protocol}//${parsedBase.host}`;
-    this._baseHost = parsedBase.host;
-    this._baseProtocol = parsedBase.protocol.toLowerCase();
-    this._allowInsecure = Boolean(options.allowInsecure);
-    this._authToken = options.authToken ?? null;
-    this._apiToken = options.apiToken ?? null;
-    this._insecureTelemetryHook =
-      typeof options.insecureTransportTelemetryHook === "function"
-        ? options.insecureTransportTelemetryHook
-        : null;
-    this._fetch = options.fetchImpl ?? globalThis.fetch;
-    if (typeof this._fetch !== "function") {
-      throw new Error("fetch implementation is required");
+    this.#insecureTelemetryHook = normalizeOptionalFunction(
+      options.insecureTransportTelemetryHook,
+      "options.insecureTransportTelemetryHook",
+    );
+    this.#fetch = options.fetchImpl ?? globalThis.fetch;
+    if (typeof this.#fetch !== "function") {
+      throw new TypeError("options.fetchImpl must be a function");
     }
-    this._defaultHeaders = normalizeHeaders(options.defaultHeaders);
-    applyCredentialHeaders(this._defaultHeaders, this._authToken, this._apiToken);
-    this._timeoutMs =
-      options.timeoutMs === undefined || options.timeoutMs === null
-        ? null
-        : Math.max(0, Number(options.timeoutMs));
-    const hasConfiguredCredentials =
-      headersContainCredentials(this._defaultHeaders) ||
-      this._authToken !== null ||
-      this._apiToken !== null;
-    if (hasConfiguredCredentials && !this._allowInsecure && !isSecureProtocol(this._baseProtocol)) {
+    const defaultHeaders = normalizeHeaders(
+      options.defaultHeaders,
+      "options.defaultHeaders",
+    );
+    applyCredentialOverride(
+      defaultHeaders,
+      "Authorization",
+      options,
+      "authToken",
+      (token) => `Bearer ${token}`,
+    );
+    applyCredentialOverride(
+      defaultHeaders,
+      "X-API-Token",
+      options,
+      "apiToken",
+      (token) => token,
+    );
+    this.#defaultHeaders = Object.freeze(defaultHeaders);
+    this.#timeoutMs = normalizeTimeout(options.timeoutMs, "options.timeoutMs");
+    if (
+      headersContainCredentials(this.#defaultHeaders) &&
+      !this.#allowInsecure &&
+      !isSecureProtocol(this.#baseProtocol)
+    ) {
       throw new Error(
         "NoritoRpcClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.",
       );
@@ -109,11 +165,7 @@ export class NoritoRpcClient {
   }
 
   get baseUrl() {
-    return this._baseUrl;
-  }
-
-  close() {
-    // Present for API parity with Python helper; no resources to release.
+    return this.#baseUrl;
   }
 
   /**
@@ -128,17 +180,21 @@ export class NoritoRpcClient {
    * @param {Record<string, string | number | boolean>} [options.params]
    * @param {AbortSignal} [options.signal]
    * @param {boolean} [options.allowAbsoluteUrl] Allow cross-host URLs when no credentials are attached.
-   * @param {string} [options.authToken] Per-call bearer token override.
-   * @param {string} [options.apiToken] Per-call API token override.
+   * @param {string | null} [options.authToken] Per-call bearer token override.
+   * @param {string | null} [options.apiToken] Per-call API token override.
    * @returns {Promise<Uint8Array>}
    */
   async call(path, payload, options = {}) {
+    requireOptionsObject(options, "NoritoRpcClient.call options");
+    if (typeof path !== "string" || path.length === 0) {
+      throw new TypeError("path must be a non-empty string");
+    }
     const body = normalizePayload(payload);
-    const method = (options.method ?? "POST").toUpperCase();
+    const method = normalizeMethod(options.method);
     const pathIsAbsolute = isAbsoluteUrl(path);
     const urlObj = pathIsAbsolute
       ? new URL(path)
-      : new URL(path ?? "", `${this._baseUrl}/`);
+      : new URL(path ?? "", `${this.#baseUrl}/`);
     if (options.params && Object.keys(options.params).length > 0) {
       for (const [key, value] of Object.entries(options.params)) {
         if (value === undefined || value === null) {
@@ -148,9 +204,19 @@ export class NoritoRpcClient {
       }
     }
     const protocol = urlObj.protocol.toLowerCase();
-    const originMatches = urlObj.host === this._baseHost && protocol === this._baseProtocol;
+    if (protocol !== "http:" && protocol !== "https:") {
+      throw new TypeError("NoritoRpcClient.call URL must use http or https");
+    }
+    if (urlObj.username !== "" || urlObj.password !== "") {
+      throw new TypeError("NoritoRpcClient.call URL must not contain credentials");
+    }
+    if (urlObj.hash !== "") {
+      throw new TypeError("NoritoRpcClient.call URL must not contain a fragment");
+    }
+    const originMatches =
+      urlObj.host === this.#baseHost && protocol === this.#baseProtocol;
     const headers = {
-      ...this._defaultHeaders,
+      ...this.#defaultHeaders,
       "Content-Type": "application/x-norito",
     };
     const disableAccept = options.accept === null;
@@ -160,12 +226,16 @@ export class NoritoRpcClient {
           ? null
           : "application/x-norito"
         : options.accept;
+    if (acceptHeader !== null && typeof acceptHeader !== "string") {
+      throw new TypeError("options.accept must be a string or null");
+    }
     if (acceptHeader) {
       headers.Accept = acceptHeader;
     } else {
       delete headers.Accept;
     }
-    if (options.headers) {
+    if (options.headers !== undefined && options.headers !== null) {
+      requireOptionsObject(options.headers, "options.headers");
       for (const [key, value] of Object.entries(options.headers)) {
         const lower = typeof key === "string" ? key.toLowerCase() : key;
         const targetKey =
@@ -175,38 +245,52 @@ export class NoritoRpcClient {
               ? "Content-Type"
               : key;
         if (value === undefined || value === null) {
-          delete headers[targetKey];
-          if (targetKey !== key) {
-            delete headers[key];
-          }
+          deleteHeader(headers, targetKey);
           continue;
         }
         if (lower === "accept" && disableAccept) {
-          delete headers.Accept;
+          deleteHeader(headers, "Accept");
           continue;
         }
-        headers[targetKey] = String(value);
+        if (typeof value !== "string") {
+          throw new TypeError(`options.headers.${key} must be a string, null, or undefined`);
+        }
+        deleteHeader(headers, targetKey);
+        setHeader(headers, targetKey, value);
       }
     }
-    applyCredentialHeaders(
+    applyCredentialOverride(
       headers,
-      options.authToken ?? this._authToken,
-      options.apiToken ?? this._apiToken,
+      "Authorization",
+      options,
+      "authToken",
+      (token) => `Bearer ${token}`,
+    );
+    applyCredentialOverride(
+      headers,
+      "X-API-Token",
+      options,
+      "apiToken",
+      (token) => token,
     );
     const hasCredentials = headersContainCredentials(headers);
-    const allowAbsoluteUrl = options.allowAbsoluteUrl === true;
+    const allowAbsoluteUrl = normalizeBooleanOption(
+      options.allowAbsoluteUrl,
+      "options.allowAbsoluteUrl",
+      false,
+    );
     if (hasCredentials) {
-      if (protocol !== this._baseProtocol) {
+      if (protocol !== this.#baseProtocol) {
         throw new Error(
-          `NoritoRpcClient: refusing protocol ${urlObj.protocol} when credentials are attached; use ${this._baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
+          `NoritoRpcClient: refusing protocol ${urlObj.protocol} when credentials are attached; use ${this.#baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
         );
       }
-      if (pathIsAbsolute && urlObj.host !== this._baseHost) {
+      if (pathIsAbsolute && urlObj.host !== this.#baseHost) {
         throw new Error(
           `NoritoRpcClient: refusing host override ${urlObj.host} when credentials are attached; use relative paths on the configured base URL.`,
         );
       }
-      if (!this._allowInsecure && !isSecureProtocol(protocol)) {
+      if (!this.#allowInsecure && !isSecureProtocol(protocol)) {
         throw new Error(
           `NoritoRpcClient: refusing insecure protocol ${urlObj.protocol} with credentials; use https or set allowInsecure: true for dev.`,
         );
@@ -216,14 +300,14 @@ export class NoritoRpcClient {
         "NoritoRpcClient: absolute URLs are blocked when no credentials are attached; pass allowAbsoluteUrl: true to override.",
       );
     }
-    if (hasCredentials && this._allowInsecure && !isSecureProtocol(protocol)) {
-      this._emitInsecureTransportTelemetry({
+    if (hasCredentials && this.#allowInsecure && !isSecureProtocol(protocol)) {
+      this.#emitInsecureTransportTelemetry({
         client: "norito-rpc",
         method,
         hasCredentials: true,
         allowInsecure: true,
         url: urlObj.toString(),
-        baseUrl: this._baseUrl,
+        baseUrl: this.#baseUrl,
         host: urlObj.host,
         protocol,
         pathIsAbsolute,
@@ -233,9 +317,9 @@ export class NoritoRpcClient {
 
     const timeout =
       options.timeoutMs === undefined || options.timeoutMs === null
-        ? this._timeoutMs
-        : Math.max(0, Number(options.timeoutMs));
-    const response = await this._fetchWithTimeout(
+        ? this.#timeoutMs
+        : normalizeTimeout(options.timeoutMs, "options.timeoutMs");
+    const response = await this.#fetchWithTimeout(
       urlObj.toString(),
       { method, headers, body, redirect: "error" },
       timeout,
@@ -249,68 +333,124 @@ export class NoritoRpcClient {
     return new Uint8Array(buffer);
   }
 
-  async _fetchWithTimeout(url, init, timeoutMs, externalSignal) {
+  async #fetchWithTimeout(url, init, timeoutMs, externalSignal) {
     if (timeoutMs == null) {
       const finalInit =
         externalSignal == null ? init : { ...init, signal: externalSignal };
-      return this._fetch(url, finalInit);
+      return this.#fetch(url, finalInit);
     }
     const abortController = new AbortController();
     const signal = combineAbortSignals(externalSignal, abortController.signal);
     const finalInit = { ...init, signal };
     const timer = setTimeout(() => abortController.abort(), timeoutMs);
     try {
-      return await this._fetch(url, finalInit);
+      return await this.#fetch(url, finalInit);
     } finally {
       clearTimeout(timer);
     }
   }
 
-  _emitInsecureTransportTelemetry(event) {
-    if (typeof this._insecureTelemetryHook !== "function") {
+  #emitInsecureTransportTelemetry(event) {
+    if (this.#insecureTelemetryHook === null) {
       return;
     }
     try {
-      this._insecureTelemetryHook({ ...event, timestampMs: Date.now() });
+      this.#insecureTelemetryHook({ ...event, timestampMs: Date.now() });
     } catch {
       // Telemetry must never interrupt the call path.
     }
   }
 }
 
-function normalizeHeaders(input) {
-  if (!input) {
+function normalizeHeaders(input, context) {
+  if (input === undefined) {
     return {};
   }
+  requireOptionsObject(input, context);
   const result = {};
   for (const [key, value] of Object.entries(input)) {
-    if (value == null) {
-      continue;
+    if (typeof value !== "string") {
+      throw new TypeError(`${context}.${key} must be a string`);
     }
-    result[key] = String(value);
+    setHeader(result, key, value);
   }
   return result;
+}
+
+function requireOptionsObject(value, context) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${context} must be a plain object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${context} must be a plain object`);
+  }
+}
+
+function normalizeBooleanOption(value, context, fallback) {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${context} must be a boolean`);
+  }
+  return value;
+}
+
+function normalizeOptionalFunction(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "function") {
+    throw new TypeError(`${context} must be a function`);
+  }
+  return value;
+}
+
+function normalizeOptionalToken(value, context) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string or null`);
+  }
+  return value;
+}
+
+function normalizeTimeout(value, context) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${context} must be a non-negative safe integer or null`);
+  }
+  return value;
+}
+
+function normalizeMethod(value) {
+  if (value === undefined) {
+    return "POST";
+  }
+  if (
+    typeof value !== "string" ||
+    !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(value)
+  ) {
+    throw new TypeError("options.method must be a non-empty HTTP token");
+  }
+  return value.toUpperCase();
 }
 
 function normalizePayload(payload) {
   if (payload == null) {
     throw new TypeError("payload is required");
   }
-  if (Buffer.isBuffer(payload)) {
-    return payload;
-  }
-  if (payload instanceof Uint8Array) {
-    return Buffer.from(payload);
-  }
   if (ArrayBuffer.isView(payload)) {
     return Buffer.from(
-      payload.buffer,
-      payload.byteOffset,
-      payload.byteLength,
+      new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength),
     );
   }
   if (payload instanceof ArrayBuffer) {
-    return Buffer.from(payload);
+    return Buffer.from(new Uint8Array(payload));
   }
   throw new TypeError("payload must be Buffer, Uint8Array, or ArrayBuffer");
 }

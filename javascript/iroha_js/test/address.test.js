@@ -22,6 +22,8 @@ import {
   AccountAddressErrorCode as DistAccountAddressErrorCode,
 } from "../dist/address.js";
 import * as distAddressModule from "../dist/address.js";
+import * as sourceCurveRegistry from "../src/curveRegistry.js";
+import * as distCurveRegistry from "../dist/curveRegistry.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -123,6 +125,14 @@ function oneMemberMultisigCanonicalBytes(curve, publicKey) {
 }
 
 test("the complete V1 curve registry is deterministic and has no mutable gate", () => {
+  for (const registry of [sourceCurveRegistry, distCurveRegistry]) {
+    assert.equal("CURVE_PUBLIC_KEY_LENGTH" in registry, false);
+    assert.equal(Object.isFrozen(registry.CURVE_REGISTRY), true);
+    assert.equal(
+      registry.CURVE_REGISTRY.every((entry) => Object.isFrozen(entry)),
+      true,
+    );
+  }
   for (const addressModule of [sourceAddressModule, distAddressModule]) {
     assert.equal("configureCurveSupport" in addressModule, false);
     const singleMlDsaAddress = addressModule.AccountAddress.fromAccount({

@@ -14,7 +14,10 @@ readonly FORMAL_DIR="${REPO_ROOT}/formal/private_settlement"
 readonly MODEL="${FORMAL_DIR}/AtomicPrivateSettlementV1.tla"
 readonly INDEXED_MODEL="${FORMAL_DIR}/AtomicPrivateSettlementV1CommitteeFaults.tla"
 readonly REPORT_BUILDER="${REPO_ROOT}/scripts/formal/private_settlement_tlc_report.py"
-source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+readonly RUNNER_SOURCE="${REPO_ROOT}/scripts/formal/run_atomic_private_settlement_tlc.sh"
+readonly RESULT_CONTRACT="${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+readonly JAVA_RESOLVER="${REPO_ROOT}/scripts/formal/resolve_java.sh"
+source "$RESULT_CONTRACT"
 
 readonly POSITIVE_CONFIGS=(
   AtomicPrivateSettlementV1_3.cfg
@@ -156,7 +159,10 @@ done
 
 if [[ "$list_configs" == true ]]; then
   for config in "${ALL_CONFIGS[@]}"; do
-    printf '%s\t%s\n' "$config" "$(configuration_outcome "$config")"
+    printf '%s\t%s\t%s\n' \
+      "$config" \
+      "$(configuration_outcome "$config")" \
+      "$(basename -- "$(configuration_model "$config")")"
   done
   exit 0
 fi
@@ -165,11 +171,11 @@ fi
   echo "--workers must be auto or a positive integer" >&2
   exit 2
 }
-[[ "$seed" =~ ^[0-9]+$ ]] || {
+[[ "$seed" =~ ^(0|[1-9][0-9]*)$ ]] || {
   echo "--seed must be an unsigned integer" >&2
   exit 2
 }
-[[ "$fingerprint_index" =~ ^[0-9]+$ ]] || {
+[[ "$fingerprint_index" =~ ^(0|[1-9][0-9]*)$ ]] || {
   echo "--fingerprint-index must be an unsigned integer" >&2
   exit 2
 }
@@ -264,6 +270,13 @@ readonly JAVA_BIN="$resolved_java"
   echo "a working Java runtime is required for TLC" >&2
   exit 1
 }
+readonly JAVA_BINARY_SHA256="$(hash_file "$JAVA_BIN")"
+JAVA_BINARY_BYTES="$(wc -c <"$JAVA_BIN" | tr -d '[:space:]')"
+[[ "$JAVA_BINARY_BYTES" =~ ^[1-9][0-9]*$ ]] || {
+  echo "resolved Java runtime has no positive byte count" >&2
+  exit 1
+}
+readonly JAVA_BINARY_BYTES
 for required in "$MODEL" "$INDEXED_MODEL" "$REPORT_BUILDER"; do
   [[ -f "$required" && ! -L "$required" ]] || {
     echo "atomic private-settlement formal input is missing: $required" >&2
@@ -297,8 +310,16 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p -- "$run_dir/inputs" "$run_dir/logs" "$run_dir/metadir" "$run_dir/sany"
+readonly JAVA_VERSION_OUTPUT="$run_dir/java-version.log"
+"$JAVA_BIN" -version >"$JAVA_VERSION_OUTPUT" 2>&1 || {
+  echo "resolved Java runtime could not report its version" >&2
+  exit 1
+}
 readonly frozen_report_builder="$run_dir/inputs/private_settlement_tlc_report.py"
 install -m 600 -- "$REPORT_BUILDER" "$frozen_report_builder"
+for evidence_source in "$RUNNER_SOURCE" "$RESULT_CONTRACT" "$JAVA_RESOLVER"; do
+  install -m 600 -- "$evidence_source" "$run_dir/inputs/$(basename -- "$evidence_source")"
+done
 for model in "$MODEL" "$INDEXED_MODEL"; do
   install -m 600 -- "$model" "$run_dir/inputs/$(basename -- "$model")"
 done
@@ -376,6 +397,11 @@ done
 if [[ "$complete_matrix" == true ]]; then
   commit="$candidate_commit"
   assert_candidate_unchanged
+  if [[ "$(hash_file "$JAVA_BIN")" != "$JAVA_BINARY_SHA256" \
+    || "$(wc -c <"$JAVA_BIN" | tr -d '[:space:]')" != "$JAVA_BINARY_BYTES" ]]; then
+    echo "the Java runtime changed during the complete TLC release run" >&2
+    exit 1
+  fi
   formal_inputs=(
     "$(basename -- "$MODEL")"
     "$(basename -- "$INDEXED_MODEL")"
@@ -399,6 +425,16 @@ if [[ "$complete_matrix" == true ]]; then
     echo "frozen report builder does not match ${commit}" >&2
     exit 1
   fi
+  for evidence_source in "$RUNNER_SOURCE" "$RESULT_CONTRACT" "$JAVA_RESOLVER"; do
+    source_path="${evidence_source#"$REPO_ROOT/"}"
+    frozen_source="$run_dir/inputs/$(basename -- "$evidence_source")"
+    expected_object="$(git -C "$REPO_ROOT" rev-parse "${commit}:${source_path}")"
+    observed_object="$(git -C "$REPO_ROOT" hash-object "$frozen_source")"
+    if [[ "$observed_object" != "$expected_object" ]]; then
+      echo "frozen formal evidence code does not match ${commit}: ${source_path}" >&2
+      exit 1
+    fi
+  done
   python3 "$frozen_report_builder" \
     --formal-dir "$run_dir/inputs" \
     --logs-dir "$run_dir/logs" \
@@ -406,6 +442,9 @@ if [[ "$complete_matrix" == true ]]; then
     --commit "$commit" \
     --tool-version "TLC ${TLC_VERSION} / TLA+ tools ${TLA2TOOLS_VERSION}" \
     --tool-sha256 "$actual_sha256" \
+    --java-binary-sha256 "$JAVA_BINARY_SHA256" \
+    --java-binary-bytes "$JAVA_BINARY_BYTES" \
+    --java-version-output "$JAVA_VERSION_OUTPUT" \
     --seed "$seed" \
     --fingerprint-index "$fingerprint_index" \
     --workers "$workers" \
