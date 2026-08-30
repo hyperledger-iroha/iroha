@@ -1937,26 +1937,24 @@ fn sorafs_default_policy() -> AliasCachePolicy {
 }
 fn policy_override_u64<'py>(
     overrides: &Bound<'py, PyDict>,
-    keys: &[&str],
-    context: &str,
+    key: &str,
+    allow_zero: bool,
 ) -> PyResult<Option<u64>> {
-    for key in keys {
-        if let Some(value) = overrides.get_item(*key)? {
-            if value.is_none() {
-                return Ok(None);
-            }
-            let secs: u64 = value.extract().map_err(|_| {
-                PyValueError::new_err(format!("{context} must be a positive integer"))
-            })?;
-            if secs == 0 {
-                return Err(PyValueError::new_err(format!(
-                    "{context} must be greater than zero"
-                )));
-            }
-            return Ok(Some(secs));
-        }
+    let Some(value) = overrides.get_item(key)? else {
+        return Ok(None);
+    };
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!("{key} must be an integer")));
     }
-    Ok(None)
+    let secs: u64 = value
+        .extract()
+        .map_err(|_| PyValueError::new_err(format!("{key} must be an integer")))?;
+    if !allow_zero && secs == 0 {
+        return Err(PyValueError::new_err(format!(
+            "{key} must be greater than zero"
+        )));
+    }
+    Ok(Some(secs))
 }
 fn alias_policy_from_py(overrides: Option<&Bound<'_, PyDict>>) -> PyResult<AliasCachePolicy> {
     let defaults = sorafs_default_policy();
@@ -1969,60 +1967,48 @@ fn alias_policy_from_py(overrides: Option<&Bound<'_, PyDict>>) -> PyResult<Alias
     let mut successor = defaults.successor_grace().as_secs();
     let mut governance = defaults.governance_grace().as_secs();
     if let Some(mapping) = overrides {
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["positive_ttl_secs", "positiveTtlSecs"],
+        const FIELDS: [&str; 8] = [
             "positive_ttl_secs",
-        )? {
+            "refresh_window_secs",
+            "hard_expiry_secs",
+            "negative_ttl_secs",
+            "revocation_ttl_secs",
+            "rotation_max_age_secs",
+            "successor_grace_secs",
+            "governance_grace_secs",
+        ];
+        for (key, _) in mapping.iter() {
+            let key: String = key
+                .extract()
+                .map_err(|_| PyValueError::new_err("SoraFS alias policy fields must be strings"))?;
+            if !FIELDS.contains(&key.as_str()) {
+                return Err(PyValueError::new_err(format!(
+                    "unsupported SoraFS alias policy field: {key}"
+                )));
+            }
+        }
+        if let Some(value) = policy_override_u64(mapping, "positive_ttl_secs", false)? {
             positive = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["refresh_window_secs", "refreshWindowSecs"],
-            "refresh_window_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "refresh_window_secs", false)? {
             refresh = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["hard_expiry_secs", "hardExpirySecs"],
-            "hard_expiry_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "hard_expiry_secs", false)? {
             hard = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["negative_ttl_secs", "negativeTtlSecs"],
-            "negative_ttl_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "negative_ttl_secs", false)? {
             negative = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["revocation_ttl_secs", "revocationTtlSecs"],
-            "revocation_ttl_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "revocation_ttl_secs", false)? {
             revocation = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["rotation_max_age_secs", "rotationMaxAgeSecs"],
-            "rotation_max_age_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "rotation_max_age_secs", false)? {
             rotation = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["successor_grace_secs", "successorGraceSecs"],
-            "successor_grace_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "successor_grace_secs", true)? {
             successor = value;
         }
-        if let Some(value) = policy_override_u64(
-            mapping,
-            &["governance_grace_secs", "governanceGraceSecs"],
-            "governance_grace_secs",
-        )? {
+        if let Some(value) = policy_override_u64(mapping, "governance_grace_secs", true)? {
             governance = value;
         }
     }
@@ -5625,6 +5611,42 @@ mod tests {
     fn py_err_message(err: pyo3::PyErr) -> String {
         ensure_python();
         Python::attach(|py| err.value(py).to_string())
+    }
+    #[test]
+    fn sorafs_alias_policy_parser_accepts_zero_grace_and_rejects_retired_shapes() {
+        ensure_python();
+        Python::attach(|py| {
+            let defaults = sorafs_default_policy();
+            let mapping = alias_policy_to_dict(py, &defaults).expect("encode default policy");
+            let parsed = alias_policy_from_py(Some(mapping.bind(py)))
+                .expect("the canonical default policy must parse");
+            assert_eq!(parsed.successor_grace(), defaults.successor_grace());
+            assert_eq!(parsed.governance_grace(), Duration::ZERO);
+
+            let zero_successor = PyDict::new(py);
+            zero_successor
+                .set_item("successor_grace_secs", 0)
+                .expect("set policy field");
+            let parsed = alias_policy_from_py(Some(&zero_successor))
+                .expect("zero successor grace must be accepted");
+            assert_eq!(parsed.successor_grace(), Duration::ZERO);
+
+            let camel_case = PyDict::new(py);
+            camel_case
+                .set_item("positiveTtlSecs", 600)
+                .expect("set retired policy field");
+            let err = alias_policy_from_py(Some(&camel_case))
+                .expect_err("camel-case policy aliases must be rejected");
+            assert!(err.value(py).to_string().contains("unsupported"));
+
+            let boolean = PyDict::new(py);
+            boolean
+                .set_item("positive_ttl_secs", true)
+                .expect("set invalid policy field");
+            let err = alias_policy_from_py(Some(&boolean))
+                .expect_err("boolean policy fields must be rejected");
+            assert!(err.value(py).to_string().contains("must be an integer"));
+        });
     }
     const MALFORMED_ED25519_PUBLIC_KEYS: [(&str, [u8; 32], &str); 3] = [
         ("all-zero", [0u8; 32], "all zero"),

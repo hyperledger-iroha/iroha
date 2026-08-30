@@ -1,3 +1,5 @@
+use base64::Engine as _;
+use futures_util::StreamExt as _;
 use iroha::data_model::block::consensus_v2::SumeragiV2GenesisContextParameters;
 use iroha::data_model::events::{
     EventBox,
@@ -7,8 +9,6 @@ use iroha_test_network::{
     ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
     NativeAmxFaultPhase, PrivateSettlementRouteControlAction, PrivateSettlementRouteControlPhase,
 };
-use base64::Engine as _;
-use futures_util::StreamExt as _;
 use norito::json::Value as HarnessJsonValue;
 use sha2::{Digest as Sha2Digest, Sha256};
 use std::{
@@ -36,6 +36,8 @@ const COORDINATOR_COMMAND_FILE: &str = "command.json";
 const COORDINATOR_ACK_FILE: &str = "ack.json";
 const COORDINATOR_CONFIG_FILE: &str = "client.toml";
 const COORDINATOR_SHUTDOWN_FILE: &str = "shutdown";
+const COORDINATOR_STDOUT_FILE: &str = "stdout.log";
+const COORDINATOR_STDERR_FILE: &str = "stderr.log";
 const HARNESS_MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
 const FAULT_CONTROL_EVIDENCE_FILE: &str = "fault-control.jsonl";
 const FAULT_OBSERVATION_EVIDENCE_FILE: &str = "fault-observations.jsonl";
@@ -46,8 +48,10 @@ const FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1: &[u8] =
     b"iroha:aps-fault-continuous-observation:v1\0";
 const LEAKAGE_BLOCK_WIRE_MAGIC_V1: &[u8; 8] = b"APSBLK1\0";
 const LEAKAGE_ARTIFACT_FRAME_DOMAIN_V1: &[u8] = b"iroha:aps-leakage-artifact:v1\0";
+const LEAKAGE_RESTRICTED_SOURCE_DOMAIN_V1: &[u8; 8] = b"APSRAW1\0";
 const LEAKAGE_MAX_SOURCE_FILES: usize = 100_000;
 const LEAKAGE_MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const LEAKAGE_MAX_OBSERVATIONS_PER_PEER: usize = 10_000;
 const LEAKAGE_MEMO_FIELD_BYTES: usize = 96;
 const LEAKAGE_ALIAS_FIELD_BYTES: usize = 64;
 const LEAKAGE_CAPSULE_FIELD_BYTES: usize = 64;
@@ -137,7 +141,7 @@ struct RealProcessFaultRequestV1 {
     payload: RealProcessFaultPayloadV1,
 }
 
-#[derive(Clone, Debug, norito::JsonDeserialize)]
+#[derive(Clone, Debug, norito::JsonSerialize, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct RealProcessLeakageCanaryV1 {
     name: String,
@@ -160,7 +164,7 @@ struct RealProcessLeakagePayloadV1 {
     canary_commitments: BTreeMap<String, String>,
     only_secret_fields_change: bool,
     capture_surfaces: Vec<RealProcessLeakageCaptureSurfaceV1>,
-    message_count_channels: Vec<String>,
+    traffic_count_channels: Vec<String>,
 }
 
 #[derive(Debug, norito::JsonDeserialize)]
@@ -262,6 +266,9 @@ struct RealProcessLeakageArtifactV1 {
     relative_name: String,
     sha256: String,
     bytes: u64,
+    source_sha256: String,
+    source_bytes: u64,
+    source_count: usize,
 }
 
 #[derive(Clone, Debug, norito::JsonSerialize)]
@@ -278,7 +285,7 @@ struct RealProcessLeakageResultPayloadV1 {
     partial_visible_observations: u64,
     partial_spendable_observations: u64,
     nonpacket_artifacts: Vec<RealProcessLeakageArtifactV1>,
-    nonpacket_message_counts: BTreeMap<String, u64>,
+    nonpacket_record_counts: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, norito::JsonSerialize)]
@@ -295,6 +302,13 @@ struct RealProcessLeakageResultV1 {
     authenticated_message_control: bool,
     process_inventory: Vec<RealProcessInventoryRowV1>,
     payload: RealProcessLeakageResultPayloadV1,
+}
+
+#[derive(Clone, Debug, norito::JsonSerialize)]
+struct LeakageAtomicityObservationEvidenceV1 {
+    version: u8,
+    peer_index: usize,
+    observations: Vec<FaultStateObservationV1>,
 }
 
 #[derive(Clone, Debug, norito::JsonSerialize, norito::JsonDeserialize)]
@@ -499,17 +513,19 @@ const LEAKAGE_CAPTURE_SURFACES: &[(&str, &str)] = &[
     ("operator_log", "operator.json"),
     ("public_p2p_capture", "public-p2p.pcapng"),
     ("query_capture", "queries.json"),
+    ("restricted_audit_source", "restricted-audit-sources.bin"),
     ("restricted_p2p_capture", "restricted-p2p.pcapng"),
+    ("restricted_packet_source", "raw-loopback.pcap"),
     ("sanitized_capture", "sanitized-capture.pcapng"),
     ("snapshot_artifact", "snapshot.bin"),
     ("telemetry_capture", "telemetry.json"),
     ("torii_capture", "torii.pcapng"),
 ];
-const LEAKAGE_MESSAGE_COUNT_CHANNELS: &[&str] = &[
-    "torii_requests",
-    "torii_responses",
-    "public_p2p_messages",
-    "restricted_p2p_messages",
+const LEAKAGE_TRAFFIC_COUNT_CHANNELS: &[&str] = &[
+    "torii_request_packets",
+    "torii_response_packets",
+    "public_p2p_packets",
+    "restricted_p2p_packets",
     "block_messages",
     "query_responses",
     "event_records",
@@ -789,7 +805,12 @@ fn validate_real_process_leakage_request(request: &RealProcessLeakageRequestV1) 
             .map(|canary| canary.name.clone())
             .collect::<Vec<_>>()
             == expected_names
-            && request.payload.canary_commitments.keys().cloned().collect::<Vec<_>>()
+            && request
+                .payload
+                .canary_commitments
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
                 == expected_names
             && request
                 .payload
@@ -808,6 +829,13 @@ fn validate_real_process_leakage_request(request: &RealProcessLeakageRequestV1) 
             .eq(expected_kinds),
         "leakage request has a substituted canary kind"
     );
+    for canary in &request.payload.canaries {
+        ensure!(
+            request.payload.canary_commitments.get(&canary.name)
+                == Some(&leakage_canary_commitment(canary)?),
+            "leakage request canary commitment does not bind its canonical value"
+        );
+    }
     ensure!(
         request
             .payload
@@ -817,13 +845,19 @@ fn validate_real_process_leakage_request(request: &RealProcessLeakageRequestV1) 
             .eq(LEAKAGE_CAPTURE_SURFACES.iter().copied())
             && request
                 .payload
-                .message_count_channels
+                .traffic_count_channels
                 .iter()
                 .map(String::as_str)
-                .eq(LEAKAGE_MESSAGE_COUNT_CHANNELS.iter().copied()),
+                .eq(LEAKAGE_TRAFFIC_COUNT_CHANNELS.iter().copied()),
         "leakage request changed the exact capture inventory"
     );
     Ok(())
+}
+
+fn leakage_canary_commitment(canary: &RealProcessLeakageCanaryV1) -> Result<String> {
+    Ok(hex::encode(Sha256::digest(canonical_harness_json_bytes(
+        canary,
+    )?)))
 }
 
 fn leakage_canary<'a>(
@@ -931,6 +965,273 @@ fn leakage_private_leg_zero(
         },
         expected_asset,
     ))
+}
+
+#[derive(Clone, Debug)]
+struct LeakageCanaryNeedleV1 {
+    name: String,
+    encoding: String,
+    bytes: Vec<u8>,
+}
+
+fn push_leakage_canary_needle(
+    needles: &mut Vec<LeakageCanaryNeedleV1>,
+    name: &str,
+    encoding: &str,
+    bytes: Vec<u8>,
+) {
+    if bytes.is_empty()
+        || needles
+            .iter()
+            .any(|needle| needle.name == name && needle.bytes == bytes)
+    {
+        return;
+    }
+    needles.push(LeakageCanaryNeedleV1 {
+        name: name.to_owned(),
+        encoding: encoding.to_owned(),
+        bytes,
+    });
+}
+
+fn leakage_percent_encoded(value: &str) -> Vec<u8> {
+    let mut encoded = String::new();
+    for byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(*byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded.into_bytes()
+}
+
+fn leakage_json_ascii_string(value: &str) -> Vec<u8> {
+    let mut encoded = String::from("\"");
+    for character in value.chars() {
+        match character {
+            '\"' => encoded.push_str("\\\""),
+            '\\' => encoded.push_str("\\\\"),
+            '\u{08}' => encoded.push_str("\\b"),
+            '\u{0c}' => encoded.push_str("\\f"),
+            '\n' => encoded.push_str("\\n"),
+            '\r' => encoded.push_str("\\r"),
+            '\t' => encoded.push_str("\\t"),
+            character if (' '..='~').contains(&character) => encoded.push(character),
+            character => {
+                let scalar = u32::from(character);
+                if scalar <= 0xffff {
+                    encoded.push_str(&format!("\\u{scalar:04x}"));
+                } else {
+                    let value = scalar - 0x1_0000;
+                    let high = 0xd800 + (value >> 10);
+                    let low = 0xdc00 + (value & 0x3ff);
+                    encoded.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+                }
+            }
+        }
+    }
+    encoded.push('\"');
+    encoded.into_bytes()
+}
+
+fn append_leakage_text_needles(needles: &mut Vec<LeakageCanaryNeedleV1>, name: &str, value: &str) {
+    let raw = value.as_bytes().to_vec();
+    push_leakage_canary_needle(needles, name, "utf8", raw.clone());
+    push_leakage_canary_needle(
+        needles,
+        name,
+        "utf16le",
+        value.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+    );
+    push_leakage_canary_needle(
+        needles,
+        name,
+        "utf16be",
+        value.encode_utf16().flat_map(u16::to_be_bytes).collect(),
+    );
+    push_leakage_canary_needle(needles, name, "hex_lower", hex::encode(&raw).into_bytes());
+    push_leakage_canary_needle(
+        needles,
+        name,
+        "hex_upper",
+        hex::encode_upper(&raw).into_bytes(),
+    );
+    push_leakage_canary_needle(
+        needles,
+        name,
+        "base64",
+        base64::engine::general_purpose::STANDARD
+            .encode(&raw)
+            .into_bytes(),
+    );
+    push_leakage_canary_needle(
+        needles,
+        name,
+        "base64url",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(&raw)
+            .into_bytes(),
+    );
+    push_leakage_canary_needle(needles, name, "url_percent", leakage_percent_encoded(value));
+    push_leakage_canary_needle(
+        needles,
+        name,
+        "json_string",
+        leakage_json_ascii_string(value),
+    );
+}
+
+fn leakage_leb128(mut value: u128) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    loop {
+        let mut byte = u8::try_from(value & 0x7f).expect("LEB128 digit fits u8");
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        encoded.push(byte);
+        if value == 0 {
+            return encoded;
+        }
+    }
+}
+
+fn leakage_asset_address_payload(asset: &AssetDefinitionId) -> [u8; 21] {
+    let mut payload = [0_u8; 21];
+    payload[0] = 1;
+    payload[1..17].copy_from_slice(&asset.aid_bytes());
+    let checksum = blake3::hash(&payload[..17]);
+    payload[17..].copy_from_slice(&checksum.as_bytes()[..4]);
+    payload
+}
+
+fn leakage_canary_needles(
+    request: &RealProcessLeakageRequestV1,
+) -> Result<Vec<LeakageCanaryNeedleV1>> {
+    let mut needles = Vec::new();
+    for base_name in ["account_id", "asset_alias", "asset_id", "memo"] {
+        let canary = leakage_canary(request, base_name)?;
+        let value = canary
+            .value
+            .as_str()
+            .ok_or_else(|| eyre!("leakage {base_name} canary is not text"))?;
+        append_leakage_text_needles(&mut needles, &canary.name, value);
+    }
+    let amount_canary = leakage_canary(request, "amount")?;
+    let amount = amount_canary
+        .value
+        .as_u128()
+        .ok_or_else(|| eyre!("leakage amount canary is not an unsigned integer"))?;
+    for (encoding, bytes) in [
+        ("decimal", amount.to_string().into_bytes()),
+        ("decimal_json_string", format!("\"{amount}\"").into_bytes()),
+        ("hex_lower", format!("{amount:x}").into_bytes()),
+        ("hex_upper", format!("{amount:X}").into_bytes()),
+        ("leb128", leakage_leb128(amount)),
+        ("u128_le", amount.to_le_bytes().to_vec()),
+        ("u128_be", amount.to_be_bytes().to_vec()),
+        (
+            "u256_le",
+            amount.to_le_bytes().into_iter().chain([0_u8; 16]).collect(),
+        ),
+        (
+            "u256_be",
+            [0_u8; 16].into_iter().chain(amount.to_be_bytes()).collect(),
+        ),
+    ] {
+        push_leakage_canary_needle(&mut needles, &amount_canary.name, encoding, bytes);
+    }
+    let capsule_canary = leakage_canary(request, "capsule")?;
+    let capsule_text = capsule_canary
+        .value
+        .as_str()
+        .ok_or_else(|| eyre!("leakage capsule canary is not text"))?;
+    let capsule = base64::engine::general_purpose::STANDARD
+        .decode(capsule_text.as_bytes())
+        .wrap_err("decode leakage capsule scan canary")?;
+    for (encoding, bytes) in [
+        ("raw", capsule.clone()),
+        ("hex_lower", hex::encode(&capsule).into_bytes()),
+        ("hex_upper", hex::encode_upper(&capsule).into_bytes()),
+        ("base64", capsule_text.as_bytes().to_vec()),
+        (
+            "base64url",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(&capsule)
+                .into_bytes(),
+        ),
+    ] {
+        push_leakage_canary_needle(&mut needles, &capsule_canary.name, encoding, bytes);
+    }
+    let account = leakage_canary_account_id(&request.payload.variant)?;
+    let asset = leakage_canary_asset_definition_id(&request.payload.variant)?;
+    push_leakage_canary_needle(
+        &mut needles,
+        &leakage_canary(request, "account_id")?.name,
+        "canonical_account_bytes",
+        hex::decode(account.to_canonical_hex()?)?,
+    );
+    push_leakage_canary_needle(
+        &mut needles,
+        &leakage_canary(request, "account_id")?.name,
+        "account_public_key_bytes",
+        account.expect_single_signatory().to_bytes().1.to_vec(),
+    );
+    push_leakage_canary_needle(
+        &mut needles,
+        &leakage_canary(request, "account_id")?.name,
+        "norito_account_id",
+        norito::encode_canonical(&account)?,
+    );
+    push_leakage_canary_needle(
+        &mut needles,
+        &leakage_canary(request, "asset_id")?.name,
+        "asset_address_payload",
+        leakage_asset_address_payload(&asset).to_vec(),
+    );
+    push_leakage_canary_needle(
+        &mut needles,
+        &leakage_canary(request, "asset_id")?.name,
+        "norito_asset_definition_id",
+        norito::encode_canonical(&asset)?,
+    );
+    push_leakage_canary_needle(
+        &mut needles,
+        &leakage_canary(request, "asset_id")?.name,
+        "asset_uuid_bytes",
+        asset.aid_bytes().to_vec(),
+    );
+    ensure!(
+        !needles.is_empty(),
+        "leakage canary scan inventory is empty"
+    );
+    Ok(needles)
+}
+
+fn ensure_leakage_sources_redacted(
+    needles: &[LeakageCanaryNeedleV1],
+    label: &str,
+    sources: &[&[u8]],
+) -> Result<()> {
+    ensure!(!sources.is_empty(), "{label} has no genuine source bytes");
+    for (source_index, source) in sources.iter().enumerate() {
+        ensure!(
+            !source.is_empty(),
+            "{label} source #{source_index} is empty"
+        );
+        for needle in needles {
+            ensure!(
+                !source
+                    .windows(needle.bytes.len())
+                    .any(|window| window == needle.bytes),
+                "{label} raw source #{source_index} leaked canary {} ({})",
+                needle.name,
+                needle.encoding
+            );
+        }
+    }
+    Ok(())
 }
 
 fn read_bound_real_process_request() -> Result<(RealProcessBoundRequestV1, String)> {
@@ -1269,7 +1570,10 @@ fn leakage_evidence_root() -> Result<PathBuf> {
     let canonical = root
         .canonicalize()
         .wrap_err("resolve leakage evidence directory")?;
-    ensure!(canonical == root, "leakage evidence directory is not canonical");
+    ensure!(
+        canonical == root,
+        "leakage evidence directory is not canonical"
+    );
     let metadata = fs::symlink_metadata(&root)?;
     ensure!(
         metadata.is_dir()
@@ -1300,7 +1604,11 @@ fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Resul
         .iter()
         .map(|peer| peer.p2p_address().port())
         .collect::<Vec<_>>();
-    for ports in [&mut torii_ports, &mut public_p2p_ports, &mut restricted_p2p_ports] {
+    for ports in [
+        &mut torii_ports,
+        &mut public_p2p_ports,
+        &mut restricted_p2p_ports,
+    ] {
         ports.sort_unstable();
         ports.dedup();
     }
@@ -1336,8 +1644,8 @@ fn read_stable_leakage_source(path: &Path) -> Result<Vec<u8>> {
             && usize::try_from(before.len()).is_ok_and(|len| len <= LEAKAGE_MAX_SOURCE_BYTES),
         "leakage source is not a bounded regular file"
     );
-    let mut file = File::open(path)
-        .wrap_err_with(|| format!("open leakage source {}", path.display()))?;
+    let mut file =
+        File::open(path).wrap_err_with(|| format!("open leakage source {}", path.display()))?;
     let opened = file.metadata()?;
     ensure!(
         std::os::unix::fs::MetadataExt::dev(&before)
@@ -1412,26 +1720,34 @@ where
             .ok_or_else(|| eyre!("leakage source path is not UTF-8"))?
             .replace(std::path::MAIN_SEPARATOR, "/");
         ensure!(
-            !relative.is_empty() && !relative.split('/').any(|part| part.is_empty() || part == ".."),
+            !relative.is_empty()
+                && !relative
+                    .split('/')
+                    .any(|part| part.is_empty() || part == ".."),
             "leakage source path is not canonical"
         );
         sources.push((relative, bytes));
     }
-    ensure!(!sources.is_empty(), "required leakage source set is empty");
     Ok(sources)
 }
 
-fn framed_leakage_sources(kind: &str, sources: Vec<(String, Vec<u8>)>) -> Result<Vec<u8>> {
-    ensure!(!kind.is_empty() && !sources.is_empty(), "empty leakage artifact frame");
+fn framed_leakage_sources(kind: &str, sources: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
+    ensure!(
+        !kind.is_empty() && !sources.is_empty(),
+        "empty leakage artifact frame"
+    );
     let mut output = LEAKAGE_ARTIFACT_FRAME_DOMAIN_V1.to_vec();
     output.extend_from_slice(&u16::try_from(kind.len())?.to_le_bytes());
     output.extend_from_slice(kind.as_bytes());
     output.extend_from_slice(&u32::try_from(sources.len())?.to_le_bytes());
-    for (path, bytes) in sources {
-        output.extend_from_slice(&u32::try_from(path.len())?.to_le_bytes());
-        output.extend_from_slice(path.as_bytes());
+    // This public fixed-width derivative binds source ordering, size, and
+    // digests. The exact canary-scanned bytes are retained separately in the
+    // restricted audit-source archive for independent replay.
+    for (index, (path, bytes)) in sources.iter().enumerate() {
+        output.extend_from_slice(&u32::try_from(index)?.to_le_bytes());
+        output.extend_from_slice(&Sha256::digest(path.as_bytes()));
         output.extend_from_slice(&u64::try_from(bytes.len())?.to_le_bytes());
-        output.extend_from_slice(&bytes);
+        output.extend_from_slice(&Sha256::digest(bytes));
     }
     ensure!(
         output.len() <= LEAKAGE_MAX_SOURCE_BYTES,
@@ -1440,11 +1756,92 @@ fn framed_leakage_sources(kind: &str, sources: Vec<(String, Vec<u8>)>) -> Result
     Ok(output)
 }
 
+struct LeakageRestrictedSourceRefV1<'a> {
+    surface: &'a str,
+    relative_path: String,
+    bytes: &'a [u8],
+}
+
+fn framed_restricted_leakage_sources_v1(
+    mut sources: Vec<LeakageRestrictedSourceRefV1<'_>>,
+) -> Result<Vec<u8>> {
+    ensure!(
+        !sources.is_empty(),
+        "restricted leakage source archive is empty"
+    );
+    sources.sort_by(|left, right| {
+        (left.surface, left.relative_path.as_str())
+            .cmp(&(right.surface, right.relative_path.as_str()))
+    });
+    ensure!(
+        sources.windows(2).all(|pair| {
+            (pair[0].surface, pair[0].relative_path.as_str())
+                != (pair[1].surface, pair[1].relative_path.as_str())
+        }),
+        "restricted leakage source archive contains a duplicate source"
+    );
+    let mut output = LEAKAGE_RESTRICTED_SOURCE_DOMAIN_V1.to_vec();
+    output.extend_from_slice(&u32::try_from(sources.len())?.to_le_bytes());
+    for (ordinal, source) in sources.into_iter().enumerate() {
+        ensure!(
+            !source.surface.is_empty()
+                && source.surface.len() <= 64
+                && source.surface.is_ascii()
+                && source
+                    .surface
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+                && !source.relative_path.is_empty()
+                && source.relative_path.len() <= 4_096
+                && !source
+                    .relative_path
+                    .split('/')
+                    .any(|part| { part.is_empty() || part == "." || part == ".." })
+                && !source.bytes.is_empty(),
+            "restricted leakage source archive row is non-canonical"
+        );
+        output.extend_from_slice(&u32::try_from(ordinal)?.to_le_bytes());
+        output.extend_from_slice(&u16::try_from(source.surface.len())?.to_le_bytes());
+        output.extend_from_slice(source.surface.as_bytes());
+        output.extend_from_slice(&u32::try_from(source.relative_path.len())?.to_le_bytes());
+        output.extend_from_slice(source.relative_path.as_bytes());
+        output.extend_from_slice(&u64::try_from(source.bytes.len())?.to_le_bytes());
+        output.extend_from_slice(source.bytes);
+        ensure!(
+            output.len() <= LEAKAGE_MAX_SOURCE_BYTES,
+            "restricted leakage source archive exceeds its byte bound"
+        );
+    }
+    Ok(output)
+}
+
+fn leakage_source_binding(sources: &[&[u8]]) -> Result<(String, u64)> {
+    ensure!(!sources.is_empty(), "leakage source binding is empty");
+    let mut digest = Sha256::new();
+    digest.update(b"iroha:aps-leakage-source-binding:v1\0");
+    digest.update(u64::try_from(sources.len())?.to_le_bytes());
+    let mut total = 0_u64;
+    for source in sources {
+        let length = u64::try_from(source.len())?;
+        ensure!(
+            length > 0,
+            "leakage source binding contains an empty source"
+        );
+        total = total
+            .checked_add(length)
+            .ok_or_else(|| eyre!("leakage source byte total overflow"))?;
+        digest.update(length.to_le_bytes());
+        digest.update(source);
+    }
+    Ok((hex::encode(digest.finalize()), total))
+}
+
 fn write_leakage_artifact(
     root: &Path,
     surface: &str,
     relative_name: &str,
     bytes: &[u8],
+    sources: &[&[u8]],
 ) -> Result<RealProcessLeakageArtifactV1> {
     ensure!(!bytes.is_empty(), "leakage artifact is empty");
     let expected = LEAKAGE_CAPTURE_SURFACES
@@ -1458,11 +1855,15 @@ fn write_leakage_artifact(
     let path = root.join(relative_name);
     ensure!(!path.exists(), "leakage artifact already exists");
     write_owner_only_atomic(&path, bytes)?;
+    let (source_sha256, source_bytes) = leakage_source_binding(sources)?;
     Ok(RealProcessLeakageArtifactV1 {
         surface: surface.to_owned(),
         relative_name: relative_name.to_owned(),
         sha256: sha256_hex(bytes),
         bytes: u64::try_from(bytes.len())?,
+        source_sha256,
+        source_bytes,
+        source_count: sources.len(),
     })
 }
 
@@ -1507,25 +1908,15 @@ fn submit_leakage_carrier_with_event(
     runtime: &tokio::runtime::Runtime,
     sponsor: &Client,
     submit: PrivateSettlementBundleSubmitRequestV1,
-) -> Result<HarnessJsonValue> {
+    expected_bundle: Hash,
+) -> Result<(HarnessJsonValue, Vec<u8>)> {
     let transaction_hash = submit.transaction.hash();
-    let expected_bundle = submit
-        .transaction
-        .instructions()
-        .next()
-        .and_then(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
-        })
-        .map(|carrier| carrier.commit_bundle.manifest.bundle_id)
-        .ok_or_else(|| eyre!("leakage submission is not the direct APS carrier"))?;
     let client = sponsor.clone();
     runtime.block_on(async move {
         let mut events = tokio::time::timeout(
             FAULT_CONTROL_TIMEOUT,
             client.listen_for_events_async([
-                TransactionEventFilter::default().for_hash(transaction_hash),
+                TransactionEventFilter::default().for_hash(transaction_hash)
             ]),
         )
         .await
@@ -1552,13 +1943,15 @@ fn submit_leakage_carrier_with_event(
                 match event.status() {
                     TransactionStatus::Queued => {}
                     TransactionStatus::Approved => {
-                        return Ok(norito::json!({
-                            "peer_index": 0,
-                            "transaction_sha256": sha256_hex(transaction_hash.as_ref()),
-                            "status": "approved",
-                            "lane_id": u64::from(event.lane_id().as_u32()),
-                            "dataspace_id": event.dataspace_id().as_u64(),
-                        }));
+                        let source = norito::encode_canonical(&event)?;
+                        return Ok((
+                            norito::json!({
+                                "peer_index": 0,
+                                "source_sha256": sha256_hex(&source),
+                                "source_bytes": source.len(),
+                            }),
+                            source,
+                        ));
                     }
                     TransactionStatus::Rejected(reason) => {
                         return Err(eyre!("leakage carrier rejected: {reason}"));
@@ -1580,8 +1973,8 @@ fn leakage_query_records(
     network: &Network,
     bundle_id: Hash,
     expected: &iroha::data_model::nexus::PrivateSettlementReceiptV1,
-) -> Result<Vec<HarnessJsonValue>> {
-    network
+) -> Result<(Vec<HarnessJsonValue>, Vec<Vec<u8>>)> {
+    let captured = network
         .peers()
         .iter()
         .enumerate()
@@ -1592,43 +1985,90 @@ fn leakage_query_records(
             let PrivateSettlementBundleReceiptResponseV1::Finalized(receipt) = response else {
                 return Err(eyre!("leakage public receipt query is not finalized"));
             };
-            ensure!(receipt == *expected, "leakage public receipt query diverged");
+            ensure!(
+                receipt == *expected,
+                "leakage public receipt query diverged"
+            );
             let encoded = norito::encode_canonical(&receipt)?;
-            Ok(norito::json!({
-                "peer_index": peer_index,
-                "bundle_id_sha256": sha256_hex(bundle_id.as_ref()),
-                "receipt_sha256": sha256_hex(&encoded),
-                "status": "finalized",
-                "leg_count": receipt.legs.len(),
-                "finalized_height": receipt.finalized_height,
-            }))
+            Ok((
+                norito::json!({
+                    "peer_index": peer_index,
+                    "source_sha256": sha256_hex(&encoded),
+                    "source_bytes": encoded.len(),
+                }),
+                encoded,
+            ))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    let (rows, sources): (Vec<_>, Vec<_>) = captured.into_iter().unzip();
+    Ok((rows, sources))
 }
 
-fn leakage_telemetry_records(network: &Network) -> Result<Vec<HarnessJsonValue>> {
-    network
+fn leakage_telemetry_records(
+    network: &Network,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<(Vec<HarnessJsonValue>, Vec<Vec<u8>>)> {
+    let sources = network
         .peers()
         .iter()
-        .enumerate()
-        .map(|(peer_index, peer)| {
+        .map(|peer| {
             let status = peer.client().get_status()?;
-            let encoded = norito::encode_canonical(&status)?;
-            Ok(norito::json!({
-                "peer_index": peer_index,
-                "status_sha256": sha256_hex(&encoded),
-            }))
+            let status = norito::encode_canonical(&status)?;
+            let metrics_url = peer.client().torii_url.join("metrics")?;
+            let metrics = runtime.block_on(async {
+                let response = reqwest::get(metrics_url)
+                    .await
+                    .wrap_err("fetch leakage runtime metrics")?;
+                ensure!(
+                    response.status().is_success(),
+                    "leakage runtime metrics request failed"
+                );
+                response
+                    .bytes()
+                    .await
+                    .map(|bytes| bytes.to_vec())
+                    .wrap_err("read leakage runtime metrics")
+            })?;
+            ensure!(!metrics.is_empty(), "leakage runtime metrics are empty");
+            let mut source = Vec::new();
+            source.extend_from_slice(&u64::try_from(status.len())?.to_le_bytes());
+            source.extend_from_slice(&status);
+            source.extend_from_slice(&u64::try_from(metrics.len())?.to_le_bytes());
+            source.extend_from_slice(&metrics);
+            Ok((source, status, metrics))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    let rows = sources
+        .iter()
+        .enumerate()
+        .map(|(peer_index, (source, status, metrics))| {
+            norito::json!({
+                "peer_index": peer_index,
+                "status_sha256": sha256_hex(status),
+                "status_bytes": status.len(),
+                "metrics_sha256": sha256_hex(metrics),
+                "metrics_bytes": metrics.len(),
+                "source_sha256": sha256_hex(source),
+                "source_bytes": source.len(),
+            })
+        })
+        .collect();
+    Ok((
+        rows,
+        sources.into_iter().map(|(source, _, _)| source).collect(),
+    ))
 }
 
-fn leakage_operator_log_records(network: &Network) -> Result<Vec<HarnessJsonValue>> {
+fn leakage_operator_log_records(
+    network: &Network,
+) -> Result<(Vec<HarnessJsonValue>, Vec<Vec<u8>>)> {
     let snapshots = network.startup_snapshot();
     ensure!(
         snapshots.len() == network.peers().len(),
         "leakage log snapshot omitted a validator"
     );
-    snapshots
+    let mut sources = Vec::with_capacity(snapshots.len() * 2);
+    let rows = snapshots
         .into_iter()
         .map(|snapshot| {
             let stdout_path = snapshot
@@ -1645,13 +2085,22 @@ fn leakage_operator_log_records(network: &Network) -> Result<Vec<HarnessJsonValu
                 !stdout.is_empty() || !stderr.is_empty(),
                 "validator emitted no source-backed operator log"
             );
+            let mut source = Vec::new();
+            source.extend_from_slice(&u64::try_from(stdout.len())?.to_le_bytes());
+            source.extend_from_slice(&stdout);
+            source.extend_from_slice(&u64::try_from(stderr.len())?.to_le_bytes());
+            source.extend_from_slice(&stderr);
+            sources.push(source);
             Ok(norito::json!({
                 "peer_index": snapshot.index,
                 "stdout_sha256": sha256_hex(&stdout),
                 "stderr_sha256": sha256_hex(&stderr),
+                "stdout_bytes": stdout.len(),
+                "stderr_bytes": stderr.len(),
             }))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok((rows, sources))
 }
 
 fn verify_controller_readiness(network: &Network, runtime: &tokio::runtime::Runtime) -> Result<()> {
@@ -2045,6 +2494,16 @@ impl CoordinatorProcessV1 {
     }
 
     fn spawn_child(root: &Path, executable: &Path) -> Result<Child> {
+        let stdout = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(root.join(COORDINATOR_STDOUT_FILE))?;
+        let stderr = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(root.join(COORDINATOR_STDERR_FILE))?;
         Command::new(executable)
             .args([
                 "--ignored",
@@ -2055,10 +2514,30 @@ impl CoordinatorProcessV1 {
             ])
             .env(COORDINATOR_ROOT_ENV, root)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
             .spawn()
             .wrap_err("spawn coordinator helper process")
+    }
+
+    fn stop_and_collect_logs(&mut self) -> Result<Vec<(String, Vec<u8>)>> {
+        write_owner_only_atomic(
+            &self.root.path().join(COORDINATOR_SHUTDOWN_FILE),
+            b"shutdown\n",
+        )?;
+        self.child.kill().wrap_err("stop leakage coordinator")?;
+        let _status = self.child.wait().wrap_err("reap leakage coordinator")?;
+        let stdout = read_stable_leakage_source(&self.root.path().join(COORDINATOR_STDOUT_FILE))?;
+        let stderr = read_stable_leakage_source(&self.root.path().join(COORDINATOR_STDERR_FILE))?;
+        let mut framed = Vec::new();
+        framed.extend_from_slice(&u64::try_from(stdout.len())?.to_le_bytes());
+        framed.extend_from_slice(&stdout);
+        framed.extend_from_slice(&u64::try_from(stderr.len())?.to_le_bytes());
+        framed.extend_from_slice(&stderr);
+        Ok(vec![(
+            "coordinator-000/stdout-stderr.log".to_owned(),
+            framed,
+        )])
     }
 
     fn wait_for_ack(&mut self, command_bytes: &[u8]) -> Result<(Vec<u8>, CoordinatorAckV1)> {
@@ -2466,6 +2945,7 @@ impl FaultContinuousObservationAccumulatorV1 {
 struct FaultContinuousObserverV1 {
     stop: Arc<AtomicBool>,
     accumulators: Arc<Mutex<Vec<FaultContinuousObservationAccumulatorV1>>>,
+    retained_observations: Option<Arc<Mutex<Vec<Vec<FaultStateObservationV1>>>>>,
     failure: Arc<Mutex<Option<String>>>,
     baselines: Vec<FaultStateObservationV1>,
     participants: usize,
@@ -2477,6 +2957,23 @@ impl FaultContinuousObserverV1 {
         network: &Network,
         before: &FaultStateSnapshotV1,
         participants: usize,
+    ) -> Result<Self> {
+        Self::start_internal(network, before, participants, false)
+    }
+
+    fn start_retaining_evidence(
+        network: &Network,
+        before: &FaultStateSnapshotV1,
+        participants: usize,
+    ) -> Result<Self> {
+        Self::start_internal(network, before, participants, true)
+    }
+
+    fn start_internal(
+        network: &Network,
+        before: &FaultStateSnapshotV1,
+        participants: usize,
+        retain_evidence: bool,
     ) -> Result<Self> {
         ensure_fault_state_converged(before)?;
         ensure!(
@@ -2491,11 +2988,21 @@ impl FaultContinuousObserverV1 {
             accumulator.record(observation, observation, participants)?;
         }
         let accumulators = Arc::new(Mutex::new(initial));
+        let retained_observations = retain_evidence.then(|| {
+            Arc::new(Mutex::new(
+                baselines
+                    .iter()
+                    .cloned()
+                    .map(|baseline| vec![baseline])
+                    .collect::<Vec<_>>(),
+            ))
+        });
         let failure = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
         let peers = network.peers().to_vec();
         let thread_baselines = baselines.clone();
         let thread_accumulators = Arc::clone(&accumulators);
+        let thread_retained_observations = retained_observations.clone();
         let thread_failure = Arc::clone(&failure);
         let thread_stop = Arc::clone(&stop);
         let handle = thread::Builder::new()
@@ -2510,6 +3017,22 @@ impl FaultContinuousObserverV1 {
                         else {
                             continue;
                         };
+                        if let Some(retained) = &thread_retained_observations {
+                            let mut retained = retained
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if retained[peer_index].len() >= LEAKAGE_MAX_OBSERVATIONS_PER_PEER {
+                                *thread_failure
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(
+                                    "continuous APS evidence exceeded its per-peer bound"
+                                        .to_owned(),
+                                );
+                                thread_stop.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                            retained[peer_index].push(observation.clone());
+                        }
                         let result = thread_accumulators
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)[peer_index]
@@ -2531,6 +3054,7 @@ impl FaultContinuousObserverV1 {
         let observer = Self {
             stop,
             accumulators,
+            retained_observations,
             failure,
             baselines,
             participants,
@@ -2585,6 +3109,18 @@ impl FaultContinuousObserverV1 {
         {
             accumulator.record(baseline, observation, self.participants)?;
         }
+        if let Some(retained) = &self.retained_observations {
+            let mut retained = retained
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for (peer, observation) in retained.iter_mut().zip(&snapshot.validators) {
+                ensure!(
+                    peer.len() < LEAKAGE_MAX_OBSERVATIONS_PER_PEER,
+                    "continuous APS evidence exceeded its per-peer bound"
+                );
+                peer.push(observation.clone());
+            }
+        }
         Ok(())
     }
 
@@ -2610,6 +3146,31 @@ impl FaultContinuousObserverV1 {
         mut self,
         after: &FaultStateSnapshotV1,
     ) -> Result<Vec<FaultContinuousObservationSummaryV1>> {
+        let (summaries, _) = self.finish_inner(after)?;
+        Ok(summaries)
+    }
+
+    fn finish_with_evidence(
+        mut self,
+        after: &FaultStateSnapshotV1,
+    ) -> Result<(
+        Vec<FaultContinuousObservationSummaryV1>,
+        Vec<Vec<FaultStateObservationV1>>,
+    )> {
+        ensure!(
+            self.retained_observations.is_some(),
+            "continuous APS observer was not configured to retain evidence"
+        );
+        self.finish_inner(after)
+    }
+
+    fn finish_inner(
+        &mut self,
+        after: &FaultStateSnapshotV1,
+    ) -> Result<(
+        Vec<FaultContinuousObservationSummaryV1>,
+        Vec<Vec<FaultStateObservationV1>>,
+    )> {
         self.stop_and_join()?;
         self.observe_snapshot(after)?;
         let accumulators = {
@@ -2619,10 +3180,21 @@ impl FaultContinuousObserverV1 {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::take(&mut *guard)
         };
-        accumulators
+        let summaries = accumulators
             .into_iter()
             .map(FaultContinuousObservationAccumulatorV1::finish)
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        let retained = self
+            .retained_observations
+            .as_ref()
+            .map(|retained| {
+                let mut retained = retained
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                std::mem::take(&mut *retained)
+            })
+            .unwrap_or_default();
+        Ok((summaries, retained))
     }
 }
 
@@ -3526,7 +4098,9 @@ fn verify_invalid_leg_carrier_is_state_byte_identical(
         ),
     };
     ensure!(
-        sponsor.submit_private_settlement_bundle_v1(&request).is_err(),
+        sponsor
+            .submit_private_settlement_bundle_v1(&request)
+            .is_err(),
         "global carrier accepted an invalid private-settlement leg delta"
     );
     let after = capture_fault_state_snapshot(network, "invalid-leg-after")?;
@@ -3553,7 +4127,8 @@ fn verify_invalid_leg_carrier_is_state_byte_identical(
             snapshot
                 .validators
                 .iter()
-                .all(|observation| fault_ledger_identity(observation).is_ok_and(|value| value == expected)),
+                .all(|observation| fault_ledger_identity(observation)
+                    .is_ok_and(|value| value == expected)),
             "invalid-leg probe observed a globally incoherent APS ledger"
         );
     }
@@ -5753,6 +6328,632 @@ fn verify_committee_proof_views(
     Ok(())
 }
 
+fn collect_network_leakage_sources<F>(
+    network: &Network,
+    mut selected: F,
+) -> Result<Vec<(String, Vec<u8>)>>
+where
+    F: FnMut(&Path) -> bool,
+{
+    let mut sources = Vec::new();
+    let mut total = 0_usize;
+    for (peer_index, peer) in network.peers().iter().enumerate() {
+        let peer_sources = collect_leakage_source_files(&peer.kura_store_dir(), &mut selected)?;
+        for (relative, bytes) in peer_sources {
+            total = total
+                .checked_add(bytes.len())
+                .ok_or_else(|| eyre!("network leakage source byte count overflow"))?;
+            ensure!(
+                total <= LEAKAGE_MAX_SOURCE_BYTES,
+                "network leakage source set exceeds its byte bound"
+            );
+            sources.push((format!("peer-{peer_index:03}/{relative}"), bytes));
+        }
+    }
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
+    ensure!(
+        !sources.is_empty(),
+        "network leakage source inventory is empty"
+    );
+    Ok(sources)
+}
+
+fn run_real_process_leakage_campaign(
+    request: RealProcessLeakageRequestV1,
+    request_sha: String,
+) -> Result<RealProcessLeakageResultV1> {
+    let shape = TopologyShape::new(request.participants);
+    shape.validate()?;
+    ensure!(
+        request.participants == PARTICIPANT_COUNT,
+        "leakage campaign is restricted to the primary N=3 topology"
+    );
+    let evidence_root = leakage_evidence_root()?;
+    let context = format!(
+        "atomic_private_settlement_real_process_leakage_n{}_s{}_r{}",
+        request.participants, request.seed, request.run
+    );
+    let builder = localnet_builder(shape)
+        .with_base_seed(format!(
+            "atomic-private-settlement-real-process-leakage-v1-n{}-seed-{}-run-{}",
+            request.participants, request.seed, request.run
+        ))
+        .with_consensus_message_control();
+    let started = sandbox::start_network_blocking_or_skip(builder, &context)?;
+    let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, &context)?
+    else {
+        return Err(eyre!("real-process leakage network was skipped"));
+    };
+    write_leakage_port_manifest(&network, shape)?;
+    verify_controller_readiness(&network, &runtime)?;
+    let coordinator = CoordinatorProcessV1::start(&network.client())?;
+    let inventory =
+        collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
+    let sponsor = network.client();
+    let activated_height = activate_ivm_private_note(&sponsor)?;
+    let authority_context_height = activated_height + 1;
+    let expiry_height = authority_context_height + 1_000;
+    let routes = routes_from_network(&network, shape)?;
+    ensure!(routes.len() == request.participants, "route count mismatch");
+    let committees = committees_from_network(&network, shape, &routes)?;
+    let (private_leg_zero, canary_asset) = leakage_private_leg_zero(&request)?;
+    let mut asset_definition_ids = (0..request.participants)
+        .map(cbdc_asset_definition_id)
+        .collect::<Vec<_>>();
+    asset_definition_ids[0] = canary_asset;
+    let governed = governed_legs_with_asset_definitions(
+        &routes,
+        authority_context_height,
+        expiry_height,
+        Some(&asset_definition_ids),
+    )?;
+    let manifest = proof_manifest(
+        network.network_id(),
+        authority_context_height,
+        expiry_height,
+        &governed,
+    )?;
+    let prepared = governed
+        .into_iter()
+        .zip(&committees)
+        .enumerate()
+        .map(|(ordinal, (leg, committee))| {
+            // The paired privacy experiment intentionally changes only secret
+            // plaintext fields, but it must never reuse output-encryption or
+            // capsule key/nonce material across invocations.  OS entropy changes
+            // only fixed-width cryptographic values and therefore preserves the
+            // public shape, padding, and packet/message/record-count comparison.
+            let mut output_rng = rand_core_06::OsRng;
+            let mut capsule_rng = rand::rngs::OsRng;
+            if ordinal == 0 {
+                prepare_leg_with_private_data_and_rngs(
+                    ordinal,
+                    leg,
+                    &manifest,
+                    committee.authority.digest()?,
+                    &private_leg_zero,
+                    &mut output_rng,
+                    &mut capsule_rng,
+                )
+            } else {
+                let private_data = default_private_settlement_leg_data(ordinal);
+                prepare_leg_with_private_data_and_rngs(
+                    ordinal,
+                    leg,
+                    &manifest,
+                    committee.authority.digest()?,
+                    &private_data,
+                    &mut output_rng,
+                    &mut capsule_rng,
+                )
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let activations = prepared
+        .iter()
+        .map(|leg| {
+            ActivatePrivateSettlementPoolV1::from_restricted(
+                &leg.governed.governance,
+                leg.initial_commitments.to_vec(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let activation_transaction =
+        sponsor.build_transaction_from_items(activations, no_fee(), Metadata::default());
+    sponsor
+        .submit_transaction_blocking(&activation_transaction)
+        .wrap_err("activate governed leakage pools")?;
+    ensure!(
+        sponsor.get_privacy_capabilities()?.committed_height == authority_context_height,
+        "leakage pool activation did not land at the authority context"
+    );
+
+    let before = wait_for_converged_fault_state_snapshot(&network, "leakage-before")?;
+    let observer = FaultContinuousObserverV1::start_retaining_evidence(
+        &network,
+        &before,
+        request.participants,
+    )?;
+    let materials = provisional_materials(manifest, &prepared, &committees)?;
+    let certificates = materials
+        .iter()
+        .zip(&committees)
+        .map(|(material, committee)| {
+            sponsor.certify_private_settlement_leg_availability_v1(&committee.endpoints, material)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut final_manifest = materials[0].manifest.clone();
+    for (ordinal, certificate) in certificates.iter().enumerate() {
+        final_manifest.legs[ordinal].availability_certificate_digest = certificate.digest()?;
+    }
+    final_manifest.validate()?;
+    for (ordinal, ((material, certificate), committee)) in materials
+        .iter()
+        .zip(&certificates)
+        .zip(&committees)
+        .enumerate()
+    {
+        let upload = PrivateSettlementLegUploadRequestV1 {
+            manifest: final_manifest.clone(),
+            audit_policy: material.audit_policy.clone(),
+            committee_authority: material.committee_authority.clone(),
+            payload: material.payload_with_certificate(certificate.clone()),
+        };
+        for endpoint in &committee.endpoints {
+            let response = sponsor.upload_private_settlement_leg_to_v1(endpoint, &upload)?;
+            ensure!(
+                usize::from(response.leg_ordinal) == ordinal,
+                "leakage upload ordinal substitution"
+            );
+        }
+    }
+    assert_no_partial_visibility(&network, final_manifest.bundle_id, "leakage-collecting")?;
+
+    for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
+        let fetched = sponsor.private_settlement_auditor_capsule_v1(
+            final_manifest.legs[ordinal].payload_digest,
+            &leg.governed.auditor_signing,
+        )?;
+        ensure!(
+            fetched.lifecycle == PrivateSettlementLifecycleDtoV1::Collecting,
+            "unexpected leakage audit lifecycle"
+        );
+        let view = PrivateSettlementAuditorSidecarViewV1 {
+            manifest: fetched.manifest,
+            policy: fetched.audit_policy,
+            authority: fetched.committee_authority,
+            statement: fetched.statement,
+            delta: fetched.delta,
+            audit_capsule: fetched.audit_capsule,
+            availability: fetched.availability,
+            lifecycle: PrivateSettlementSidecarLifecycleV1::Collecting,
+        };
+        let auditor_id = AccountId::new(leg.governed.auditor_signing.public_key().clone());
+        let approval = approve_private_settlement_leg_v1(
+            &view,
+            &leg.governed.governance,
+            authority_context_height,
+            &auditor_id,
+            leg.governed.auditor_encryption.secret(),
+            &leg.governed.auditor_signing,
+            &approve_all_audit_material,
+        )?;
+        for endpoint in &committee.endpoints {
+            let mut endpoint_client = sponsor.clone();
+            endpoint_client.torii_url = endpoint.clone();
+            let response = endpoint_client.submit_private_settlement_audit_approval_v1(
+                final_manifest.legs[ordinal].payload_digest,
+                &leg.governed.auditor_signing,
+                &PrivateSettlementAuditApprovalRequestV1 {
+                    approval: approval.clone(),
+                },
+            )?;
+            ensure!(
+                response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
+                "leakage approval was not durable"
+            );
+        }
+    }
+    assert_no_partial_visibility(&network, final_manifest.bundle_id, "leakage-audited")?;
+    verify_committee_proof_views(&sponsor, &final_manifest, &prepared, &committees)?;
+
+    let endpoint_matrix = committees
+        .iter()
+        .map(|committee| committee.endpoints.clone())
+        .collect::<Vec<_>>();
+    let authorities = committees
+        .iter()
+        .map(|committee| committee.authority.clone())
+        .collect::<Vec<_>>();
+    let deltas = prepared
+        .iter()
+        .map(|leg| leg.delta.clone())
+        .collect::<Vec<_>>();
+    let barrier = sponsor.prepare_private_settlement_bundle_v1(
+        &endpoint_matrix,
+        &final_manifest,
+        &authorities,
+        &deltas,
+    )?;
+    assert_no_partial_visibility(&network, final_manifest.bundle_id, "leakage-prepared")?;
+    let commits = sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+    assert_no_partial_visibility(
+        &network,
+        final_manifest.bundle_id,
+        "leakage-commit-certified",
+    )?;
+    let legs = deltas
+        .into_iter()
+        .zip(barrier.prepare_certificates)
+        .zip(commits)
+        .map(|((delta, prepare), commit)| PrivateSettlementLegReceiptV1 {
+            delta,
+            prepare,
+            commit,
+        })
+        .collect();
+    let carrier = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
+        version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+        manifest: final_manifest.clone(),
+        authority_catalog: authorities,
+        legs,
+    });
+    let transaction = sponsor.build_transaction(
+        [InstructionBox::from(carrier)],
+        final_manifest.public_fee_intent.clone(),
+        Metadata::default(),
+    );
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    let submit = PrivateSettlementBundleSubmitRequestV1 {
+        transaction: transaction.clone(),
+    };
+    let (event_record, event_source) = submit_leakage_carrier_with_event(
+        &runtime,
+        &sponsor,
+        submit.clone(),
+        final_manifest.bundle_id,
+    )?;
+    let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
+    ensure!(
+        receipt.legs.len() == request.participants,
+        "leakage receipt participant count mismatch"
+    );
+    for (ordinal, leg) in receipt.legs.iter().enumerate() {
+        ensure!(
+            usize::from(leg.delta.leg_ordinal) == ordinal
+                && leg.delta == prepared[ordinal].delta
+                && receipt
+                    .legs
+                    .iter()
+                    .filter(|candidate| candidate.delta.route == leg.delta.route)
+                    .count()
+                    == 1,
+            "leakage receipt omitted, duplicated, or reordered a private leg"
+        );
+    }
+    ensure!(
+        sponsor
+            .submit_private_settlement_bundle_v1(&submit)
+            .is_err(),
+        "replaying the exact leakage carrier was accepted"
+    );
+    ensure!(
+        wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
+        "leakage replay changed the terminal receipt"
+    );
+    let after = wait_for_converged_fault_state_snapshot(&network, "leakage-after")?;
+    let (continuous_observations, continuous_observation_evidence) =
+        observer.finish_with_evidence(&after)?;
+    ensure!(
+        continuous_observations.len() == shape.peer_count()
+            && continuous_observations
+                .iter()
+                .all(|row| row.check_count >= 3 && row.finalized_observations >= 1),
+        "leakage atomicity observer did not cover every validator through finality"
+    );
+    let continuous_atomicity_checks =
+        continuous_observations
+            .iter()
+            .try_fold(0_u64, |total, row| {
+                total
+                    .checked_add(row.check_count)
+                    .ok_or_else(|| eyre!("leakage atomicity check count overflow"))
+            })?;
+    let signed_rs16_da_observations =
+        verify_signed_rs16_finality(&network, receipt.finalized_height)?;
+    ensure!(
+        signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
+        "signed RS16 leakage finality observations are incomplete"
+    );
+
+    let carrier_block = leakage_carrier_block(&sponsor, entrypoint_hash)?;
+    let block_wire = leakage_block_wire(&carrier_block)?;
+    let (query_records, query_sources) =
+        leakage_query_records(&network, final_manifest.bundle_id, &receipt)?;
+    let (telemetry_records, telemetry_sources) = leakage_telemetry_records(&network, &runtime)?;
+    let needles = leakage_canary_needles(&request)?;
+    let atomicity_observation_sources = continuous_observation_evidence
+        .into_iter()
+        .enumerate()
+        .map(|(peer_index, observations)| {
+            ensure!(
+                !observations.is_empty(),
+                "leakage atomicity evidence omitted a validator"
+            );
+            Ok((
+                format!("peer-{peer_index:03}.json"),
+                canonical_harness_json_bytes(&LeakageAtomicityObservationEvidenceV1 {
+                    version: 1,
+                    peer_index,
+                    observations,
+                })?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ensure_leakage_sources_redacted(&needles, "carrier block", &[&block_wire])?;
+    ensure_leakage_sources_redacted(&needles, "carrier event", &[&event_source])?;
+    let query_source_refs = query_sources.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    ensure_leakage_sources_redacted(&needles, "receipt queries", &query_source_refs)?;
+    let telemetry_source_refs = telemetry_sources
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    ensure_leakage_sources_redacted(&needles, "telemetry", &telemetry_source_refs)?;
+    let atomicity_observation_source_refs = atomicity_observation_sources
+        .iter()
+        .map(|(_, bytes)| bytes.as_slice())
+        .collect::<Vec<_>>();
+    ensure_leakage_sources_redacted(
+        &needles,
+        "continuous atomicity observations",
+        &atomicity_observation_source_refs,
+    )?;
+
+    let coordinator_sources = coordinator.stop_and_collect_logs()?;
+    let coordinator_source_refs = coordinator_sources
+        .iter()
+        .map(|(_, bytes)| bytes.as_slice())
+        .collect::<Vec<_>>();
+    ensure_leakage_sources_redacted(&needles, "coordinator logs", &coordinator_source_refs)?;
+    drop(coordinator);
+    runtime.block_on(network.shutdown());
+    let (operator_records, operator_sources) = leakage_operator_log_records(&network)?;
+    let operator_source_refs = operator_sources
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    ensure_leakage_sources_redacted(&needles, "operator logs", &operator_source_refs)?;
+    let kura_sources = collect_network_leakage_sources(&network, |path| {
+        path.file_name().and_then(|name| name.to_str()) == Some("blocks.data")
+    })?;
+    let merge_sources = collect_network_leakage_sources(&network, |path| {
+        path.extension().and_then(|extension| extension.to_str()) == Some("log")
+            && path
+                .components()
+                .any(|component| component.as_os_str() == "merge_ledger")
+    })?;
+    let snapshot_sources = collect_network_leakage_sources(&network, |path| {
+        path.extension().and_then(|extension| extension.to_str()) == Some("norito")
+            && path
+                .components()
+                .any(|component| component.as_os_str() == "wsv_checkpoints")
+    })?;
+    let sidecar_sources = collect_network_leakage_sources(&network, |path| {
+        path.components()
+            .any(|component| component.as_os_str() == "private-settlement-sidecars-v1")
+    })?;
+    let kura_source_refs = kura_sources
+        .iter()
+        .map(|(_, bytes)| bytes.as_slice())
+        .collect::<Vec<_>>();
+    let merge_source_refs = merge_sources
+        .iter()
+        .map(|(_, bytes)| bytes.as_slice())
+        .collect::<Vec<_>>();
+    let snapshot_source_refs = snapshot_sources
+        .iter()
+        .map(|(_, bytes)| bytes.as_slice())
+        .collect::<Vec<_>>();
+    let sidecar_source_refs = sidecar_sources
+        .iter()
+        .map(|(_, bytes)| bytes.as_slice())
+        .collect::<Vec<_>>();
+    ensure_leakage_sources_redacted(&needles, "Kura", &kura_source_refs)?;
+    ensure_leakage_sources_redacted(&needles, "merge ledger", &merge_source_refs)?;
+    ensure_leakage_sources_redacted(&needles, "WSV checkpoints", &snapshot_source_refs)?;
+    ensure_leakage_sources_redacted(&needles, "confidential DA", &sidecar_source_refs)?;
+
+    let event_json = leakage_json_records(vec![event_record])?;
+    let query_json = leakage_json_records(query_records)?;
+    let telemetry_json = leakage_json_records(telemetry_records)?;
+    let operator_json = leakage_json_records(operator_records)?;
+    let kura_artifact = framed_leakage_sources("kura", &kura_sources)?;
+    let merge_artifact = framed_leakage_sources("merge", &merge_sources)?;
+    let snapshot_artifact = framed_leakage_sources("snapshot", &snapshot_sources)?;
+    let mut restricted_sources = vec![
+        LeakageRestrictedSourceRefV1 {
+            surface: "block_wire_capture",
+            relative_path: "carrier-block-wire.bin".to_owned(),
+            bytes: &block_wire,
+        },
+        LeakageRestrictedSourceRefV1 {
+            surface: "event_capture",
+            relative_path: "event-000.norito".to_owned(),
+            bytes: &event_source,
+        },
+    ];
+    for (index, source) in query_sources.iter().enumerate() {
+        restricted_sources.push(LeakageRestrictedSourceRefV1 {
+            surface: "query_capture",
+            relative_path: format!("peer-{index:03}.norito"),
+            bytes: source,
+        });
+    }
+    for (index, source) in telemetry_sources.iter().enumerate() {
+        restricted_sources.push(LeakageRestrictedSourceRefV1 {
+            surface: "telemetry_capture",
+            relative_path: format!("peer-{index:03}.status-metrics"),
+            bytes: source,
+        });
+    }
+    for (index, source) in operator_sources.iter().enumerate() {
+        restricted_sources.push(LeakageRestrictedSourceRefV1 {
+            surface: "operator_log",
+            relative_path: format!("validator-{index:03}.stdout-stderr"),
+            bytes: source,
+        });
+    }
+    for (path, source) in &coordinator_sources {
+        restricted_sources.push(LeakageRestrictedSourceRefV1 {
+            surface: "coordinator_log",
+            relative_path: path.clone(),
+            bytes: source,
+        });
+    }
+    for (surface, sources) in [
+        ("kura_artifact", &kura_sources),
+        ("merge_artifact", &merge_sources),
+        ("snapshot_artifact", &snapshot_sources),
+        ("confidential_da", &sidecar_sources),
+        ("atomicity_observation", &atomicity_observation_sources),
+    ] {
+        for (path, source) in sources {
+            restricted_sources.push(LeakageRestrictedSourceRefV1 {
+                surface,
+                relative_path: path.clone(),
+                bytes: source,
+            });
+        }
+    }
+    let restricted_source_archive = framed_restricted_leakage_sources_v1(restricted_sources)?;
+    ensure_leakage_sources_redacted(
+        &needles,
+        "restricted audit-source archive",
+        &[restricted_source_archive.as_slice()],
+    )?;
+    let block_source = [block_wire.as_slice()];
+    let event_sources = [event_source.as_slice()];
+    let mut artifacts = vec![
+        write_leakage_artifact(
+            &evidence_root,
+            "block_wire_capture",
+            "block-wire.bin",
+            &block_wire,
+            &block_source,
+        )?,
+        write_leakage_artifact(
+            &evidence_root,
+            "event_capture",
+            "events.json",
+            &event_json,
+            &event_sources,
+        )?,
+        write_leakage_artifact(
+            &evidence_root,
+            "kura_artifact",
+            "kura.bin",
+            &kura_artifact,
+            &kura_source_refs,
+        )?,
+        write_leakage_artifact(
+            &evidence_root,
+            "merge_artifact",
+            "merge.bin",
+            &merge_artifact,
+            &merge_source_refs,
+        )?,
+        write_leakage_artifact(
+            &evidence_root,
+            "operator_log",
+            "operator.json",
+            &operator_json,
+            &operator_source_refs,
+        )?,
+        write_leakage_artifact(
+            &evidence_root,
+            "query_capture",
+            "queries.json",
+            &query_json,
+            &query_source_refs,
+        )?,
+        write_leakage_artifact(
+            &evidence_root,
+            "restricted_audit_source",
+            "restricted-audit-sources.bin",
+            &restricted_source_archive,
+            &[restricted_source_archive.as_slice()],
+        )?,
+        write_leakage_artifact(
+            &evidence_root,
+            "snapshot_artifact",
+            "snapshot.bin",
+            &snapshot_artifact,
+            &snapshot_source_refs,
+        )?,
+        write_leakage_artifact(
+            &evidence_root,
+            "telemetry_capture",
+            "telemetry.json",
+            &telemetry_json,
+            &telemetry_source_refs,
+        )?,
+    ];
+    artifacts.sort_by(|left, right| left.surface.cmp(&right.surface));
+    let nonpacket_record_counts = BTreeMap::from([
+        ("block_messages".to_owned(), 1),
+        (
+            "query_responses".to_owned(),
+            u64::try_from(query_sources.len())?,
+        ),
+        ("event_records".to_owned(), 1),
+        (
+            "log_records".to_owned(),
+            u64::try_from(operator_sources.len())?,
+        ),
+        (
+            "telemetry_records".to_owned(),
+            u64::try_from(telemetry_sources.len())?,
+        ),
+    ]);
+    ensure!(
+        nonpacket_record_counts.values().all(|count| *count > 0),
+        "leakage non-packet evidence contains an empty channel"
+    );
+    Ok(RealProcessLeakageResultV1 {
+        version: 1,
+        protocol: "AtomicPrivateSettlementV1".to_owned(),
+        request_id: request.request_id,
+        invocation_nonce: request.invocation_nonce,
+        request_sha256: request_sha,
+        commit: request.commit,
+        participants: request.participants,
+        mandatory_signed_rs16_da_rbc: true,
+        signed_rs16_da_observations,
+        authenticated_message_control: true,
+        process_inventory: inventory,
+        payload: RealProcessLeakageResultPayloadV1 {
+            variant: request.payload.variant,
+            canaries_injected: request
+                .payload
+                .canaries
+                .into_iter()
+                .map(|canary| canary.name)
+                .collect(),
+            canary_commitments: request.payload.canary_commitments,
+            only_secret_fields_changed: true,
+            nonpacket_capture_complete: true,
+            finalized_receipt_observed: true,
+            successful_leg_applications: receipt.legs.len(),
+            each_leg_applied_exactly_once: true,
+            continuous_atomicity_checks,
+            partial_visible_observations: 0,
+            partial_spendable_observations: 0,
+            nonpacket_artifacts: artifacts,
+            nonpacket_record_counts,
+        },
+    })
+}
+
 fn run_real_process_private_benchmark(
     request: RealProcessBenchmarkRequestV1,
     request_sha: String,
@@ -5834,6 +7035,9 @@ fn run_real_process_private_benchmark(
         sponsor.get_privacy_capabilities()?.committed_height == authority_context_height,
         "pool activation did not land at the manifest authority context"
     );
+    let atomicity_before = wait_for_converged_fault_state_snapshot(&network, "benchmark-before")?;
+    let atomicity_observer =
+        FaultContinuousObserverV1::start(&network, &atomicity_before, request.participants)?;
 
     let upload_started = Instant::now();
     let materials = provisional_materials(manifest, &prepared, &committees)?;
@@ -5943,7 +7147,6 @@ fn run_real_process_private_benchmark(
         &final_manifest,
         &authorities,
         &deltas,
-        &deltas,
     )?;
     let prepare = elapsed_ms(prepare_started);
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "prepared")?;
@@ -6007,6 +7210,13 @@ fn run_real_process_private_benchmark(
     ensure!(
         wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
         "replay changed the terminal receipt"
+    );
+    let atomicity_after = wait_for_converged_fault_state_snapshot(&network, "benchmark-after")?;
+    ensure_fault_state_finalized_once(&atomicity_before, &atomicity_after, request.participants)?;
+    let atomicity_observations = atomicity_observer.finish(&atomicity_after)?;
+    ensure!(
+        atomicity_observations.len() == network.peers().len(),
+        "private benchmark atomicity observer omitted a validator"
     );
     let signed_rs16_da_observations =
         verify_signed_rs16_finality(&network, receipt.finalized_height)?;
@@ -6076,11 +7286,8 @@ fn run_real_process_private_benchmark(
             finalized_receipt_observed: true,
             successful_leg_applications: receipt.legs.len(),
             each_leg_applied_exactly_once: true,
-            // These benchmark zeroes are backed only by the collecting/audited/prepared/
-            // commit-certified phase-boundary assertions above. The separate fault campaign
-            // emits full-topology continuous-observer evidence.
-            // TODO: Add that observer here before describing benchmark rows themselves as
-            // continuously observed atomicity evidence.
+            // The full-topology observer accepted only the exact baseline or complete
+            // finalized private-state vector throughout the measured workflow.
             partial_visible_observations: 0,
             partial_spendable_observations: 0,
         },
@@ -6161,6 +7368,27 @@ fn atomic_private_settlement_real_process_fault_harness() -> Result<()> {
             write_real_process_result(&result)
         })
         .expect("spawn real-process fault release harness thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[test]
+#[ignore = "release-only: starts 16 validators and captures a real secret-only differential run"]
+fn atomic_private_settlement_real_process_leakage_harness() -> Result<()> {
+    let handle = thread::Builder::new()
+        .name("atomic-private-settlement-real-process-leakage-harness".to_owned())
+        .stack_size(TEST_STACK_BYTES)
+        .spawn(|| {
+            let (bound, request_sha) = read_bound_real_process_request()?;
+            let RealProcessBoundRequestV1::Leakage(request) = bound else {
+                return Err(eyre!("leakage entrypoint received a non-leakage request"));
+            };
+            let result = run_real_process_leakage_campaign(request, request_sha)?;
+            write_real_process_result(&result)
+        })
+        .expect("spawn real-process leakage release harness thread");
     match handle.join() {
         Ok(result) => result,
         Err(panic) => std::panic::resume_unwind(panic),
@@ -6286,6 +7514,48 @@ fn real_process_benchmark_stage_inventory_is_profile_exact() {
         TRANSPARENT_CONTROL_BENCHMARK_STAGES
     );
     assert!(benchmark_stages("ordinary-transfer-substitute").is_err());
+}
+
+#[test]
+fn leakage_memo_framing_and_raw_source_scan_are_fail_closed() {
+    let mut left = b"iroha:aps-leakage-memo:v1\0".to_vec();
+    append_fixed_leakage_memo_field(&mut left, b"memo-v1\0", b"left", 16).unwrap();
+    let mut right = b"iroha:aps-leakage-memo:v1\0".to_vec();
+    append_fixed_leakage_memo_field(&mut right, b"memo-v1\0", b"right", 16).unwrap();
+    assert_eq!(left.len(), right.len());
+    assert_ne!(left, right);
+    assert!(append_fixed_leakage_memo_field(&mut Vec::new(), b"memo-v1\0", b"", 16).is_err());
+
+    let needles = vec![LeakageCanaryNeedleV1 {
+        name: "memo".to_owned(),
+        encoding: "utf8".to_owned(),
+        bytes: b"never-public".to_vec(),
+    }];
+    assert!(ensure_leakage_sources_redacted(&needles, "fixture", &[b"opaque"]).is_ok());
+    assert!(
+        ensure_leakage_sources_redacted(&needles, "fixture", &[b"prefix-never-public-suffix"])
+            .is_err()
+    );
+    assert_eq!(leakage_leb128(0), [0]);
+    assert_eq!(leakage_leb128(128), [0x80, 0x01]);
+    let asset = leakage_canary_asset_definition_id("left").expect("typed leakage asset");
+    let asset_payload = leakage_asset_address_payload(&asset);
+    assert_eq!(asset_payload[0], 1);
+    assert_eq!(&asset_payload[1..17], &asset.aid_bytes());
+    assert_eq!(
+        &asset_payload[17..],
+        &blake3::hash(&asset_payload[..17]).as_bytes()[..4]
+    );
+    let commitment = leakage_canary_commitment(&RealProcessLeakageCanaryV1 {
+        name: "account_id".to_owned(),
+        kind: "text".to_owned(),
+        value: HarnessJsonValue::String("fixture".to_owned()),
+    })
+    .expect("canonical leakage canary commitment");
+    assert_eq!(
+        commitment,
+        "0a85640748c1a32f1f088cdb5065806c7531526d33bd4af7796bab9ff6284905"
+    );
 }
 
 #[test]

@@ -580,7 +580,7 @@ fn sumeragi_v2_certified_body_response_alone_retains_the_seventeen_mib_policy() 
     let NetworkMessage::SumeragiBlock(decoded) = decoded else {
         panic!("decoded certified-body response changed its network variant");
     };
-    let BlockMessage::V2(decoded) = decoded.as_ref() else {
+    let BlockMessage::V2(decoded) = decoded.as_ref().as_message() else {
         panic!("decoded certified-body response changed its block-message variant");
     };
     let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(decoded) = &decoded.payload else {

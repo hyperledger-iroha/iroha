@@ -71,3 +71,67 @@ def test_native_alias_policy_defaults_do_not_fall_back(
 
     with pytest.raises(RuntimeError, match="native extension unavailable"):
         sorafs.SorafsAliasPolicy.defaults()
+
+
+@pytest.mark.parametrize("value", [True, 600.0, "600"])
+def test_alias_policy_rejects_lossy_integer_inputs(value: object) -> None:
+    with pytest.raises(TypeError, match="positive integer"):
+        sorafs.SorafsAliasPolicy(
+            **{**CANONICAL_DEFAULTS, "positive_ttl_secs": value},  # type: ignore[arg-type]
+        )
+
+
+def test_alias_policy_rejects_u64_overflow() -> None:
+    with pytest.raises(ValueError, match="unsigned 64-bit"):
+        sorafs.SorafsAliasPolicy(
+            **{**CANONICAL_DEFAULTS, "positive_ttl_secs": 1 << 64},
+        )
+
+
+def test_alias_policy_mapping_accepts_only_first_release_field_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sorafs, "_crypto", FakeCrypto(dict(CANONICAL_DEFAULTS)))
+
+    policy = sorafs.SorafsAliasPolicy.from_mapping({"positive_ttl_secs": 700})
+    assert policy.positive_ttl_secs == 700
+    assert policy.refresh_window_secs == CANONICAL_DEFAULTS["refresh_window_secs"]
+    with pytest.raises(ValueError, match="unsupported fields"):
+        sorafs.SorafsAliasPolicy.from_mapping({"positiveTtlSecs": 700})
+
+
+@pytest.mark.parametrize("policy", [{}, False, 0])
+def test_evaluate_alias_proof_rejects_falsey_invalid_policy_before_native_call(
+    monkeypatch: pytest.MonkeyPatch,
+    policy: object,
+) -> None:
+    class NoCallsCrypto:
+        @staticmethod
+        def sorafs_evaluate_alias_proof(*_args: object) -> Any:
+            raise AssertionError("native evaluation must not be called")
+
+    monkeypatch.setattr(sorafs, "_crypto", NoCallsCrypto())
+
+    with pytest.raises(TypeError, match="SorafsAliasPolicy"):
+        sorafs.evaluate_alias_proof("proof", policy=policy)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("now_secs", [True, 1.5, "1", -1])
+def test_evaluate_alias_proof_rejects_ambiguous_time_before_native_call(
+    monkeypatch: pytest.MonkeyPatch,
+    now_secs: object,
+) -> None:
+    class NoCallsCrypto:
+        @staticmethod
+        def sorafs_evaluate_alias_proof(*_args: object) -> Any:
+            raise AssertionError("native evaluation must not be called")
+
+    monkeypatch.setattr(sorafs, "_crypto", NoCallsCrypto())
+    policy = sorafs.SorafsAliasPolicy(**CANONICAL_DEFAULTS)
+
+    with pytest.raises((TypeError, ValueError), match="now_secs"):
+        sorafs.evaluate_alias_proof(
+            "proof",
+            policy=policy,
+            now_secs=now_secs,  # type: ignore[arg-type]
+        )

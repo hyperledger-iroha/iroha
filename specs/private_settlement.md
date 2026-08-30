@@ -281,7 +281,7 @@ The canonical route catalog is
 | `GET .../legs/{payload_digest}/committee-proof` | identity-bound exact validator | proof, approvals, opaque delta |
 | `GET .../legs/{payload_digest}/audit-capsule` | identity-bound governed auditor | padded encrypted capsule |
 | `POST .../legs/{payload_digest}/audit-approvals` | identity-bound governed auditor | record approval |
-| `POST /v1/nexus/private-settlements/bundles` | canonical sponsor signature | submit exact global carrier |
+| `POST /v1/nexus/private-settlements/bundles` | canonical sponsor signature | submit exact finalization or abort carrier |
 | `GET .../bundles/{bundle_id}` | public | redacted bundle status |
 | `GET .../bundles/{bundle_id}/receipt` | public | final receipt or abort marker |
 
@@ -290,7 +290,22 @@ All restricted and authenticated settlement responses advertise private
 public route/timing fields only; audit approval counts and the governed
 threshold remain restricted committee/auditor material. Handlers return
 bounded stable error classes rather than echoing identifiers, plaintext,
-parser detail, or policy internals.
+parser detail, or policy internals. SDKs retain a server reject-code header only
+when it matches the bounded public grammar `[A-Za-z0-9_.:-]{1,128}`. Response
+decode and validation failures discard parser causes as well as body text, so
+cause-aware logging cannot recover attacker-controlled field names or response
+documents.
+Carrier admission returns only the bundle identifier, observed admission
+height, and signed carrier hash. It does not claim that a queued abort is
+already durable; the public status and receipt routes are the authoritative
+terminal projection. Every SDK requires both identifiers to be canonical,
+checksummed Norito `Hash` JSON literals and the height to be an unsigned
+64-bit integer; missing, additional, mistyped, non-canonical, or overflowed
+fields fail closed before the response reaches application code.
+Success status is part of the exact V1 contract: carrier admission requires
+HTTP `202`, while every other private-settlement operation requires HTTP `200`.
+SDKs reject an alternate successful `2xx` code before accepting its body and
+do not echo that unexpected response body through client errors.
 
 ## Configuration
 
@@ -382,7 +397,7 @@ Run exact four-validator processes for every dataspace at N=2,3,4,8,16, using
 N=3 as the paper's primary configuration. Stop/restart one validator in every
 committee plus coordinator/global nodes. Use only the authenticated consensus
 message controller, acknowledge each hold/drop, and exercise 5%, 10%, and 20%
-loss, phase-cut partitions, delay, reordering, healing, and crashes after
+loss, phase-cut partitions, delayed delivery, healing, and crashes after
 sidecar, staged delta, Prepare QC, Commit QC, Kura append, WSV apply, and receipt
 publication. Continuously assert that no strict subset becomes visible or
 spendable and that every node converges after healing. Keep signed RS16 DA/RBC
@@ -432,32 +447,57 @@ tests. They must not be labeled real-network latency measurements.
 Capture Torii, restricted/public P2P, block wire, Kura/merge artifacts,
 snapshots, queries, events, logs, and telemetry. Plant account, asset, amount,
 memo, and capsule canaries in multiple encodings. Differential runs in which
-only secrets change must preserve public shapes and message counts; only
+only secrets change must preserve public shapes and traffic counts; only
 cryptographic values may differ. Publish the residual metadata listed above.
 `scripts/private_settlement_leakage_audit.py` enforces this with byte-level
 canary scans, exact public file/size/JSON-shape comparison, and mandatory paired
-V1 message-count manifests covering Torii, public/restricted P2P, block, query,
-event, log, and telemetry records. Its report binds the canary manifest, every
-scanned artifact, and both message-count manifests by byte length and SHA-256.
+V1 traffic-count manifests covering Torii requests/responses,
+public/restricted P2P packets, blocks, queries, events, logs, and telemetry.
+Its report binds the canary manifest, every scanned artifact, and both
+traffic-count manifests by byte length and SHA-256.
 Canonical account and asset canaries are expanded into their protocol-native
 I105-controller and asset-UUID byte encodings as well as ordinary text, integer,
 hex, Base64, URL, and JSON representations. The real loopback capture is split
 by the exact per-run Torii, public-lane P2P, and restricted-lane P2P port
 manifest with `scripts/private_settlement_capture_split.py`; packet payloads and
 timestamps are copied unchanged into canonical pcapng surfaces, and an empty
-declared channel fails closed.
+declared channel fails closed. The unfiltered classic pcap is retained as an
+owner-only `restricted_packet_source`; final capture provenance binds its exact
+bytes, the canonical port manifest, and the raw `tcpdump` stderr. Validation
+reparses the capture statistics, requires a nonzero capture with no kernel
+drops, rejects truncated/fragmented packets, scans the complete raw capture for
+canaries before filtering, and reconstructs all four published pcapng surfaces
+byte-for-byte from that retained source.
+
+Non-packet evidence is retained once more in an owner-only
+`restricted_audit_source` archive. Its canonical rows preserve the exact source
+bytes for block wire, queries, events, operator/coordinator logs, telemetry,
+Kura/merge/snapshot inputs, confidential DA, and all 16 peer atomicity
+observations. Replay verifies each public digest projection against those raw
+bytes. Atomicity replay additionally requires a common byte-identical baseline
+and terminal state across every peer, bounded nondecreasing heights, no baseline
+or terminal staged locks, and exactly the expected N=3 pool/root/nullifier/
+output/receipt transition with no partial visible or spendable state.
 The DOI-bundle verifier independently requires those bindings to cover every
 archived public and restricted capture, Kura/merge and snapshot artifact,
-query/event/log/telemetry record, and both count manifests; a clean report from
-another capture set cannot satisfy the gate. It also reloads the canary manifest
-and independently rescans every archived privacy surface, so a digest-rebound
-report with suppressed findings still fails. A separate canonical
-differential-pair manifest binds the left and right artifact paths, kinds,
-lengths, and SHA-256 digests for every required privacy surface. The verifier
-requires the declared left/right roots to contain exactly that paired archive
-inventory, loads every pair itself, requires equal byte lengths, and recomputes
-JSON public shapes. Changing a same-size public field name or omitting an
-unpaired differential file cannot be hidden by rewriting the leakage report.
+query/event/log/telemetry record, both retained raw-source archives, and both
+traffic-count manifests; a clean report from another capture set cannot satisfy
+the gate. It reloads each archived capture-provenance response and reruns the
+release runner's complete raw-pcap, restricted-source, and atomicity validator
+against the archived left/right directories. It also reloads the canary
+manifest and independently rescans every archived privacy surface, so a
+digest-rebound report with suppressed findings still fails. A separate
+canonical differential-pair manifest binds the left and right artifact paths,
+kinds, lengths, and SHA-256 digests for every required privacy surface. The
+verifier requires the declared left/right roots to contain exactly that paired
+archive inventory and loads every pair itself. Public/fixed-shape surfaces must
+have equal byte lengths and JSON shapes. The entropy-bearing raw pcap and
+restricted-source archive are explicit whole-file size exceptions; instead the
+verifier requires equal packet link types and per-packet length sequences, equal
+restricted row identities, and equal lengths for the restricted fixed-shape
+groups. Changing a same-size public field name, a packet boundary, a
+capture-provenance claim, or an unpaired differential file cannot be hidden by
+rewriting summary reports and their digests.
 
 For each real N, run at least five warmups and thirty measured bundles across
 multiple seeds on pinned hardware. Report p50/p95/p99 with confidence intervals
@@ -517,3 +557,45 @@ benchmark comparison. The configuration manifest must bind every archived
 N=2,3,4,8,16 configuration used by both the fault and benchmark matrices. This
 verifier deliberately does not manufacture or waive any of those external
 results.
+
+The release inventory is derived, never ratcheted to a literal count. The
+candidate producer must first prove a clean `HEAD`, index, and worktree, then
+archive the raw Git commit object, canonical recursive
+`(path, mode, object_type, object_id)` tree rows, the exact binary source path
+list, the deterministic `iroha-workspace-source-seal-v1` archive, and the
+candidate `Cargo.lock`. The verifier hashes the raw commit object to the
+release commit, reads its tree header, reconstructs that root tree from the
+rows, derives the file count, compares the path list byte-for-byte, streams and
+rehashes every regular file or symlink in the source seal to its Git object,
+checks gitlink shape, recomputes the full-permission workspace manifest, and
+requires the sealed `Cargo.lock` bytes to equal the separately archived
+lockfile. Missing, unexpected, or changed paths are reported by name; two
+matching self-reported counts cannot satisfy the gate.
+
+Both the producer and the independent verifier resolve the complete archived
+symlink graph before acceptance. A target that is lexically in-root but escapes
+after another archived link is followed, a cycle, `.git` traversal, or a
+Windows-drive/backslash target fails closed before any link is materialized.
+Valid deeply nested inventory paths are reconstructed iteratively rather than
+through the host language's recursion stack. The source manifest and every
+structured command-gate report are reread through a stable bounded file handle
+and authenticated against the exact artifact digest and length at the point of
+JSON parsing. Exactly one archive, raw commit, lockfile, path list, source
+manifest, and release-inventory report may appear in a release bundle.
+
+Generate those source artifacts from the final clean checkout before assembling
+the DOI bundle:
+
+```sh
+python3 scripts/private_settlement_source_evidence.py \
+  --repository-root . \
+  --bundle-root /absolute/path/to/release-bundle
+```
+
+The command refuses an output directory inside the checkout, any staged,
+unstaged, untracked, or unmerged source, an existing destination, non-canonical
+tree rows, or source identity drift during capture. It publishes
+`evidence/source` by one directory rename only after repeating the source and
+inventory checks. Add every artifact declaration printed in its JSON result to
+the final release manifest; the final verifier remains the authority for the
+complete DOI bundle.

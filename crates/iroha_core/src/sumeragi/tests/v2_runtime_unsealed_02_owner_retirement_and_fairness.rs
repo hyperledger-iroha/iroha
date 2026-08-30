@@ -1750,7 +1750,8 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
     let original = signed_runtime_proposal(&context, &keys, 1);
     let second = signed_runtime_proposal(&context, &keys, 2);
     let third = signed_runtime_proposal(&context, &keys, 3);
-    let authenticated_peer = super::super::authenticated_peer_for_test();
+    let transport_key = KeyPair::random();
+    let authenticated_peer = PeerId::new(transport_key.public_key().clone());
     let enqueue_network = |runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
                            message: wire::ConsensusMessageV2| {
         let ownership = fair_runtime_ownership(

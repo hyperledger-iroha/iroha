@@ -1266,7 +1266,8 @@ public struct SumeragiV2CommitCertificateResponse: Equatable, Sendable {
     }
 }
 
-/// Canonical v2 network payload union in Rust declaration order.
+/// Client-facing v2 payload subset retaining the canonical Rust tags 0...9.
+/// Validator-internal threshold-beacon shares use tag 10 and are not an SDK API.
 public enum SumeragiV2ConsensusPayload: Equatable, Sendable {
     case proposal(SumeragiV2Proposal)
     case vote(SumeragiV2Vote)

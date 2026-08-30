@@ -1630,7 +1630,7 @@ fn native_amx_merge_projection_matches_decoded_replay_entry() {
             &fixture.block,
         )
         .expect("ordinary-only replay projection");
-    let witness = crate::sumeragi::consensus::ExecWitness {
+    let witness = iroha_data_model::block::consensus::ExecWitness {
         reads: Vec::new(),
         writes: Vec::new(),
         fastpq_transcripts: Vec::new(),

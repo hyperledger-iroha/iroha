@@ -376,6 +376,74 @@ pub fn reconstruct_shards(
     }
     Ok(())
 }
+
+/// Reconstruct only the missing data rows of one RS16 stripe.
+///
+/// The returned vector has exactly `data_shards` slots. A slot is populated
+/// only when the corresponding data row was absent from `shards`; present data
+/// rows remain borrowed by the caller and are not cloned. Parity rows are
+/// never regenerated. This is the preferred recovery path for consumers that
+/// need the original payload but do not need to repair the complete codeword.
+///
+/// # Errors
+/// Returns `Rs16Error` if the stripe geometry is invalid, fewer than
+/// `data_shards` rows are present, symbol widths differ, or the selected
+/// recovery matrix is singular.
+pub fn reconstruct_missing_data_shards(
+    shards: &[Option<Vec<u16>>],
+    data_shards: usize,
+    parity_shards: usize,
+) -> Result<Vec<Option<Vec<u16>>>, Rs16Error> {
+    if data_shards == 0 || shards.len() != data_shards.saturating_add(parity_shards) {
+        return Err(Rs16Error);
+    }
+
+    let mut selected = Vec::with_capacity(data_shards);
+    let mut symbol_count = None;
+    for (idx, maybe_row) in shards.iter().enumerate() {
+        let Some(row) = maybe_row.as_deref() else {
+            continue;
+        };
+        match symbol_count {
+            Some(expected) if expected != row.len() => return Err(Rs16Error),
+            Some(_) => {}
+            None => symbol_count = Some(row.len()),
+        }
+        if selected.len() < data_shards {
+            selected.push((idx, row));
+        }
+    }
+    let symbol_count = symbol_count.ok_or(Rs16Error)?;
+    if selected.len() != data_shards {
+        return Err(Rs16Error);
+    }
+
+    let mut recovered = (0..data_shards).map(|_| None).collect::<Vec<_>>();
+    if shards.iter().take(data_shards).all(Option::is_some) {
+        return Ok(recovered);
+    }
+
+    let decode_matrix = selected
+        .iter()
+        .map(|(idx, _)| generator_row(data_shards, parity_shards, *idx))
+        .collect::<Result<Vec<_>, _>>()?;
+    let inverse = invert_matrix(decode_matrix)?;
+    let backend = choose_backend();
+    for data_idx in 0..data_shards {
+        if shards[data_idx].is_some() {
+            continue;
+        }
+        let mut output = vec![0_u16; symbol_count];
+        for (selected_idx, (_, input)) in selected.iter().enumerate() {
+            let coefficient = inverse[data_idx][selected_idx];
+            if coefficient != 0 {
+                mul_add_row(coefficient, input, &mut output, backend);
+            }
+        }
+        recovered[data_idx] = Some(output);
+    }
+    Ok(recovered)
+}
 /// Compute the parity chunk offset for a given stripe/parity index.
 pub fn parity_offset(
     total_size: u64,
@@ -745,5 +813,57 @@ mod tests {
         reconstruct_shards(&mut shards, 4, 2).expect("reconstruct");
         assert_eq!(shards[1].as_ref().expect("data shard"), &expected_data);
         assert_eq!(shards[4].as_ref().expect("parity shard"), &parity[0]);
+    }
+
+    #[test]
+    fn payload_recovery_allocates_only_missing_data_rows() {
+        let data = sample_symbols(4, 8);
+        let expected_missing = data[1].clone();
+        let parity = encode_parity(&data, 2).expect("parity");
+        let mut shards = data.into_iter().chain(parity).map(Some).collect::<Vec<_>>();
+        shards[1] = None;
+        shards[5] = None;
+
+        let recovered =
+            reconstruct_missing_data_shards(&shards, 4, 2).expect("recover payload data");
+        assert_eq!(recovered.len(), 4);
+        assert_eq!(
+            recovered.iter().filter(|row| row.is_some()).count(),
+            1,
+            "present data and missing parity must not allocate output rows"
+        );
+        assert_eq!(
+            recovered[1].as_ref().expect("missing data row"),
+            &expected_missing
+        );
+    }
+
+    #[test]
+    fn payload_recovery_simd_matches_scalar_for_multiple_missing_rows() {
+        struct RestoreSimd(bool);
+        impl Drop for RestoreSimd {
+            fn drop(&mut self) {
+                set_simd_enabled(self.0);
+            }
+        }
+
+        let _guard = SIMULATED_GUARD
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        let data = sample_symbols(4, 257);
+        let parity = encode_parity_with_backend(&data, 2, Backend::Scalar).expect("parity");
+        let mut shards = data.into_iter().chain(parity).map(Some).collect::<Vec<_>>();
+        shards[0] = None;
+        shards[2] = None;
+
+        let _restore = RestoreSimd(simd_enabled());
+        set_simd_enabled(false);
+        let scalar = reconstruct_missing_data_shards(&shards, 4, 2).expect("scalar recovery");
+        set_simd_enabled(true);
+        let accelerated =
+            reconstruct_missing_data_shards(&shards, 4, 2).expect("accelerated recovery");
+
+        assert_eq!(accelerated, scalar);
     }
 }

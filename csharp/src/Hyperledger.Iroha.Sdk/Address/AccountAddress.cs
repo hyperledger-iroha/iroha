@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Hyperledger.Iroha.Address;
 
-public sealed class AccountAddress
+public sealed class AccountAddress : IEquatable<AccountAddress>
 {
     public const ushort DefaultChainDiscriminant = 0x02F1;
     public const ushort DevChainDiscriminant = 0x0000;
@@ -28,29 +28,6 @@ public sealed class AccountAddress
     ];
 
     private static readonly IReadOnlyDictionary<string, int> I105Index = BuildI105Index();
-    private static readonly IReadOnlyDictionary<string, CurveId> CurveAliases = new Dictionary<string, CurveId>(StringComparer.Ordinal)
-    {
-        ["ed"] = CurveId.Ed25519,
-        ["ed25519"] = CurveId.Ed25519,
-        ["gost-256-a"] = CurveId.Gost256A,
-        ["gost-256-b"] = CurveId.Gost256B,
-        ["gost-256-c"] = CurveId.Gost256C,
-        ["gost-512-a"] = CurveId.Gost512A,
-        ["gost-512-b"] = CurveId.Gost512B,
-        ["gost256a"] = CurveId.Gost256A,
-        ["gost256b"] = CurveId.Gost256B,
-        ["gost256c"] = CurveId.Gost256C,
-        ["gost512a"] = CurveId.Gost512A,
-        ["gost512b"] = CurveId.Gost512B,
-        ["ml-dsa"] = CurveId.MlDsa,
-        ["mldsa"] = CurveId.MlDsa,
-        ["ml_dsa"] = CurveId.MlDsa,
-        ["mldsa65"] = CurveId.MlDsa,
-        ["ml-dsa-65"] = CurveId.MlDsa,
-        ["ml_dsa_65"] = CurveId.MlDsa,
-        ["ml_dsa-65"] = CurveId.MlDsa,
-        ["sm2"] = CurveId.Sm2,
-    };
 
     private readonly byte[] canonicalBytes;
     private readonly byte[] controllerBytes;
@@ -90,12 +67,33 @@ public sealed class AccountAddress
 
     public byte[] PublicKey => publicKey is null ? [] : [.. publicKey];
 
-    public static string I105Warning =>
-        "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
-
     public byte[] CanonicalBytes() => [.. canonicalBytes];
 
     public byte[] ControllerBytes() => [.. controllerBytes];
+
+    /// <inheritdoc />
+    public bool Equals(AccountAddress? other) =>
+        other is not null && canonicalBytes.AsSpan().SequenceEqual(other.canonicalBytes);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => obj is AccountAddress other && Equals(other);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        foreach (var value in canonicalBytes)
+        {
+            hash.Add(value);
+        }
+        return hash.ToHashCode();
+    }
+
+    public static bool operator ==(AccountAddress? left, AccountAddress? right) =>
+        Equals(left, right);
+
+    public static bool operator !=(AccountAddress? left, AccountAddress? right) =>
+        !Equals(left, right);
 
     public static AccountAddress FromCanonicalBytes(ReadOnlySpan<byte> payload)
     {
@@ -134,34 +132,22 @@ public sealed class AccountAddress
         };
     }
 
-    public static AccountAddress FromPublicKey(ReadOnlySpan<byte> publicKey, string algorithm = "ed25519")
+    public static AccountAddress FromPublicKey(
+        ReadOnlySpan<byte> publicKey,
+        CurveId curveIdentifier = CurveId.Ed25519)
     {
-        if (string.IsNullOrWhiteSpace(algorithm))
+        if (!Enum.IsDefined(typeof(CurveId), curveIdentifier))
         {
-            throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, "signing algorithm must be a non-empty string");
-        }
-
-        if (algorithm.Trim() != algorithm)
-        {
-            throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, "signing algorithm must not contain surrounding whitespace");
-        }
-
-        if (algorithm.Any(char.IsWhiteSpace))
-        {
-            throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, "signing algorithm must not contain whitespace");
-        }
-
-        var normalizedAlgorithm = algorithm;
-        if (!IsPrintableAscii(normalizedAlgorithm) || !CurveAliases.TryGetValue(normalizedAlgorithm, out var curveId))
-        {
-            throw NewError(AccountAddressErrorCode.UnsupportedAlgorithm, $"unsupported signing algorithm: {algorithm}");
+            throw NewError(
+                AccountAddressErrorCode.UnknownCurve,
+                $"unknown curve id: {(byte)curveIdentifier}");
         }
 
         if (publicKey.Length > ushort.MaxValue)
         {
             throw NewError(AccountAddressErrorCode.InvalidPublicKey, "public key length must be between 1 and 65535 bytes");
         }
-        ValidateControllerPublicKey(curveId, publicKey);
+        ValidateControllerPublicKey(curveIdentifier, publicKey);
         if (publicKey.IsEmpty)
         {
             throw NewError(AccountAddressErrorCode.InvalidPublicKey, "public key length must be between 1 and 65535 bytes");
@@ -171,7 +157,7 @@ public sealed class AccountAddress
         var keyOffset = extended ? 4 : 3;
         var controllerBytes = new byte[keyOffset + publicKey.Length];
         controllerBytes[0] = extended ? ExtendedSingleKeyControllerTag : SingleKeyControllerTag;
-        controllerBytes[1] = (byte)curveId;
+        controllerBytes[1] = (byte)curveIdentifier;
         if (extended)
         {
             controllerBytes[2] = (byte)(publicKey.Length >> 8);
@@ -193,22 +179,9 @@ public sealed class AccountAddress
             AddressClass.SingleKey,
             canonicalBytes,
             controllerBytes,
-            curveId,
-            CurveIdToAlgorithm(curveId),
+            curveIdentifier,
+            CurveIdToAlgorithm(curveIdentifier),
             publicKey.ToArray());
-    }
-
-    private static bool IsPrintableAscii(string value)
-    {
-        foreach (var ch in value)
-        {
-            if (ch < 0x20 || ch > 0x7E)
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     public static AccountAddress Parse(string encoded, ushort? expectedDiscriminant = null)
@@ -244,11 +217,6 @@ public sealed class AccountAddress
         }
 
         return address;
-    }
-
-    public AddressDisplayFormats GetDisplayFormats(ushort chainDiscriminant = DefaultChainDiscriminant)
-    {
-        return new AddressDisplayFormats(ToI105(chainDiscriminant), chainDiscriminant, I105Warning);
     }
 
     public string ToI105(ushort chainDiscriminant = DefaultChainDiscriminant)
@@ -403,6 +371,14 @@ public sealed class AccountAddress
 
     private static void ValidateControllerPublicKey(CurveId curveId, ReadOnlySpan<byte> publicKey)
     {
+        if (curveId == CurveId.Ed25519
+            && (publicKey.Length != 32 || IsAllZero(publicKey)))
+        {
+            throw NewError(
+                AccountAddressErrorCode.InvalidPublicKey,
+                "invalid Ed25519 public key: expected a nonzero 32-byte key");
+        }
+
         if (curveId == CurveId.MlDsa
             && (publicKey.Length != MlDsa65PublicKeyLength || IsAllZero(publicKey)))
         {
@@ -439,11 +415,11 @@ public sealed class AccountAddress
         {
             CurveId.Ed25519 => "ed25519",
             CurveId.MlDsa => "ml-dsa",
-            CurveId.Gost256A => "gost-256-a",
-            CurveId.Gost256B => "gost-256-b",
-            CurveId.Gost256C => "gost-256-c",
-            CurveId.Gost512A => "gost-512-a",
-            CurveId.Gost512B => "gost-512-b",
+            CurveId.Gost256A => "gost3410-2012-256-paramset-a",
+            CurveId.Gost256B => "gost3410-2012-256-paramset-b",
+            CurveId.Gost256C => "gost3410-2012-256-paramset-c",
+            CurveId.Gost512A => "gost3410-2012-512-paramset-a",
+            CurveId.Gost512B => "gost3410-2012-512-paramset-b",
             CurveId.Sm2 => "sm2",
             _ => throw NewError(AccountAddressErrorCode.UnknownCurve, $"unknown curve id: {curveId}"),
         };

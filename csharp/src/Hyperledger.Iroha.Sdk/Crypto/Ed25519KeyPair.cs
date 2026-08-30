@@ -3,10 +3,11 @@ using Hyperledger.Iroha.Address;
 
 namespace Hyperledger.Iroha.Crypto;
 
-public sealed class Ed25519KeyPair
+public sealed class Ed25519KeyPair : IDisposable
 {
     private readonly byte[] privateKeySeed;
     private readonly byte[] publicKey;
+    private bool disposed;
 
     private Ed25519KeyPair(byte[] privateKeySeed, byte[] publicKey)
     {
@@ -14,9 +15,33 @@ public sealed class Ed25519KeyPair
         this.publicKey = publicKey;
     }
 
-    public byte[] PrivateKeySeed => [.. privateKeySeed];
+    internal ReadOnlySpan<byte> PrivateKeySeedSpan
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return privateKeySeed;
+        }
+    }
 
-    public byte[] PublicKey => [.. publicKey];
+    public byte[] PublicKey
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return [.. publicKey];
+        }
+    }
+
+    /// <summary>
+    /// Explicitly exports a copy of the private seed for APIs that cannot accept this key pair.
+    /// The caller owns the returned secret and should zero it after use.
+    /// </summary>
+    public byte[] ExportPrivateKeySeed()
+    {
+        ThrowIfDisposed();
+        return [.. privateKeySeed];
+    }
 
     public static Ed25519KeyPair FromSeed(ReadOnlySpan<byte> privateKeySeed)
     {
@@ -37,11 +62,37 @@ public sealed class Ed25519KeyPair
 
     public static Ed25519KeyPair Generate()
     {
-        return FromSeed(RandomNumberGenerator.GetBytes(Ed25519Signer.PrivateKeySeedLength));
+        var seed = RandomNumberGenerator.GetBytes(Ed25519Signer.PrivateKeySeedLength);
+        try
+        {
+            return FromSeed(seed);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(seed);
+        }
     }
 
     public AccountAddress ToAccountAddress()
     {
-        return AccountAddress.FromPublicKey(publicKey, "ed25519");
+        ThrowIfDisposed();
+        return AccountAddress.FromPublicKey(publicKey);
+    }
+
+    /// <summary>Zeros the owned private seed. The key pair cannot be used afterwards.</summary>
+    public void Dispose()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        CryptographicOperations.ZeroMemory(privateKeySeed);
+        disposed = true;
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
     }
 }

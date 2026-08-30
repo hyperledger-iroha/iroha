@@ -29,10 +29,11 @@ public sealed class LedgerClient
     {
         ArgumentNullException.ThrowIfNull(transaction);
         ArgumentNullException.ThrowIfNull(privateKeySeed);
-        var payload = transaction.BuildUnsignedPayload();
+        var signingSnapshot = transaction.CreateSigningSnapshot();
+        var payload = signingSnapshot.BuildUnsignedPayload();
         var quote = await torii.QuoteFeesAsync(payload, cancellationToken);
-        transaction.ApplyFeeQuote(quote.Intent);
-        return new QuotedSignedTransaction(transaction.BuildSigned(privateKeySeed), quote);
+        signingSnapshot.ApplyFeeQuote(quote.Intent);
+        return new QuotedSignedTransaction(signingSnapshot.BuildSigned(privateKeySeed), quote);
     }
 
     /// <summary>
@@ -86,25 +87,35 @@ public sealed class LedgerClient
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(effective.Timeout);
 
-        while (true)
+        try
         {
-            timeout.Token.ThrowIfCancellationRequested();
-            var status = await torii.GetPipelineTransactionStatusAsync(
-                transactionHashHex,
-                "global",
-                timeout.Token);
-            if (status?.IsSuccess == true)
+            while (true)
             {
-                return status;
-            }
+                timeout.Token.ThrowIfCancellationRequested();
+                var status = await torii.GetPipelineTransactionStatusAsync(
+                    transactionHashHex,
+                    "global",
+                    timeout.Token);
+                if (status?.IsSuccess == true)
+                {
+                    return status;
+                }
 
-            if (status?.IsFailure == true)
-            {
-                throw new InvalidOperationException(
-                    $"Pipeline transaction {transactionHashHex} failed with exact state {status.RawKind}.");
-            }
+                if (status?.IsFailure == true)
+                {
+                    throw new InvalidOperationException(
+                        $"Pipeline transaction {transactionHashHex} failed with exact state {status.RawKind}.");
+                }
 
-            await Task.Delay(effective.PollInterval, timeout.Token);
+                await Task.Delay(effective.PollInterval, timeout.Token);
+            }
+        }
+        catch (OperationCanceledException error)
+            when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Pipeline transaction {transactionHashHex} did not reach authoritative finality within {effective.Timeout}.",
+                error);
         }
     }
 }

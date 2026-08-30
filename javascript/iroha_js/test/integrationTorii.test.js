@@ -2034,7 +2034,7 @@ test(
     });
     let summaries;
     try {
-      summaries = await client.listVerifyingKeysTyped();
+      summaries = await client.listVerifyingKeys();
     } catch (error) {
       t.diagnostic(
         `verifying key list endpoint unavailable: ${error instanceof Error ? error.message : String(error)}`,
@@ -2058,7 +2058,7 @@ test(
     const targetId = entryWithRecord.id;
     let detail;
     try {
-      detail = await client.getVerifyingKeyTyped(targetId.backend, targetId.name);
+      detail = await client.getVerifyingKey(targetId.backend, targetId.name);
     } catch (error) {
       t.diagnostic(
         `verifying key detail endpoint unavailable for ${targetId.backend}/${targetId.name}: ${
@@ -5047,22 +5047,29 @@ function assertVerifyingKeyDetail(detail, expectedId = null) {
     assert.equal(detail.id.name, expectedId.name, "verifying key detail name mismatch");
   }
   assertVerifyingKeyRecord(detail.record, "verifying key detail.record");
+  assert.ok(
+    isNonEmptyString(detail.record_norito_base64),
+    "verifying key detail.record_norito_base64 must be a string",
+  );
 }
 
 function assertVerifyingKeyRecord(record, label = "verifying key record") {
   assert.ok(isPlainObject(record), `${label} must be an object`);
   assertNonNegativeInteger(record.version, `${label}.version`);
   assert.ok(isNonEmptyString(record.circuit_id), `${label}.circuit_id must be a string`);
-  assert.ok(isNonEmptyString(record.backend), `${label}.backend must be a string`);
-  if (record.curve !== null) {
-    assert.ok(isNonEmptyString(record.curve), `${label}.curve must be a string when present`);
+  if (record.owner_manifest_id !== null) {
+    assert.ok(
+      isNonEmptyString(record.owner_manifest_id),
+      `${label}.owner_manifest_id must be a string when present`,
+    );
   }
+  assert.ok(isNonEmptyString(record.namespace), `${label}.namespace must be a string`);
+  assert.ok(isNonEmptyString(record.backend), `${label}.backend must be a string`);
+  assert.ok(isNonEmptyString(record.curve), `${label}.curve must be a string`);
   assertHexString(record.public_inputs_schema_hash, `${label}.public_inputs_schema_hash`);
   assertHexString(record.commitment_hex, `${label}.commitment_hex`);
   assertNonNegativeInteger(record.vk_len, `${label}.vk_len`);
-  if (record.max_proof_bytes !== null) {
-    assertNonNegativeInteger(record.max_proof_bytes, `${label}.max_proof_bytes`);
-  }
+  assertNonNegativeInteger(record.max_proof_bytes, `${label}.max_proof_bytes`);
   if (record.gas_schedule_id !== null) {
     assert.ok(isNonEmptyString(record.gas_schedule_id), `${label}.gas_schedule_id must be a string`);
   }

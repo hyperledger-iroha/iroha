@@ -29,6 +29,14 @@ opens fallback and expands body/chunk service to the whole committee. Timeout
 and NewView traffic is committee-wide, so a withholding leader or proxy tail
 cannot make the recovery path depend on the failed fast-path route.
 
+The producer signs and canonically encodes each immutable chunk once. Initial
+fanout and bounded fallback retain those same shared encoded frames; retry does
+not clone shard bodies or serialize them again. The outer-frame integrity hash
+is cached beside those immutable bytes and invalidated by the sole mutable wire
+accessor, so exact-output retirement and finality checks do not rescan every
+shard. This is an implementation optimization only and does not change the
+manifest, signature preimage, recipient set, or fallback schedule.
+
 For a certified missing body, recovery requests authenticated chunks or the
 canonical body from certificate signers first and then expands to the frozen
 committee. Responses remain bound to the exact height context, proposal round,
@@ -51,6 +59,14 @@ Authenticated partial shards are bounded volatile state. A restart may discard
 them and reacquire them from the frozen committee. The complete canonical body
 is the only DA object that crosses the mandatory durable boundary, so the fast
 path does not pay one fsync per shard while restart safety remains explicit.
+
+When a stripe needs parity, reconstruction borrows present rows and computes
+only missing systematic rows through the deterministic selected RS16 backend.
+It does not materialize replacement parity or copy already-present systematic
+chunks. The recovered body still crosses the complete canonical codeword,
+length, chunk-root, and body-hash validation boundary before durability and
+Prepare authorization; the optimization therefore cannot admit a
+non-canonical shard set.
 
 The authoritative status surface exposes the local transition through
 `SumeragiV2BodyState::{Missing, Reconstructing, Stored, Validated,

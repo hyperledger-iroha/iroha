@@ -23,6 +23,8 @@ mod operator_auth_bootstrap_hard_cut;
 mod p2p_hard_cut;
 #[path = "pipeline_cycle_ceiling.rs"]
 mod pipeline_cycle_ceiling;
+#[path = "push_provider_credentials.rs"]
+mod push_provider_credentials;
 #[path = "sccp_route_manifest_aliases.rs"]
 mod sccp_route_manifest_aliases;
 #[path = "sorafs_gateway_runtime_providers.rs"]

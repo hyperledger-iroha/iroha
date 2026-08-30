@@ -1614,6 +1614,11 @@ mod tests {
                 CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG,
             ),
         ];
+        assert_eq!(
+            variants.len(),
+            11,
+            "the first-release payload inventory is exact"
+        );
         for (payload, expected_tag) in variants {
             assert_eq!(
                 payload.encode().get(..core::mem::size_of::<u32>()),
@@ -1669,6 +1674,12 @@ mod tests {
         let payload = chunk
             .signature_payload(&validated)
             .expect("valid chunk signature payload");
+        assert_eq!(
+            validated
+                .committed_chunk_signature_payload(chunk.index, chunk.sender)
+                .expect("reuse the locally committed chunk hash"),
+            payload
+        );
         assert_eq!(payload.context_id, context.id());
         assert_eq!(payload.epoch, context.epoch);
         assert_eq!(payload.height, context.height);
@@ -1689,7 +1700,7 @@ mod tests {
         assert!(unsigned.signature_payload(&validated).is_ok());
         assert_eq!(
             unsigned.validate_for_authentication(&validated),
-            Err(ValidationError::MissingChunkSignature)
+            Err(ValidationError::MissingSignature)
         );
         let mut corrupted = chunk.clone();
         corrupted.bytes.push(0);

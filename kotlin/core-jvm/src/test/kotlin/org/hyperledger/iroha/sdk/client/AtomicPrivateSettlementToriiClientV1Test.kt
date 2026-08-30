@@ -3,6 +3,10 @@
 
 package org.hyperledger.iroha.sdk.client
 
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.math.BigDecimal
+import java.math.BigInteger
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -136,6 +140,74 @@ class AtomicPrivateSettlementToriiClientV1Test {
     }
 
     @Test
+    fun bundleAdmissionUsesTheSharedExactNonterminalResponse() {
+        val response = fixture.objectField("responses").objectField("bundle_submit")
+        val executor = CapturingSettlementExecutor(jsonResponse(response, statusCode = 202))
+
+        val received = client(executor).submitBundle(bundleRequest(), sponsorAuth()).join()
+
+        assertEquals(
+            response,
+            JsonParser.parse(String(received.bytes(), StandardCharsets.UTF_8)),
+        )
+        assertEquals("/api/v1/nexus/private-settlements/bundles", executor.request.uri.path)
+        assertEquals("POST", executor.request.method)
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.request.replayPolicy)
+        assertTrue(executor.request.headers.containsKey(CanonicalRequestSigner.HEADER_SIGNATURE))
+        assertFalse(executor.request.headers.containsKey(OperatorRequestSigner.HEADER_SIGNATURE))
+        assertFalse(response.containsKey("lifecycle"))
+    }
+
+    @Test
+    fun bundleAdmissionRejectsNoncanonicalHashesInvalidHeightsAndFieldDrift() {
+        val response = fixture.objectField("responses").objectField("bundle_submit")
+        fun changed(update: MutableMap<String, Any?>.() -> Unit): Map<String, Any?> =
+            LinkedHashMap(response).apply(update)
+
+        val maximumHeight = changed {
+            this["accepted_at_height"] = BigInteger("18446744073709551615")
+        }
+        client(CapturingSettlementExecutor(jsonResponse(maximumHeight, statusCode = 202)))
+            .submitBundle(bundleRequest(), sponsorAuth())
+            .join()
+
+        val wrongCarrierStatus = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(CapturingSettlementExecutor(jsonResponse(response, statusCode = 200)))
+                .submitBundle(bundleRequest(), sponsorAuth())
+                .join()
+        }
+        assertTrue(wrongCarrierStatus.cause is AtomicPrivateSettlementToriiExceptionV1)
+
+        val noncanonicalCase = AtomicPrivateSettlementIdentifierV1
+            .parse("ab".repeat(32))
+            .jsonLiteral()
+            .lowercase()
+        val invalidResponses = listOf(
+            changed { remove("carrier_id") },
+            changed { this["unexpected"] = true },
+            changed { this["lifecycle"] = mapOf("status" to "aborted") },
+            changed { this["bundle_id"] = emptyList<Any?>() },
+            changed { this["carrier_id"] = 42L },
+            changed { this["bundle_id"] = identifiers.stringField("bundle_hex") },
+            changed { this["bundle_id"] = noncanonicalCase },
+            changed { this["carrier_id"] = identifiers.stringField("payload_hex") },
+            changed { this["accepted_at_height"] = "105" },
+            changed { this["accepted_at_height"] = BigDecimal("105.0") },
+            changed { this["accepted_at_height"] = -1L },
+            changed { this["accepted_at_height"] = BigInteger("18446744073709551616") },
+        )
+
+        invalidResponses.forEachIndexed { index, candidate ->
+            val error = assertFailsWith<java.util.concurrent.CompletionException>("case $index") {
+                client(CapturingSettlementExecutor(jsonResponse(candidate, statusCode = 202)))
+                    .submitBundle(bundleRequest(), sponsorAuth())
+                    .join()
+            }
+            assertTrue(error.cause is AtomicPrivateSettlementToriiExceptionV1, "case $index")
+        }
+    }
+
+    @Test
     fun auditorApprovalUsesPurposeSeparatedRoleHeadersAndExactPayloadPath() {
         val response = fixture.objectField("responses").objectField("audit_approval")
         val executor = CapturingSettlementExecutor(jsonResponse(response))
@@ -179,6 +251,15 @@ class AtomicPrivateSettlementToriiClientV1Test {
             receiptExecutor.request.uri.path,
         )
 
+        val wrongReceiptStatus = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(
+                CapturingSettlementExecutor(
+                    jsonResponse(responses.objectField("receipt_pending"), statusCode = 201),
+                ),
+            ).getBundleReceipt(bundle).join()
+        }
+        assertTrue(wrongReceiptStatus.cause is AtomicPrivateSettlementToriiExceptionV1)
+
         val substituted = LinkedHashMap(responses.objectField("receipt_pending"))
         val value = LinkedHashMap(substituted.objectField("value"))
         value["bundle_id"] = identifiers.stringField("payload_json")
@@ -189,6 +270,37 @@ class AtomicPrivateSettlementToriiClientV1Test {
                 .join()
         }
         assertTrue(error.cause is AtomicPrivateSettlementToriiExceptionV1)
+    }
+
+    @Test
+    fun rejectCodesAreAllowlistedBeforeEnteringPublicStatusErrors() {
+        fun rejectionMessage(rejectCode: String): String {
+            val rejection = TransportResponse.builder()
+                .setStatusCode(403)
+                .addHeader("X-Iroha-Reject-Code", rejectCode)
+                .build()
+            val error = assertFailsWith<java.util.concurrent.CompletionException> {
+                client(CapturingSettlementExecutor(rejection)).getBundleStatus(bundle).join()
+            }
+            val failure = error.cause as AtomicPrivateSettlementToriiExceptionV1
+            return failure.message.orEmpty()
+        }
+
+        assertEquals(
+            "atomic private settlement request failed with HTTP 403; " +
+                "reject_code=APS_POLICY_DENIED",
+            rejectionMessage("APS_POLICY_DENIED"),
+        )
+
+        val oversized = "A".repeat(129)
+        val oversizedMessage = rejectionMessage(oversized)
+        assertEquals("atomic private settlement request failed with HTTP 403", oversizedMessage)
+        assertFalse(oversizedMessage.contains(oversized))
+
+        val secretShaped = "memo=LEAK_CANARY_987654"
+        val secretShapedMessage = rejectionMessage(secretShaped)
+        assertEquals("atomic private settlement request failed with HTTP 403", secretShapedMessage)
+        assertFalse(secretShapedMessage.contains(secretShaped))
     }
 
     @Test
@@ -211,6 +323,7 @@ class AtomicPrivateSettlementToriiClientV1Test {
                 .setStatusCode(400)
                 .setBody("memo=LEAK_CANARY amount=987654".toByteArray(StandardCharsets.UTF_8))
                 .addHeader("Content-Type", "text/plain")
+                .addHeader("X-Iroha-Reject-Code", "memo=LEAK_CANARY_987654")
                 .build(),
         )
         val client = client(executor)
@@ -237,6 +350,27 @@ class AtomicPrivateSettlementToriiClientV1Test {
         assertFalse(message.contains("LEAK_CANARY"))
         assertFalse(message.contains("987654"))
 
+        val responseCanary = "APS_PRIVATE_KEY_RESPONSE_CANARY_9F48A3"
+        val secretKey = "private_key_$responseCanary"
+        val malformedResponse = TransportResponse.builder()
+            .setStatusCode(200)
+            .setBody(
+                """{"$secretKey":"first","$secretKey":"second"}"""
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+            .addHeader("Content-Type", "application/json")
+            .build()
+        val malformedError = assertFailsWith<java.util.concurrent.CompletionException> {
+            client(CapturingSettlementExecutor(malformedResponse)).getBundleReceipt(bundle).join()
+        }
+        val responseFailure = malformedError.cause
+        assertTrue(responseFailure is AtomicPrivateSettlementToriiExceptionV1)
+        assertEquals("atomic private settlement response is invalid", responseFailure.message)
+        assertTrue(responseFailure.cause == null)
+        assertFalse(malformedError.toString().contains(responseCanary))
+        assertFalse(responseFailure.toString().contains(responseCanary))
+        assertFalse(renderThrowable(malformedError).contains(responseCanary))
+
         val redirectedResponse = TransportResponse(
             200,
             JsonEncoder.encode(fixture.objectField("responses").objectField("bundle_status_aborted"))
@@ -258,9 +392,30 @@ class AtomicPrivateSettlementToriiClientV1Test {
             .localSigningContext(LocalSigningContext(TestNetworkIds.canonical()))
             .build()
 
-    private fun jsonResponse(value: Map<String, Any?>): TransportResponse =
+    private fun bundleRequest(): AtomicPrivateSettlementPreparedRequestV1 =
+        AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
+            AtomicPrivateSettlementOperationV1.BUNDLE_SUBMIT,
+            """{"transaction":{}}""".toByteArray(StandardCharsets.UTF_8),
+        )
+
+    private fun sponsorAuth(): ToriiCanonicalRequestAuth =
+        ToriiCanonicalRequestAuth(
+            "alice@universal",
+            KeyPairGenerator.getInstance("Ed25519").generateKeyPair().private,
+        )
+
+    private fun renderThrowable(error: Throwable): String {
+        val output = StringWriter()
+        error.printStackTrace(PrintWriter(output))
+        return output.toString()
+    }
+
+    private fun jsonResponse(
+        value: Map<String, Any?>,
+        statusCode: Int = 200,
+    ): TransportResponse =
         TransportResponse.builder()
-            .setStatusCode(200)
+            .setStatusCode(statusCode)
             .setBody(JsonEncoder.encode(value).toByteArray(StandardCharsets.UTF_8))
             .addHeader("Content-Type", "application/json")
             .build()

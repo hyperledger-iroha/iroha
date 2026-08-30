@@ -624,3 +624,27 @@ fn redemption_rejects_nonconservation_and_reused_input_material() {
         .expect("updated unshield digest");
     assert!(wrong_change.validate_public_binding().is_err());
 }
+
+#[test]
+fn kagemusha_json_requires_closed_objects_and_explicit_enum_content() {
+    let branch = norito::json::from_str::<KagemushaRecursiveSpendBranchV2>(
+        r#"{"branch":"recipient","value":null}"#,
+    )
+    .expect("canonical branch JSON");
+    assert_eq!(branch, KagemushaRecursiveSpendBranchV2::Recipient);
+    let missing_content = norito::json::from_str::<KagemushaRecursiveSpendBranchV2>(
+        r#"{"branch":"recipient"}"#,
+    )
+    .expect_err("a unit branch must carry an explicit null content member");
+    assert!(missing_content.to_string().contains("missing field `value`"));
+
+    let amount = KagemushaScaledAmountV2::new(1, SCALE).expect("canonical amount");
+    let mut amount_json = norito::json::to_value(&amount).expect("encode amount JSON");
+    amount_json
+        .as_object_mut()
+        .expect("amount JSON object")
+        .insert("retired_scale_hint".to_owned(), norito::json::Value::Null);
+    let unknown = norito::json::from_value::<KagemushaScaledAmountV2>(amount_json)
+        .expect_err("Kagemusha objects must reject unknown members");
+    assert!(unknown.to_string().contains("unknown field"));
+}

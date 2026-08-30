@@ -125,6 +125,44 @@ public sealed class ToriiOneShotTransportTests
     }
 
     [Fact]
+    public async Task SignedBodyRoutesRejectUnverifiedInjectedTransportBeforeDispatch()
+    {
+        const string transactionHash =
+            "1111111111111111111111111111111111111111111111111111111111111111";
+        using var handler = new CountingHandler((_, _) =>
+            Task.FromException<HttpResponseMessage>(
+                new InvalidOperationException("unverified signed request reached HTTP dispatch")));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var queryError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.SubmitSignedQueryAsync(
+                ValidSignedQueryEnvelope(),
+                cancellationToken: TestContext.Current.CancellationToken));
+        var detailsError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.GetPipelineTransactionDetailsAsync(
+                new SignedIterableQueryBuilder(
+                    CanonicalAccountId,
+                    NetworkId.Parse(CanonicalNetworkId))
+                    .FindTransactionDetails(transactionHash)
+                    .BuildSigned(CanonicalPrivateKeySeed),
+                transactionHash,
+                TestContext.Current.CancellationToken));
+        var pinError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.RegisterSoraFsPinManifestAsync(
+                ValidSignedTransactionEnvelope(),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("one-shot", queryError.Message, StringComparison.Ordinal);
+        Assert.Contains("one-shot", detailsError.Message, StringComparison.Ordinal);
+        Assert.Contains("one-shot", pinError.Message, StringComparison.Ordinal);
+        Assert.Equal(0, handler.CountFor("/v1/query"));
+        Assert.Equal(0, handler.CountFor("/v1/pipeline/transactions/details"));
+        Assert.Equal(0, handler.CountFor("/v1/sorafs/pin/register"));
+    }
+
+    [Fact]
     public async Task SignedTransactionNetworkFailureIsNotRetried()
     {
         using var handler = TransactionHandler((_, _) =>
@@ -181,8 +219,7 @@ public sealed class ToriiOneShotTransportTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
+                NetworkId = NetworkId.Parse(CanonicalNetworkId),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),

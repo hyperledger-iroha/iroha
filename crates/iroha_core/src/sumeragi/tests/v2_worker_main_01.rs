@@ -2444,11 +2444,8 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
                     == wire::ConsensusMessageV2Payload::Proposal(proposal.clone())
         ));
         let manifest = payload.manifest();
-        let validated = wire::ValidatedPayloadManifest::new(
-            &service.context,
-            manifest.clone(),
-        )
-        .expect("validate retained chunk manifest once");
+        let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+            .expect("validate retained chunk manifest once");
         let signer = &service.context.roster[proposer].validator;
         let mut observed_chunk_indices = BTreeSet::new();
         for encoded in &chunks.messages {
@@ -2467,10 +2464,7 @@ fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound() {
             let signature = Signature::try_from_bytes(&chunk.signature)
                 .expect("the retained chunk signature is canonical");
             signature
-                .verify(
-                    signer.public_key(),
-                    &signature_payload.signature_preimage(),
-                )
+                .verify(signer.public_key(), &signature_payload.signature_preimage())
                 .expect("the retained chunk is signed by the recovered proposer");
             assert!(observed_chunk_indices.insert(chunk.index));
         }
@@ -2643,6 +2637,66 @@ fn same_round_proposal_retransmission_expands_chunks_to_set_b_and_all_voters() {
         expected_all
     );
 }
+
+#[test]
+fn proposal_retransmission_reuses_retained_preencoded_chunk_arcs() {
+    let (mut service, keys) = fixture_with_block_payload();
+    let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+    set_local_validator(&mut service, &keys, proposal.proposer);
+    let manifest_hash = HashOf::new(payload.manifest());
+    service
+        .register_outbound_payload(service.active_tag, payload)
+        .expect("retain preencoded proposal chunks");
+    let retained = service
+        .outbound_chunks
+        .get(&manifest_hash)
+        .expect("registered payload owns its exact manifest")
+        .messages
+        .iter()
+        .map(|message| {
+            let NetworkMessage::SumeragiBlock(envelope) = message else {
+                panic!("retained payload chunk changed network lane")
+            };
+            assert!(envelope.as_ref().encoded_len().is_some());
+            Arc::clone(envelope)
+        })
+        .collect::<Vec<_>>();
+    let observed = Arc::new(Mutex::new(Vec::<Arc<BlockMessageWire>>::new()));
+    let observed_for_hook = Arc::clone(&observed);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        assert!(ticket.is_none());
+        let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+            panic!("proposal fanout changed network lane")
+        };
+        if matches!(
+            envelope.as_message(),
+            BlockMessage::V2(message)
+                if matches!(&message.payload, wire::ConsensusMessageV2Payload::PayloadChunk(_))
+        ) {
+            observed_for_hook
+                .lock()
+                .expect("record routed chunk envelope")
+                .push(Arc::clone(envelope));
+        }
+        Ok(())
+    });
+    let message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal));
+    service
+        .broadcast_consensus(message.clone())
+        .expect("broadcast first proposal occurrence");
+    service
+        .broadcast_consensus(message)
+        .expect("broadcast proposal fallback occurrence");
+
+    let observed = observed.lock().expect("inspect routed chunk envelopes");
+    assert!(observed.len() > retained.len());
+    assert!(observed.iter().all(|routed| {
+        routed.as_ref().encoded_len().is_some()
+            && retained.iter().any(|cached| Arc::ptr_eq(cached, routed))
+    }));
+}
+
 #[test]
 fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -2877,11 +2931,6 @@ fn certified_view_transition_resets_fast_path_before_new_set_a_fanout() {
         service.fast_path_proposals,
         BTreeSet::from([proposal.round])
     );
-}
-fn install_temporary_chunk_root(service: &mut ProductionV2Services) -> TempDir {
-    let directory = TempDir::new().expect("temporary chunk root");
-    service.chunk_root = directory.path().to_path_buf();
-    directory
 }
 fn certified_fetch_task(
     service: &ProductionV2Services,

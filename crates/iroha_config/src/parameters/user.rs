@@ -15362,6 +15362,20 @@ fn validate_optional_push_text(
     }
     value
 }
+fn validate_optional_push_path(
+    emitter: &mut Emitter<ParseError>,
+    field: &str,
+    value: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if value
+        .as_ref()
+        .is_some_and(|path| path.as_os_str().is_empty())
+    {
+        emit_torii_config_error(emitter, format!("{field} must not be an empty path"));
+        return None;
+    }
+    value
+}
 impl ToriiPush {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Push {
         if self.max_topics_per_device.get() > defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE_V1 {
@@ -15390,6 +15404,11 @@ impl ToriiPush {
             "torii.push.fcm_project_id",
             self.fcm_project_id,
         );
+        let fcm_service_account_path = validate_optional_push_path(
+            emitter,
+            "torii.push.fcm_service_account_path",
+            self.fcm_service_account_path,
+        );
         let apns_topic =
             validate_optional_push_text(emitter, "torii.push.apns_topic", self.apns_topic);
         let apns_team_id =
@@ -15401,8 +15420,13 @@ impl ToriiPush {
             "torii.push.apns_endpoint",
             self.apns_endpoint,
         );
-        let fcm_any = fcm_project_id.is_some() || self.fcm_service_account_path.is_some();
-        let fcm_complete = fcm_project_id.is_some() && self.fcm_service_account_path.is_some();
+        let apns_private_key_path = validate_optional_push_path(
+            emitter,
+            "torii.push.apns_private_key_path",
+            self.apns_private_key_path,
+        );
+        let fcm_any = fcm_project_id.is_some() || fcm_service_account_path.is_some();
+        let fcm_complete = fcm_project_id.is_some() && fcm_service_account_path.is_some();
         if fcm_any && !fcm_complete {
             emit_torii_config_error(
                 emitter,
@@ -15412,12 +15436,12 @@ impl ToriiPush {
         let apns_any = apns_topic.is_some()
             || apns_team_id.is_some()
             || apns_key_id.is_some()
-            || self.apns_private_key_path.is_some()
+            || apns_private_key_path.is_some()
             || apns_endpoint.is_some();
         let apns_complete = apns_topic.is_some()
             && apns_team_id.is_some()
             && apns_key_id.is_some()
-            && self.apns_private_key_path.is_some();
+            && apns_private_key_path.is_some();
         if apns_any && !apns_complete {
             emit_torii_config_error(
                 emitter,
@@ -15450,12 +15474,12 @@ impl ToriiPush {
             request_timeout: self.request_timeout_ms.get(),
             max_topics_per_device: self.max_topics_per_device,
             fcm_project_id,
-            fcm_service_account_path: self.fcm_service_account_path,
+            fcm_service_account_path,
             apns_environment,
             apns_topic,
             apns_team_id,
             apns_key_id,
-            apns_private_key_path: self.apns_private_key_path,
+            apns_private_key_path,
             apns_endpoint,
         }
     }
@@ -15578,7 +15602,10 @@ mod torii_push_tests {
         let mut padded = ToriiPush::default();
         padded.fcm_project_id = Some(" project ".to_owned());
         padded.fcm_service_account_path = Some(PathBuf::from("/run/secrets/fcm.json"));
-        for config in [partial_fcm, partial_apns, padded] {
+        let mut empty_path = ToriiPush::default();
+        empty_path.fcm_project_id = Some("project".to_owned());
+        empty_path.fcm_service_account_path = Some(PathBuf::new());
+        for config in [partial_fcm, partial_apns, padded, empty_path] {
             let mut emitter = Emitter::new();
             let _ = config.parse(&mut emitter);
             emitter
@@ -16083,8 +16110,12 @@ impl Torii {
             kagemusha_commands: self
                 .kagemusha_commands
                 .and_then(|config| config.parse(emitter)),
-            ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
-            tx_history: self.tx_history.map(ToriiTxHistory::parse),
+            ram_lfe: self
+                .ram_lfe
+                .and_then(|config| config.parse(emitter)),
+            tx_history: self
+                .tx_history
+                .map(|config| config.parse(emitter)),
             recipient_lookup: self
                 .recipient_lookup
                 .and_then(|config| config.parse(emitter))
@@ -16952,13 +16983,13 @@ pub struct ToriiMcp {
     /// Master enable switch for native `/v1/mcp`.
     #[config(default = "defaults::torii::mcp::ENABLED")]
     pub enabled: bool,
-    /// Maximum accepted request payload size in bytes.
+    /// Non-zero maximum accepted request payload size in bytes.
     #[config(default = "defaults::torii::mcp::MAX_REQUEST_BYTES")]
     pub max_request_bytes: usize,
-    /// Maximum number of tools emitted in one `tools/list` response page.
+    /// Non-zero maximum number of tools emitted in one `tools/list` response page.
     #[config(default = "defaults::torii::mcp::MAX_TOOLS_PER_LIST")]
     pub max_tools_per_list: usize,
-    /// Maximum number of MCP tool dispatches executing concurrently.
+    /// Non-zero maximum number of MCP tool dispatches executing concurrently.
     #[config(default = "defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES")]
     pub max_inflight_dispatches: usize,
     /// MCP tool profile (`read_only`, `writer`, `operator`).
@@ -16990,12 +17021,38 @@ impl ToriiMcp {
             );
             actual::ToriiMcpProfile::ReadOnly
         });
+        let max_request_bytes = if self.max_request_bytes == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.mcp.max_request_bytes must be greater than zero",
+            );
+            defaults::torii::mcp::MAX_REQUEST_BYTES
+        } else {
+            self.max_request_bytes
+        };
+        let max_tools_per_list = if self.max_tools_per_list == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.mcp.max_tools_per_list must be greater than zero",
+            );
+            defaults::torii::mcp::MAX_TOOLS_PER_LIST
+        } else {
+            self.max_tools_per_list
+        };
+        let max_inflight_dispatches =
+            NonZeroUsize::new(self.max_inflight_dispatches).unwrap_or_else(|| {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.mcp.max_inflight_dispatches must be greater than zero",
+                );
+                NonZeroUsize::new(defaults::torii::mcp::MAX_INFLIGHT_DISPATCHES)
+                    .expect("default MCP in-flight dispatch limit is non-zero")
+            });
         actual::ToriiMcp {
             enabled: self.enabled,
-            max_request_bytes: self.max_request_bytes.max(1),
-            max_tools_per_list: self.max_tools_per_list.max(1),
-            max_inflight_dispatches: NonZeroUsize::new(self.max_inflight_dispatches.max(1))
-                .expect("clamped MCP in-flight dispatch limit is non-zero"),
+            max_request_bytes,
+            max_tools_per_list,
+            max_inflight_dispatches,
             profile,
             expose_operator_routes: self.expose_operator_routes,
             allow_tool_prefixes: self.allow_tool_prefixes,
@@ -17034,15 +17091,26 @@ mod exact_torii_transport_label_tests {
     }
 
     #[test]
-    fn mcp_inflight_dispatch_limit_is_never_zero() {
-        let mut mcp = ToriiMcp::default();
-        mcp.max_inflight_dispatches = 0;
-        let mut emitter = Emitter::new();
-        let actual = mcp.parse(&mut emitter);
-        emitter
-            .into_result()
-            .expect("the canonical default MCP profile is valid");
-        assert_eq!(actual.max_inflight_dispatches.get(), 1);
+    fn mcp_zero_capacities_are_rejected_without_unwinding() {
+        for field in [
+            "max_request_bytes",
+            "max_tools_per_list",
+            "max_inflight_dispatches",
+        ] {
+            let mut mcp = ToriiMcp::default();
+            match field {
+                "max_request_bytes" => mcp.max_request_bytes = 0,
+                "max_tools_per_list" => mcp.max_tools_per_list = 0,
+                "max_inflight_dispatches" => mcp.max_inflight_dispatches = 0,
+                _ => unreachable!("test enumerates every MCP capacity field"),
+            }
+            let mut emitter = Emitter::new();
+            let _ = mcp.parse(&mut emitter);
+            let error = emitter
+                .into_result()
+                .expect_err("zero MCP capacities must fail closed");
+            assert!(format!("{error:?}").contains(field), "{field}: {error:?}");
+        }
     }
 }
 /// CORS response-header policy for Torii.
@@ -18494,38 +18562,57 @@ mod torii_faucet_tests;
 mod torii_kagemusha_commands_tests;
 /// RAM-LFE runtime configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct ToriiRamLfe {
-    /// Master enable switch for Torii's in-process RAM-LFE runtime.
-    #[config(default = "defaults::torii::ram_lfe::ENABLED")]
-    pub enabled: bool,
-    /// Per-program runtime entries.
+    /// Non-empty per-program runtime entries. Presence of this table enables the runtime.
     #[config(default)]
     pub programs: Vec<ToriiRamLfeProgram>,
 }
 impl ToriiRamLfe {
-    fn parse(self) -> Option<actual::ToriiRamLfe> {
-        if !self.enabled {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiRamLfe> {
+        if self.programs.is_empty() {
+            emit_torii_config_error(
+                emitter,
+                "torii.ram_lfe.programs must contain at least one program when torii.ram_lfe is configured",
+            );
+            return None;
+        }
+        let mut program_ids = BTreeSet::new();
+        let mut programs = Vec::with_capacity(self.programs.len());
+        for (index, program) in self.programs.into_iter().enumerate() {
+            let Some(program) = program.parse(index, emitter) else {
+                continue;
+            };
+            if !program_ids.insert(program.program_id.clone()) {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.ram_lfe.programs[{index}].program_id duplicates `{}`",
+                        program.program_id
+                    ),
+                );
+                continue;
+            }
+            programs.push(program);
+        }
+        if programs.is_empty() {
             return None;
         }
         Some(actual::ToriiRamLfe {
-            programs: self
-                .programs
-                .into_iter()
-                .enumerate()
-                .map(|(index, program)| program.parse(index))
-                .collect(),
+            programs,
         })
     }
 }
 /// Per-program runtime material for Torii's RAM-LFE runtime.
 #[derive(ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct ToriiRamLfeProgram {
     /// On-chain RAM-LFE program identifier.
     pub program_id: String,
     /// Hidden derivation secret encoded as hex.
     pub secret_hex: RamLfeSecret,
-    /// Norito-encoded hidden BFV RAM-FHE program encoded as hex.
-    pub hidden_program_hex: Option<String>,
+    /// Norito-encoded hidden BFV RAM-FHE program as exact `0x`-prefixed lowercase hex.
+    pub hidden_program_hex: String,
     /// Private key used to sign receipts for this program.
     pub signer_private_key: PrivateKey,
     /// Optional receipt TTL expressed in milliseconds.
@@ -18543,45 +18630,136 @@ impl Debug for ToriiRamLfeProgram {
             .finish()
     }
 }
-fn default_ram_lfe_hidden_program_hex() -> String {
-    let bytes = iroha_crypto::default_bfv_programmed_hidden_program()
-        .to_bytes()
-        .expect("default RAM-LFE hidden program should encode");
-    hex::encode(bytes)
-}
 impl ToriiRamLfeProgram {
-    fn parse(self, index: usize) -> actual::ToriiRamLfeProgram {
-        let program_id: iroha_data_model::ram_lfe::RamLfeProgramId =
-            self.program_id.parse().unwrap_or_else(|err| {
-                panic!(
-                    "invalid torii.ram_lfe.programs[{index}].program_id `{}`: {err}",
-                    self.program_id
-                )
-            });
-        let hidden_program_hex = self
-            .hidden_program_hex
-            .unwrap_or_else(default_ram_lfe_hidden_program_hex);
-        let hidden_program_literal = hidden_program_hex.trim().trim_start_matches("0x");
-        let hidden_program_bytes = Vec::from_hex(hidden_program_literal).unwrap_or_else(|err| {
-            panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex: {err}")
-        });
-        if hidden_program_bytes.is_empty() {
-            panic!("torii.ram_lfe.programs[{index}].hidden_program_hex must not be empty");
+    fn parse(
+        self,
+        index: usize,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::ToriiRamLfeProgram> {
+        if self.program_id.trim() != self.program_id {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.ram_lfe.programs[{index}].program_id must not contain surrounding whitespace"
+                ),
+            );
+            return None;
         }
+        let program_id: iroha_data_model::ram_lfe::RamLfeProgramId =
+            match self.program_id.parse() {
+                Ok(program_id) if program_id.to_string() == self.program_id => program_id,
+                Ok(program_id) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "torii.ram_lfe.programs[{index}].program_id must use the canonical spelling `{program_id}`"
+                        ),
+                    );
+                    return None;
+                }
+                Err(err) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "invalid torii.ram_lfe.programs[{index}].program_id `{}`: {err}",
+                            self.program_id
+                        ),
+                    );
+                    return None;
+                }
+            };
+        let Some(hidden_program_literal) = self.hidden_program_hex.strip_prefix("0x") else {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.ram_lfe.programs[{index}].hidden_program_hex must be exact `0x`-prefixed lowercase hex"
+                ),
+            );
+            return None;
+        };
+        if hidden_program_literal.is_empty()
+            || !hidden_program_literal
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.ram_lfe.programs[{index}].hidden_program_hex must contain non-empty lowercase hex after `0x`"
+                ),
+            );
+            return None;
+        }
+        let hidden_program_bytes = match Vec::from_hex(hidden_program_literal) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "invalid torii.ram_lfe.programs[{index}].hidden_program_hex: {err}"
+                    ),
+                );
+                return None;
+            }
+        };
         let hidden_program: iroha_crypto::HiddenRamFheProgram =
-            norito::decode_from_bytes(hidden_program_bytes.as_slice()).unwrap_or_else(|err| {
-                panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex payload: {err}")
-            });
-        iroha_crypto::validate_hidden_ram_fhe_program(&hidden_program).unwrap_or_else(|err| {
-            panic!("invalid torii.ram_lfe.programs[{index}].hidden_program_hex program: {err}")
-        });
-        actual::ToriiRamLfeProgram {
+            match norito::decode_from_bytes(hidden_program_bytes.as_slice()) {
+                Ok(program) => program,
+                Err(err) => {
+                    emit_torii_config_error(
+                        emitter,
+                        format!(
+                            "invalid torii.ram_lfe.programs[{index}].hidden_program_hex payload: {err}"
+                        ),
+                    );
+                    return None;
+                }
+            };
+        if let Err(err) = iroha_crypto::validate_hidden_ram_fhe_program(&hidden_program) {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "invalid torii.ram_lfe.programs[{index}].hidden_program_hex program: {err}"
+                ),
+            );
+            return None;
+        }
+        if let Err(err) = KeyPair::from_private_key(self.signer_private_key.clone()) {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "invalid torii.ram_lfe.programs[{index}].signer_private_key: {err}"
+                ),
+            );
+            return None;
+        }
+        if let Some(ttl) = self.receipt_ttl_ms {
+            if ttl.get().is_zero() {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.ram_lfe.programs[{index}].receipt_ttl_ms must be greater than zero when configured"
+                    ),
+                );
+                return None;
+            }
+            if u64::try_from(ttl.get().as_millis()).is_err() {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.ram_lfe.programs[{index}].receipt_ttl_ms must fit the runtime millisecond domain"
+                    ),
+                );
+                return None;
+            }
+        }
+        Some(actual::ToriiRamLfeProgram {
             program_id,
             secret: self.secret_hex,
             hidden_program,
             signer_private_key: self.signer_private_key,
             receipt_ttl: self.receipt_ttl_ms.map(DurationMs::get),
-        }
+        })
     }
 }
 fn default_events_buffer_capacity() -> NonZeroUsize {
@@ -33573,11 +33751,17 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_BYTES,
         });
         config.torii.ram_lfe = Some(super::ToriiRamLfe {
-            enabled: true,
             programs: vec![super::ToriiRamLfeProgram {
                 program_id: "phone_retail".to_owned(),
                 secret_hex: "01020304".parse().expect("valid RAM-LFE secret"),
-                hidden_program_hex: None,
+                hidden_program_hex: format!(
+                    "0x{}",
+                    hex::encode(
+                        iroha_crypto::default_bfv_programmed_hidden_program()
+                            .to_bytes()
+                            .expect("default RAM-LFE hidden program should encode")
+                    )
+                ),
                 signer_private_key: private_key,
                 receipt_ttl_ms: None,
             }],

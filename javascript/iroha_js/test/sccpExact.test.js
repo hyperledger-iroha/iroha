@@ -179,14 +179,8 @@ function tonOutboundPolicy(protocolVersion = 4) {
 function soraOutboundExecutionPolicy() {
   return {
     version: 1,
-    semantics: "ivm_proved_record_sccp_message_v1",
+    execution_semantics: "ivm_contract_record_sccp_message_v1",
     contract_artifact_sha256: UPPER(0xb1, 32),
-    vk_ref: {
-      backend: "stark/fri/v1",
-      name: "ivm-execution-v1",
-      version: 1,
-      commitment: UPPER(0xb2, 32),
-    },
     gas_limit: 50_000_000,
   };
 }
@@ -558,19 +552,12 @@ function soraOutboundMaterial() {
     settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
     policy: {
       version: 1,
-      semantics: "ivm_proved_record_sccp_message_v1",
+      execution_semantics: "ivm_contract_record_sccp_message_v1",
       contract_artifact_sha256: createHash("sha256").update(artifact).digest("hex").toUpperCase(),
-      vk_ref: {
-        backend: "stark/fri/v1",
-        name: "ivm-execution-v1",
-        version: 7,
-        commitment: UPPER(0x23, 32),
-      },
       gas_limit: 50_000_000,
     },
     contract_artifact_b64: artifact.toString("base64"),
     contract_code_hash: PREFIX_HASH(0x22),
-    verifying_key_version: 7,
   };
 }
 
@@ -1096,11 +1083,10 @@ test("route-scoped SORA outbound material binds exact route, policy, and artifac
   const mutations = [
     (value) => { value.contract_artifact_b64 = Buffer.from("caller-selected").toString("base64"); },
     (value) => { value.policy.gas_limit = 0; },
-    (value) => { value.policy.vk_ref.backend = "stark//fri"; },
-    (value) => { value.policy.vk_ref.version = 0; },
-    (value) => { value.policy.vk_ref.version += 1; },
-    (value) => { value.policy.vk_ref.commitment = UPPER(0, 32); },
-    (value) => { value.verifying_key_version += 1; },
+    (value) => { value.policy.execution_semantics = "ivm_proved_record_sccp_message_v1"; },
+    (value) => { value.policy.semantics = "ivm_contract_record_sccp_message_v1"; },
+    (value) => { value.policy.vk_ref = { backend: "stark/fri/v1" }; },
+    (value) => { value.verifying_key_version = 7; },
     (value) => { value.policy.bytecode = value.contract_artifact_b64; },
     (value) => { value.route_key.route_id = "legacy_bsc_xor"; },
     (value) => { value.route_key.legacy_route = "taira_bsc_xor"; },
@@ -1235,15 +1221,16 @@ test("registry validates complete typed route identity and immutable key hash", 
     () => normalizeSccpRegistry(missingExecutionPolicy),
     /sora_outbound_execution_policy/u,
   );
-  for (const field of ["version", "commitment"]) {
+  for (const field of ["version", "execution_semantics", "contract_artifact_sha256", "gas_limit"]) {
     const missingPin = registry();
-    delete missingPin.lanes[0].routes[0].sora_outbound_execution_policy.vk_ref[field];
+    delete missingPin.lanes[0].routes[0].sora_outbound_execution_policy[field];
     assert.throws(() => normalizeSccpRegistry(missingPin), new RegExp(field, "u"));
   }
-  const aliasedVkCommitment = registry();
-  aliasedVkCommitment.lanes[0].routes[0].sora_outbound_execution_policy.vk_ref.commitment =
-    aliasedVkCommitment.lanes[0].routes[0].sora_outbound_execution_policy.contract_artifact_sha256;
-  assert.throws(() => normalizeSccpRegistry(aliasedVkCommitment), /reuses/u);
+  for (const retiredField of ["semantics", "vk_ref"]) {
+    const retiredPolicy = registry();
+    retiredPolicy.lanes[0].routes[0].sora_outbound_execution_policy[retiredField] = {};
+    assert.throws(() => normalizeSccpRegistry(retiredPolicy), new RegExp(retiredField, "u"));
+  }
   const wrongSettlementAsset = registry();
   wrongSettlementAsset.lanes[0].routes[0].settlement.asset_definition_id =
     "another-canonical-looking-asset";

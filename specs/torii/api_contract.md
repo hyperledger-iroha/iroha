@@ -99,8 +99,10 @@ preflight remains bodyless and does not require `Content-Type`.
 
 Structured query DTOs accept at most one value for each decoded key. Literal
 duplicates and percent-encoded equivalents such as `limit` and `%6cimit` return
-`400 request_query_invalid`; only explicitly documented protocol parsers may
-define repeated-key semantics.
+`400 request_query_invalid`. Percent-decoded keys and values must be exact
+UTF-8; invalid UTF-8 byte sequences are rejected rather than replaced with
+Unicode replacement characters. Only explicitly documented
+protocol parsers may define repeated-key semantics.
 
 ## Errors and correlation
 

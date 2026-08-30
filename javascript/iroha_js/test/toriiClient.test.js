@@ -50,7 +50,6 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  configureCurveSupport,
 } from "../src/address.js";
 import { sorafsGatewayFetch } from "../src/sorafs.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
@@ -196,6 +195,12 @@ const txStatusErrorMessageContract = JSON.parse(
   ),
 );
 const nativeTest = makeNativeTest(test);
+
+function assertRequestSignal(actual, caller, label = "request signal") {
+  assert.ok(actual, `${label} is present`);
+  assert.equal(typeof actual.addEventListener, "function", `${label} is abortable`);
+  assert.equal(actual.aborted, caller.aborted, `${label} preserves caller state`);
+}
 
 function canonicalTransactionCodecNative(overrides = {}) {
   return {
@@ -2009,7 +2014,7 @@ test("listAttachments returns attachment metadata", async () => {
 test("listAttachments forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (_url, init) => {
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: [],
@@ -2132,7 +2137,7 @@ test("getAttachment returns bytes and content type", async () => {
 test("getAttachment forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (_url, init) => {
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       arrayData: new ArrayBuffer(0),
@@ -2646,7 +2651,7 @@ test("getIsoMessageStatus fetches status JSON and validates input", async () => 
   assert.equal(captured.url, `${BASE_URL}/v1/iso20022/messages/MSG999`);
   assert.equal(captured.init.method, "GET");
   assert.equal(captured.init.headers.Accept, "application/json");
-  assert.strictEqual(captured.init.signal, controller.signal);
+  assertRequestSignal(captured.init.signal, controller.signal);
   assert.deepEqual(payload, statusPayload);
 
   await assert.rejects(
@@ -5109,7 +5114,7 @@ test("publishSpaceDirectoryManifest forwards AbortSignal options", async () => {
     },
     { signal: controller.signal, canonicalAuth: APPLICATION_CANONICAL_AUTH },
   );
-  assert.equal(captured.init.signal, controller.signal);
+  assertRequestSignal(captured.init.signal, controller.signal);
 });
 
 test("publishSpaceDirectoryManifest rejects invalid options payloads", async () => {
@@ -5240,7 +5245,7 @@ test("revokeSpaceDirectoryManifest supports AbortSignal options", async () => {
     },
     { signal: controller.signal, canonicalAuth: APPLICATION_CANONICAL_AUTH },
   );
-  assert.equal(captured.init.signal, controller.signal);
+  assertRequestSignal(captured.init.signal, controller.signal);
 });
 
 test("revokeSpaceDirectoryManifest rejects unsupported option fields", async () => {
@@ -7489,11 +7494,11 @@ test("submitIsoMessage supports pacs.009 wait flow and reuses signals", async ()
 
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, "/v1/iso20022/pacs009");
-  assert.equal(calls[0].init.signal, controller.signal);
+  assertRequestSignal(calls[0].init.signal, controller.signal);
   assert.equal(calls[0].init.retryProfile, "iso-flow");
   assert.equal(calls[0].init.headers["Content-Type"], "application/pacs009+xml");
   assert.equal(calls[1].url, "/v1/iso20022/messages/flow-009");
-  assert.equal(calls[1].init.signal, controller.signal);
+  assertRequestSignal(calls[1].init.signal, controller.signal);
   assert.equal(calls[1].init.retryProfile, "iso-flow");
   assert.equal(status.status, "Accepted");
   assert.equal(status.transaction_hash, "h-1");
@@ -7594,10 +7599,10 @@ test("submitIsoPacs008AndWait reuses signal and retryProfile for polling", async
 
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, "/v1/iso20022/pacs008");
-  assert.equal(calls[0].init.signal, controller.signal);
+  assertRequestSignal(calls[0].init.signal, controller.signal);
   assert.equal(calls[0].init.retryProfile, "iso-wait");
   assert.equal(calls[1].url, "/v1/iso20022/messages/reuse-008");
-  assert.equal(calls[1].init.signal, controller.signal);
+  assertRequestSignal(calls[1].init.signal, controller.signal);
   assert.equal(calls[1].init.retryProfile, "iso-wait");
   assert.equal(status.status, "Accepted");
   assert.equal(status.transaction_hash, "0xiso008");
@@ -7972,7 +7977,8 @@ test("waitForIsoMessageStatus forwards AbortSignal to status fetches", async () 
     maxAttempts: 1,
   });
   assert.equal(status.transaction_hash, "tx-1");
-  assert.deepEqual(signals, [controller.signal]);
+  assert.equal(signals.length, 1);
+  assertRequestSignal(signals[0], controller.signal);
 });
 
 test("submitIsoPacs008AndWait submits payload then waits for completion", async () => {
@@ -8926,7 +8932,7 @@ test("submitTransaction posts unchanged canonical VersionedSignedTransaction V1 
     }
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
-    assert.equal(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     assert.equal(init.headers["Content-Type"], "application/x-norito");
     assert.deepEqual([...Buffer.from(init.body).values()], [...payload]);
     return createResponse({
@@ -9460,7 +9466,7 @@ test("getTransactionStatus forwards signal to fetch", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.getTransactionStatus(hashHex, { signal: controller.signal });
-  assert.equal(capturedSignal, controller.signal);
+  assertRequestSignal(capturedSignal, controller.signal);
 });
 
 test("getTransactionStatus validates signal option type", async () => {
@@ -10127,7 +10133,7 @@ test("getPipelineRecoveryFastpqProofs fetches committed proof batches", async ()
   const fetchImpl = async (url, init) => {
     capturedUrl = url;
     assert.equal(init?.method, "GET");
-    assert.equal(init?.signal, controller.signal);
+    assertRequestSignal(init?.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: fixture,
@@ -10806,7 +10812,7 @@ test("getHealth requests JSON snapshot", async () => {
   assert.deepEqual(payload, { status: "healthy" });
 });
 
-test("getHealth returns null for non-JSON responses", async () => {
+test("getHealth rejects non-JSON protocol responses", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 200,
@@ -10814,8 +10820,10 @@ test("getHealth returns null for non-JSON responses", async () => {
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.getHealth();
-  assert.equal(payload, null);
+  await assert.rejects(
+    () => client.getHealth(),
+    /must use application\/json/u,
+  );
 });
 
 test("getHealth returns null when the body is empty", async () => {
@@ -13474,7 +13482,7 @@ test("getStatusSnapshot forwards AbortSignal", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/status`);
     assert.equal(init.headers.Accept, "application/json");
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: { peers: 1, queue_size: 0, commit_time_ms: 1 },
@@ -14080,8 +14088,8 @@ registerToriiClientGovernanceTests({
   ToriiClient,
   ValidationError,
   ValidationErrorCode,
+  assertRequestSignal,
   cloneFixture,
-  configureCurveSupport,
   createResponse,
   expectValidationErrorFixture,
   parseStrictLosslessIntegerJson,
@@ -14136,7 +14144,7 @@ test("listSumeragiEvidence encodes query parameters", async () => {
   assert.equal(payload.items.length, 1);
   assert.equal(payload.items[0].kind, "DoublePrepare");
   controller.abort();
-  assert.ok(observedSignal?.aborted);
+  assert.equal(observedSignal?.aborted, false, "completed requests detach caller abort listeners");
 });
 
 test("listSumeragiEvidence rejects invalid kind", async () => {
@@ -14554,7 +14562,7 @@ test("getMetrics forwards AbortSignal", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/metrics`);
     assert.equal(init.headers.Accept, "application/json");
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: { ok: true },
@@ -14706,7 +14714,7 @@ test("getBlock forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/explorer/blocks/7`);
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: {
@@ -16107,7 +16115,7 @@ test("listAccountPermissions rejects non-object options", async () => {
   });
   await assert.rejects(
     () => client.listAccountPermissions(FIXTURE_ALICE_ID, 1),
-    /listAccountPermissions options must be an object/,
+    /listAccountPermissions must be a plain object/,
   );
   assert.equal(fetchCalled, false);
 });
@@ -16153,7 +16161,7 @@ test("listAccountPermissions forwards AbortSignal instances", async () => {
     signal: controller.signal,
   });
   assert.ok(capturedInit);
-  assert.strictEqual(capturedInit.signal, controller.signal);
+  assertRequestSignal(capturedInit.signal, controller.signal);
 });
 
 test("iterateAccountPermissions paginates account-scoped permissions", async () => {
@@ -17443,6 +17451,7 @@ test("resolveToriiClientConfig merges config, env, and overrides", async () => {
     },
     () => {
       const resolved = resolveToriiClientConfig({
+        env: process.env,
         config: {
           torii: { apiTokens: ["from-config"] },
           toriiClient: {
@@ -17493,6 +17502,25 @@ test("removed transaction status fallback configuration fails fast", () => {
         },
       }),
     /transactionStatusScope is no longer supported/,
+  );
+});
+
+test("explicit Torii configuration wins over opt-in environment fallbacks", () => {
+  const resolved = resolveToriiClientConfig({
+    env: {
+      IROHA_TORII_TIMEOUT_MS: "999",
+      IROHA_TORII_AUTH_TOKEN: "ambient-auth",
+      IROHA_TORII_API_TOKEN: "ambient-api",
+    },
+    config: { toriiClient: { timeoutMs: 456, authToken: "config-auth" } },
+    overrides: { timeoutMs: 123, apiToken: "explicit-api" },
+  });
+  assert.equal(resolved.timeoutMs, 123);
+  assert.equal(resolved.authToken, "config-auth");
+  assert.equal(resolved.apiToken, "explicit-api");
+  assert.throws(
+    () => resolveToriiClientConfig({ overrides: { backoffMultiplier: 0.5 } }),
+    /backoffMultiplier must be at least 1/u,
   );
 });
 
@@ -17730,7 +17758,7 @@ test("ToriiClient.getConfigurationTyped returns null on 404", async () => {
   assert.strictEqual(snapshot, null);
 });
 
-test("ToriiClient applies default headers and tokens", async () => {
+test("ToriiClient ignores ambient credentials unless explicitly configured", async () => {
   await withEnv(
     {
       IROHA_TORII_API_TOKEN: "env-token",
@@ -17755,11 +17783,31 @@ test("ToriiClient applies default headers and tokens", async () => {
       assert.equal(captures.length, 1);
       const headers = captures[0].init.headers;
       assert.equal(headers["User-Agent"], "iroha-js");
-      assert.equal(headers["X-API-Token"], "env-token");
+      assert.equal(headers["X-API-Token"], undefined);
       assert.equal(headers["X-Iroha-API-Token"], undefined);
       assert.equal(headers.Authorization, "Bearer local-auth");
     },
   );
+});
+
+test("ToriiClient requires an exact boolean for insecure credential transport", () => {
+  let fetchCalls = 0;
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    throw new Error("unexpected fetch");
+  };
+  for (const allowInsecure of ["false", "true", 0, 1, {}, []]) {
+    assert.throws(
+      () =>
+        new ToriiClient("http://torii.example", {
+          allowInsecure,
+          authToken: "secret",
+          fetchImpl,
+        }),
+      /allowInsecure must be a boolean/u,
+    );
+  }
+  assert.equal(fetchCalls, 0);
 });
 
 test("ToriiClient retries retryable statuses", async () => {
@@ -17821,18 +17869,23 @@ test("ToriiClient emits retry telemetry events", async () => {
   assert.ok(event.durationMs >= 0);
 });
 
-test("ToriiClient enforces request timeout", async () => {
+test("ToriiClient composes request timeouts with caller cancellation", async () => {
   const fetchImpl = async (_url, init) =>
     new Promise((_, reject) => {
+      const abort = () => {
+        const abortError =
+          typeof DOMException !== "undefined"
+            ? new DOMException("Aborted", "AbortError")
+            : Object.assign(new Error("Aborted"), { name: "AbortError" });
+        reject(abortError);
+      };
+      if (init.signal?.aborted) {
+        abort();
+        return;
+      }
       init.signal?.addEventListener(
         "abort",
-        () => {
-          const abortError =
-            typeof DOMException !== "undefined"
-              ? new DOMException("Aborted", "AbortError")
-              : Object.assign(new Error("Aborted"), { name: "AbortError" });
-          reject(abortError);
-        },
+        abort,
         { once: true },
       );
     });
@@ -17841,10 +17894,29 @@ test("ToriiClient enforces request timeout", async () => {
     timeoutMs: 10,
     maxRetries: 0,
   });
+  const liveCaller = new AbortController();
   await assert.rejects(
-    () => client.listAttachments(canonicalReadOptions()),
+    () =>
+      client.listAttachments({
+        ...canonicalReadOptions(),
+        signal: liveCaller.signal,
+      }),
     /AbortError|aborted/i,
   );
+
+  const callerAbort = new AbortController();
+  const callerReason = new Error("caller stopped request");
+  const slowTimeoutClient = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    timeoutMs: 1_000,
+    maxRetries: 0,
+  });
+  const pending = slowTimeoutClient.listAttachments({
+    ...canonicalReadOptions(),
+    signal: callerAbort.signal,
+  });
+  callerAbort.abort(callerReason);
+  await assert.rejects(pending, /AbortError|aborted/i);
 });
 
 test("streamEvents signs the exact final path and query with the default identity", async () => {
@@ -18710,7 +18782,7 @@ test("listKaigiRelays forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/kaigi/relays`);
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: { total: 0, items: [] },
@@ -18832,7 +18904,7 @@ test("getKaigiRelay forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/kaigi/relays/${encodeURIComponent(relayId)}`);
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: {
@@ -18928,7 +19000,7 @@ test("getKaigiRelaysHealth forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/kaigi/relays/health`);
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: {
@@ -19648,7 +19720,7 @@ test("listProverReports forwards AbortSignal options", async () => {
     },
   });
   await client.listProverReports({}, { signal: controller.signal });
-  assert.strictEqual(capturedSignal, controller.signal);
+  assertRequestSignal(capturedSignal, controller.signal);
 });
 
 test("countProverReports rejects invalid AbortSignal option", async () => {
@@ -19670,7 +19742,7 @@ test("getProverReport fetches report by id", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/zk/prover/reports/r-1`);
-    assert.strictEqual(init?.signal, controller.signal);
+    assertRequestSignal(init?.signal, controller.signal);
     return createResponse({
       status: 200,
       jsonData: {
@@ -19710,7 +19782,7 @@ test("deleteProverReport issues delete", async () => {
     called = true;
     assert.equal(url, `${BASE_URL}/v1/zk/prover/reports/r-2`);
     assert.equal(init.method, "DELETE");
-    assert.strictEqual(init.signal, controller.signal);
+    assertRequestSignal(init.signal, controller.signal);
     return createResponse({ status: 204 });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
@@ -19738,7 +19810,7 @@ test("countProverReports returns parsed count", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const count = await client.countProverReports({ failed_only: true }, { signal: controller.signal });
   assert.equal(count, 7);
-  assert.strictEqual(capturedSignal, controller.signal);
+  assertRequestSignal(capturedSignal, controller.signal);
   const missingPayloadClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
   });
@@ -23422,7 +23494,7 @@ test("IVM response endpoints enforce declared caps before reads and forward sign
     });
     await assert.rejects(invoke(client), /exceeds the .*response limit/, name);
     assert.equal(bodyReads, 0, `${name} must reject before reading`);
-    assert.equal(capturedSignal, controller.signal, `${name} signal`);
+    assertRequestSignal(capturedSignal, controller.signal, `${name} signal`);
   }
 });
 
@@ -24137,7 +24209,7 @@ test("IVM proof job attachments enforce structural hashes and rolling wire compa
     ],
     [
       { ...valid, proof: { backend: "stark/fri", bytes_b64: "AQID" } },
-      /proof\.backend must match/,
+      /unsupported production verifier backend/,
     ],
     [
       { ...valid, proof: { backend: "halo2/ipa", bytes_b64: "AQID\n" } },
@@ -24808,7 +24880,7 @@ test("getContractCodeBytes returns a bounded record and forwards AbortSignal", a
     canonicalReadOptions({ signal: controller.signal }),
   );
   assert.deepEqual(result, { code_b64: "Y29kZQ==" });
-  assert.equal(capturedSignal, controller.signal);
+  assertRequestSignal(capturedSignal, controller.signal);
 });
 
 test("getContractCodeBytes validates options before fetch", async () => {
@@ -24844,7 +24916,7 @@ test("bounded code-byte responses cancel on early rejection and 404", async () =
       name: "wrong content type",
       status: 200,
       headers: { "content-type": "text/plain" },
-      expected: null,
+      error: /must use application\/json/,
     },
     {
       name: "oversized Content-Length",
@@ -24955,12 +25027,12 @@ test("bounded JSON responses require one exact application/json media type", asy
         },
       }),
     });
-    assert.equal(
-      await client.getContractCodeBytes(
+    await assert.rejects(
+      () => client.getContractCodeBytes(
         "1".repeat(64),
         canonicalReadOptions(),
       ),
-      null,
+      /must use application\/json/,
       contentType,
     );
     assert.equal(bodyReads, 0, `${contentType} body reads`);
@@ -25144,8 +25216,8 @@ test("bounded readers close reentrant abort and hostile signal cleanup races", a
         ),
       mode === "add throws" ? /listener boom/ : /non-byte chunk/,
     );
-    assert.equal(readerCancels, 1, mode);
-    assert.equal(releases, 1, mode);
+    assert.equal(readerCancels, mode === "add throws" ? 0 : 1, mode);
+    assert.equal(releases, mode === "add throws" ? 0 : 1, mode);
   }
 });
 
@@ -27117,9 +27189,24 @@ function createBatchCapabilitiesResponse() {
 }
 
 function createResponse({ status, jsonData, arrayData, textBody, headers }) {
-  const effectiveJsonData = jsonData === undefined ? {} : jsonData;
-  const responseText =
-    typeof textBody === "string" ? textBody : JSON.stringify(effectiveJsonData);
+  const implicitEmptyBody =
+    (status === 204 || status === 404) &&
+    jsonData === undefined &&
+    arrayData === undefined &&
+    textBody === undefined;
+  const effectiveJsonData = jsonData === undefined
+    ? (implicitEmptyBody ? null : {})
+    : jsonData;
+  const effectiveHeaders = headers ?? (
+    arrayData === undefined && textBody === undefined
+      ? { "content-type": "application/json" }
+      : {}
+  );
+  const responseText = implicitEmptyBody
+    ? ""
+    : typeof textBody === "string"
+      ? textBody
+      : JSON.stringify(effectiveJsonData);
   const bodyBytes =
     arrayData instanceof ArrayBuffer
       ? new Uint8Array(arrayData)
@@ -27154,11 +27241,8 @@ function createResponse({ status, jsonData, arrayData, textBody, headers }) {
     }),
     headers: {
       get(name) {
-        if (!headers) {
-          return null;
-        }
         const normalized = name.toLowerCase();
-        for (const [key, value] of Object.entries(headers)) {
+        for (const [key, value] of Object.entries(effectiveHeaders)) {
           if (key.toLowerCase() === normalized) {
             return value;
           }

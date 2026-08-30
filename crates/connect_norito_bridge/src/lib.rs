@@ -770,6 +770,7 @@ impl_kagemusha_canonical_decode_schema!(
     iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2,
     iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
     iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4,
+    iroha_torii_shared::offline_api::OfflineOperationReference,
 );
 impl_kagemusha_canonical_decode_profile!(
     KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER,
@@ -31379,6 +31380,10 @@ mod tests {
         assert_eq!(
             <iroha_torii_shared::offline_api::OfflineOperationStatus as KagemushaCanonicalDecodeSchema>::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
             KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER
+        );
+        assert_eq!(
+            <iroha_torii_shared::offline_api::OfflineOperationReference as KagemushaCanonicalDecodeSchema>::EXTRA_ENCODED_ALLOCATION_MULTIPLIER,
+            0
         );
     }
     #[test]

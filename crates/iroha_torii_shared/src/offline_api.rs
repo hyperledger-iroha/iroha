@@ -465,6 +465,22 @@ pub type OfflineTopUpAnchor = iroha_data_model::offline::KagemushaRecursiveSpend
 /// directly. It is never wrapped as an opaque base64 payload and is required
 /// before a wallet may initialize recursive spending from the returned anchor.
 pub type OfflineTopUpFinalityProof = iroha_data_model::offline::KagemushaTopUpFinalityProofV2;
+/// Maximum negotiated response size accepted for the universal capability.
+pub const OFFLINE_STATUS_MAX_BYTES: usize = 4 * 1024;
+/// Maximum canonical archive size accepted for one operation reference.
+pub const OFFLINE_OPERATION_REFERENCE_MAX_BYTES: usize = 4 * 1024;
+/// Maximum canonical archive size accepted for one operation status.
+///
+/// This leaves bounded framing headroom above the 2 MiB finality proof and
+/// 64 KiB finalized anchor while remaining aligned with the first-release SDK
+/// response ceiling.
+pub const OFFLINE_OPERATION_STATUS_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum JSON response size accepted for one operation status.
+///
+/// Canonical Norito proof bytes may expand when byte vectors are represented
+/// as JSON arrays. This remains far below the transport-wide default while
+/// covering the full bounded finality proof.
+pub const OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Offline lifecycle command selected by an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(
@@ -606,6 +622,49 @@ pub struct OfflineTopUpResult {
     /// Typed consensus proof bound to the exact finalized top-up anchor.
     pub finality_proof: OfflineTopUpFinalityProof,
 }
+impl OfflineTopUpResult {
+    /// Validate every terminal top-up field against the selected operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operation or transaction hash is malformed,
+    /// the anchor or finality proof is structurally invalid, or any operation,
+    /// network, transaction, height, or anchor reference disagrees.
+    pub fn validate_for_operation_id(&self, operation_id: &str) -> Result<(), String> {
+        let operation_id = exact_nonzero_operation_id(operation_id)?;
+        let transaction_hash = exact_iroha_transaction_hash(&self.transaction_hash)?;
+        if self.finalized_block_height == 0 {
+            return Err("offline applied result finalized_block_height must be at least 1".into());
+        }
+        if self.server_time_ms == 0 {
+            return Err("offline applied result server_time_ms must be at least 1".into());
+        }
+        self.anchor
+            .validate_public_binding()
+            .map_err(|error| format!("applied top-up anchor is invalid: {error}"))?;
+        self.finality_proof
+            .validate_structure()
+            .map_err(|error| format!("applied top-up finality proof is invalid: {error}"))?;
+        let anchor_ref = self
+            .anchor
+            .compact_ref()
+            .map_err(|error| format!("applied top-up anchor cannot be referenced: {error}"))?;
+        if operation_id != self.anchor.topup_operation_id
+            || transaction_hash != self.anchor.finalized_tx_hash
+            || self.finalized_block_height != self.anchor.finalized_height
+            || self.finalized_block_height
+                != self.finality_proof.commit_qc.height_context.height
+            || self.finality_proof.commit_qc.height_context.network_id != self.anchor.network_id
+            || self.finality_proof.anchor != anchor_ref
+        {
+            return Err(
+                "applied top-up anchor, finality proof, and terminal result are not mutually bound"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
 /// Final result of an applied redemption operation.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -618,6 +677,24 @@ pub struct OfflineRedeemResult {
     pub finalized_block_height: u64,
     /// Finalized chain time in Unix milliseconds.
     pub server_time_ms: u64,
+}
+impl OfflineRedeemResult {
+    /// Validate the canonical terminal redemption fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the transaction hash is malformed or either
+    /// finality field is zero.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        exact_iroha_transaction_hash(&self.transaction_hash)?;
+        if self.finalized_block_height == 0 {
+            return Err("offline applied result finalized_block_height must be at least 1".into());
+        }
+        if self.server_time_ms == 0 {
+            return Err("offline applied result server_time_ms must be at least 1".into());
+        }
+        Ok(())
+    }
 }
 /// Applied offline operation result, discriminated by command kind.
 #[expect(
@@ -686,6 +763,96 @@ pub enum OfflineOperationStatus {
         /// Stable typed Torii error.
         error: ErrorEnvelope,
     },
+}
+impl OfflineOperationStatus {
+    /// Return the operation identifier selected by this status.
+    #[must_use]
+    pub fn operation_id(&self) -> &str {
+        match self {
+            Self::Pending { operation_id, .. }
+            | Self::Applied { operation_id, .. }
+            | Self::Rejected { operation_id, .. } => operation_id,
+        }
+    }
+
+    /// Validate the complete status without external request context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed identifiers, transaction hashes,
+    /// timestamps, rejection text, or terminal result bindings.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        let operation_id = self.operation_id();
+        exact_nonzero_operation_id(operation_id)?;
+        match self {
+            Self::Pending {
+                transaction_hash,
+                submitted_at_ms,
+                ..
+            } => {
+                exact_iroha_transaction_hash(transaction_hash)?;
+                if *submitted_at_ms == 0 {
+                    return Err("offline pending result submitted_at_ms must be at least 1".into());
+                }
+            }
+            Self::Applied {
+                result: OfflineOperationResult::TopUp(result),
+                ..
+            } => result.validate_for_operation_id(operation_id)?,
+            Self::Applied {
+                result: OfflineOperationResult::Redeem(result),
+                ..
+            } => result.validate_structure()?,
+            Self::Rejected {
+                transaction_hash,
+                error,
+                ..
+            } => {
+                exact_iroha_transaction_hash(transaction_hash)?;
+                validate_rejection_text("code", &error.code)?;
+                validate_rejection_text("message", &error.message)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate the complete status against the requested operation resource.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when structural validation fails or the status selects
+    /// a different operation identifier.
+    pub fn validate_for_operation_id(&self, expected_operation_id: &str) -> Result<(), String> {
+        let expected = exact_nonzero_operation_id(expected_operation_id)?;
+        self.validate_structure()?;
+        if exact_nonzero_operation_id(self.operation_id())? != expected {
+            return Err("operation status id does not match the requested resource".into());
+        }
+        Ok(())
+    }
+}
+
+fn exact_nonzero_operation_id(value: &str) -> Result<[u8; 32], String> {
+    let operation_id = exact_lower_hex_32("operation_id", value)?;
+    if operation_id.iter().all(|byte| *byte == 0) {
+        return Err("operation_id must be non-zero".into());
+    }
+    Ok(operation_id)
+}
+
+fn exact_iroha_transaction_hash(value: &str) -> Result<[u8; 32], String> {
+    let transaction_hash = exact_lower_hex_32("transaction_hash", value)?;
+    if transaction_hash[31] & 1 != 1 {
+        return Err("transaction_hash must preserve the Iroha hash marker".into());
+    }
+    Ok(transaction_hash)
+}
+
+fn validate_rejection_text(field: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
+        return Err(format!("rejected status contains a malformed {field}"));
+    }
+    Ok(())
 }
 #[cfg(test)]
 #[path = "offline_cash_v1_api_tests.rs"]
@@ -952,6 +1119,61 @@ mod tests {
         )
         .expect_err("unknown operation kind must be rejected");
         assert_eq!(error.to_string(), "unknown JSON enum variant");
+    }
+    #[test]
+    fn operation_status_structure_rejects_invalid_continuity_fields() {
+        let operation_id = "11".repeat(32);
+        let transaction_hash = format!("{}25", "22".repeat(31));
+        let pending = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: transaction_hash.clone(),
+            submitted_at_ms: 42,
+        };
+        pending
+            .validate_for_operation_id(&operation_id)
+            .expect("canonical pending status");
+
+        let mut zero_time = pending.clone();
+        let OfflineOperationStatus::Pending {
+            submitted_at_ms, ..
+        } = &mut zero_time
+        else {
+            unreachable!()
+        };
+        *submitted_at_ms = 0;
+        assert!(zero_time.validate_structure().is_err());
+
+        let unmarked = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: "22".repeat(32),
+            submitted_at_ms: 42,
+        };
+        assert!(unmarked.validate_structure().is_err());
+        assert!(pending.validate_for_operation_id(&"33".repeat(32)).is_err());
+
+        let redeem = OfflineOperationStatus::Applied {
+            operation_id,
+            result: OfflineOperationResult::Redeem(OfflineRedeemResult {
+                transaction_hash,
+                finalized_block_height: 1,
+                server_time_ms: 1,
+            }),
+        };
+        redeem
+            .validate_structure()
+            .expect("canonical applied redemption");
+        let mut zero_height = redeem;
+        let OfflineOperationStatus::Applied {
+            result: OfflineOperationResult::Redeem(result),
+            ..
+        } = &mut zero_height
+        else {
+            unreachable!()
+        };
+        result.finalized_block_height = 0;
+        assert!(zero_height.validate_structure().is_err());
     }
     #[test]
     fn operation_reference_golden_vector() {

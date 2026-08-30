@@ -248,7 +248,7 @@ pub struct TonOrdinaryBlockSignaturesV1 {
     pub catchain_seqno: u32,
     /// Native validator-list hash.
     pub validator_list_hash_short: u32,
-    /// Unique native signatures.
+    /// Strictly node-id-ordered unique native signatures.
     pub signatures: Vec<TonValidatorSignatureV1>,
 }
 
@@ -276,7 +276,7 @@ pub struct TonSimplexBlockSignaturesV1 {
     /// Exact boxed TL `consensus.CandidateHashData` bytes.
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub candidate_data: Vec<u8>,
-    /// Unique native final signatures.
+    /// Strictly node-id-ordered unique native final signatures.
     pub signatures: Vec<TonValidatorSignatureV1>,
 }
 
@@ -313,7 +313,8 @@ pub enum TonBlockSignaturesV1 {
 pub struct TonMasterchainBlockProofV1 {
     /// Native block identifier signed by validators.
     pub block_id: TonBlockIdExtV1,
-    /// Complete or Merkle-pruned BoC rooted at `block_id.root_hash`.
+    /// Canonical checksum-free, unindexed, minimal-width complete or
+    /// Merkle-pruned BoC rooted at `block_id.root_hash`.
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub block_proof_boc: Vec<u8>,
     /// Native final signatures for this exact `BlockIdExt`.
@@ -354,17 +355,19 @@ pub struct TonNativeFinalityProofV1 {
 pub struct TonShardEventProofV1 {
     /// Shard block selected by the finalized masterchain `ShardHashes` tree.
     pub shard_block_id: TonBlockIdExtV1,
-    /// Complete or Merkle-pruned shard-block BoC.
+    /// Canonical checksum-free, unindexed, minimal-width complete or
+    /// Merkle-pruned shard-block BoC.
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub shard_block_proof_boc: Vec<u8>,
-    /// Merkle proof rooted at the selected transaction's pre-state `Account` hash.
+    /// Canonical Merkle proof rooted at the selected transaction's pre-state
+    /// `Account` hash.
     ///
     /// This binds the governed code and route configuration to the code that
     /// executed the event transaction. The shard post-state alone is
     /// insufficient because another transaction can restore governed state.
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub transaction_pre_state_proof_boc: Vec<u8>,
-    /// Merkle proof rooted at the shard block's post-state.
+    /// Canonical Merkle proof rooted at the shard block's post-state.
     #[norito(with = "crate::json_utils::bytes_hex")]
     pub shard_state_proof_boc: Vec<u8>,
     /// Exact logical time key of the source transaction.
@@ -2063,7 +2066,7 @@ pub fn ton_boc_single_root_hash_v1(bytes: &[u8]) -> Option<H256> {
 fn parse_complete_ordinary_single_root_boc(
     bytes: &[u8],
 ) -> Option<(TonBoc, Vec<TonComputedCell>, usize)> {
-    let (boc, computed, root) = parse_single_root_boc(bytes)?;
+    let (boc, computed, root) = parse_canonical_single_root_boc(bytes)?;
     if boc
         .cells
         .iter()
@@ -2101,7 +2104,8 @@ pub fn ton_boc_single_ordinary_root_hash_v1(bytes: &[u8]) -> Option<H256> {
 ///
 /// The constructed root has absent `split_depth` and `special`, present code
 /// and data references, and an empty library (`00110` in TL-B field order).
-/// Both supplied BOCs must be complete, single-root ordinary-cell DAGs.
+/// Both supplied BOCs must use the unique canonical checksum-free, unindexed,
+/// minimal-width encoding of complete single-root ordinary-cell DAGs.
 #[must_use]
 pub fn ton_state_init_address_hash_v1(code_boc: &[u8], data_boc: &[u8]) -> Option<H256> {
     let (_code, code_cells, code_root) = parse_complete_ordinary_single_root_boc(code_boc)?;
@@ -3110,7 +3114,9 @@ fn ton_finality_signature_shape(
     if entries.is_empty() || entries.len() > TON_MAX_SIGNATURES {
         return Err(TonNativeSourceError::ResourceLimit);
     }
-    if entries.iter().any(|entry| entry.signature.len() != 64) {
+    if !ton_block_signatures_are_canonically_ordered(signatures)
+        || entries.iter().any(|entry| entry.signature.len() != 64)
+    {
         return Err(TonNativeSourceError::InvalidSignatures);
     }
     Ok(entries)
@@ -5711,16 +5717,16 @@ mod tests {
         let validators = vec![validator];
         let validator_list_hash_short =
             ton_validator_list_hash_short_v1(7, &validators).expect("fixture set hash");
-        let signature = TonValidatorSignatureV1 {
-            node_id_short: ton_validator_node_id_short_v1(&validator.public_key)
-                .expect("fixture node id"),
-            signature: vec![0; 64],
-        };
-        let signed = |count| {
+        let signed = |count: u8| {
             TonBlockSignaturesV1::Ordinary(TonOrdinaryBlockSignaturesV1 {
                 catchain_seqno: 7,
                 validator_list_hash_short,
-                signatures: vec![signature.clone(); count],
+                signatures: (1..=count)
+                    .map(|id| TonValidatorSignatureV1 {
+                        node_id_short: [id; 32],
+                        signature: vec![0; 64],
+                    })
+                    .collect(),
             })
         };
         let checkpoint = TonBlockIdExtV1 {
@@ -6159,6 +6165,17 @@ mod tests {
         );
 
         proof = work_estimate_fixture();
+        let TonBlockSignaturesV1::Ordinary(signatures) = &mut proof.finality.blocks[1].signatures
+        else {
+            unreachable!("fixture uses ordinary signatures")
+        };
+        signatures.signatures.swap(0, 1);
+        assert_eq!(
+            ton_native_source_work_estimate(&proof),
+            Err(TonNativeSourceError::InvalidSignatures)
+        );
+
+        proof = work_estimate_fixture();
         proof.event.transaction_pre_state_proof_boc = vec![0; TON_MAX_BOC_BYTES + 1];
         assert_eq!(
             ton_native_source_work_estimate(&proof),
@@ -6412,10 +6429,10 @@ mod tests {
         assert!(parse_canonical_single_root_boc(&crc_alias).is_none());
         let mut aliased_proof = proof_with(ordinary);
         aliased_proof.blocks[0].block_proof_boc = crc_alias;
-        assert_eq!(
-            verify_masterchain_finality(&aliased_proof, SccpNetworkV1::TonMainnet, anchor_hash,),
+        assert!(matches!(
+            verify_masterchain_finality(&aliased_proof, SccpNetworkV1::TonMainnet, anchor_hash),
             Err(TonNativeSourceError::InvalidBoc)
-        );
+        ));
 
         let candidate_data = simplex_candidate_without_parents(block);
         let unsigned_simplex = TonSimplexBlockSignaturesV1 {
@@ -6574,6 +6591,8 @@ mod tests {
             Some(state_init_hash)
         );
         assert_eq!(ton_boc_single_root_hash_v1(EMPTY_WITH_CRC), Some(expected));
+        assert_eq!(ton_boc_single_ordinary_root_hash_v1(EMPTY_WITH_CRC), None);
+        assert_eq!(ton_state_init_address_hash_v1(EMPTY_WITH_CRC, EMPTY), None);
         let mut corrupted = EMPTY_WITH_CRC.to_vec();
         *corrupted.last_mut().expect("fixture crc") ^= 1;
         assert_eq!(ton_boc_single_root_hash_v1(&corrupted), None);
@@ -7033,6 +7052,15 @@ mod tests {
         });
         assert!(parse_ton_boc(&duplicate).is_some());
         assert_eq!(ton_canonical_boc_single_root_hash_v1(&duplicate), None);
+        assert_eq!(ton_boc_single_ordinary_root_hash_v1(&duplicate), None);
+        let canonical_leaf = serialize_test_boc(&TonBoc {
+            roots: vec![0],
+            cells: vec![ordinary_cell(Vec::new(), Vec::new())],
+        });
+        assert_eq!(
+            ton_state_init_address_hash_v1(&duplicate, &canonical_leaf),
+            None
+        );
 
         let alternate = serialize_test_boc(&TonBoc {
             roots: vec![0],
@@ -7345,7 +7373,7 @@ mod tests {
     }
 
     #[test]
-    fn breaker_signature_envelope_requires_strict_node_id_order() {
+    fn block_signature_envelope_requires_strict_node_id_order() {
         let signature = |id| TonValidatorSignatureV1 {
             node_id_short: [id; 32],
             signature: vec![id; 64],

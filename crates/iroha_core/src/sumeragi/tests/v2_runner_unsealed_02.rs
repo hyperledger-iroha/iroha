@@ -387,10 +387,8 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
     );
     assert_eq!(encoded.manifest().subject, locked_subject);
     let (manifest, chunks) = encoded.into_parts();
-    let acquisition_root = tempfile::tempdir().expect("chunk reconstruction directory");
-    let mut session =
-        super::super::v2_chunks::V2ChunkSession::open(acquisition_root.path(), &context, manifest)
-            .expect("open exact reproposal chunk session");
+    let mut session = super::super::v2_chunks::V2ChunkSession::open(&context, manifest)
+        .expect("open exact reproposal chunk session");
     for (index, chunk) in chunks.iter().enumerate() {
         session
             .admit_bytes(

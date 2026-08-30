@@ -6,7 +6,7 @@
 //! authentication all complete before an adapter may act on the payload.
 use super::v2::{SumeragiV2Adapter, VerifiedHeightContext, verify_historical_quorum_certificate};
 use core::fmt;
-use iroha_crypto::{HashOf, Signature};
+use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     block::{consensus_v2 as wire, decode_framed_signed_block},
     peer::PeerId,
@@ -190,20 +190,16 @@ impl From<wire::ValidationError> for V2TransportError {
     }
 }
 /// Payload chunk admitted through structural, identity, and signature checks.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[must_use]
 pub(crate) struct AuthenticatedPayloadChunk {
     chunk: wire::PayloadChunk,
-    signature_payload: wire::PayloadChunkSignaturePayload,
+    chunk_hash: Hash,
 }
 impl AuthenticatedPayloadChunk {
-    /// Borrow the authenticated chunk.
-    pub(crate) const fn chunk(&self) -> &wire::PayloadChunk {
-        &self.chunk
-    }
-    /// Borrow the already-hashed payload authenticated by the chunk signature.
-    pub(crate) const fn signature_payload(&self) -> &wire::PayloadChunkSignaturePayload {
-        &self.signature_payload
+    /// Consume the seal into the exact wire chunk and its already-verified hash.
+    pub(crate) fn into_parts(self) -> (wire::PayloadChunk, Hash) {
+        (self.chunk, self.chunk_hash)
     }
 }
 /// Certified-body request admitted through structural, identity, signature,
@@ -348,7 +344,7 @@ pub(crate) fn authenticate_payload_chunk(
     )?;
     Ok(AuthenticatedPayloadChunk {
         chunk,
-        signature_payload,
+        chunk_hash: signature_payload.chunk_hash,
     })
 }
 /// Authenticate a certified-body request against the live adapter's frozen
@@ -1208,11 +1204,9 @@ mod tests {
             PeerId::new(key.public_key().clone())
         }
         fn signed_chunk(&self, sender: wire::ValidatorIndex) -> wire::PayloadChunk {
-            let validated = wire::ValidatedPayloadManifest::new(
-                &self.context,
-                self.manifest.clone(),
-            )
-            .expect("validate chunk manifest once");
+            let validated =
+                wire::ValidatedPayloadManifest::new(&self.context, self.manifest.clone())
+                    .expect("validate chunk manifest once");
             let mut chunk = wire::PayloadChunk {
                 manifest_hash: validated.manifest_hash(),
                 index: 0,
@@ -1293,23 +1287,21 @@ mod tests {
     #[test]
     fn payload_chunk_binds_exact_manifest_outer_sender_and_signature() {
         let fixture = Fixture::new();
-        let validated = wire::ValidatedPayloadManifest::new(
-            &fixture.context,
-            fixture.manifest.clone(),
-        )
-        .expect("validate chunk manifest once");
+        let validated =
+            wire::ValidatedPayloadManifest::new(&fixture.context, fixture.manifest.clone())
+                .expect("validate chunk manifest once");
         let chunk = fixture.signed_chunk(0);
         let sender = Fixture::peer(&fixture.validators[0]);
-        let authenticated = authenticate_payload_chunk(&validated, chunk.clone(), &sender)
-            .expect("valid chunk");
-        assert_eq!(authenticated.chunk(), &chunk);
-        assert_eq!(
-            authenticated.signature_payload().chunk_hash,
-            Hash::new(&chunk.bytes)
-        );
+        let authenticated =
+            authenticate_payload_chunk(&validated, chunk.clone(), &sender).expect("valid chunk");
+        let (authenticated_chunk, authenticated_hash) = authenticated.into_parts();
+        assert_eq!(authenticated_chunk, chunk);
+        assert_eq!(authenticated_hash, Hash::new(&chunk.bytes));
         let spoof = Fixture::peer(&fixture.validators[1]);
+        let mut malformed_spoof = chunk.clone();
+        malformed_spoof.bytes.pop();
         assert!(matches!(
-            authenticate_payload_chunk(&validated, chunk.clone(), &spoof),
+            authenticate_payload_chunk(&validated, malformed_spoof, &spoof),
             Err(V2TransportError::OuterIdentityMismatch {
                 kind: TransportIdentityKind::ChunkSender,
                 ..
@@ -1326,11 +1318,7 @@ mod tests {
         .payload()
         .to_vec();
         assert!(matches!(
-            authenticate_payload_chunk(
-                &validated,
-                wrong_signature,
-                &sender
-            ),
+            authenticate_payload_chunk(&validated, wrong_signature, &sender),
             Err(V2TransportError::InvalidSignature {
                 kind: TransportSignatureKind::PayloadChunk,
                 ..

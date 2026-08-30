@@ -281,10 +281,10 @@ for peer in peers:
     print(peer.address, peer.id.public_key, peer.last_seen_at)
 
 # Network Time Service snapshots (typed DTOs)
-snapshot = client.get_time_now_typed()
+snapshot = client.get_time_now()
 print("Cluster time:", snapshot.now_ms, "offset", snapshot.offset_ms)
 
-status = client.get_time_status_typed()
+status = client.get_time_status()
 for sample in status.samples:
     print(
         sample.peer,
@@ -383,12 +383,12 @@ gaps.
 
 - `list_peers_typed()` returns a list of `PeerInfo` records (address, peer ID, metadata)
   so dashboards or operator tooling can diff the online set deterministically.
-- `get_time_now_typed()` mirrors `/v1/time/now` and raises if the endpoint is disabled,
+- `get_time_now()` mirrors `/v1/time/now` and raises if the endpoint is disabled,
   matching the deterministic behaviour expected by the runbooks.
-- `get_time_status_typed()` parses the per-peer samples and RTT histogram produced by
+- `get_time_status()` parses the per-peer samples and RTT histogram produced by
   `/v1/time/status`; use it to confirm clock skew alerts before filing readiness reports.
 
-Configuration surfaces now follow the same pattern: `get_configuration_typed()`
+Configuration surfaces now follow the same pattern: `get_configuration()`
 returns a `ConfigurationSnapshot` (logger, gossip windows, queue capacity, and
 the confidential gas schedule). The gas schedule is read-only at runtime because
 it is consensus-relevant and committed into the ZK policy hash. Operators change
@@ -396,10 +396,10 @@ it through a coordinated startup configuration rollout, not through
 `/v1/configuration`.
 
 ```python
-config = client.get_configuration_typed()
+config = client.get_configuration()
 print("Logger:", config.logger.level, "Queue cap:", config.queue.capacity if config.queue else "n/a")
 
-schedule = client.get_confidential_gas_schedule_typed()
+schedule = client.get_confidential_gas_schedule()
 if schedule:
     print("Proof base cost:", schedule.proof_base)
 ```

@@ -13,7 +13,6 @@ import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import {
   canonicalCurveAlgorithm,
   CURVE_PUBLIC_KEY_LENGTH,
-  CurveFeature,
   CurveId,
   getCurveEntryByAlgorithm,
   getCurveEntryById,
@@ -78,7 +77,6 @@ export const AccountAddressErrorCode = Object.freeze({
   MULTISIG_MEMBER_OVERFLOW: "ERR_MULTISIG_MEMBER_OVERFLOW",
   INVALID_MULTISIG_POLICY: "ERR_INVALID_MULTISIG_POLICY",
 });
-const ACCOUNT_ADDRESS_ERROR_CODES = new Set(Object.values(AccountAddressErrorCode));
 
 export class AccountAddressError extends Error {
   constructor(code, message, options = {}) {
@@ -148,89 +146,7 @@ function hexToBytes(body) {
   return out;
 }
 
-let enabledFeatures = new Set();
-
-function normalizeCurveSupportOptions(options) {
-  if (options === undefined) {
-    return { allowMlDsa: false, allowGost: false, allowSm2: false, allowBls: false };
-  }
-  if (!isPlainObject(options)) {
-    throw new TypeError("configureCurveSupport options must be an object");
-  }
-  const allowedKeys = new Set(["allowMlDsa", "allowGost", "allowSm2", "allowBls"]);
-  const extras = Object.keys(options).filter((key) => !allowedKeys.has(key));
-  if (extras.length > 0) {
-    throw new TypeError(
-      `configureCurveSupport options contains unsupported fields: ${extras.join(", ")}`,
-    );
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(options, "allowMlDsa") &&
-    typeof options.allowMlDsa !== "boolean"
-  ) {
-    throw new TypeError("configureCurveSupport options.allowMlDsa must be a boolean");
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(options, "allowGost") &&
-    typeof options.allowGost !== "boolean"
-  ) {
-    throw new TypeError("configureCurveSupport options.allowGost must be a boolean");
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(options, "allowSm2") &&
-    typeof options.allowSm2 !== "boolean"
-  ) {
-    throw new TypeError("configureCurveSupport options.allowSm2 must be a boolean");
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(options, "allowBls") &&
-    typeof options.allowBls !== "boolean"
-  ) {
-    throw new TypeError("configureCurveSupport options.allowBls must be a boolean");
-  }
-  return {
-    allowMlDsa: options.allowMlDsa === true,
-    allowGost: options.allowGost === true,
-    allowSm2: options.allowSm2 === true,
-    allowBls: options.allowBls === true,
-  };
-}
-
-export function configureCurveSupport(options) {
-  const { allowMlDsa, allowGost, allowSm2, allowBls } = normalizeCurveSupportOptions(options);
-  enabledFeatures = new Set();
-  if (allowMlDsa) {
-    enabledFeatures.add(CurveFeature.ML_DSA);
-  }
-  if (allowGost) {
-    enabledFeatures.add(CurveFeature.GOST);
-  }
-  if (allowSm2) {
-    enabledFeatures.add(CurveFeature.SM2);
-  }
-  if (allowBls) {
-    enabledFeatures.add(CurveFeature.BLS);
-  }
-}
-
-configureCurveSupport();
-
-function isFeatureEnabled(feature) {
-  return feature === CurveFeature.NONE || enabledFeatures.has(feature);
-}
-
-function ensureCurveEnabled(entry, context) {
-  if (!isFeatureEnabled(entry.feature)) {
-    const label = entry.algorithm;
-    throw new AccountAddressError(
-      AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-      `${context ?? "curve"} disabled by configuration: ${label}`,
-      { details: { feature: entry.feature, label } },
-    );
-  }
-}
-
-function ensureCurveIdEnabled(curveId, context) {
+function ensureCurveIdEnabled(curveId, _context) {
   const entry = getCurveEntryById(curveId);
   if (!entry) {
     throw new AccountAddressError(
@@ -238,7 +154,6 @@ function ensureCurveIdEnabled(curveId, context) {
       `unknown curve id: ${curveId}`,
     );
   }
-  ensureCurveEnabled(entry, context ?? `curve id ${curveId}`);
   return entry;
 }
 
@@ -431,7 +346,7 @@ function normalizeMultisigMembers(members) {
       invalidMultisigPolicy("DuplicateMember", "invalid multisig policy: DuplicateMember");
     }
   }
-  return normalized.map(({ sortKey, ...rest }) => rest);
+  return normalized.map(({ sortKey: _sortKey, ...rest }) => rest);
 }
 
 function validateAndNormalizeMultisigController(controller) {
@@ -541,7 +456,6 @@ function curveIdFromAlgorithm(algorithm) {
       { details: { algorithm } },
     );
   }
-  ensureCurveEnabled(entry, `signing algorithm ${algorithm}`);
   return entry.id;
 }
 

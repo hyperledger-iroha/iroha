@@ -28,10 +28,13 @@ import json
 import math
 import os
 import re
+import signal
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -41,6 +44,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import private_settlement_benchmark_report as benchmark_report
+import private_settlement_capture_split as capture_split
 import private_settlement_fault_report as fault_report
 import private_settlement_leakage_audit as leakage_audit
 import private_settlement_release_evidence as release_evidence
@@ -77,7 +81,9 @@ SURFACE_FILES: Mapping[str, str] = {
     "operator_log": "operator.json",
     "public_p2p_capture": "public-p2p.pcapng",
     "query_capture": "queries.json",
+    "restricted_audit_source": "restricted-audit-sources.bin",
     "restricted_p2p_capture": "restricted-p2p.pcapng",
+    "restricted_packet_source": "raw-loopback.pcap",
     "sanitized_capture": "sanitized-capture.pcapng",
     "snapshot_artifact": "snapshot.bin",
     "telemetry_capture": "telemetry.json",
@@ -107,13 +113,41 @@ COMMON_RESPONSE_FIELDS = {
     "process_inventory",
     "payload",
 }
+LEAKAGE_PAYLOAD_FIELDS = {
+    "variant",
+    "canaries_injected",
+    "canary_commitments",
+    "only_secret_fields_changed",
+    "capture_complete",
+    "finalized_receipt_observed",
+    "successful_leg_applications",
+    "each_leg_applied_exactly_once",
+    "continuous_atomicity_checks",
+    "partial_visible_observations",
+    "partial_spendable_observations",
+    "capture_provenance",
+    "artifacts",
+    "traffic_counts",
+}
+LEAKAGE_ARTIFACT_FIELDS = {
+    "surface",
+    "relative_name",
+    "sha256",
+    "bytes",
+    "source_sha256",
+    "source_bytes",
+    "source_count",
+}
+LEAKAGE_BLOCK_WIRE_MAGIC_V1 = b"APSBLK1\0"
+LEAKAGE_ARTIFACT_FRAME_DOMAIN_V1 = b"iroha:aps-leakage-artifact:v1\0"
+LEAKAGE_RESTRICTED_SOURCE_DOMAIN_V1 = b"APSRAW1\0"
 
-# The reviewed partial harness now lives at
+# The reviewed real-process harness lives at
 # ``scripts/private_settlement_real_process_harness.py`` and implements genuine
 # N=2,3,4,8,16 private/transparent-control benchmarks and the authenticated
-# real-process recovery campaign under this contract.
-# TODO: Keep leakage execution fail-closed until the harness archives every
-# required real-process public and restricted capture surface.
+# real-process recovery campaign and N=3 secret-only leakage differential under
+# this contract. Leakage remains fail-closed when tcpdump, any source artifact,
+# or any independently replayed packet/message/record count channel is unavailable.
 HARNESS_CONTRACT: Mapping[str, Any] = {
     "version": VERSION,
     "invocation_arguments": [
@@ -599,7 +633,7 @@ def build_configuration(
             "enabled": participants == PRIMARY_PARTICIPANTS,
             "differential_variants": ["left", "right"],
             "capture_surfaces": sorted(SURFACE_FILES),
-            "message_count_channels": list(leakage_audit.REQUIRED_COUNT_CHANNELS),
+            "traffic_count_channels": list(leakage_audit.REQUIRED_COUNT_CHANNELS),
             "only_secret_fields_change": True,
         },
     }
@@ -968,7 +1002,7 @@ def create_plan(
                 "phase_cuts": list(fault_report.REQUIRED_PHASE_CUTS),
                 "crash_boundaries": list(fault_report.REQUIRED_CRASH_BOUNDARIES),
                 "capture_surfaces": sorted(SURFACE_FILES),
-                "message_count_channels": list(
+                "traffic_count_channels": list(
                     leakage_audit.REQUIRED_COUNT_CHANNELS
                 ),
             },
@@ -1046,7 +1080,7 @@ def load_plan(path: Path) -> tuple[dict[str, Any], Path]:
             "phase_cuts",
             "crash_boundaries",
             "capture_surfaces",
-            "message_count_channels",
+            "traffic_count_channels",
         },
         "plan.requirements",
     )
@@ -1062,7 +1096,7 @@ def load_plan(path: Path) -> tuple[dict[str, Any], Path]:
         or requirements["crash_boundaries"]
         != list(fault_report.REQUIRED_CRASH_BOUNDARIES)
         or requirements["capture_surfaces"] != sorted(SURFACE_FILES)
-        or requirements["message_count_channels"]
+        or requirements["traffic_count_channels"]
         != list(leakage_audit.REQUIRED_COUNT_CHANNELS)
     ):
         raise RunnerError("plan requirement matrix is not canonical")
@@ -2906,6 +2940,843 @@ def materialize_benchmark_response(
     return raw
 
 
+def _read_exact_stream(stream: Any, length: int, label: str) -> bytes:
+    raw = stream.read(length)
+    if len(raw) != length:
+        raise RunnerError(f"{label} is truncated")
+    return raw
+
+
+def _derive_leakage_block_count(path: Path) -> int:
+    """Replay the bounded release-only block-wire framing without decoding blocks."""
+
+    descriptor, metadata = _open_regular_nofollow(path)
+    try:
+        with os.fdopen(descriptor, "rb") as stream:
+            if _read_exact_stream(stream, len(LEAKAGE_BLOCK_WIRE_MAGIC_V1), "block wire") != LEAKAGE_BLOCK_WIRE_MAGIC_V1:
+                raise RunnerError("leakage block-wire capture has the wrong framing domain")
+            count = struct.unpack("<I", _read_exact_stream(stream, 4, "block count"))[0]
+            if count != 1:
+                raise RunnerError("leakage block-wire capture must contain exactly one carrier")
+            consumed = len(LEAKAGE_BLOCK_WIRE_MAGIC_V1) + 4
+            for index in range(count):
+                length = struct.unpack(
+                    "<Q", _read_exact_stream(stream, 8, f"block[{index}] length")
+                )[0]
+                if length == 0 or length > leakage_audit.DEFAULT_MAX_FILE_BYTES:
+                    raise RunnerError("leakage block-wire payload length is outside its bound")
+                consumed += 8
+                remaining = length
+                while remaining:
+                    chunk = stream.read(min(remaining, 1024 * 1024))
+                    if not chunk:
+                        raise RunnerError(f"leakage block[{index}] is truncated")
+                    remaining -= len(chunk)
+                    consumed += len(chunk)
+            if stream.read(1):
+                raise RunnerError("leakage block-wire capture has trailing bytes")
+            final_metadata = os.fstat(stream.fileno())
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    stable = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if consumed != metadata.st_size or any(
+        getattr(metadata, field) != getattr(final_metadata, field) for field in stable
+    ):
+        raise RunnerError("leakage block-wire capture changed during replay")
+    return count
+
+
+def _validate_leakage_digest_derivative(
+    path: Path, expected_kind: str
+) -> tuple[int, int, list[dict[str, Any]]]:
+    """Validate a Kura/merge/checkpoint artifact contains digests, never raw bytes."""
+
+    descriptor, metadata = _open_regular_nofollow(path)
+    try:
+        with os.fdopen(descriptor, "rb") as stream:
+            if _read_exact_stream(
+                stream,
+                len(LEAKAGE_ARTIFACT_FRAME_DOMAIN_V1),
+                "leakage digest derivative",
+            ) != LEAKAGE_ARTIFACT_FRAME_DOMAIN_V1:
+                raise RunnerError("leakage digest derivative has the wrong domain")
+            kind_length = struct.unpack(
+                "<H", _read_exact_stream(stream, 2, "leakage derivative kind length")
+            )[0]
+            if kind_length == 0 or kind_length > 32:
+                raise RunnerError("leakage digest derivative kind is outside its bound")
+            try:
+                kind = _read_exact_stream(
+                    stream, kind_length, "leakage derivative kind"
+                ).decode("ascii")
+            except UnicodeError as error:
+                raise RunnerError("leakage digest derivative kind is not ASCII") from error
+            if kind != expected_kind:
+                raise RunnerError("leakage digest derivative kind was substituted")
+            count = struct.unpack(
+                "<I", _read_exact_stream(stream, 4, "leakage derivative count")
+            )[0]
+            if count == 0 or count > 100_000:
+                raise RunnerError("leakage digest derivative count is outside its bound")
+            total_source_bytes = 0
+            rows: list[dict[str, Any]] = []
+            for index in range(count):
+                ordinal = struct.unpack(
+                    "<I",
+                    _read_exact_stream(stream, 4, f"leakage derivative[{index}] ordinal"),
+                )[0]
+                path_digest = _read_exact_stream(
+                    stream, 32, f"leakage derivative[{index}] path digest"
+                )
+                source_bytes = struct.unpack(
+                    "<Q",
+                    _read_exact_stream(stream, 8, f"leakage derivative[{index}] size"),
+                )[0]
+                source_digest = _read_exact_stream(
+                    stream, 32, f"leakage derivative[{index}] source digest"
+                )
+                if (
+                    ordinal != index
+                    or path_digest == bytes(32)
+                    or source_bytes == 0
+                    or source_digest == bytes(32)
+                ):
+                    raise RunnerError("leakage digest derivative row is invalid")
+                total_source_bytes += source_bytes
+                if total_source_bytes > leakage_audit.DEFAULT_MAX_TOTAL_BYTES:
+                    raise RunnerError("leakage derivative source total exceeds its bound")
+                rows.append(
+                    {
+                        "path_sha256": path_digest.hex(),
+                        "source_bytes": source_bytes,
+                        "source_sha256": source_digest.hex(),
+                    }
+                )
+            if stream.read(1):
+                raise RunnerError("leakage digest derivative has trailing bytes")
+            final_metadata = os.fstat(stream.fileno())
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+    stable = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(
+        getattr(metadata, field) != getattr(final_metadata, field) for field in stable
+    ):
+        raise RunnerError("leakage digest derivative changed during replay")
+    return count, total_source_bytes, rows
+
+
+def _validate_restricted_leakage_source_archive(
+    path: Path,
+) -> dict[str, dict[str, Any]]:
+    """Replay the retained raw-source archive into per-surface bindings."""
+
+    descriptor, metadata = _open_regular_nofollow(path)
+    rows: list[dict[str, Any]] = []
+    try:
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            if _read_exact_stream(
+                stream,
+                len(LEAKAGE_RESTRICTED_SOURCE_DOMAIN_V1),
+                "restricted leakage source domain",
+            ) != LEAKAGE_RESTRICTED_SOURCE_DOMAIN_V1:
+                raise RunnerError("restricted leakage source archive has the wrong domain")
+            count = struct.unpack(
+                "<I", _read_exact_stream(stream, 4, "restricted source count")
+            )[0]
+            if count == 0 or count > 100_000:
+                raise RunnerError("restricted leakage source count is outside its bound")
+            previous: tuple[str, str] | None = None
+            total_source_bytes = 0
+            for index in range(count):
+                ordinal = struct.unpack(
+                    "<I",
+                    _read_exact_stream(stream, 4, f"restricted source[{index}] ordinal"),
+                )[0]
+                surface_length = struct.unpack(
+                    "<H",
+                    _read_exact_stream(
+                        stream, 2, f"restricted source[{index}] surface length"
+                    ),
+                )[0]
+                if surface_length == 0 or surface_length > 64:
+                    raise RunnerError("restricted leakage source surface is outside its bound")
+                try:
+                    surface = _read_exact_stream(
+                        stream,
+                        surface_length,
+                        f"restricted source[{index}] surface",
+                    ).decode("ascii")
+                except UnicodeError as error:
+                    raise RunnerError("restricted leakage source surface is not ASCII") from error
+                if not re.fullmatch(r"[a-z_]+", surface):
+                    raise RunnerError("restricted leakage source surface is non-canonical")
+                path_length = struct.unpack(
+                    "<I",
+                    _read_exact_stream(
+                        stream, 4, f"restricted source[{index}] path length"
+                    ),
+                )[0]
+                if path_length == 0 or path_length > 4_096:
+                    raise RunnerError("restricted leakage source path is outside its bound")
+                try:
+                    relative = _read_exact_stream(
+                        stream, path_length, f"restricted source[{index}] path"
+                    ).decode("utf-8")
+                except UnicodeError as error:
+                    raise RunnerError("restricted leakage source path is not UTF-8") from error
+                if (
+                    PurePosixPath(relative).is_absolute()
+                    or PurePosixPath(relative).as_posix() != relative
+                    or any(part in ("", ".", "..") for part in relative.split("/"))
+                ):
+                    raise RunnerError("restricted leakage source path is non-canonical")
+                source_bytes = struct.unpack(
+                    "<Q",
+                    _read_exact_stream(
+                        stream, 8, f"restricted source[{index}] byte length"
+                    ),
+                )[0]
+                if source_bytes == 0 or source_bytes > leakage_audit.DEFAULT_MAX_FILE_BYTES:
+                    raise RunnerError("restricted leakage source bytes are outside their bound")
+                identity = (surface, relative)
+                if ordinal != index or (previous is not None and identity <= previous):
+                    raise RunnerError("restricted leakage sources are not uniquely ordered")
+                previous = identity
+                source_offset = stream.tell()
+                digest = hashlib.sha256()
+                remaining = source_bytes
+                while remaining:
+                    chunk = stream.read(min(remaining, 1024 * 1024))
+                    if not chunk:
+                        raise RunnerError(f"restricted source[{index}] is truncated")
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                total_source_bytes += source_bytes
+                if total_source_bytes > leakage_audit.DEFAULT_MAX_TOTAL_BYTES:
+                    raise RunnerError("restricted leakage sources exceed their total bound")
+                rows.append(
+                    {
+                        "surface": surface,
+                        "relative_path": relative,
+                        "source_offset": source_offset,
+                        "source_bytes": source_bytes,
+                        "source_sha256": digest.hexdigest(),
+                    }
+                )
+            if stream.read(1):
+                raise RunnerError("restricted leakage source archive has trailing bytes")
+            final_metadata = os.fstat(stream.fileno())
+    finally:
+        os.close(descriptor)
+    stable = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(
+        getattr(metadata, field) != getattr(final_metadata, field) for field in stable
+    ):
+        raise RunnerError("restricted leakage source archive changed during replay")
+
+    grouped_rows: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped_rows.setdefault(row["surface"], []).append(row)
+    replay_descriptor, replay_metadata = _open_regular_nofollow(path)
+    if any(
+        getattr(metadata, field) != getattr(replay_metadata, field) for field in stable
+    ):
+        os.close(replay_descriptor)
+        raise RunnerError("restricted leakage source archive changed before binding replay")
+    groups: dict[str, dict[str, Any]] = {}
+    try:
+        with os.fdopen(replay_descriptor, "rb", closefd=False) as stream:
+            for surface, surface_rows in grouped_rows.items():
+                binding = hashlib.sha256()
+                binding.update(b"iroha:aps-leakage-source-binding:v1\0")
+                binding.update(struct.pack("<Q", len(surface_rows)))
+                source_total = 0
+                for row in surface_rows:
+                    stream.seek(row["source_offset"])
+                    source_bytes = row["source_bytes"]
+                    binding.update(struct.pack("<Q", source_bytes))
+                    remaining = source_bytes
+                    while remaining:
+                        chunk = stream.read(min(remaining, 1024 * 1024))
+                        if not chunk:
+                            raise RunnerError("restricted leakage source changed during binding")
+                        binding.update(chunk)
+                        remaining -= len(chunk)
+                    source_total += source_bytes
+                groups[surface] = {
+                    "source_sha256": binding.hexdigest(),
+                    "source_bytes": source_total,
+                    "source_count": len(surface_rows),
+                    "rows": [
+                        {
+                            "relative_path": row["relative_path"],
+                            "source_offset": row["source_offset"],
+                            "source_sha256": row["source_sha256"],
+                            "source_bytes": row["source_bytes"],
+                        }
+                        for row in surface_rows
+                    ],
+                }
+            replay_final = os.fstat(stream.fileno())
+    finally:
+        os.close(replay_descriptor)
+    if any(
+        getattr(metadata, field) != getattr(replay_final, field) for field in stable
+    ):
+        raise RunnerError("restricted leakage source archive changed during binding replay")
+    return groups
+
+
+def _single_file_source_binding(path: Path) -> dict[str, Any]:
+    """Recompute the Rust one-source binding over one stable archived file."""
+
+    descriptor, metadata = _open_regular_nofollow(path)
+    digest = hashlib.sha256()
+    digest.update(b"iroha:aps-leakage-source-binding:v1\0")
+    digest.update(struct.pack("<Q", 1))
+    digest.update(struct.pack("<Q", metadata.st_size))
+    consumed = 0
+    try:
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+                consumed += len(chunk)
+            final_metadata = os.fstat(stream.fileno())
+    finally:
+        os.close(descriptor)
+    stable = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if consumed != metadata.st_size or any(
+        getattr(metadata, field) != getattr(final_metadata, field) for field in stable
+    ):
+        raise RunnerError("restricted leakage source archive changed while bound")
+    return {
+        "source_sha256": digest.hexdigest(),
+        "source_bytes": consumed,
+        "source_count": 1,
+    }
+
+
+def _read_restricted_archive_row(path: Path, row: Mapping[str, Any]) -> bytes:
+    descriptor, metadata = _open_regular_nofollow(path)
+    offset = bounded_integer(
+        row["source_offset"], 1, metadata.st_size, "restricted source offset"
+    )
+    length = bounded_integer(
+        row["source_bytes"],
+        1,
+        leakage_audit.DEFAULT_MAX_FILE_BYTES,
+        "restricted source bytes",
+    )
+    if offset + length > metadata.st_size:
+        os.close(descriptor)
+        raise RunnerError("restricted source row escapes its archive")
+    try:
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            stream.seek(offset)
+            raw = _read_exact_stream(stream, length, "restricted source row")
+            final_metadata = os.fstat(stream.fileno())
+    finally:
+        os.close(descriptor)
+    stable = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(
+        getattr(metadata, field) != getattr(final_metadata, field) for field in stable
+    ):
+        raise RunnerError("restricted source archive changed while a row was read")
+    if hashlib.sha256(raw).hexdigest() != row["source_sha256"]:
+        raise RunnerError("restricted source row digest is false")
+    return raw
+
+
+def _validate_leakage_atomicity_observations(
+    archive: Path,
+    rows: Sequence[Mapping[str, Any]],
+    participants: int,
+    expected_peers: int,
+) -> int:
+    """Independently replay every retained full-topology atomicity observation."""
+
+    if len(rows) != expected_peers:
+        raise RunnerError("restricted atomicity evidence omits validators")
+    count_fields = {
+        "governance",
+        "pools",
+        "roots",
+        "nullifiers",
+        "commitments",
+        "encrypted_outputs",
+        "replay_markers",
+        "receipts",
+        "abort_markers",
+        "staged_pool_heads",
+        "staged_nullifiers",
+        "staged_output_commitments",
+        "staged_locks",
+    }
+    expected_deltas = {
+        "roots": participants,
+        "nullifiers": participants * 2,
+        "commitments": participants * 3,
+        "encrypted_outputs": participants * 3,
+        "replay_markers": 1,
+        "receipts": 1,
+    }
+    total_checks = 0
+    final_ledgers: set[str] = set()
+    baseline_states: set[tuple[str, str, tuple[tuple[str, int], ...]]] = set()
+    final_states: set[tuple[str, str, tuple[tuple[str, int], ...]]] = set()
+    for peer_index, row in enumerate(rows):
+        try:
+            document_text = _read_restricted_archive_row(archive, row).decode("utf-8")
+        except UnicodeError as error:
+            raise RunnerError("atomicity evidence is not UTF-8") from error
+        document = strict_json_loads(
+            document_text, f"atomicity evidence peer {peer_index}"
+        )
+        document = exact_fields(
+            document,
+            {"version", "peer_index", "observations"},
+            f"atomicity evidence peer {peer_index}",
+        )
+        observations = document["observations"]
+        if (
+            document["version"] != 1
+            or document["peer_index"] != peer_index
+            or not isinstance(observations, list)
+            or len(observations) < 3
+        ):
+            raise RunnerError("atomicity evidence has an invalid peer sequence")
+        baseline_counts: dict[str, int] | None = None
+        baseline_ledger: str | None = None
+        finalized = 0
+        peer_final_ledger: str | None = None
+        empty_staged_commitment: str | None = None
+        previous_height: int | None = None
+        peer_final_state: tuple[str, str, tuple[tuple[str, int], ...]] | None = None
+        for observation_index, item in enumerate(observations):
+            observation = exact_fields(
+                item,
+                {
+                    "peer_index",
+                    "response_sha256",
+                    "response_hex",
+                    "height",
+                    "commitment",
+                    "ledger_commitment",
+                    "staged_lock_commitment",
+                    "counts",
+                },
+                f"atomicity peer {peer_index} observation {observation_index}",
+            )
+            if observation["peer_index"] != peer_index:
+                raise RunnerError("atomicity observation changed validator identity")
+            height = bounded_integer(
+                observation["height"],
+                0,
+                MAX_OBSERVATION_COUNT,
+                "atomicity observation height",
+            )
+            if previous_height is not None and height < previous_height:
+                raise RunnerError("atomicity observation heights are not nondecreasing")
+            previous_height = height
+            for field in ("commitment", "ledger_commitment", "staged_lock_commitment"):
+                value = observation[field]
+                if not isinstance(value, str) or IROHA_HASH_LITERAL.fullmatch(value) is None:
+                    raise RunnerError(f"atomicity observation {field} is not canonical")
+            try:
+                response = bytes.fromhex(observation["response_hex"])
+            except (TypeError, ValueError) as error:
+                raise RunnerError("atomicity observation response is not canonical hex") from error
+            if (
+                not response
+                or observation["response_hex"] != response.hex()
+                or hashlib.sha256(response).hexdigest()
+                != observation["response_sha256"]
+            ):
+                raise RunnerError("atomicity observation response binding is false")
+            try:
+                response_document = strict_json_loads(
+                    response.decode("utf-8"),
+                    f"atomicity response peer {peer_index} observation {observation_index}",
+                )
+            except UnicodeError as error:
+                raise RunnerError("atomicity observation response is not UTF-8") from error
+            response_document = exact_fields(
+                response_document,
+                {
+                    "format_version",
+                    "height",
+                    "commitment",
+                    "ledger_commitment",
+                    "staged_lock_commitment",
+                    "counts",
+                },
+                f"atomicity response peer {peer_index} observation {observation_index}",
+            )
+            if (
+                response_document["format_version"] != 1
+                or response_document["height"] != observation["height"]
+                or response_document["commitment"] != observation["commitment"]
+                or response_document["ledger_commitment"]
+                != observation["ledger_commitment"]
+                or response_document["staged_lock_commitment"]
+                != observation["staged_lock_commitment"]
+                or response_document["counts"] != observation["counts"]
+            ):
+                raise RunnerError("atomicity observation projection differs from its raw response")
+            counts = observation["counts"]
+            if not isinstance(counts, dict) or set(counts) != count_fields:
+                raise RunnerError("atomicity observation count vector is incomplete")
+            normalized = {
+                name: bounded_integer(
+                    counts[name], 0, MAX_OBSERVATION_COUNT, f"atomicity.counts.{name}"
+                )
+                for name in count_fields
+            }
+            staged_pool_heads = normalized["staged_pool_heads"]
+            staged_nullifiers = normalized["staged_nullifiers"]
+            staged_outputs = normalized["staged_output_commitments"]
+            staged_total = normalized["staged_locks"]
+            if (
+                staged_pool_heads > participants
+                or staged_nullifiers != staged_pool_heads * 2
+                or staged_outputs != staged_pool_heads * 3
+                or staged_total
+                != staged_pool_heads + staged_nullifiers + staged_outputs
+            ):
+                raise RunnerError("atomicity observation has an impossible staged-lock shape")
+            if staged_total == 0:
+                if empty_staged_commitment is None:
+                    empty_staged_commitment = observation["staged_lock_commitment"]
+                elif observation["staged_lock_commitment"] != empty_staged_commitment:
+                    raise RunnerError("empty staged-lock commitment changed during observation")
+            elif (
+                empty_staged_commitment is not None
+                and observation["staged_lock_commitment"] == empty_staged_commitment
+            ):
+                raise RunnerError("non-empty staged locks reused the empty commitment")
+            ledger_normalized = {
+                name: value
+                for name, value in normalized.items()
+                if not name.startswith("staged_")
+            }
+            if baseline_counts is None:
+                if staged_total != 0 or empty_staged_commitment is None:
+                    raise RunnerError("atomicity baseline contains staged locks")
+                baseline_counts = ledger_normalized
+                baseline_ledger = observation["ledger_commitment"]
+                baseline_states.add(
+                    (
+                        baseline_ledger,
+                        empty_staged_commitment,
+                        tuple(sorted(ledger_normalized.items())),
+                    )
+                )
+                continue
+            if (
+                ledger_normalized == baseline_counts
+                and observation["ledger_commitment"] == baseline_ledger
+            ):
+                if finalized:
+                    raise RunnerError("atomicity evidence reverted after observing finalization")
+                continue
+            if observation["ledger_commitment"] == baseline_ledger:
+                raise RunnerError("atomicity counts changed without a ledger transition")
+            for name, delta in expected_deltas.items():
+                if ledger_normalized[name] != baseline_counts[name] + delta:
+                    raise RunnerError(
+                        f"atomicity observation exposed a partial {name} transition"
+                    )
+            for name in ("governance", "pools", "abort_markers"):
+                if ledger_normalized[name] != baseline_counts[name]:
+                    raise RunnerError(
+                        f"atomicity observation changed {name} outside finalization"
+                    )
+            if staged_total != 0 or observation["staged_lock_commitment"] != empty_staged_commitment:
+                raise RunnerError("finalized atomicity observation retained staged locks")
+            if peer_final_ledger is None:
+                peer_final_ledger = observation["ledger_commitment"]
+            elif peer_final_ledger != observation["ledger_commitment"]:
+                raise RunnerError("atomicity evidence contains multiple finalized states")
+            finalized += 1
+            current_final_state = (
+                observation["ledger_commitment"],
+                observation["staged_lock_commitment"],
+                tuple(sorted(normalized.items())),
+            )
+            if peer_final_state is None:
+                peer_final_state = current_final_state
+            elif peer_final_state != current_final_state:
+                raise RunnerError("atomicity evidence contains divergent finalized state")
+        if finalized == 0:
+            raise RunnerError("atomicity evidence never observed finalization")
+        if peer_final_ledger is None:
+            raise RunnerError("atomicity evidence lacks a finalized ledger binding")
+        final_ledgers.add(peer_final_ledger)
+        if peer_final_state is None:
+            raise RunnerError("atomicity evidence lacks a complete final state")
+        final_states.add(peer_final_state)
+        total_checks += len(observations)
+    if len(baseline_states) != 1:
+        raise RunnerError("atomicity evidence validators disagree on baseline state")
+    if len(final_ledgers) != 1 or len(final_states) != 1:
+        raise RunnerError("atomicity evidence validators disagree on final state")
+    return total_checks
+
+
+def _leakage_json_records(
+    path: Path,
+    *,
+    label: str,
+    fields: set[str],
+    expected_peers: int | None = None,
+) -> list[dict[str, Any]]:
+    before = file_binding(path)
+    document = read_json_file(path, label)
+    if file_binding(path) != before:
+        raise RunnerError(f"{label} changed during source replay")
+    root = exact_fields(document, {"version", "records"}, label)
+    if root["version"] != VERSION or not isinstance(root["records"], list) or not root["records"]:
+        raise RunnerError(f"{label} has an invalid or empty record inventory")
+    rows = [
+        exact_fields(row, fields, f"{label}.records[{index}]")
+        for index, row in enumerate(root["records"])
+    ]
+    if expected_peers is not None:
+        indexes = [row["peer_index"] for row in rows]
+        if indexes != list(range(expected_peers)):
+            raise RunnerError(f"{label} does not cover every validator exactly once")
+    for index, row in enumerate(rows):
+        if isinstance(row["peer_index"], bool) or not isinstance(row["peer_index"], int):
+            raise RunnerError(f"{label}.records[{index}].peer_index is invalid")
+        for key, value in row.items():
+            if key.endswith("sha256"):
+                if not isinstance(value, str) or SHA256.fullmatch(value) is None or value == "0" * 64:
+                    raise RunnerError(f"{label}.records[{index}].{key} is invalid")
+            if key.endswith("bytes") and (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < (1 if key == "source_bytes" else 0)
+            ):
+                raise RunnerError(f"{label}.records[{index}].{key} is invalid")
+    return rows
+
+
+def derive_leakage_nonpacket_counts(evidence_dir: Path) -> dict[str, int]:
+    """Independently replay the five non-packet count channels from final files."""
+
+    peer_count = (PRIMARY_PARTICIPANTS + 1) * VALIDATORS_PER_DATASPACE
+    block_path = regular_file_under(
+        evidence_dir, PurePosixPath(SURFACE_FILES["block_wire_capture"]), "block capture"
+    )
+    events = _leakage_json_records(
+        regular_file_under(
+            evidence_dir, PurePosixPath(SURFACE_FILES["event_capture"]), "event capture"
+        ),
+        label="leakage events",
+        fields={
+            "peer_index",
+            "source_sha256",
+            "source_bytes",
+        },
+    )
+    if len(events) != 1 or events[0]["peer_index"] != 0:
+        raise RunnerError("leakage event capture is not one retained carrier event")
+    queries = _leakage_json_records(
+        regular_file_under(
+            evidence_dir, PurePosixPath(SURFACE_FILES["query_capture"]), "query capture"
+        ),
+        label="leakage queries",
+        fields={
+            "peer_index",
+            "source_sha256",
+            "source_bytes",
+        },
+        expected_peers=peer_count,
+    )
+    logs = _leakage_json_records(
+        regular_file_under(
+            evidence_dir, PurePosixPath(SURFACE_FILES["operator_log"]), "operator capture"
+        ),
+        label="leakage operator logs",
+        fields={
+            "peer_index",
+            "stdout_sha256",
+            "stderr_sha256",
+            "stdout_bytes",
+            "stderr_bytes",
+        },
+        expected_peers=peer_count,
+    )
+    if any(row["stdout_bytes"] + row["stderr_bytes"] <= 0 for row in logs):
+        raise RunnerError("leakage operator capture has an empty validator source")
+    telemetry = _leakage_json_records(
+        regular_file_under(
+            evidence_dir,
+            PurePosixPath(SURFACE_FILES["telemetry_capture"]),
+            "telemetry capture",
+        ),
+        label="leakage telemetry",
+        fields={
+            "peer_index",
+            "status_sha256",
+            "status_bytes",
+            "metrics_sha256",
+            "metrics_bytes",
+            "source_sha256",
+            "source_bytes",
+        },
+        expected_peers=peer_count,
+    )
+    if any(
+        row["status_bytes"] <= 0
+        or row["metrics_bytes"] <= 0
+        or row["source_bytes"]
+        != row["status_bytes"] + row["metrics_bytes"] + 16
+        for row in telemetry
+    ):
+        raise RunnerError("leakage telemetry omitted status or runtime metrics")
+    return {
+        "block_messages": _derive_leakage_block_count(block_path),
+        "query_responses": len(queries),
+        "event_records": len(events),
+        "log_records": len(logs),
+        "telemetry_records": len(telemetry),
+    }
+
+
+def _validate_retained_nonpacket_source_rows(
+    evidence_dir: Path,
+    archive: Path,
+    groups: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Bind every public source-digest row to exact retained source bytes."""
+
+    peer_count = (PRIMARY_PARTICIPANTS + 1) * VALIDATORS_PER_DATASPACE
+    block_path = regular_file_under(
+        evidence_dir,
+        PurePosixPath(SURFACE_FILES["block_wire_capture"]),
+        "leakage block wire",
+    )
+    block_rows = groups["block_wire_capture"]["rows"]
+    block_binding = file_binding(block_path)
+    if (
+        len(block_rows) != 1
+        or block_rows[0]["relative_path"] != "carrier-block-wire.bin"
+        or block_rows[0]["source_sha256"] != block_binding["sha256"]
+        or block_rows[0]["source_bytes"] != block_binding["bytes"]
+    ):
+        raise RunnerError("public block-wire artifact differs from its retained raw source")
+    specifications = {
+        "event_capture": (
+            "leakage events",
+            {
+                "peer_index",
+                "source_sha256",
+                "source_bytes",
+            },
+            None,
+        ),
+        "query_capture": (
+            "leakage queries",
+            {
+                "peer_index",
+                "source_sha256",
+                "source_bytes",
+            },
+            peer_count,
+        ),
+        "telemetry_capture": (
+            "leakage telemetry",
+            {
+                "peer_index",
+                "status_sha256",
+                "status_bytes",
+                "metrics_sha256",
+                "metrics_bytes",
+                "source_sha256",
+                "source_bytes",
+            },
+            peer_count,
+        ),
+        "operator_log": (
+            "leakage operator logs",
+            {
+                "peer_index",
+                "stdout_sha256",
+                "stderr_sha256",
+                "stdout_bytes",
+                "stderr_bytes",
+            },
+            peer_count,
+        ),
+    }
+    for surface, (label, fields, expected_peers) in specifications.items():
+        records = _leakage_json_records(
+            regular_file_under(
+                evidence_dir, PurePosixPath(SURFACE_FILES[surface]), label
+            ),
+            label=label,
+            fields=fields,
+            expected_peers=expected_peers,
+        )
+        source_rows = groups[surface]["rows"]
+        if len(records) != len(source_rows):
+            raise RunnerError(f"{surface} records omit retained raw sources")
+        for index, (record, source_row) in enumerate(zip(records, source_rows)):
+            source = _read_restricted_archive_row(archive, source_row)
+            if surface in {"event_capture", "query_capture"}:
+                if (
+                    record["source_bytes"] != len(source)
+                    or record["source_sha256"] != hashlib.sha256(source).hexdigest()
+                ):
+                    raise RunnerError(f"{surface}[{index}] has a false source binding")
+            elif surface == "telemetry_capture":
+                if len(source) < 16:
+                    raise RunnerError("telemetry retained source is truncated")
+                status_bytes = struct.unpack_from("<Q", source, 0)[0]
+                metrics_offset = 8 + status_bytes
+                if metrics_offset + 8 > len(source):
+                    raise RunnerError("telemetry retained status length is invalid")
+                metrics_bytes = struct.unpack_from("<Q", source, metrics_offset)[0]
+                status = source[8:metrics_offset]
+                metrics = source[metrics_offset + 8 :]
+                if (
+                    metrics_bytes != len(metrics)
+                    or record["status_bytes"] != len(status)
+                    or record["metrics_bytes"] != len(metrics)
+                    or record["source_bytes"] != len(source)
+                    or record["status_sha256"] != hashlib.sha256(status).hexdigest()
+                    or record["metrics_sha256"] != hashlib.sha256(metrics).hexdigest()
+                    or record["source_sha256"] != hashlib.sha256(source).hexdigest()
+                ):
+                    raise RunnerError(f"telemetry_capture[{index}] has a false source binding")
+            else:
+                if len(source) < 16:
+                    raise RunnerError("operator retained source is truncated")
+                stdout_bytes = struct.unpack_from("<Q", source, 0)[0]
+                stderr_offset = 8 + stdout_bytes
+                if stderr_offset + 8 > len(source):
+                    raise RunnerError("operator retained stdout length is invalid")
+                stderr_bytes = struct.unpack_from("<Q", source, stderr_offset)[0]
+                stdout = source[8:stderr_offset]
+                stderr = source[stderr_offset + 8 :]
+                if (
+                    stderr_bytes != len(stderr)
+                    or record["stdout_bytes"] != len(stdout)
+                    or record["stderr_bytes"] != len(stderr)
+                    or record["stdout_sha256"] != hashlib.sha256(stdout).hexdigest()
+                    or record["stderr_sha256"] != hashlib.sha256(stderr).hexdigest()
+                ):
+                    raise RunnerError(f"operator_log[{index}] has a false source binding")
+
+
 def validate_leakage_response(
     response: Mapping[str, Any],
     *,
@@ -2920,20 +3791,7 @@ def validate_leakage_response(
     common = validate_common_response(response, plan=plan, job=job)
     payload = exact_fields(
         common["payload"],
-        {
-            "variant",
-            "canaries_injected",
-            "canary_commitments",
-            "only_secret_fields_changed",
-            "capture_complete",
-            "finalized_receipt_observed",
-            "successful_leg_applications",
-            "each_leg_applied_exactly_once",
-            "partial_visible_observations",
-            "partial_spendable_observations",
-            "artifacts",
-            "message_counts",
-        },
+        LEAKAGE_PAYLOAD_FIELDS,
         "leakage payload",
     )
     if payload["variant"] != job["variant"]:
@@ -2951,15 +3809,29 @@ def validate_leakage_response(
         require_true(payload[field], f"leakage.{field}")
     if payload["successful_leg_applications"] != PRIMARY_PARTICIPANTS:
         raise RunnerError("leakage run did not apply every primary leg")
-    if payload["partial_visible_observations"] != 0:
-        raise RunnerError("leakage run observed partial visibility")
-    if payload["partial_spendable_observations"] != 0:
-        raise RunnerError("leakage run observed partial spendability")
-    counts = payload["message_counts"]
+    bounded_integer(
+        payload["continuous_atomicity_checks"],
+        (PRIMARY_PARTICIPANTS + 1) * VALIDATORS_PER_DATASPACE * 3,
+        MAX_OBSERVATION_COUNT,
+        "leakage.continuous_atomicity_checks",
+    )
+    bounded_integer(
+        payload["partial_visible_observations"],
+        0,
+        0,
+        "leakage.partial_visible_observations",
+    )
+    bounded_integer(
+        payload["partial_spendable_observations"],
+        0,
+        0,
+        "leakage.partial_spendable_observations",
+    )
+    counts = payload["traffic_counts"]
     if not isinstance(counts, dict) or set(counts) != set(
         leakage_audit.REQUIRED_COUNT_CHANNELS
     ):
-        raise RunnerError("leakage message-count inventory is incomplete")
+        raise RunnerError("leakage traffic-count inventory is incomplete")
     normalized_counts = {
         channel: bounded_integer(
             counts[channel],
@@ -2969,6 +3841,90 @@ def validate_leakage_response(
         )
         for channel in leakage_audit.REQUIRED_COUNT_CHANNELS
     }
+    provenance = exact_fields(
+        payload["capture_provenance"],
+        {"raw_pcap", "port_manifest", "ports", "packet_counts", "tcpdump"},
+        "leakage.capture_provenance",
+    )
+    raw_pcap_binding = exact_fields(
+        provenance["raw_pcap"], {"sha256", "bytes"}, "leakage.raw_pcap"
+    )
+    manifest_binding = exact_fields(
+        provenance["port_manifest"],
+        {"sha256", "bytes"},
+        "leakage.port_manifest",
+    )
+    for label, binding in (
+        ("raw_pcap", raw_pcap_binding),
+        ("port_manifest", manifest_binding),
+    ):
+        if (
+            not isinstance(binding["sha256"], str)
+            or SHA256.fullmatch(binding["sha256"]) is None
+            or binding["sha256"] == "0" * 64
+        ):
+            raise RunnerError(f"leakage {label} digest is invalid")
+        bounded_integer(
+            binding["bytes"], 1, leakage_audit.DEFAULT_MAX_FILE_BYTES, f"leakage.{label}.bytes"
+        )
+    try:
+        port_document = exact_fields(
+            provenance["ports"],
+            capture_split.PORT_MANIFEST_FIELDS,
+            "leakage.capture_provenance.ports",
+        )
+        groups = capture_split.validate_port_manifest(port_document)
+    except (RunnerError, capture_split.CaptureSplitError) as error:
+        raise RunnerError(f"leakage capture port binding is invalid: {error}") from error
+    peer_count = (PRIMARY_PARTICIPANTS + 1) * VALIDATORS_PER_DATASPACE
+    if (
+        len(groups["torii"]) != peer_count
+        or len(groups["public_p2p"]) != GLOBAL_VALIDATORS
+        or len(groups["restricted_p2p"])
+        != PRIMARY_PARTICIPANTS * VALIDATORS_PER_DATASPACE
+    ):
+        raise RunnerError("leakage capture ports do not cover the exact N=3 topology")
+    if capture_split.canonical_port_manifest_binding(groups) != manifest_binding:
+        raise RunnerError("leakage port-manifest binding is not derived from its port document")
+    tcpdump = exact_fields(
+        provenance["tcpdump"],
+        {"stderr_base64", "stderr_sha256", "stderr_bytes", "statistics"},
+        "leakage.capture_provenance.tcpdump",
+    )
+    try:
+        tcpdump_stderr = base64.b64decode(tcpdump["stderr_base64"], validate=True)
+    except (TypeError, ValueError) as error:
+        raise RunnerError("leakage tcpdump stderr is not canonical base64") from error
+    if (
+        not tcpdump_stderr
+        or base64.b64encode(tcpdump_stderr).decode("ascii")
+        != tcpdump["stderr_base64"]
+        or hashlib.sha256(tcpdump_stderr).hexdigest() != tcpdump["stderr_sha256"]
+        or len(tcpdump_stderr) != tcpdump["stderr_bytes"]
+    ):
+        raise RunnerError("leakage tcpdump stderr binding is false")
+    try:
+        replayed_tcpdump_statistics = capture_split.parse_tcpdump_statistics(
+            tcpdump_stderr
+        )
+    except capture_split.CaptureSplitError as error:
+        raise RunnerError(f"leakage tcpdump statistics are invalid: {error}") from error
+    if replayed_tcpdump_statistics != tcpdump["statistics"]:
+        raise RunnerError("leakage tcpdump statistics differ from retained stderr")
+    split_counts = exact_fields(
+        provenance["packet_counts"],
+        set(capture_split.PACKET_COUNT_FIELDS),
+        "leakage.capture_provenance.packet_counts",
+    )
+    normalized_split_counts = {
+        channel: bounded_integer(
+            split_counts[channel],
+            1,
+            MAX_OBSERVATION_COUNT,
+            f"leakage.packet_counts.{channel}",
+        )
+        for channel in split_counts
+    }
     artifacts = payload["artifacts"]
     expected_surfaces = sorted(SURFACE_FILES)
     if not isinstance(artifacts, list) or len(artifacts) != len(expected_surfaces):
@@ -2976,11 +3932,13 @@ def validate_leakage_response(
     if evidence_dir.is_symlink() or not evidence_dir.is_dir():
         raise RunnerError("leakage evidence root must be a regular directory")
     by_surface: dict[str, tuple[Path, dict[str, Any]]] = {}
+    source_claims: dict[str, dict[str, Any]] = {}
+    derivative_rows: dict[str, list[dict[str, Any]]] = {}
     total_bytes = 0
     for index, item in enumerate(artifacts):
         row = exact_fields(
             item,
-            {"surface", "relative_name", "sha256", "bytes"},
+            LEAKAGE_ARTIFACT_FIELDS,
             f"leakage.artifacts[{index}]",
         )
         surface = row["surface"]
@@ -3008,9 +3966,144 @@ def validate_leakage_response(
             raise RunnerError("leakage capture exceeds the total-size bound")
         if binding != {"sha256": row["sha256"], "bytes": row["bytes"]}:
             raise RunnerError(f"leakage surface {surface} binding is false")
+        if (
+            not isinstance(row["source_sha256"], str)
+            or SHA256.fullmatch(row["source_sha256"]) is None
+            or row["source_sha256"] == "0" * 64
+        ):
+            raise RunnerError(f"leakage surface {surface} has an invalid source digest")
+        bounded_integer(
+            row["source_bytes"],
+            1,
+            leakage_audit.DEFAULT_MAX_TOTAL_BYTES,
+            f"leakage.artifacts[{index}].source_bytes",
+        )
+        bounded_integer(
+            row["source_count"],
+            1,
+            MAX_OBSERVATION_COUNT,
+            f"leakage.artifacts[{index}].source_count",
+        )
+        if row["relative_name"].endswith(".pcapng") and (
+            row["source_sha256"] != raw_pcap_binding["sha256"]
+            or row["source_bytes"] != raw_pcap_binding["bytes"]
+            or row["source_count"] != 1
+        ):
+            raise RunnerError(f"leakage packet surface {surface} is not bound to the raw pcap")
+        if surface == "restricted_packet_source" and (
+            binding != raw_pcap_binding
+            or row["source_sha256"] != raw_pcap_binding["sha256"]
+            or row["source_bytes"] != raw_pcap_binding["bytes"]
+            or row["source_count"] != 1
+        ):
+            raise RunnerError("retained raw packet capture has a false provenance binding")
+        derivative_kind = {
+            "kura_artifact": "kura",
+            "merge_artifact": "merge",
+            "snapshot_artifact": "snapshot",
+        }.get(surface)
+        if derivative_kind is not None:
+            source_count, source_bytes, rows = _validate_leakage_digest_derivative(
+                source, derivative_kind
+            )
+            if (
+                source_count != row["source_count"]
+                or source_bytes != row["source_bytes"]
+            ):
+                raise RunnerError(
+                    f"leakage surface {surface} source provenance differs from its digest frame"
+                )
+            derivative_rows[surface] = rows
+        source_claims[surface] = {
+            "source_sha256": row["source_sha256"],
+            "source_bytes": row["source_bytes"],
+            "source_count": row["source_count"],
+        }
         by_surface[surface] = (source, binding)
     if set(by_surface) != set(SURFACE_FILES):
         raise RunnerError("leakage capture does not contain every required surface")
+    restricted_source = by_surface["restricted_audit_source"][0]
+    restricted_groups = _validate_restricted_leakage_source_archive(restricted_source)
+    required_restricted_groups = {
+        "block_wire_capture",
+        "event_capture",
+        "kura_artifact",
+        "merge_artifact",
+        "operator_log",
+        "query_capture",
+        "snapshot_artifact",
+        "telemetry_capture",
+        "coordinator_log",
+        "confidential_da",
+        "atomicity_observation",
+    }
+    if set(restricted_groups) != required_restricted_groups:
+        raise RunnerError("restricted leakage source archive has an incomplete source inventory")
+    expected_indexed_paths = {
+        "query_capture": [f"peer-{index:03}.norito" for index in range(peer_count)],
+        "telemetry_capture": [
+            f"peer-{index:03}.status-metrics" for index in range(peer_count)
+        ],
+        "operator_log": [
+            f"validator-{index:03}.stdout-stderr" for index in range(peer_count)
+        ],
+        "atomicity_observation": [
+            f"peer-{index:03}.json" for index in range(peer_count)
+        ],
+    }
+    for surface, expected_paths in expected_indexed_paths.items():
+        if [row["relative_path"] for row in restricted_groups[surface]["rows"]] != expected_paths:
+            raise RunnerError(f"restricted {surface} paths do not cover every validator")
+    if [row["relative_path"] for row in restricted_groups["event_capture"]["rows"]] != [
+        "event-000.norito"
+    ]:
+        raise RunnerError("restricted event source path is non-canonical")
+    if [row["relative_path"] for row in restricted_groups["coordinator_log"]["rows"]] != [
+        "coordinator-000/stdout-stderr.log"
+    ]:
+        raise RunnerError("restricted coordinator log path is non-canonical")
+    replayed_atomicity_checks = _validate_leakage_atomicity_observations(
+        restricted_source,
+        restricted_groups["atomicity_observation"]["rows"],
+        PRIMARY_PARTICIPANTS,
+        peer_count,
+    )
+    if replayed_atomicity_checks != payload["continuous_atomicity_checks"]:
+        raise RunnerError("atomicity check count is not backed by retained observations")
+    _validate_retained_nonpacket_source_rows(
+        evidence_dir, restricted_source, restricted_groups
+    )
+    for surface in required_restricted_groups.intersection(source_claims):
+        claim = source_claims[surface]
+        group = restricted_groups[surface]
+        if claim != {
+            "source_sha256": group["source_sha256"],
+            "source_bytes": group["source_bytes"],
+            "source_count": group["source_count"],
+        }:
+            raise RunnerError(
+                f"leakage surface {surface} is not bound to its retained raw sources"
+            )
+    if source_claims["restricted_audit_source"] != _single_file_source_binding(
+        restricted_source
+    ):
+        raise RunnerError("restricted leakage source artifact has a false self-binding")
+    for surface, rows in derivative_rows.items():
+        raw_rows = restricted_groups[surface]["rows"]
+        expected_rows = [
+            {
+                "path_sha256": hashlib.sha256(
+                    row["relative_path"].encode("utf-8")
+                ).hexdigest(),
+                "source_bytes": row["source_bytes"],
+                "source_sha256": row["source_sha256"],
+            }
+            for row in raw_rows
+        ]
+        if rows != expected_rows:
+            raise RunnerError(
+                f"leakage derivative {surface} does not describe its retained raw sources"
+            )
     declared_names = {SURFACE_FILES[surface] for surface in SURFACE_FILES}
     try:
         actual_entries = list(evidence_dir.iterdir())
@@ -3021,6 +4114,60 @@ def validate_leakage_response(
         or any(entry.is_symlink() or not entry.is_file() for entry in actual_entries)
     ):
         raise RunnerError("leakage evidence directory contains an undeclared file")
+    try:
+        replayed_split_counts = capture_split.derive_split_packet_counts(
+            evidence_dir, groups
+        )
+        raw_capture = by_surface["restricted_packet_source"][0]
+        with tempfile.TemporaryDirectory(prefix="aps-capture-replay-") as temporary:
+            replay_root = Path(temporary)
+            raw_replayed_counts = capture_split.packet_count_claims(
+                capture_split.split_capture(
+                    raw_capture,
+                    replay_root,
+                    groups,
+                    expected_source_packets=replayed_tcpdump_statistics[
+                        "captured_packets"
+                    ],
+                )
+            )
+            replayed_bindings = {
+                name: file_binding(replay_root / relative)
+                for name, relative in capture_split.OUTPUT_NAMES.items()
+            }
+        retained_bindings = {
+            name: by_surface[
+                {
+                    "sanitized": "sanitized_capture",
+                    "torii": "torii_capture",
+                    "public_p2p": "public_p2p_capture",
+                    "restricted_p2p": "restricted_p2p_capture",
+                }[name]
+            ][1]
+            for name in capture_split.OUTPUT_NAMES
+        }
+    except (
+        capture_split.CaptureSplitError,
+        capture_split.pcapng.CaptureFormatError,
+        OSError,
+    ) as error:
+        raise RunnerError(f"leakage split captures cannot be replayed: {error}") from error
+    if raw_replayed_counts != replayed_split_counts:
+        raise RunnerError("retained raw pcap produces different packet-count claims")
+    if replayed_bindings != retained_bindings:
+        raise RunnerError("retained split captures are not exact derivatives of the raw pcap")
+    if replayed_split_counts != normalized_split_counts:
+        raise RunnerError("leakage split-count claims differ from the final packet files")
+    nonpacket_counts = derive_leakage_nonpacket_counts(evidence_dir)
+    source_backed_counts = {
+        "torii_request_packets": replayed_split_counts["torii_request_packets"],
+        "torii_response_packets": replayed_split_counts["torii_response_packets"],
+        "public_p2p_packets": replayed_split_counts["public_p2p_packets"],
+        "restricted_p2p_packets": replayed_split_counts["restricted_p2p_packets"],
+        **nonpacket_counts,
+    }
+    if normalized_counts != source_backed_counts:
+        raise RunnerError("leakage traffic-count claims are not source-backed")
     return normalized_counts, [
         (surface, by_surface[surface][0], by_surface[surface][1])
         for surface in expected_surfaces
@@ -3169,11 +4316,54 @@ def build_request(
                 {"surface": surface, "relative_name": SURFACE_FILES[surface]}
                 for surface in sorted(SURFACE_FILES)
             ],
-            "message_count_channels": list(
+            "traffic_count_channels": list(
                 leakage_audit.REQUIRED_COUNT_CHANNELS
             ),
         }
     return request
+
+
+def _process_group_exists(process_group: int) -> bool:
+    """Return whether the exact harness-owned POSIX process group still exists."""
+
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError as error:
+        raise RunnerError("cannot inspect the harness-owned process group") from error
+    return True
+
+
+def _terminate_owned_process_group(
+    process: subprocess.Popen[bytes], process_group: int
+) -> None:
+    """Boundedly terminate only the new session created for one harness run."""
+
+    if process_group != process.pid or process_group <= 1:
+        raise RunnerError("refusing to terminate an unbound process group")
+    if not _process_group_exists(process_group):
+        process.wait(timeout=1)
+        return
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait(timeout=1)
+        return
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and _process_group_exists(process_group):
+        time.sleep(0.05)
+    if _process_group_exists(process_group):
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and _process_group_exists(process_group):
+            time.sleep(0.05)
+    if _process_group_exists(process_group):
+        raise RunnerError("harness-owned process group survived bounded termination")
+    process.wait(timeout=1)
 
 
 def invoke_harness(
@@ -3213,7 +4403,7 @@ def invoke_harness(
     evidence_dir = root / "evidence"
     stdout_path = root / "stdout.log"
     stderr_path = root / "stderr.log"
-    evidence_dir.mkdir()
+    evidence_dir.mkdir(mode=0o700)
     write_json(request_path, request)
     command = [
         str(harness),
@@ -3224,25 +4414,44 @@ def invoke_harness(
         "--aps-evidence-dir",
         str(evidence_dir),
     ]
+    process: subprocess.Popen[bytes] | None = None
     try:
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
-                check=False,
+                stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
-                timeout=timeout_seconds,
+                start_new_session=True,
             )
-    except (OSError, subprocess.TimeoutExpired) as error:
+            process_group = process.pid
+            try:
+                returncode = process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired as error:
+                _terminate_owned_process_group(process, process_group)
+                raise RunnerError(
+                    f"real-process harness exceeded its {timeout_seconds}-second deadline"
+                ) from error
+            if _process_group_exists(process_group):
+                _terminate_owned_process_group(process, process_group)
+                raise RunnerError(
+                    "real-process harness exited while owned child processes remained"
+                )
+    except OSError as error:
+        if process is not None and process.poll() is None:
+            _terminate_owned_process_group(process, process.pid)
         temporary.cleanup()
         raise RunnerError(f"real-process harness invocation failed: {error}") from error
+    except RunnerError:
+        temporary.cleanup()
+        raise
     if (
         expected_harness_binding is not None
         and verify_harness(harness) != dict(expected_harness_binding)
     ):
         temporary.cleanup()
         raise RunnerError("harness executable changed during invocation")
-    if completed.returncode != 0:
+    if returncode != 0:
         try:
             with stderr_path.open("rb") as stream:
                 stream.seek(max(0, stderr_path.stat().st_size - 2_000))
@@ -3251,7 +4460,7 @@ def invoke_harness(
             stderr_tail = "<stderr unavailable>"
         temporary.cleanup()
         raise RunnerError(
-            f"real-process harness exited {completed.returncode}: {stderr_tail}"
+            f"real-process harness exited {returncode}: {stderr_tail}"
         )
     if response_path.is_symlink() or not response_path.is_file():
         temporary.cleanup()
@@ -3735,6 +4944,22 @@ def execute_plan(
                                 **file_binding(destination, relative_to=publication),
                             }
                         )
+                    provenance_path = (
+                        publication
+                        / "leakage"
+                        / f"capture-provenance-{job['variant']}.json"
+                    )
+                    copy_bound_file(
+                        response_path,
+                        provenance_path,
+                        expected=response_binding,
+                    )
+                    artifacts.append(
+                        {
+                            "kind": "leakage_capture_provenance",
+                            **file_binding(provenance_path, relative_to=publication),
+                        }
+                    )
                 artifacts.append(
                     archive_harness_response(
                         response_path,
@@ -3857,7 +5082,7 @@ def execute_plan(
 
         count_paths: dict[str, Path] = {}
         for variant in ("left", "right"):
-            path = publication / "leakage" / f"message-counts-{variant}.json"
+            path = publication / "leakage" / f"traffic-counts-{variant}.json"
             write_json(
                 path,
                 {"version": VERSION, "channels": leakage_counts[variant]},
@@ -3865,7 +5090,7 @@ def execute_plan(
             count_paths[variant] = path
             artifacts.append(
                 {
-                    "kind": "message_count_manifest",
+                    "kind": "traffic_count_manifest",
                     **file_binding(path, relative_to=publication),
                 }
             )
@@ -3887,20 +5112,20 @@ def execute_plan(
             )
             for artifact in artifacts
             if artifact["kind"] in release_evidence.REQUIRED_LEAKAGE_ARTIFACT_KINDS
-            or artifact["kind"] == "message_count_manifest"
+            or artifact["kind"] == "traffic_count_manifest"
         ]
         leakage_report_value = leakage_audit.run_audit(
             publication / "canary-manifest-v1.json",
             scannable,
             differential_left=publication / "leakage" / "left",
             differential_right=publication / "leakage" / "right",
-            message_counts_left=count_paths["left"],
-            message_counts_right=count_paths["right"],
+            traffic_counts_left=count_paths["left"],
+            traffic_counts_right=count_paths["right"],
         )
         if leakage_report_value["passed"] is not True:
             raise RunnerError(
                 "leakage audit found a canary, public-shape, size, or "
-                "message-count mismatch"
+                "traffic-count mismatch"
             )
         leakage_report_path = publication / "reports" / "leakage-report-v1.json"
         write_json(leakage_report_path, leakage_report_value)

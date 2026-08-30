@@ -10,7 +10,6 @@ pub(crate) struct ProductionV2Services {
     /// Rotating start for bounded live-topology archive discovery.
     archive_peer_cursor: AtomicUsize,
     kura: Arc<Kura>,
-    chunk_root: PathBuf,
     io: Option<V2IoHandle>,
     lifecycle_body_store_identity: Option<V2BodyStoreInstanceIdentity>,
     lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,

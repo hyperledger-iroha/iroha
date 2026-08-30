@@ -9972,7 +9972,7 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         _offline_top_up_anchor(finalized_root=_offline_fixed_bytes(0x10)),
         _offline_top_up_anchor(shield_leaf_index=-1),
         _offline_top_up_anchor(shield_leaf_index=65_463),
-        _offline_top_up_anchor(shield_leaf_index=65_464),
+        _offline_top_up_anchor(shield_leaf_index=1 << 16),
         _offline_top_up_anchor(topup_operation_id=_offline_fixed_bytes(0x12)),
         _offline_top_up_anchor(finalized_height=11),
         _offline_top_up_anchor(finalized_tx_hash=_offline_fixed_bytes(0x22)),

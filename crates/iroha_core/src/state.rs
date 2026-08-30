@@ -45,7 +45,7 @@ use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
         consensus::{
-            EvidenceRecord, LaneBlockCommitment, NexusFeeReceipt,
+            EvidenceRecord, ExecKv, ExecWitness, LaneBlockCommitment, NexusFeeReceipt,
             SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX,
             SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX, SumeragiAutonomousLaneExecution,
             SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
@@ -91,7 +91,8 @@ use iroha_data_model::{
     fastpq::{TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle},
     governance::types::{
         BallotAttemptId, BallotAttemptStatusV1, BeaconSessionId, BodyInstanceStatusV1,
-        GovernanceAttemptId, GovernanceAttemptStatusV1, ProposalKind, TleKeySessionId,
+        GovernanceAttemptId, GovernanceAttemptStatusV1, MAX_PARLIAMENT_CITIZENS_V1, ProposalKind,
+        TleKeySessionId,
     },
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
@@ -1328,6 +1329,7 @@ macro_rules! with_world_overlay_fields {
             governance_unlock_stats,
             parliament_attempts,
             parliament_required_beacon_pulse_slots,
+            parliament_certified_enactments,
             parliament_unavailable_beacon_pulse_slots,
             tle_key_sessions,
             tle_key_session_rosters,
@@ -4621,6 +4623,10 @@ pub struct World {
     #[norito(skip)]
     pub(crate) parliament_required_beacon_pulse_slots:
         Storage<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Certified governance attempts keyed by their exact enactment height.
+    #[norito(skip)]
+    pub(crate) parliament_certified_enactments:
+        Storage<u64, BTreeSet<GovernanceAttemptId>>,
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
     #[norito(skip)]
     pub(crate) parliament_unavailable_beacon_pulse_slots:
@@ -5386,6 +5392,10 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageBlock<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Certified governance attempts keyed by their exact enactment height.
+    #[norito(skip)]
+    pub(crate) parliament_certified_enactments:
+        StorageBlock<'world, u64, BTreeSet<GovernanceAttemptId>>,
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
     #[norito(skip)]
     pub(crate) parliament_unavailable_beacon_pulse_slots:
@@ -6792,6 +6802,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Governance attempts that currently require a logical beacon slot.
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageTransaction<'block, 'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Certified governance attempts keyed by their exact enactment height.
+    pub(crate) parliament_certified_enactments:
+        StorageTransaction<'block, 'world, u64, BTreeSet<GovernanceAttemptId>>,
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
     pub(crate) parliament_unavailable_beacon_pulse_slots:
         StorageTransaction<'block, 'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
@@ -8773,6 +8786,9 @@ pub struct WorldView<'world> {
     /// Governance attempts that currently require a logical beacon slot.
     pub(crate) parliament_required_beacon_pulse_slots:
         StorageView<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+    /// Certified governance attempts keyed by their exact enactment height.
+    pub(crate) parliament_certified_enactments:
+        StorageView<'world, u64, BTreeSet<GovernanceAttemptId>>,
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
     pub(crate) parliament_unavailable_beacon_pulse_slots:
         StorageView<'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
@@ -11714,7 +11730,7 @@ pub struct StateBlock<'state> {
     /// Verified lane relay records captured while executing this block.
     verified_lane_relay_records: Vec<VerifiedLaneRelayRecord>,
     /// Captured execution witness for the block (SBV‑AM).
-    pub(crate) exec_witness: Option<crate::sumeragi::consensus::ExecWitness>,
+    pub(crate) exec_witness: Option<ExecWitness>,
     /// Local bounded casting-context leaves retained for durable Kura proof service.
     parliament_timed_ovn_casting_bindings: Option<
         Vec<iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1>,
@@ -17850,6 +17866,13 @@ impl World {
         Ok(())
     }
     fn rebuild_governance_read_indexes(&mut self) -> Result<(), String> {
+        let maximum_citizens = usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+            .expect("the V1 Parliament citizen cap fits usize");
+        if self.citizens.view().len() > maximum_citizens {
+            return Err(format!(
+                "Parliament citizen registry exceeds the first-release limit of {MAX_PARLIAMENT_CITIZENS_V1}"
+            ));
+        }
         let mut lock_expiries =
             BTreeMap::<u64, BTreeSet<(String, iroha_data_model::account::AccountId)>>::new();
         for (referendum_id, locks) in self.governance_locks.view().iter() {
@@ -17924,6 +17947,8 @@ impl World {
         let mut timed_ovn_resource_reservations = BTreeMap::new();
         let mut required_beacon_pulse_slots =
             BTreeMap::<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>::new();
+        let mut certified_enactments =
+            BTreeMap::<u64, BTreeSet<GovernanceAttemptId>>::new();
         let mut unavailable_beacon_pulse_slots =
             BTreeMap::<(BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>::new();
         for (governance_attempt_id, attempt) in self.parliament_attempts.view().iter() {
@@ -17936,6 +17961,12 @@ impl World {
                 return Err(format!(
                     "Parliament attempt {governance_attempt_id:?} is stored under a noncanonical id"
                 ));
+            }
+            if let Some(enact_at_height) = attempt.certified_enactment_height_v1() {
+                certified_enactments
+                    .entry(enact_at_height)
+                    .or_default()
+                    .insert(*governance_attempt_id);
             }
             for pulse_slot in attempt.required_beacon_pulse_slots_v1() {
                 required_beacon_pulse_slots
@@ -17980,6 +18011,7 @@ impl World {
             timed_ovn_resource_reservations.into_iter().collect();
         self.parliament_required_beacon_pulse_slots =
             required_beacon_pulse_slots.into_iter().collect();
+        self.parliament_certified_enactments = certified_enactments.into_iter().collect();
         self.parliament_unavailable_beacon_pulse_slots =
             unavailable_beacon_pulse_slots.into_iter().collect();
         Ok(())
@@ -20875,6 +20907,8 @@ impl<'world> WorldBlock<'world> {
             governance_unlock_stats,
             parliament_attempts,
             parliament_timed_ovn_resource_reservations,
+            parliament_required_beacon_pulse_slots,
+            parliament_certified_enactments,
             parliament_unavailable_beacon_pulse_slots,
             tle_key_sessions,
             tle_key_session_rosters,
@@ -21042,6 +21076,8 @@ impl<'world> WorldBlock<'world> {
         governance_unlock_stats.commit();
         parliament_attempts.commit();
         parliament_timed_ovn_resource_reservations.commit();
+        parliament_required_beacon_pulse_slots.commit();
+        parliament_certified_enactments.commit();
         parliament_unavailable_beacon_pulse_slots.commit();
         tle_key_sessions.commit();
         tle_key_session_rosters.commit();
@@ -22256,10 +22292,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let previous_required_slots = previous_attempt
             .map(ParliamentAttemptStateV1::required_beacon_pulse_slots_v1)
             .unwrap_or_default();
+        let previous_enactment_height = previous_attempt
+            .and_then(ParliamentAttemptStateV1::certified_enactment_height_v1);
         let previous_unavailable_slots = previous_attempt
             .map(ParliamentAttemptStateV1::unavailable_beacon_pulse_slots_v1)
             .unwrap_or_default();
         let next_required_slots = attempt.required_beacon_pulse_slots_v1();
+        let next_enactment_height = attempt.certified_enactment_height_v1();
         let next_unavailable_slots = attempt.unavailable_beacon_pulse_slots_v1();
         if next_unavailable_slots
             .iter()
@@ -22322,6 +22361,18 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                     .insert(*slot, attempts);
             }
         }
+        if previous_enactment_height != next_enactment_height
+            && let Some(height) = previous_enactment_height
+            && let Some(mut attempts) = self.parliament_certified_enactments.get(&height).cloned()
+        {
+            attempts.remove(&id);
+            if attempts.is_empty() {
+                self.parliament_certified_enactments.remove(height);
+            } else {
+                self.parliament_certified_enactments
+                    .insert(height, attempts);
+            }
+        }
         for slot in previous_unavailable_slots.difference(&next_unavailable_slots) {
             let Some(mut attempts) = self
                 .parliament_unavailable_beacon_pulse_slots
@@ -22352,6 +22403,18 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             attempts.insert(id);
             self.parliament_required_beacon_pulse_slots
                 .insert(*slot, attempts);
+        }
+        if previous_enactment_height != next_enactment_height
+            && let Some(height) = next_enactment_height
+        {
+            let mut attempts = self
+                .parliament_certified_enactments
+                .get(&height)
+                .cloned()
+                .unwrap_or_default();
+            attempts.insert(id);
+            self.parliament_certified_enactments
+                .insert(height, attempts);
         }
         for slot in next_unavailable_slots.difference(&previous_unavailable_slots) {
             let mut attempts = self
@@ -22812,6 +22875,17 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 .remove(ballot_attempt_id);
         }
         let removed = self.parliament_attempts.remove(*id)?;
+        if let Some(height) = removed.certified_enactment_height_v1()
+            && let Some(mut attempts) = self.parliament_certified_enactments.get(&height).cloned()
+        {
+            attempts.remove(id);
+            if attempts.is_empty() {
+                self.parliament_certified_enactments.remove(height);
+            } else {
+                self.parliament_certified_enactments
+                    .insert(height, attempts);
+            }
+        }
         for slot in ParliamentAttemptStateV1::required_beacon_pulse_slots_v1(&removed) {
             let Some(mut attempts) = self
                 .parliament_required_beacon_pulse_slots
@@ -23184,6 +23258,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             governance_unlock_stats,
             parliament_attempts,
             parliament_timed_ovn_resource_reservations,
+            parliament_required_beacon_pulse_slots,
+            parliament_certified_enactments,
             parliament_unavailable_beacon_pulse_slots,
             tle_key_sessions,
             tle_key_session_rosters,
@@ -23401,6 +23477,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         governance_unlock_stats.apply();
         parliament_attempts.apply();
         parliament_timed_ovn_resource_reservations.apply();
+        parliament_required_beacon_pulse_slots.apply();
+        parliament_certified_enactments.apply();
         parliament_unavailable_beacon_pulse_slots.apply();
         tle_key_sessions.apply();
         tle_key_session_rosters.apply();
@@ -24031,7 +24109,7 @@ impl CertifiedLaneBlockPersistenceAuthority {
     }
     pub(crate) fn authorizes_proposal(
         &self,
-        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
     ) -> bool {
         let descriptor = &proposal.descriptor;
         descriptor.lane_id == self.lane_id
@@ -24403,7 +24481,7 @@ impl State {
     }
     fn certified_lane_block_persistence_authority(
         &self,
-        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
     ) -> core::result::Result<CertifiedLaneBlockPersistenceAuthority, &'static str> {
         let descriptor = &proposal.descriptor;
         let lifecycle = self.lane_consensus_lifecycle_snapshot();
@@ -27346,33 +27424,25 @@ impl State {
         sb.activate_due_public_lane_validators(current_epoch);
         // Height-trigger: open/close referenda at scheduled heights
         let now_h = sb._curr_block.height().get();
-        let mut due_parliament_certificates = Vec::new();
-        for (governance_attempt_id, attempt) in sb.world.parliament_attempts.iter() {
-            attempt.validate().unwrap_or_else(|error| {
+        if let Some((enact_at_height, attempts)) =
+            sb.world.parliament_certified_enactments.iter().next()
+            && *enact_at_height < now_h
+        {
+            let governance_attempt_id = attempts.iter().next().unwrap_or_else(|| {
                 panic!(
-                    "persisted Parliament attempt {governance_attempt_id:?} is invalid at block-start height {now_h}: {error}"
+                    "Parliament certified-enactment index contains an empty bucket at height {enact_at_height}"
                 )
             });
-            if attempt.attempt().status
-                != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Certified
-            {
-                continue;
-            }
-            let certificate = attempt.certificate().unwrap_or_else(|| {
-                panic!(
-                    "certified Parliament attempt {governance_attempt_id:?} has no certificate at block-start height {now_h}"
-                )
-            });
-            if certificate.enact_at_height < now_h {
-                panic!(
-                    "certified Parliament attempt {governance_attempt_id:?} missed exact enactment height {} before block-start height {now_h}",
-                    certificate.enact_at_height
-                );
-            }
-            if certificate.enact_at_height == now_h {
-                due_parliament_certificates.push(*governance_attempt_id);
-            }
+            panic!(
+                "certified Parliament attempt {governance_attempt_id:?} missed exact enactment height {enact_at_height} before block-start height {now_h}"
+            );
         }
+        let due_parliament_certificates = sb
+            .world
+            .parliament_certified_enactments
+            .get(&now_h)
+            .cloned()
+            .unwrap_or_default();
         for governance_attempt_id in due_parliament_certificates {
             let mut enactment = sb.transaction();
             match crate::smartcontracts::isi::world::isi::execute_due_parliament_certificate_v1(
@@ -27407,6 +27477,16 @@ impl State {
                     failure.apply();
                 }
             }
+        }
+        if sb
+            .world
+            .parliament_certified_enactments
+            .get(&now_h)
+            .is_some()
+        {
+            panic!(
+                "Parliament certified-enactment index retained a due bucket after block-start execution at height {now_h}"
+            );
         }
         let current_slot =
             current_axt_slot_from_block(&sb._curr_block, sb.nexus.axt.slot_length_ms);
@@ -35060,7 +35140,7 @@ impl State {
     }
     pub(crate) fn certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
         &self,
-        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
     ) -> bool {
         let descriptor = &proposal.descriptor;
         let previous_height = descriptor.previous_lane_block_height;
@@ -35098,7 +35178,7 @@ impl State {
     }
     fn certified_lane_block_proposal_has_hash_only_snapshot_anchor(
         &self,
-        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
     ) -> bool {
         let descriptor = &proposal.descriptor;
         let Some(artifact) = self.kura.read_lane_block_artifact_without_sidecar_repair(
@@ -35114,7 +35194,7 @@ impl State {
     }
     fn lane_block_artifact_matches_certified_proposal(
         artifact: &crate::kura::LaneBlockArtifact,
-        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
     ) -> bool {
         let ownership = &artifact.ownership;
         let descriptor = &proposal.descriptor;
@@ -47816,7 +47896,7 @@ impl<'state> StateBlock<'state> {
             witness
                 .writes
                 .retain(|entry| entry.key.as_slice() != receiver_key);
-            witness.writes.push(crate::sumeragi::consensus::ExecKv {
+            witness.writes.push(ExecKv {
                 key: receiver_key.to_vec(),
                 value: receiver_value,
             });
@@ -47843,7 +47923,7 @@ impl<'state> StateBlock<'state> {
             witness
                 .writes
                 .retain(|entry| entry.key.as_slice() != validation_fee_key);
-            witness.writes.push(crate::sumeragi::consensus::ExecKv {
+            witness.writes.push(ExecKv {
                 key: validation_fee_key.to_vec(),
                 value: validation_fee_value,
             });
@@ -47865,7 +47945,7 @@ impl<'state> StateBlock<'state> {
             witness
                 .writes
                 .retain(|entry| entry.key.as_slice() != casting_key);
-            witness.writes.push(crate::sumeragi::consensus::ExecKv {
+            witness.writes.push(ExecKv {
                 key: casting_key.to_vec(),
                 value: casting_value,
             });
@@ -47950,7 +48030,7 @@ impl<'state> StateBlock<'state> {
         }
     }
     /// Take the captured execution witness, if any, transferring ownership to the caller.
-    pub(crate) fn take_exec_witness(&mut self) -> Option<crate::sumeragi::consensus::ExecWitness> {
+    pub(crate) fn take_exec_witness(&mut self) -> Option<ExecWitness> {
         self.exec_witness.take()
     }
     /// Take the local compact casting leaves aligned with the captured synthetic snapshot.
@@ -55853,10 +55933,9 @@ mod tiered_snapshot_diff_tests {
         let descriptor = message.descriptor();
         replace_complete_sccp_outbound_history(&mut world, hostile_key, message, descriptor);
 
-        let registry = ValidatedSccpRegistryV1::try_from_wire(
-            world.sccp_registry.view().get().clone(),
-        )
-        .expect("test registry is valid");
+        let registry =
+            ValidatedSccpRegistryV1::try_from_wire(world.sccp_registry.view().get().clone())
+                .expect("test registry is valid");
         let chain_id: ChainId = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
             .parse()
             .expect("canonical Taira chain id");
@@ -58093,7 +58172,7 @@ impl StateTransaction<'_, '_> {
     /// Consume the exact signed private-settlement carrier once.
     pub(crate) fn consume_private_settlement_carrier_binding_v1(
         &mut self,
-        commit_bundle_digest: Hash,
+        payload_digest: Hash,
         instruction_digest: Hash,
     ) -> core::result::Result<(), PrivateSettlementCarrierBindingErrorV1> {
         let max_signed_transaction_bytes =
@@ -58102,7 +58181,7 @@ impl StateTransaction<'_, '_> {
             .as_mut()
             .ok_or(PrivateSettlementCarrierBindingErrorV1::MissingBinding)?
             .consume(
-                commit_bundle_digest,
+                payload_digest,
                 instruction_digest,
                 max_signed_transaction_bytes,
             )

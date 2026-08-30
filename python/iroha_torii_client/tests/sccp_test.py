@@ -693,33 +693,6 @@ def _recent(
     }
 
 
-def _prehash(value: bytes) -> bytes:
-    digest = bytearray(hashlib.blake2b(value, digest_size=32).digest())
-    digest[-1] |= 1
-    return bytes(digest)
-
-
-def _prepared_response(**overrides: Any) -> Dict[str, Any]:
-    transaction = b"\x01\x02\x03\x04"
-    response: Dict[str, Any] = {
-        "submitted": False,
-        "payload_kind": "transfer",
-        "message_id_hex": MESSAGE_ID,
-        "backend": "bridge/sccp/native/bsc-parlia-v1",
-        "counterparty_domain": 2,
-        "counterparty_chain": "bsc-mainnet",
-        "route_configuration_hash_hex": HASH(0x31),
-        "range_start_height": 7,
-        "range_end_height": 9,
-        "creation_time_ms": 10,
-        "tx_hash_hex": None,
-        "transaction_payload_b64": _b64(transaction),
-        "signing_message_b64": _b64(_prehash(transaction)),
-    }
-    response.update(overrides)
-    return response
-
-
 class StubResponse(requests.Response):
     """Minimal requests response preserving raw JSON and binary bodies."""
 
@@ -1798,82 +1771,6 @@ def test_bundle_accepts_only_exact_canonical_i105_sora_sender() -> None:
         normalize_sccp_message_bundle(invalid_utf8)
 
 
-def test_sccp_write_surface_is_not_public() -> None:
-    for name in (
-        "normalize_bridge_proof_submit_payload",
-        "normalize_bridge_message_submit_payload",
-        "SccpBridgeSubmitResponse",
-        "normalize_sccp_bridge_submit_response",
-        "parse_sccp_bridge_submit_response_json",
-    ):
-        assert name not in package.__all__
-        assert not hasattr(package, name)
-        assert not hasattr(sccp, name)
-    assert not hasattr(ToriiClient, "submit_bridge_proof")
-    assert not hasattr(ToriiClient, "submit_bridge_message")
-
-
-def test_internal_bridge_response_parser_rejects_contradictions_and_duplicates() -> None:
-    normalize_response = sccp._normalize_sccp_bridge_submit_response  # noqa: SLF001
-    parse_response = sccp._parse_sccp_bridge_submit_response_json  # noqa: SLF001
-    assert normalize_response(_prepared_response()).submitted is False
-    assert (
-        normalize_response(
-            _prepared_response(backend="evm-groth16-bn254-v1")
-        ).backend
-        == "evm-groth16-bn254-v1"
-    )
-    assert (
-        normalize_response(
-            _prepared_response(
-                backend="ton-groth16-bls12381-v1",
-                counterparty_domain=4,
-                counterparty_chain="ton-mainnet",
-            )
-        ).backend
-        == "ton-groth16-bls12381-v1"
-    )
-    submitted = _prepared_response(
-        submitted=True,
-        tx_hash_hex=HASH(0x55),
-        transaction_payload_b64=None,
-        signing_message_b64=None,
-    )
-    assert normalize_response(submitted).submitted is True
-    for value in (
-        _prepared_response(payload_kind="burn"),
-        _prepared_response(counterparty_chain="solana-mainnet-beta"),
-        _prepared_response(proof_artifact_hash=HASH(3)),
-        _prepared_response(manifest_hash_hex=HASH(3)),
-        _prepared_response(route_configuration_hash_hex=HASH(0xAB).upper()),
-        _prepared_response(creation_time_ms=0),
-        _prepared_response(tx_hash_hex=HASH(4)),
-        _prepared_response(transaction_payload_b64=_b64(b"\x01\x02\x03\x05")),
-        _prepared_response(signing_message_b64=_b64(b"\x09" * 32)),
-    ):
-        with pytest.raises((TypeError, ValueError)):
-            normalize_response(value)
-    missing_route_hash = _prepared_response()
-    del missing_route_hash["route_configuration_hash_hex"]
-    with pytest.raises(ValueError, match="missing required"):
-        normalize_response(missing_route_hash)
-    with pytest.raises(ValueError, match="signing state"):
-        normalize_response(_prepared_response(), {"submitted": True})
-    canonical = json.dumps(_prepared_response())
-    assert parse_response(canonical).submitted is False
-    with pytest.raises(ValueError, match="duplicate"):
-        parse_response(canonical.replace("{", '{"submitted":false,', 1))
-    duplicated_hash = canonical.replace(
-        f'"route_configuration_hash_hex": "{HASH(0x31)}"',
-        f'"route_configuration_hash_hex": "{HASH(0x31)}", '
-        f'"route_configuration_hash_hex": "{HASH(0x32)}"',
-    )
-    with pytest.raises(ValueError, match="duplicate"):
-        parse_response(duplicated_hash)
-    with pytest.raises(ValueError):
-        parse_sccp_json_object(canonical + "{}")
-
-
 def test_torii_exact_endpoints_and_content_negotiation() -> None:
     proof_request_frame = _sccp_norito_frame(PROOF_REQUEST_NORITO_TYPE)
     session = RecordingSession(
@@ -2159,6 +2056,21 @@ def test_torii_rejects_invalid_recent_queries_without_io(
             from_height=from_height, after_index=after_index, limit=limit
         )
     assert session.calls == []
+
+
+def test_torii_exposes_no_unauthenticated_sccp_write_stubs() -> None:
+    assert not hasattr(ToriiClient, "submit_bridge_proof")
+    assert not hasattr(ToriiClient, "submit_bridge_message")
+    for name in (
+        "normalize_bridge_proof_submit_payload",
+        "normalize_bridge_message_submit_payload",
+        "SccpBridgeSubmitResponse",
+        "normalize_sccp_bridge_submit_response",
+        "parse_sccp_bridge_submit_response_json",
+    ):
+        assert name not in package.__all__
+        assert not hasattr(package, name)
+        assert not hasattr(sccp, name)
 
 
 def test_embedded_mock_serves_only_exact_registry_bundle_and_request_routes() -> None:

@@ -485,7 +485,9 @@ mod tests {
                 .filter(|(name, _)| name.starts_with("Subscription")),
         );
     }
-    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 8] = [
+    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 10] = [
+        "OfflineRecipientLineageRequest",
+        "OfflineRecipientRegistrationLineage",
         "OfflineTopUpRequest",
         "OfflineRedeemRequest",
         "OfflineStatus",
@@ -1006,10 +1008,59 @@ mod tests {
         }
         reachable
     }
+    fn reachable_component_graph(schemas: &Map, roots: &[&str]) -> BTreeSet<String> {
+        let mut pending = roots
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<VecDeque<_>>();
+        let mut reachable = BTreeSet::new();
+        while let Some(name) = pending.pop_front() {
+            if !reachable.insert(name.clone()) {
+                continue;
+            }
+            let schema = schemas
+                .get(&name)
+                .unwrap_or_else(|| panic!("component reference does not resolve: {name}"));
+            let mut refs = BTreeSet::new();
+            collect_component_refs(schema, &mut refs);
+            for referenced in refs {
+                assert!(
+                    schemas.contains_key(&referenced),
+                    "component {name} references missing component {referenced}"
+                );
+                if !reachable.contains(&referenced) {
+                    pending.push_back(referenced);
+                }
+            }
+        }
+        reachable
+    }
+    fn assert_closed_object_schemas(value: &Value, component: &str) {
+        let mut pending = vec![value];
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::Object(object) => {
+                    if object.get("type").and_then(Value::as_str) == Some("object")
+                        || object.contains_key("properties")
+                    {
+                        assert_eq!(
+                            object.get("additionalProperties"),
+                            Some(&Value::Bool(false)),
+                            "Offline component {component} contains an open object schema"
+                        );
+                    }
+                    pending.extend(object.values());
+                }
+                Value::Array(values) => pending.extend(values),
+                _ => {}
+            }
+        }
+    }
     fn is_shared_sumeragi_consensus_component(name: &str) -> bool {
         matches!(
             name,
-            "SumeragiV2HeightContextId"
+            "BridgeFinalityProof"
+                | "SumeragiV2HeightContextId"
                 | "SumeragiV2FinalizedNextEpochSnapshot"
                 | "SumeragiV2ConsensusMode"
                 | "SumeragiV2CommitQuorumCertificate"
@@ -2760,6 +2811,191 @@ mod tests {
         }
     }
     #[test]
+    fn operator_credential_management_contract_is_closed_and_two_factor() {
+        const INVENTORY_PATH: &str = "/v1/operator/auth/credentials";
+        const DELETE_PATH: &str = "/v1/operator/auth/credentials/{credential_id}";
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let inventory = openapi_operation(&document, INVENTORY_PATH, "get");
+        let deletion = openapi_operation(&document, DELETE_PATH, "delete");
+
+        for (operation, stable_route_id) in [
+            (inventory, "operator.authentication.credentials"),
+            (deletion, "operator.authentication.credential_delete"),
+        ] {
+            assert_eq!(
+                operation_header_requirements(operation),
+                [
+                    "X-Iroha-Operator-Public-Key",
+                    "X-Iroha-Operator-Timestamp-Ms",
+                    "X-Iroha-Operator-Nonce",
+                    "X-Iroha-Operator-Signature",
+                    "X-Iroha-Operator-Session",
+                ]
+                .into_iter()
+                .map(|name| (name.to_owned(), true))
+                .collect::<Vec<_>>()
+            );
+            let session_parameter = operation["parameters"]
+                .as_array()
+                .expect("credential-management parameters")
+                .iter()
+                .find(|parameter| {
+                    parameter.get("name").and_then(Value::as_str)
+                        == Some("X-Iroha-Operator-Session")
+                })
+                .expect("operator session header parameter");
+            assert_eq!(session_parameter["schema"]["minLength"].as_u64(), Some(43));
+            assert_eq!(session_parameter["schema"]["maxLength"].as_u64(), Some(43));
+            assert_eq!(
+                session_parameter["schema"]["pattern"].as_str(),
+                Some("^[A-Za-z0-9_-]{43}$")
+            );
+            let security = operation
+                .get("security")
+                .and_then(Value::as_array)
+                .expect("operator credential-management security requirements");
+            assert_eq!(security.len(), 1);
+            let signature_headers = security[0]
+                .as_object()
+                .expect("conjunctive operator-signature requirement")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                signature_headers,
+                [
+                    "IrohaOperatorNonce",
+                    "IrohaOperatorPublicKey",
+                    "IrohaOperatorSignature",
+                    "IrohaOperatorTimestampMs",
+                ]
+                .into_iter()
+                .collect()
+            );
+            let route_auth = operation
+                .get(ROUTE_AUTH_EXTENSION)
+                .and_then(Value::as_object)
+                .expect("catalog route-auth metadata");
+            assert_eq!(
+                route_auth
+                    .get("stableRouteId")
+                    .and_then(Value::as_str),
+                Some(stable_route_id)
+            );
+            assert_eq!(
+                route_auth
+                    .get("authentication")
+                    .and_then(Value::as_str),
+                Some("operator_signature")
+            );
+            assert!(
+                operation["responses"]
+                    .as_object()
+                    .expect("credential-management responses")
+                    .values()
+                    .all(|response| {
+                        response["headers"]["Cache-Control"]["schema"]["const"].as_str()
+                            == Some("private, no-store")
+                    })
+            );
+        }
+
+        assert_eq!(
+            inventory["responses"]
+                .as_object()
+                .expect("credential inventory responses")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            ["200", "401", "403", "429", "500"]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            operation_response_schema_ref(inventory, "200", INVENTORY_PATH),
+            "#/components/schemas/OperatorWebAuthnCredentialListResponse"
+        );
+        assert!(
+            inventory["responses"]["500"]["description"]
+                .as_str()
+                .is_some_and(|description| {
+                    description.contains("operator_webauthn_state_unavailable")
+                        && !description.contains("capacity")
+                })
+        );
+
+        assert_eq!(
+            deletion["responses"]
+                .as_object()
+                .expect("credential deletion responses")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            ["200", "400", "401", "403", "404", "409", "429", "500"]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            operation_response_schema_ref(deletion, "200", DELETE_PATH),
+            "#/components/schemas/OperatorWebAuthnCredentialDeleteResponse"
+        );
+        for (status, code) in [
+            ("404", "operator_webauthn_credential_not_found"),
+            ("409", "operator_webauthn_last_credential"),
+        ] {
+            assert!(
+                deletion["responses"][status]["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains(code)),
+                "DELETE {DELETE_PATH} HTTP {status} must document {code}"
+            );
+        }
+        let delete_internal_error = deletion["responses"]["500"]["description"]
+            .as_str()
+            .expect("credential deletion internal-error description");
+        assert!(delete_internal_error.contains("operator_webauthn_state_unavailable"));
+        assert!(delete_internal_error.contains("operator_webauthn_persist_failed"));
+
+        assert_strict_object_schema(
+            schemas,
+            "OperatorWebAuthnCredentialListResponse",
+            &["credentials", "credentials_total"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "OperatorWebAuthnCredentialMetadata",
+            &["credential_id", "algorithm", "sign_count", "created_at_ms"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "OperatorWebAuthnCredentialDeleteResponse",
+            &["status", "credential_id", "credentials_total"],
+            &[],
+        );
+        let metadata_properties = schemas["OperatorWebAuthnCredentialMetadata"]["properties"]
+            .as_object()
+            .expect("credential metadata properties");
+        assert!(!metadata_properties.contains_key("public_key"));
+        assert!(!metadata_properties.contains_key("verification_key"));
+        assert_eq!(
+            schemas["OperatorWebAuthnAlgorithm"]["enum"]
+                .as_array()
+                .expect("credential algorithms"),
+            &[Value::from("es256"), Value::from("ed25519")]
+        );
+        assert_eq!(
+            schemas["OperatorWebAuthnCredentialId"]["minLength"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            schemas["OperatorWebAuthnCredentialId"]["maxLength"].as_u64(),
+            Some(1366)
+        );
+    }
+    #[test]
     fn musubi_provider_bundle_attestation_and_exact_release_contract_is_static() {
         const PROVIDER_ATTESTATION_WIRE_ID: &str =
             "iroha.musubi.v1.provider_bundle_attestation.register";
@@ -4463,10 +4699,17 @@ mod tests {
         ) {
             let expected = (
                 minimum.parse::<u64>().expect("offline integer minimum"),
-                if maximum == "kagemusha_topup_shield_tree_capacity_v2_minus_one" {
-                    iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 as u64 - 1
-                } else {
-                    maximum.parse::<u64>().expect("offline integer maximum")
+                match maximum {
+                    "kagemusha_topup_shield_tree_capacity_v2_minus_one" => {
+                        iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 as u64
+                            - 1
+                    }
+                    "kagemusha_topup_shield_insertion_capacity_v2_minus_one" => {
+                        iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2
+                            as u64
+                            - 1
+                    }
+                    _ => maximum.parse::<u64>().expect("offline integer maximum"),
                 },
             );
             assert_eq!(
@@ -4738,9 +4981,110 @@ mod tests {
         );
     }
     #[test]
+    fn generated_spec_exposes_exact_receiver_lineage_v2_contract() {
+        const PATH: &str = "/v1/offline/receiver-lineage";
+        let doc = generate_spec();
+        let schemas = component_schemas(&doc);
+        assert_strict_object_schema(
+            schemas,
+            "OfflineRecipientLineageSelector",
+            &["network_id", "recipient", "receiver_device_id", "asset"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "OfflineRecipientLineageRequest",
+            &["version", "selector", "trusted_checkpoint_height"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "OfflineRecipientRegistrationLineage",
+            &[
+                "version",
+                "selector",
+                "active_receiver_entry",
+                "active_receiver_membership",
+                "active_receiver_witness",
+                "finality_chain",
+                "evaluated_context_id",
+                "evaluated_block_height",
+                "evaluated_block_hash",
+            ],
+            &[],
+        );
+        assert_eq!(
+            component_properties(schemas, "OfflineRecipientLineageRequest")["version"]
+                .get("const")
+                .and_then(Value::as_u64),
+            Some(u64::from(
+                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION
+            ))
+        );
+        let finality_chain = &component_properties(
+            schemas,
+            "OfflineRecipientRegistrationLineage",
+        )["finality_chain"];
+        assert_eq!(finality_chain["minItems"].as_u64(), Some(1));
+        assert_eq!(
+            finality_chain["maxItems"].as_u64(),
+            Some(
+                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_PROOFS
+                    as u64
+            )
+        );
+        assert_eq!(
+            finality_chain["x-iroha-max-bytes"].as_u64(),
+            Some(
+                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_CHAIN_BYTES
+                    as u64
+            )
+        );
+
+        let operation = openapi_operation(&doc, PATH, "post");
+        let request_schema = &operation["requestBody"]["content"]["application/x-norito"]
+            ["schema"];
+        assert_eq!(
+            request_schema["$ref"].as_str(),
+            Some("#/components/schemas/OfflineRecipientLineageRequest")
+        );
+        assert_eq!(
+            request_schema["x-iroha-norito-schema"].as_str(),
+            Some(iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_REQUEST_SCHEMA_NAME)
+        );
+        assert_eq!(
+            request_schema["x-iroha-max-bytes"].as_u64(),
+            Some(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+                    as u64
+            )
+        );
+        let response_schema =
+            &operation["responses"]["200"]["content"]["application/x-norito"]["schema"];
+        assert_eq!(
+            response_schema["$ref"].as_str(),
+            Some("#/components/schemas/OfflineRecipientRegistrationLineage")
+        );
+        assert_eq!(
+            response_schema["x-iroha-norito-schema"].as_str(),
+            Some(iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_RESPONSE_SCHEMA_NAME)
+        );
+        assert_eq!(
+            response_schema["x-iroha-max-bytes"].as_u64(),
+            Some(
+                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES
+                    as u64
+            )
+        );
+    }
+    #[test]
     fn generated_spec_exposes_strict_offline_operation_json_contract() {
         let doc = generate_spec();
         let schemas = component_schemas(&doc);
+        assert_eq!(
+            schemas["OfflineTransactionHash"]["pattern"].as_str(),
+            Some("^[0-9a-f]{63}[13579bdf]$")
+        );
         for (name, tag) in [
             ("OfflineOperationKind", "kind"),
             ("OfflineOperationState", "state"),
@@ -4929,6 +5273,12 @@ mod tests {
     fn generated_spec_offline_typed_graph_is_closed_and_publicly_named() {
         let doc = generate_spec();
         let schemas = component_schemas(&doc);
+        for name in reachable_component_graph(schemas, &OFFLINE_TYPED_SCHEMA_ROOTS) {
+            assert_closed_object_schemas(
+                schemas.get(&name).expect("reachable component exists"),
+                &name,
+            );
+        }
         let reachable = reachable_offline_components(schemas);
         assert!(
             !reachable.contains("JsonValue"),

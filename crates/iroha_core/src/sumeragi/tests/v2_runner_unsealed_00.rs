@@ -544,7 +544,10 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
         .expect("pacemaker wire-family predicate remains finite");
     let predicate = &turn_driver[predicate_start..predicate_end];
     for allowed in ["QuorumCertificate", "TimeoutVote", "TimeoutCertificate"] {
-        assert!(predicate.contains(allowed), "missing {allowed} Progress root");
+        assert!(
+            predicate.contains(allowed),
+            "missing {allowed} Progress root"
+        );
     }
     for fenced in [
         "ConsensusMessageV2Payload::Proposal(",

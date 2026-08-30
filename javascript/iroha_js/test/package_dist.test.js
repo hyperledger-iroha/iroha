@@ -597,7 +597,6 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/noritoGovernanceBoundary.js",
       "dist/normalizers.js",
       "dist/numericV1.js",
-      "dist/ordering.js",
       "dist/privacyExact12Network.js",
       "dist/proofAttachment.js",
       "dist/strictLosslessJson.js",

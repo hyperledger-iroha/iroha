@@ -94,7 +94,7 @@ public sealed class ToriiIdentifierResolutionAuthenticationTests
             httpClient ?? new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(networkId ?? ExactNetwork),
+                NetworkId = networkId ?? ExactNetwork,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(AccountId, PrivateKeySeed),
             },
             TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);

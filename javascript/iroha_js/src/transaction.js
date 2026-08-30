@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { getNativeBinding } from "./native.js";
 import {
@@ -13,7 +12,6 @@ import {
 } from "./ivmArtifact.js";
 import { ToriiClient } from "./toriiClient.js";
 import { noritoDecodeInstruction } from "./norito.js";
-import { NumericV1, NumericV1Error } from "./numericV1.js";
 import { networkIdBytes } from "./networkId.js";
 import {
   buildBurnAssetInstruction,
@@ -62,7 +60,6 @@ import {
   buildSubmitBallotInstruction,
   buildFinalizeElectionInstruction,
   normalizeAccountId,
-  normalizeAssetId,
 } from "./instructionBuilders.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { createRegisterAssetDefinitionInstructionBuilder } from "./assetDefinitionRegistration.js";
@@ -452,31 +449,6 @@ function normalizeNonEmptyString(value, context) {
     throw new TypeError(`${context} must be a non-empty string`);
   }
   return trimmed;
-}
-
-function normalizeUint32(value, context) {
-  const max = 0xffff_ffffn;
-  let parsed;
-  if (typeof value === "bigint") {
-    parsed = value;
-  } else if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) {
-      throw new TypeError(`${context} must be a uint32 integer`);
-    }
-    parsed = BigInt(value);
-  } else if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!/^(?:0|[1-9][0-9]*)$/u.test(trimmed)) {
-      throw new TypeError(`${context} must be a uint32 integer`);
-    }
-    parsed = BigInt(trimmed);
-  } else {
-    throw new TypeError(`${context} must be a uint32 integer`);
-  }
-  if (parsed < 0n || parsed > max) {
-    throw new RangeError(`${context} must be between 0 and 4294967295`);
-  }
-  return Number(parsed);
 }
 
 function normalizeOptionalPositiveInteger(value, context) {
@@ -1472,59 +1444,6 @@ function readExclusiveInputAlias(record, aliases, context) {
   return supplied.length === 0 ? undefined : supplied[0].value;
 }
 
-function readOwnEnumerableDataValue(record, key, context) {
-  if (
-    record === null ||
-    (typeof record !== "object" && typeof record !== "function") ||
-    !Object.prototype.hasOwnProperty.call(record, key)
-  ) {
-    return undefined;
-  }
-  const descriptor = Object.getOwnPropertyDescriptor(record, key);
-  if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-    throw new TypeError(`${context}.${key} must be an enumerable data property`);
-  }
-  return descriptor.value;
-}
-
-function readExactInstructionVariant(record, supportedKeys, context) {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return null;
-  }
-  const ownKeys = Reflect.ownKeys(record);
-  if (
-    ownKeys.length !== 1 ||
-    typeof ownKeys[0] !== "string" ||
-    !supportedKeys.includes(ownKeys[0])
-  ) {
-    return null;
-  }
-  const name = ownKeys[0];
-  return {
-    name,
-    value: readOwnEnumerableDataValue(record, name, context),
-  };
-}
-
-function hasExactEnumerableDataShape(record, expectedKeys, context) {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return false;
-  }
-  const ownKeys = Reflect.ownKeys(record);
-  if (
-    ownKeys.length !== expectedKeys.length ||
-    ownKeys.some(
-      (key) => typeof key !== "string" || !expectedKeys.includes(key),
-    )
-  ) {
-    return false;
-  }
-  for (const key of expectedKeys) {
-    readOwnEnumerableDataValue(record, key, context);
-  }
-  return true;
-}
-
 function normalizeIvmProvedContractMetadata(value) {
   if (value === undefined || value === null) {
     return {};
@@ -1856,137 +1775,6 @@ function normalizeRequiredOverlayTransfer(requiredTransfer) {
   });
 }
 
-function directAssetTransfer(instruction) {
-  const instructionVariant = readExactInstructionVariant(
-    instruction,
-    ["Transfer"],
-    "overlay instruction",
-  );
-  if (instructionVariant === null) return null;
-  const transferVariant = instructionVariant.value;
-  if (
-    transferVariant === undefined ||
-    transferVariant === null ||
-    typeof transferVariant !== "object" ||
-    Array.isArray(transferVariant)
-  ) {
-    return null;
-  }
-  const assetVariant = readExactInstructionVariant(
-    transferVariant,
-    ["Asset"],
-    "overlay instruction.Transfer",
-  );
-  if (assetVariant === null) return null;
-  const transfer = assetVariant.value;
-  if (
-    !hasExactEnumerableDataShape(
-      transfer,
-      ["source", "object", "destination"],
-      "overlay instruction.Transfer.Asset",
-    )
-  ) {
-    return null;
-  }
-  const source = readOwnEnumerableDataValue(
-    transfer,
-    "source",
-    "overlay instruction.Transfer.Asset",
-  );
-  if (typeof source !== "string") return null;
-  const separator = source.indexOf("#");
-  if (separator <= 0 || separator === source.length - 1) return null;
-  return {
-    assetDefinitionId: source.slice(0, separator),
-    sourceAccountId: source.slice(separator + 1),
-    destinationAccountId: readOwnEnumerableDataValue(
-      transfer,
-      "destination",
-      "overlay instruction.Transfer.Asset",
-    ),
-    quantity: String(
-      readOwnEnumerableDataValue(
-        transfer,
-        "object",
-        "overlay instruction.Transfer.Asset",
-      ),
-    ),
-  };
-}
-
-function batchAssetTransfers(instruction) {
-  const variant = readExactInstructionVariant(
-    instruction,
-    ["TransferAssetBatch", "transfer_asset_batch", "AssetTransferBatch"],
-    "overlay instruction",
-  );
-  if (variant === null) return null;
-  const batch = variant.value;
-  if (
-    !hasExactEnumerableDataShape(
-      batch,
-      ["entries"],
-      "overlay instruction TransferAssetBatch",
-    )
-  ) {
-    throw new TypeError(
-      "overlay instruction TransferAssetBatch must contain exactly entries",
-    );
-  }
-  const entries = readOwnEnumerableDataValue(
-    batch,
-    "entries",
-    "overlay instruction TransferAssetBatch",
-  );
-  if (!batch || typeof batch !== "object" || !Array.isArray(entries)) {
-    throw new TypeError(
-      "overlay instruction TransferAssetBatch.entries must be an array",
-    );
-  }
-  return entries.map((entry, entryIndex) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new TypeError(
-        `overlay instruction TransferAssetBatch.entries[${entryIndex}] must be an object`,
-      );
-    }
-    if (
-      !hasExactEnumerableDataShape(
-        entry,
-        ["from", "to", "asset_definition", "amount"],
-        `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
-      )
-    ) {
-      throw new TypeError(
-        `overlay instruction TransferAssetBatch.entries[${entryIndex}] must contain exactly from, to, asset_definition, and amount`,
-      );
-    }
-    return {
-      assetDefinitionId: readOwnEnumerableDataValue(
-        entry,
-        "asset_definition",
-        `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
-      ),
-      sourceAccountId: readOwnEnumerableDataValue(
-        entry,
-        "from",
-        `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
-      ),
-      destinationAccountId: readOwnEnumerableDataValue(
-        entry,
-        "to",
-        `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
-      ),
-      quantity: String(
-        readOwnEnumerableDataValue(
-          entry,
-          "amount",
-          `overlay instruction TransferAssetBatch.entries[${entryIndex}]`,
-        ),
-      ),
-    };
-  });
-}
-
 function decodeOverlayInstruction(value, context) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value;
@@ -2007,180 +1795,6 @@ function decodeOverlayInstruction(value, context) {
       `${context} could not be decoded as a canonical Norito InstructionBox: ${error?.message ?? error}`,
     );
   }
-}
-
-function multisigPropose(instruction) {
-  const variant = readExactInstructionVariant(
-    instruction,
-    ["Custom", "MultisigPropose"],
-    "overlay instruction",
-  );
-  if (variant === null) return null;
-  let proposal = variant.value;
-  if (variant.name === "Custom") {
-    if (
-      !hasExactEnumerableDataShape(
-        variant.value,
-        ["payload"],
-        "overlay instruction.Custom",
-      )
-    ) {
-      throw new TypeError(
-        "overlay instruction.Custom must contain exactly payload",
-      );
-    }
-    const payload = readOwnEnumerableDataValue(
-      variant.value,
-      "payload",
-      "overlay instruction.Custom",
-    );
-    if (
-      !hasExactEnumerableDataShape(
-        payload,
-        ["Propose"],
-        "overlay instruction.Custom.payload",
-      )
-    ) {
-      throw new TypeError(
-        "overlay instruction.Custom.payload must contain exactly Propose",
-      );
-    }
-    proposal = readOwnEnumerableDataValue(
-      payload,
-      "Propose",
-      "overlay instruction.Custom.payload",
-    );
-  }
-  if (proposal === undefined || proposal === null) {
-    return null;
-  }
-  if (typeof proposal !== "object" || Array.isArray(proposal)) {
-    throw new TypeError("MultisigPropose payload must be an object");
-  }
-  if (
-    !hasExactEnumerableDataShape(
-      proposal,
-      ["account", "instructions"],
-      "MultisigPropose",
-    )
-  ) {
-    throw new TypeError(
-      "MultisigPropose must contain exactly account and instructions",
-    );
-  }
-  const instructions = readOwnEnumerableDataValue(
-    proposal,
-    "instructions",
-    "MultisigPropose",
-  );
-  if (!Array.isArray(instructions)) {
-    throw new TypeError("MultisigPropose.instructions must be an array");
-  }
-  const account = readOwnEnumerableDataValue(
-    proposal,
-    "account",
-    "MultisigPropose",
-  );
-  if (typeof account !== "string" || account.length === 0) {
-    throw new TypeError("MultisigPropose.account must be an account id");
-  }
-  return { account, instructions };
-}
-
-function collectOverlayTransferContexts(overlay, authority, context) {
-  const contexts = [
-    {
-      contextIndex: 0,
-      executionAccountId: authority,
-      nested: false,
-      transfers: [],
-    },
-  ];
-
-  function collect(instructions, transferContext) {
-    for (
-      let instructionIndex = 0;
-      instructionIndex < instructions.length;
-      instructionIndex += 1
-    ) {
-      const instruction = decodeOverlayInstruction(
-        instructions[instructionIndex],
-        `${context}.overlay[${instructionIndex}]`,
-      );
-      const direct = directAssetTransfer(instruction);
-      const batch = batchAssetTransfers(instruction);
-      const proposal = multisigPropose(instruction);
-      const recognizedKinds =
-        Number(direct !== null) +
-        Number(batch !== null) +
-        Number(proposal !== null);
-      if (recognizedKinds !== 1) {
-        throw new Error(
-          `${context}.overlay[${instructionIndex}] is not one unambiguous explicit asset transfer, transfer batch, or recursive multisig proposal; validation-fee submission fails closed on other instruction families`,
-        );
-      }
-      if (direct) {
-        transferContext.transfers.push({
-          ...direct,
-          contextIndex: transferContext.contextIndex,
-          instructionIndex,
-          transferEntryIndex: null,
-        });
-      }
-      for (
-        let transferEntryIndex = 0;
-        transferEntryIndex < (batch?.length ?? 0);
-        transferEntryIndex += 1
-      ) {
-        transferContext.transfers.push({
-          ...batch[transferEntryIndex],
-          contextIndex: transferContext.contextIndex,
-          instructionIndex,
-          transferEntryIndex,
-        });
-      }
-
-      if (proposal) {
-        const nestedContext = {
-          contextIndex: contexts.length,
-          executionAccountId: proposal.account,
-          nested: true,
-          transfers: [],
-        };
-        contexts.push(nestedContext);
-        collect(proposal.instructions, nestedContext);
-      }
-    }
-  }
-
-  collect(overlay, contexts[0]);
-  return contexts;
-}
-
-function sameFeeCoordinate(transfer, binding) {
-  return (
-    transfer.instructionIndex === binding.instructionIndex &&
-    transfer.transferEntryIndex === binding.transferEntryIndex
-  );
-}
-
-function validationFeeScaledUnits(value, scale, context) {
-  if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a canonical Quantity string`);
-  }
-  let quantity;
-  try {
-    quantity = NumericV1.decodeQuantityJson(value);
-  } catch (error) {
-    if (!(error instanceof NumericV1Error)) throw error;
-    throw new TypeError(`${context} must be canonical (${error.code})`);
-  }
-  if (quantity.scale > scale) {
-    throw new RangeError(
-      `${context} uses scale ${quantity.scale}, above policy scale ${scale}`,
-    );
-  }
-  return quantity.mantissa * 10n ** BigInt(scale - quantity.scale);
 }
 
 /**

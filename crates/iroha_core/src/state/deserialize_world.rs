@@ -7842,6 +7842,7 @@ fn parse_world(
         parliament_attempts,
         parliament_timed_ovn_resource_reservations: Storage::default(),
         parliament_required_beacon_pulse_slots: Storage::default(),
+        parliament_certified_enactments: Storage::default(),
         parliament_unavailable_beacon_pulse_slots: Storage::default(),
         tle_key_sessions,
         tle_key_session_rosters,

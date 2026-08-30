@@ -1410,7 +1410,7 @@ public final class SumeragiV2Wire {
     }
   }
 
-  /** Canonical network payload union, in Rust declaration order. */
+  /** Client-facing payload subset retaining Rust tags 0..9; validator-internal beacon shares use tag 10. */
   public abstract static class ConsensusPayload extends WireValue {
     public static final class ProposalMessage extends ConsensusPayload {
       public final Proposal value;

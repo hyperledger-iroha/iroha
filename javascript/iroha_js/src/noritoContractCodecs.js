@@ -975,7 +975,7 @@ export function createNoritoContractCodecs(
     }
   }
 
-  function readSingleEnumPayload(reader, context) {
+  function readSingleEnumPayload(reader, _context) {
     const value = readNoritoField(reader, "value");
     reader.assertEof();
     return value;

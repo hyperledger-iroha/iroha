@@ -1122,7 +1122,7 @@ object SumeragiV2Wire {
         }
     }
 
-    /** Canonical v2 network payload variants, in Rust declaration order. */
+    /** Client-facing payload subset retaining Rust tags 0..9; validator-internal beacon shares use tag 10. */
     sealed class ConsensusPayload : WireValue() {
         class ProposalMessage(@JvmField val value: Proposal) : ConsensusPayload() {
             override fun encode(): ByteArray = enumPayload(0, value.encode())

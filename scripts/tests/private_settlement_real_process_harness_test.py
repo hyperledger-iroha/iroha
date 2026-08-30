@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -127,6 +128,47 @@ def fault_request(participants: int = 3, *, run: int = 0) -> dict[str, Any]:
     return result
 
 
+def leakage_request(variant: str = "left") -> dict[str, Any]:
+    """Build one exact commit-bound N=3 differential request."""
+
+    result = request(3)
+    manifest = MODULE.runner.build_canary_manifest(COMMIT)
+    canaries = MODULE.runner.canaries_for_variant(manifest, variant)
+    commitments = {
+        entry["name"]: MODULE.runner.object_digest(entry) for entry in canaries
+    }
+    result["kind"] = "leakage"
+    result["payload"] = {
+        "variant": variant,
+        "canaries": canaries,
+        "canary_commitments": commitments,
+        "only_secret_fields_change": True,
+        "capture_surfaces": [
+            {
+                "surface": surface,
+                "relative_name": MODULE.runner.SURFACE_FILES[surface],
+            }
+            for surface in sorted(MODULE.runner.SURFACE_FILES)
+        ],
+        "traffic_count_channels": list(
+            MODULE.runner.leakage_audit.REQUIRED_COUNT_CHANNELS
+        ),
+    }
+    result["request_id"] = MODULE.runner.object_digest(
+        {
+            "kind": "leakage",
+            "participants": 3,
+            "seed": result["seed"],
+            "run": 0,
+            "variant": variant,
+            "canary_names": [entry["name"] for entry in canaries],
+            "canary_commitments": commitments,
+            "configuration_sha256": result["configuration_sha256"],
+        }
+    )
+    return result
+
+
 def inventory(participants: int) -> list[dict[str, Any]]:
     identities: list[tuple[str, int | None, int | None]] = [
         ("coordinator", None, None)
@@ -226,6 +268,98 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
                 ]
             )
 
+    def test_capture_stop_rejects_a_child_that_exited_early(self) -> None:
+        class ExitedCapture:
+            returncode = 0
+
+            @staticmethod
+            def poll() -> int:
+                return 0
+
+        stderr = io.BytesIO()
+        with self.assertRaisesRegex(MODULE.HarnessError, "exited before"):
+            MODULE._stop_tcpdump(ExitedCapture(), stderr, Path("unused.stderr"))
+        self.assertTrue(stderr.closed)
+
+    def test_tcpdump_statistics_require_captured_packets_and_zero_drops(self) -> None:
+        statistics = MODULE._parse_tcpdump_statistics(
+            b"tcpdump: listening on lo0\n"
+            b"12 packets captured\n"
+            b"24 packets received by filter\n"
+            b"0 packets dropped by kernel\n"
+            b"0 packets dropped by interface\n"
+        )
+        self.assertEqual(statistics["captured_packets"], 12)
+        self.assertEqual(statistics["received_by_filter_packets"], 24)
+        self.assertEqual(statistics["drop_counters"], {"interface": 0, "kernel": 0})
+        for malformed, message in (
+            (
+                b"0 packets captured\n0 packets received by filter\n"
+                b"0 packets dropped by kernel\n",
+                "zero captured",
+            ),
+            (
+                b"1 packet captured\n1 packet received by filter\n"
+                b"1 packet dropped by kernel\n",
+                "dropped packets",
+            ),
+            (
+                b"1 packet captured\n1 packet received by filter\n",
+                "drop statistic",
+            ),
+            (
+                b"1 packet captured\n1 packet received by filter\n"
+                b"0 packets dropped by kernel\ntcpdump: late warning\n",
+                "continued after",
+            ),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(MODULE.HarnessError, message):
+                    MODULE._parse_tcpdump_statistics(malformed)
+
+    def test_capture_stop_parses_the_final_child_statistics(self) -> None:
+        class RunningCapture:
+            returncode: int | None = None
+
+            def poll(self) -> None:
+                return None
+
+            def send_signal(self, sent: int) -> None:
+                self.sent = sent
+
+            def wait(self, timeout: float) -> int:
+                self.returncode = 0
+                return 0
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "tcpdump.stderr"
+            stream = path.open("xb")
+            stream.write(
+                b"4 packets captured\n8 packets received by filter\n"
+                b"0 packets dropped by kernel\n"
+            )
+            capture = RunningCapture()
+            statistics = MODULE._stop_tcpdump(capture, stream, path)
+            self.assertEqual(statistics["captured_packets"], 4)
+            self.assertEqual(capture.sent, MODULE.signal.SIGINT)
+            self.assertTrue(stream.closed)
+
+    def test_complete_raw_capture_is_scanned_before_filtering(self) -> None:
+        canaries = [{"name": "memo", "kind": "text", "value": "raw-secret"}]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "capture.pcap"
+            path.write_bytes(b"pcap-header-and-public-packets")
+            binding = MODULE._scan_raw_capture(path, canaries)
+            self.assertEqual(binding["bytes"], path.stat().st_size)
+            path.write_bytes(b"unrelated-loopback-payload-raw-secret-hidden")
+            with self.assertRaisesRegex(MODULE.HarnessError, "contains planted canaries"):
+                MODULE._scan_raw_capture(path, canaries)
+
+    def test_exact_zero_observations_reject_boolean_aliases(self) -> None:
+        self.assertTrue(MODULE._exact_integer(0, 0))
+        self.assertFalse(MODULE._exact_integer(False, 0))
+        self.assertFalse(MODULE._exact_integer(0.0, 0))
+
     def test_all_release_participant_shapes_validate_deterministically(self) -> None:
         for profile in MODULE.runner.PROFILES:
             for participants in MODULE.runner.PARTICIPANTS:
@@ -234,16 +368,25 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         for participants in MODULE.runner.PARTICIPANTS:
             fixture = fault_request(participants)
             self.assertEqual(MODULE.validate_request(copy.deepcopy(fixture)), fixture)
+        for variant in ("left", "right"):
+            fixture = leakage_request(variant)
+            self.assertEqual(MODULE.validate_request(copy.deepcopy(fixture)), fixture)
 
     def test_unsupported_kinds_fail_before_execution(self) -> None:
-        leakage = request()
-        leakage["kind"] = "leakage"
-        with self.assertRaisesRegex(MODULE.HarnessError, "does not yet support leakage"):
-            MODULE.validate_request(leakage)
         unknown = request()
         unknown["kind"] = "unknown"
-        with self.assertRaisesRegex(MODULE.HarnessError, "benchmark and fault"):
+        with self.assertRaisesRegex(MODULE.HarnessError, "benchmark, fault, and leakage"):
             MODULE.validate_request(unknown)
+
+    def test_leakage_request_rejects_canary_or_topology_substitution(self) -> None:
+        malformed = leakage_request()
+        malformed["payload"]["canaries"][0]["value"] = "substituted"
+        with self.assertRaisesRegex(MODULE.HarnessError, "commit-bound canary"):
+            MODULE.validate_request(malformed)
+        wrong_topology = leakage_request()
+        wrong_topology["run"] = 1
+        with self.assertRaisesRegex(MODULE.HarnessError, "primary differential"):
+            MODULE.validate_request(wrong_topology)
 
     def test_each_profile_requires_its_exact_stage_inventory(self) -> None:
         private = request()
@@ -360,6 +503,7 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
                 )
 
     def test_static_rust_path_uses_real_processes_controller_and_signed_da(self) -> None:
+        python_harness = SCRIPT.read_text(encoding="utf-8")
         localnet = (
             ROOT
             / "integration_tests/tests/nexus/atomic_private_settlement_localnet.rs"
@@ -368,7 +512,22 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
             ROOT
             / "integration_tests/tests/nexus/atomic_private_settlement_real_process_harness.rs"
         ).read_text(encoding="utf-8")
+        private_benchmark = harness[
+            harness.index("fn run_real_process_private_benchmark") : harness.index(
+                "fn write_real_process_result"
+            )
+        ]
         self.assertIn("atomic_private_settlement_real_process_benchmark_harness", harness)
+        self.assertIn("atomic_private_settlement_real_process_leakage_harness", harness)
+        self.assertIn("run_real_process_leakage_campaign", harness)
+        self.assertIn("ensure_leakage_sources_redacted", harness)
+        self.assertIn("let mut output_rng = rand_core_06::OsRng;", harness)
+        self.assertIn("let mut capsule_rng = rand::rngs::OsRng;", harness)
+        self.assertIn("prepare_leg_with_private_data_and_rngs", harness)
+        self.assertIn('TCPDUMP = Path("/usr/sbin/tcpdump")', python_harness)
+        self.assertIn("process.send_signal(signal.SIGINT)", python_harness)
+        self.assertIn("capture_split.derive_split_packet_counts", python_harness)
+        self.assertIn("exact {len(runner.SURFACE_FILES)}-file inventory", python_harness)
         self.assertIn("with_consensus_message_control", harness)
         self.assertIn("wait_until_ready", harness)
         self.assertIn("process_id()", harness)
@@ -381,6 +540,16 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertIn("atomicity_clients.len() == shape.peer_count()", harness)
         self.assertIn("atomicity_observer.begin()", harness)
         self.assertIn("atomicity_observer.finish(3)", harness)
+        self.assertIn('"benchmark-before"', private_benchmark)
+        self.assertIn('"benchmark-after"', private_benchmark)
+        self.assertIn(
+            "FaultContinuousObserverV1::start", private_benchmark
+        )
+        self.assertIn(
+            "atomicity_observer.finish(&atomicity_after)", private_benchmark
+        )
+        self.assertNotIn("TODO:", private_benchmark)
+        self.assertNotIn("&deltas,\n        &deltas,", private_benchmark)
         self.assertIn("run_real_process_transparent_control_benchmark", harness)
         self.assertIn("DvpIsi::new", harness)
         self.assertNotIn("Transfer::asset", harness)

@@ -23,7 +23,7 @@ use iroha_core::private_settlement::{
 use iroha_core::state::StateReadOnly as _;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
-    isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
+    isi::private_settlement::{AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1},
     nexus::{
         PrivateSettlementAbortReasonV1, PrivateSettlementAuditApprovalV1, PrivateSettlementPhaseV1,
     },
@@ -56,7 +56,24 @@ const fn private_settlement_carrier_height_is_live_v1(
     authority_context_height: u64,
     expiry_height: u64,
 ) -> bool {
-    current_height >= authority_context_height && current_height <= expiry_height
+    let Some(candidate_height) = current_height.checked_add(1) else {
+        return false;
+    };
+    current_height >= authority_context_height && candidate_height <= expiry_height
+}
+
+const fn private_settlement_abort_height_is_admissible_v1(
+    current_height: u64,
+    authority_context_height: u64,
+    expiry_height: u64,
+    reason: PrivateSettlementAbortReasonV1,
+) -> bool {
+    let Some(candidate_height) = current_height.checked_add(1) else {
+        return false;
+    };
+    current_height >= authority_context_height
+        && (candidate_height > expiry_height)
+            == matches!(reason, PrivateSettlementAbortReasonV1::Expired)
 }
 
 fn private_settlement_carrier_within_wire_bound_v1(
@@ -265,12 +282,51 @@ mod governed_sidecar_store_config_tests {
     }
 
     #[test]
-    fn carrier_ingress_accepts_exact_expiry_and_rejects_the_next_height() {
+    fn carrier_ingress_reserves_one_block_before_expiry() {
         assert!(!private_settlement_carrier_height_is_live_v1(9, 10, 20));
         assert!(private_settlement_carrier_height_is_live_v1(10, 10, 20));
         assert!(private_settlement_carrier_height_is_live_v1(19, 10, 20));
-        assert!(private_settlement_carrier_height_is_live_v1(20, 10, 20));
+        assert!(!private_settlement_carrier_height_is_live_v1(20, 10, 20));
         assert!(!private_settlement_carrier_height_is_live_v1(21, 10, 20));
+        assert!(!private_settlement_carrier_height_is_live_v1(
+            u64::MAX,
+            10,
+            u64::MAX,
+        ));
+    }
+
+    #[test]
+    fn abort_carrier_ingress_separates_expired_from_pre_expiry_reasons() {
+        assert!(private_settlement_abort_height_is_admissible_v1(
+            19,
+            10,
+            20,
+            PrivateSettlementAbortReasonV1::ParticipantRejected,
+        ));
+        assert!(!private_settlement_abort_height_is_admissible_v1(
+            20,
+            10,
+            20,
+            PrivateSettlementAbortReasonV1::ParticipantRejected,
+        ));
+        assert!(private_settlement_abort_height_is_admissible_v1(
+            20,
+            10,
+            20,
+            PrivateSettlementAbortReasonV1::Expired,
+        ));
+        assert!(private_settlement_abort_height_is_admissible_v1(
+            21,
+            10,
+            20,
+            PrivateSettlementAbortReasonV1::Expired,
+        ));
+        assert!(!private_settlement_abort_height_is_admissible_v1(
+            u64::MAX,
+            10,
+            u64::MAX,
+            PrivateSettlementAbortReasonV1::Expired,
+        ));
     }
 
     #[test]
@@ -1558,9 +1614,50 @@ pub(crate) async fn handler_auditor_approval(
     .into_response()
 }
 
-fn exact_finalization_carrier(
+enum ExactPrivateSettlementCarrierV1<'a> {
+    Finalize(&'a FinalizeAtomicPrivateSettlementV1),
+    Abort(&'a AbortAtomicPrivateSettlementV1),
+}
+
+impl ExactPrivateSettlementCarrierV1<'_> {
+    fn manifest(&self) -> &iroha_data_model::nexus::AtomicPrivateSettlementV1 {
+        match self {
+            Self::Finalize(carrier) => &carrier.commit_bundle.manifest,
+            Self::Abort(carrier) => &carrier.manifest,
+        }
+    }
+
+    fn is_structurally_admissible(&self, current_height: u64, max_participants: u16) -> bool {
+        let manifest = self.manifest();
+        if manifest.validate().is_err() || manifest.legs.len() > usize::from(max_participants) {
+            return false;
+        }
+        match self {
+            Self::Finalize(carrier) => {
+                let candidate_receipt = carrier
+                    .commit_bundle
+                    .clone()
+                    .into_receipt(manifest.authority_context_height);
+                private_settlement_carrier_height_is_live_v1(
+                    current_height,
+                    manifest.authority_context_height,
+                    manifest.expiry_height,
+                ) && candidate_receipt.validate_shape().is_ok()
+                    && carrier.commit_bundle.legs.len() <= usize::from(max_participants)
+            }
+            Self::Abort(carrier) => private_settlement_abort_height_is_admissible_v1(
+                current_height,
+                manifest.authority_context_height,
+                manifest.expiry_height,
+                carrier.reason,
+            ),
+        }
+    }
+}
+
+fn exact_private_settlement_carrier(
     transaction: &SignedTransaction,
-) -> Result<&FinalizeAtomicPrivateSettlementV1, Response> {
+) -> Result<ExactPrivateSettlementCarrierV1<'_>, Response> {
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(error_response(
             StatusCode::BAD_REQUEST,
@@ -1573,18 +1670,20 @@ fn exact_finalization_carrier(
             "private_settlement_invalid_carrier",
         ));
     }
-    instructions[0]
-        .as_any()
-        .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
-        .ok_or_else(|| {
-            error_response(
-                StatusCode::BAD_REQUEST,
-                "private_settlement_invalid_carrier",
-            )
-        })
+    let instruction = instructions[0].as_any();
+    if let Some(carrier) = instruction.downcast_ref::<FinalizeAtomicPrivateSettlementV1>() {
+        return Ok(ExactPrivateSettlementCarrierV1::Finalize(carrier));
+    }
+    if let Some(carrier) = instruction.downcast_ref::<AbortAtomicPrivateSettlementV1>() {
+        return Ok(ExactPrivateSettlementCarrierV1::Abort(carrier));
+    }
+    Err(error_response(
+        StatusCode::BAD_REQUEST,
+        "private_settlement_invalid_carrier",
+    ))
 }
 
-/// Admit one exact sponsor-signed global carrier through ordinary transaction ingress.
+/// Admit one exact sponsor-signed global finalization or abort carrier.
 pub(crate) async fn handler_bundle_submit(
     State(app): State<SharedAppState>,
     Extension(authenticated): Extension<VerifiedCanonicalRequest>,
@@ -1601,16 +1700,13 @@ pub(crate) async fn handler_bundle_submit(
         message: "private-settlement carrier admission is unavailable".to_owned(),
     })?;
     let transaction = request.transaction;
-    let carrier =
-        exact_finalization_carrier(&transaction).map_err(|_| crate::Error::AppQueryValidation {
+    let carrier = exact_private_settlement_carrier(&transaction).map_err(|_| {
+        crate::Error::AppQueryValidation {
             code: "private_settlement_invalid_carrier",
             message: "private-settlement carrier is invalid".to_owned(),
-        })?;
-    let manifest = &carrier.commit_bundle.manifest;
-    let candidate_receipt = carrier
-        .commit_bundle
-        .clone()
-        .into_receipt(manifest.authority_context_height);
+        }
+    })?;
+    let manifest = carrier.manifest();
     let carrier_within_bound = private_settlement_carrier_within_wire_bound_v1(
         &transaction,
         config.max_carrier_bytes.get(),
@@ -1623,13 +1719,7 @@ pub(crate) async fn handler_bundle_submit(
         || transaction.authority() != &manifest.sponsor
         || transaction.fee_payment_intent() != &manifest.public_fee_intent
         || manifest.network_id != app.state.network_id
-        || !private_settlement_carrier_height_is_live_v1(
-            height,
-            manifest.authority_context_height,
-            manifest.expiry_height,
-        )
-        || candidate_receipt.validate_shape().is_err()
-        || carrier.commit_bundle.legs.len() > usize::from(config.max_participants.get())
+        || !carrier.is_structurally_admissible(height, config.max_participants.get())
         || manifest
             .expiry_height
             .checked_sub(manifest.authority_context_height)
@@ -1652,7 +1742,6 @@ pub(crate) async fn handler_bundle_submit(
         bundle_id,
         accepted_at_height: height,
         carrier_id,
-        lifecycle: PrivateSettlementLifecycleDtoV1::CommitCertified,
     })
     .into_response();
     *response.status_mut() = admitted.status();
@@ -1774,6 +1863,72 @@ pub(crate) async fn handler_bundle_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_data_model::{
+        NetworkId,
+        account::AccountId,
+        block::BlockHeader,
+        nexus::{
+            AtomicPrivateSettlementV1, DataSpaceId, LaneId, PrivateSettlementLegCommitmentV1,
+            PrivateSettlementRouteV1,
+        },
+        privacy::PrivacyPoolIdV1,
+        transaction::FeePaymentIntent,
+    };
+
+    fn abort_carrier_manifest_fixture() -> AtomicPrivateSettlementV1 {
+        let sponsor = KeyPair::from_seed(vec![0xD4; 32], Algorithm::Ed25519);
+        let mut manifest = AtomicPrivateSettlementV1 {
+            version: AtomicPrivateSettlementV1::VERSION,
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"carrier bound network")),
+            ),
+            bundle_id: Hash::new(b"carrier bound bundle"),
+            authority_context_height: 10,
+            expiry_height: 20,
+            sponsor: AccountId::new(sponsor.public_key().clone()),
+            public_fee_intent: FeePaymentIntent::authority(Vec::new(), None),
+            fee_intent_digest: Hash::new(b"carrier bound fee intent"),
+            reimbursement_terms_commitment: Hash::new(b"carrier bound reimbursement"),
+            reimbursement_leg_ordinal: 0,
+            legs: (0_u8..2)
+                .map(|ordinal| PrivateSettlementLegCommitmentV1 {
+                    ordinal,
+                    route: PrivateSettlementRouteV1 {
+                        dataspace_id: DataSpaceId::new(u64::from(ordinal) + 1),
+                        lane_id: LaneId::new(u32::from(ordinal) + 1),
+                        lane_incarnation: Hash::new([ordinal, 0x11]),
+                    },
+                    pool_id: PrivacyPoolIdV1::new([ordinal + 1; 32]),
+                    asset_binding_commitment: Hash::new([ordinal, 0x22]),
+                    audit_policy_digest: Hash::new([ordinal, 0x33]),
+                    payload_digest: Hash::new([ordinal, 0x44]),
+                    availability_certificate_digest: Hash::new([ordinal, 0x55]),
+                    delta_digest: Hash::new([ordinal, 0x66]),
+                })
+                .collect(),
+        };
+        manifest.fee_intent_digest = manifest
+            .computed_fee_intent_digest()
+            .expect("fixture fee intent hashes");
+        manifest.bundle_id = manifest
+            .computed_bundle_id()
+            .expect("fixture bundle hashes");
+        manifest
+    }
+
+    #[test]
+    fn structural_carrier_applies_governed_u16_participant_boundary() {
+        let carrier = AbortAtomicPrivateSettlementV1::new(
+            abort_carrier_manifest_fixture(),
+            PrivateSettlementAbortReasonV1::ParticipantRejected,
+        );
+        let carrier = ExactPrivateSettlementCarrierV1::Abort(&carrier);
+        let exact_participant_bound: u16 = 2;
+
+        assert!(carrier.is_structurally_admissible(10, exact_participant_bound));
+        assert!(!carrier.is_structurally_admissible(10, exact_participant_bound - 1));
+    }
 
     #[test]
     fn phase_certificate_acknowledgement_is_monotonic() {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -20,6 +21,7 @@ from typing import (
 )
 
 from ._native import load_crypto_extension
+from ._validation import _normalize_mapping_payload, _optional_uint
 from .address import AccountAddress
 
 _crypto = load_crypto_extension()
@@ -650,6 +652,7 @@ if not TYPE_CHECKING:
         """Signed transaction envelope produced by the Python SDK."""
     )
 
+
 _INSPECT_SORAFS_ORDERBOOK_SUBMISSION_FOR_DISCRIMINANT_V1 = getattr(
     _crypto, "inspect_sorafs_orderbook_submission_for_discriminant_v1", None
 )
@@ -805,6 +808,17 @@ def _normalize_bytes(value: Any, name: str, *, expected_len: Optional[int] = Non
     if expected_len is not None and len(data) != expected_len:
         raise ValueError(f"{name} must be exactly {expected_len} bytes (got {len(data)})")
     return data
+
+
+def _decode_exact_lower_hex(value: Any, name: str, *, expected_bytes: int) -> bytes:
+    expected_characters = expected_bytes * 2
+    if type(value) is not str:
+        raise TypeError(f"{name} must be a lowercase hexadecimal string")
+    if re.fullmatch(rf"[0-9a-f]{{{expected_characters}}}", value) is None:
+        raise ValueError(
+            f"{name} must contain exactly {expected_characters} lowercase hexadecimal characters"
+        )
+    return bytes.fromhex(value)
 
 
 _PROOF_BOX_MAX_ENCODED_BYTES_V1 = 64 * 1024 * 1024
@@ -966,18 +980,52 @@ def _normalize_lane_privacy_attachment(entry: Mapping[str, Any]) -> Dict[str, An
     }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class CryptoKeyPair:
     """Container for an `iroha_crypto` signature key pair."""
 
     algorithm: str
-    private_key: bytes
-    public_key: bytes
+    private_key: bytes = dataclass_field(repr=False, compare=False)
+    public_key: bytes = dataclass_field(repr=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "algorithm", normalize_crypto_algorithm(self.algorithm))
-        object.__setattr__(self, "private_key", bytes(self.private_key))
-        object.__setattr__(self, "public_key", bytes(self.public_key))
+        algorithm = normalize_crypto_algorithm(self.algorithm)
+        private_key = _normalize_bytes(self.private_key, "private_key")
+        public_key = _normalize_bytes(self.public_key, "public_key")
+        _canonical_private_key, derived_public_key = _crypto.load_keypair(
+            private_key,
+            algorithm,
+        )
+        if bytes(derived_public_key) != public_key:
+            raise ValueError("public_key does not match private_key")
+        object.__setattr__(self, "algorithm", algorithm)
+        object.__setattr__(self, "private_key", private_key)
+        object.__setattr__(self, "public_key", public_key)
+
+    def __repr__(self) -> str:
+        """Return a useful representation without disclosing private key bytes."""
+
+        return (
+            f"{type(self).__name__}(algorithm={self.algorithm!r}, "
+            f"public_key_hex={self.public_key.hex()!r})"
+        )
+
+    @classmethod
+    def _from_native_result(
+        cls,
+        algorithm: str,
+        private_key: Any,
+        public_key: Any,
+    ) -> "CryptoKeyPair":
+        """Build from one already-validated native key operation."""
+
+        if not isinstance(algorithm, str) or not algorithm:
+            raise RuntimeError("native key operation returned an invalid algorithm")
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "algorithm", algorithm)
+        object.__setattr__(instance, "private_key", _normalize_bytes(private_key, "private_key"))
+        object.__setattr__(instance, "public_key", _normalize_bytes(public_key, "public_key"))
+        return instance
 
     @property
     def private_key_hex(self) -> str:
@@ -1050,12 +1098,65 @@ class CryptoKeyPair:
         return load_keypair_from_multihash(encoded)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Ed25519KeyPair:
     """Container for an Ed25519 key pair."""
 
-    private_key: bytes
-    public_key: bytes
+    private_key: bytes = dataclass_field(repr=False, compare=False)
+    public_key: bytes = dataclass_field(repr=False)
+
+    def __post_init__(self) -> None:
+        private_key = _normalize_bytes(
+            self.private_key,
+            "private_key",
+            expected_len=ED25519_PRIVATE_KEY_LENGTH,
+        )
+        public_key = _normalize_bytes(
+            self.public_key,
+            "public_key",
+            expected_len=ED25519_PUBLIC_KEY_LENGTH,
+        )
+        _canonical_private_key, derived_public_key = _crypto.load_ed25519_keypair(
+            private_key
+        )
+        if bytes(derived_public_key) != public_key:
+            raise ValueError("public_key does not match private_key")
+        object.__setattr__(self, "private_key", private_key)
+        object.__setattr__(self, "public_key", public_key)
+
+    def __repr__(self) -> str:
+        """Return a useful representation without disclosing private key bytes."""
+
+        return f"{type(self).__name__}(public_key_hex={self.public_key.hex()!r})"
+
+    @classmethod
+    def _from_native_result(
+        cls,
+        private_key: Any,
+        public_key: Any,
+    ) -> "Ed25519KeyPair":
+        """Build from one already-validated native key operation."""
+
+        instance = object.__new__(cls)
+        object.__setattr__(
+            instance,
+            "private_key",
+            _normalize_bytes(
+                private_key,
+                "private_key",
+                expected_len=ED25519_PRIVATE_KEY_LENGTH,
+            ),
+        )
+        object.__setattr__(
+            instance,
+            "public_key",
+            _normalize_bytes(
+                public_key,
+                "public_key",
+                expected_len=ED25519_PUBLIC_KEY_LENGTH,
+            ),
+        )
+        return instance
 
     @property
     def private_key_hex(self) -> str:
@@ -1105,13 +1206,74 @@ class Ed25519KeyPair:
         return ed25519_public_key_account_id(self.public_key, discriminant=discriminant)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class Sm2KeyPair:
     """Container for an SM2 key pair."""
 
-    private_key: bytes
-    public_key: bytes
+    private_key: bytes = dataclass_field(repr=False, compare=False)
+    public_key: bytes = dataclass_field(repr=False)
     distid: str
+
+    def __post_init__(self) -> None:
+        private_key = _normalize_bytes(
+            self.private_key,
+            "private_key",
+            expected_len=SM2_PRIVATE_KEY_LENGTH,
+        )
+        public_key = _normalize_bytes(
+            self.public_key,
+            "public_key",
+            expected_len=SM2_PUBLIC_KEY_LENGTH,
+        )
+        distid = _effective_sm2_distid(self.distid)
+        _canonical_private_key, derived_public_key = _crypto.load_sm2_keypair(
+            private_key,
+            distid,
+        )
+        if bytes(derived_public_key) != public_key:
+            raise ValueError("public_key does not match private_key")
+        object.__setattr__(self, "private_key", private_key)
+        object.__setattr__(self, "public_key", public_key)
+        object.__setattr__(self, "distid", distid)
+
+    def __repr__(self) -> str:
+        """Return a useful representation without disclosing private key bytes."""
+
+        return (
+            f"{type(self).__name__}(public_key_sec1_hex={self.public_key.hex()!r}, "
+            f"distid={self.distid!r})"
+        )
+
+    @classmethod
+    def _from_native_result(
+        cls,
+        private_key: Any,
+        public_key: Any,
+        distid: str,
+    ) -> "Sm2KeyPair":
+        """Build from one already-validated native key operation."""
+
+        instance = object.__new__(cls)
+        object.__setattr__(
+            instance,
+            "private_key",
+            _normalize_bytes(
+                private_key,
+                "private_key",
+                expected_len=SM2_PRIVATE_KEY_LENGTH,
+            ),
+        )
+        object.__setattr__(
+            instance,
+            "public_key",
+            _normalize_bytes(
+                public_key,
+                "public_key",
+                expected_len=SM2_PUBLIC_KEY_LENGTH,
+            ),
+        )
+        object.__setattr__(instance, "distid", _effective_sm2_distid(distid))
+        return instance
 
     @property
     def private_key_hex(self) -> str:
@@ -1142,15 +1304,25 @@ class Sm2KeyPair:
         return verify_sm2(self.public_key, message, signature, self.distid)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
 class ConfidentialKeyset:
     """Confidential spend/view key hierarchy derived from a 32-byte seed."""
 
-    sk_spend: bytes
-    nk: bytes
-    ivk: bytes
-    ovk: bytes
-    fvk: bytes
+    sk_spend: bytes = dataclass_field(repr=False)
+    nk: bytes = dataclass_field(repr=False)
+    ivk: bytes = dataclass_field(repr=False)
+    ovk: bytes = dataclass_field(repr=False)
+    fvk: bytes = dataclass_field(repr=False)
+
+    def __post_init__(self) -> None:
+        for name in ("sk_spend", "nk", "ivk", "ovk", "fvk"):
+            value = _normalize_bytes(getattr(self, name), name, expected_len=32)
+            object.__setattr__(self, name, value)
+
+    def __repr__(self) -> str:
+        """Return a representation that does not disclose confidential keys."""
+
+        return f"{type(self).__name__}(<redacted>)"
 
     def as_hex(self) -> dict[str, str]:
         """Return all keys hex-encoded."""
@@ -1210,11 +1382,7 @@ def supported_crypto_algorithms() -> tuple[str, ...]:
 
 
 def _generic_keypair(algorithm: str, private: bytes, public: bytes) -> CryptoKeyPair:
-    return CryptoKeyPair(
-        algorithm=normalize_crypto_algorithm(algorithm),
-        private_key=bytes(private),
-        public_key=bytes(public),
-    )
+    return CryptoKeyPair._from_native_result(algorithm, private, public)
 
 
 def generate_keypair(algorithm: str) -> CryptoKeyPair:
@@ -1252,27 +1420,33 @@ def generate_ed25519_keypair() -> Ed25519KeyPair:
     """Generate a random Ed25519 key pair."""
 
     private, public = _crypto.generate_ed25519_keypair()
-    return Ed25519KeyPair(private_key=private, public_key=public)
+    return Ed25519KeyPair._from_native_result(private, public)
 
 
 def derive_ed25519_keypair_from_seed(seed: bytes) -> Ed25519KeyPair:
     """Derive an Ed25519 key pair from ``seed``."""
 
     private, public = _crypto.derive_ed25519_keypair_from_seed(seed)
-    return Ed25519KeyPair(private_key=private, public_key=public)
+    return Ed25519KeyPair._from_native_result(private, public)
 
 
 def load_ed25519_keypair(private_key: bytes) -> Ed25519KeyPair:
     """Reconstruct an Ed25519 key pair from raw private key bytes."""
 
     private, public = _crypto.load_ed25519_keypair(private_key)
-    return Ed25519KeyPair(private_key=private, public_key=public)
+    return Ed25519KeyPair._from_native_result(private, public)
 
 
 def load_ed25519_keypair_from_hex(private_key_hex: str) -> Ed25519KeyPair:
     """Reconstruct an Ed25519 key pair from a hex-encoded private key."""
 
-    return load_ed25519_keypair(bytes.fromhex(private_key_hex))
+    return load_ed25519_keypair(
+        _decode_exact_lower_hex(
+            private_key_hex,
+            "private_key_hex",
+            expected_bytes=ED25519_PRIVATE_KEY_LENGTH,
+        )
+    )
 
 
 def _effective_sm2_distid(distid: Optional[str]) -> str:
@@ -1283,7 +1457,11 @@ def _effective_sm2_distid(distid: Optional[str]) -> str:
     cleaned = distid.strip()
     if not cleaned:
         raise ValueError("distid must not be empty")
-    return cleaned
+    if cleaned != distid:
+        raise ValueError("distid must not contain surrounding whitespace")
+    if len(distid.encode("utf-8")) > 8_191:
+        raise ValueError("distid must not exceed 8191 UTF-8 bytes")
+    return distid
 
 
 def generate_sm2_keypair(distid: Optional[str] = None) -> Sm2KeyPair:
@@ -1295,7 +1473,7 @@ def generate_sm2_keypair(distid: Optional[str] = None) -> Sm2KeyPair:
         raise RuntimeError("SM2 private key length mismatch; this is a bug")
     if len(public) != SM2_PUBLIC_KEY_LENGTH:
         raise RuntimeError("SM2 public key length mismatch; this is a bug")
-    return Sm2KeyPair(private_key=bytes(private), public_key=bytes(public), distid=effective_distid)
+    return Sm2KeyPair._from_native_result(private, public, effective_distid)
 
 
 def derive_sm2_keypair_from_seed(seed: bytes, distid: Optional[str] = None) -> Sm2KeyPair:
@@ -1307,7 +1485,7 @@ def derive_sm2_keypair_from_seed(seed: bytes, distid: Optional[str] = None) -> S
         raise RuntimeError("SM2 private key length mismatch; this is a bug")
     if len(public) != SM2_PUBLIC_KEY_LENGTH:
         raise RuntimeError("SM2 public key length mismatch; this is a bug")
-    return Sm2KeyPair(private_key=bytes(private), public_key=bytes(public), distid=effective_distid)
+    return Sm2KeyPair._from_native_result(private, public, effective_distid)
 
 
 def load_sm2_keypair(private_key: bytes, distid: Optional[str] = None) -> Sm2KeyPair:
@@ -1319,7 +1497,7 @@ def load_sm2_keypair(private_key: bytes, distid: Optional[str] = None) -> Sm2Key
             f"private key must be {SM2_PRIVATE_KEY_LENGTH} bytes, got {len(private_key)}"
         )
     private, public = _crypto.load_sm2_keypair(private_key, distid)
-    return Sm2KeyPair(private_key=bytes(private), public_key=bytes(public), distid=effective_distid)
+    return Sm2KeyPair._from_native_result(private, public, effective_distid)
 
 
 def sm2_public_key_multihash(public_key: bytes, distid: Optional[str] = None) -> str:
@@ -1426,19 +1604,23 @@ def _build_confidential_keyset(payload: Mapping[str, bytes]) -> ConfidentialKeys
 def derive_confidential_keyset(spend_key: bytes) -> ConfidentialKeyset:
     """Derive the confidential key hierarchy from a 32-byte spend key."""
 
-    if len(spend_key) != 32:
-        raise ValueError("confidential spend key must be exactly 32 bytes")
-    raw = _crypto.derive_confidential_keyset(spend_key)
+    normalized_spend_key = _normalize_bytes(
+        spend_key,
+        "confidential spend key",
+        expected_len=32,
+    )
+    raw = _crypto.derive_confidential_keyset(normalized_spend_key)
     return _build_confidential_keyset(raw)
 
 
 def derive_confidential_keyset_from_hex(spend_key_hex: str) -> ConfidentialKeyset:
     """Derive the confidential key hierarchy from a hex-encoded spend key."""
 
-    try:
-        spend_key = bytes.fromhex(spend_key_hex)
-    except ValueError as exc:
-        raise ValueError("confidential spend key must be valid hex") from exc
+    spend_key = _decode_exact_lower_hex(
+        spend_key_hex,
+        "confidential spend key",
+        expected_bytes=32,
+    )
     return derive_confidential_keyset(spend_key)
 
 
@@ -1494,7 +1676,7 @@ def build_signed_transaction(
         payer, exact sponsor revision, charge assets and maxima, and gas bound
         are included in the transaction signature.
     instructions:
-        Iterable of `Instruction` instances to append using the legacy instruction executable.
+        Iterable of `Instruction` instances to append using the instruction executable.
     entries:
         Ordered executable-batch entries. Supplying this argument selects batch encoding even when
         every entry is an instruction; it is mutually exclusive with ``instructions``.
@@ -1513,25 +1695,58 @@ def build_signed_transaction(
         ``proof_bytes``, and ``verifying_key_name``.
     """
 
-    if not isinstance(fee_payment, Mapping):
-        raise TypeError("fee_payment must be a FeePaymentIntent mapping")
     network_id = _require_network_id(network_id)
-    fee_payment_json = json.dumps(dict(fee_payment), separators=(",", ":"))
+    authority = _require_exact_non_empty_string(authority, "authority")
+    if type(private_key) is not bytes:
+        raise TypeError("private_key must be exact immutable bytes")
+    if len(private_key) != ED25519_PRIVATE_KEY_LENGTH:
+        raise ValueError(
+            f"private_key must contain exactly {ED25519_PRIVATE_KEY_LENGTH} bytes"
+        )
+    if instructions is not None and entries is not None:
+        raise ValueError("instructions and entries are mutually exclusive")
+    normalized_fee_payment = _normalize_mapping_payload(fee_payment, "fee_payment")
+    normalized_creation_time_ms = _optional_uint(
+        creation_time_ms,
+        "creation_time_ms",
+        maximum=(1 << 64) - 1,
+        allow_zero=True,
+    )
+    normalized_ttl_ms = _optional_uint(
+        ttl_ms,
+        "ttl_ms",
+        maximum=(1 << 64) - 1,
+        allow_zero=False,
+    )
+    normalized_nonce = _optional_uint(
+        nonce,
+        "nonce",
+        maximum=(1 << 32) - 1,
+        allow_zero=False,
+    )
+    normalized_metadata = (
+        None
+        if metadata is None
+        else _normalize_mapping_payload(metadata, "metadata")
+    )
+    fee_payment_json = json.dumps(
+        normalized_fee_payment,
+        allow_nan=False,
+        separators=(",", ":"),
+    )
     builder = TransactionBuilder(
         network_id,
         authority,
         fee_payment_json,
     )
-    if creation_time_ms is not None:
-        builder.set_creation_time_ms(int(creation_time_ms))
-    if ttl_ms is not None:
-        builder.set_ttl_ms(int(ttl_ms))
-    if nonce is not None:
-        builder.set_nonce(int(nonce))
-    if metadata is not None:
-        builder.set_metadata(metadata)
-    if instructions is not None and entries is not None:
-        raise ValueError("instructions and entries are mutually exclusive")
+    if normalized_creation_time_ms is not None:
+        builder.set_creation_time_ms(normalized_creation_time_ms)
+    if normalized_ttl_ms is not None:
+        builder.set_ttl_ms(normalized_ttl_ms)
+    if normalized_nonce is not None:
+        builder.set_nonce(normalized_nonce)
+    if normalized_metadata is not None:
+        builder.set_metadata(normalized_metadata)
     if entries is not None:
         builder.use_executable_batch()
         for index, entry in enumerate(entries):

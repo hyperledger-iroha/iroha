@@ -1767,8 +1767,6 @@ pub(crate) enum PostFinalityCleanupTarget {
     SafetyWal,
     /// Exact durable body files for the finalized height.
     DurableBodies,
-    /// Reconstructed payload chunk files for the finalized height.
-    PayloadChunks,
     /// Ordered I/O worker lifecycle or protocol state.
     CleanupWorker,
 }
@@ -1778,7 +1776,6 @@ impl PostFinalityCleanupTarget {
         match self {
             Self::SafetyWal => "safety_wal",
             Self::DurableBodies => "durable_bodies",
-            Self::PayloadChunks => "payload_chunks",
             Self::CleanupWorker => "cleanup_worker",
         }
     }
@@ -9764,7 +9761,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<(), EffectTransportError> {
         let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
+            wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
         ));
         if !ingress_ownership.validate_exact()
             || !ingress_ownership.matches_message(&message)
@@ -9775,6 +9772,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
+        let chunk = match message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ..
+            }) => chunk,
+            _ => {
+                return Err(self.fail_closed_transport(
+                    "payload chunk ownership envelope changed variant",
+                    services,
+                ));
+            }
+        };
         self.accept_payload_chunk_inner(work_id, chunk, authenticated_sender, services)
     }
     /// Test-only direct chunk helper. Production must preserve the ownership

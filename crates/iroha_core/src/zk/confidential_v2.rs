@@ -5495,10 +5495,9 @@ fn prepare_kagemusha_topup_shield_v3(
         .ok_or_else(|| "Kagemusha top-up diversifier must be a non-zero Pasta scalar".to_owned())?;
     let leaf_index_usize = usize::try_from(leaf_index)
         .map_err(|_| "Kagemusha top-up leaf_index does not fit usize".to_owned())?;
-    let topup_insertion_capacity = usize::try_from(
-        iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2,
-    )
-    .expect("the fixed Kagemusha top-up insertion capacity fits usize");
+    let topup_insertion_capacity =
+        usize::try_from(iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2)
+            .expect("the fixed Kagemusha top-up insertion capacity fits usize");
     if leaf_index_usize >= topup_insertion_capacity {
         return Err(format!(
             "Kagemusha top-up leaf_index must be < {topup_insertion_capacity} so the complete recursive lifecycle and final empty frontier leaf remain available"

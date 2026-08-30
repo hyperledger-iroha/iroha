@@ -647,7 +647,6 @@ fn cancelling_fetch_consumes_queued_reconstruction_owner() {
 #[test]
 fn fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -804,7 +803,6 @@ fn retransmitting_fetch_with_conflicting_queued_manifest_fails_closed() {
 #[test]
 fn cancelling_fetch_consumes_live_session_and_manifest_owner() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -827,7 +825,6 @@ fn cancelling_fetch_consumes_live_session_and_manifest_owner() {
 #[test]
 fn duplicate_authenticated_chunk_skips_reconstruction() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     service.context.da_layout.data_shards = 3;
     service.context.da_layout.parity_shards = 2;
@@ -870,11 +867,11 @@ fn duplicate_authenticated_chunk_skips_reconstruction() {
     )
     .payload()
     .to_vec();
-    let authenticated = authenticate_payload_chunk(&validated, chunk, &sender)
+    let authenticated = authenticate_payload_chunk(&validated, chunk.clone(), &sender)
         .expect("authenticate canonical chunk");
     assert_eq!(
         service
-            .accept_authenticated_chunk(&task, authenticated.clone())
+            .accept_authenticated_chunk(&task, authenticated)
             .expect("accept first chunk"),
         AuthenticatedChunkDisposition::Accepted
     );
@@ -884,9 +881,11 @@ fn duplicate_authenticated_chunk_skips_reconstruction() {
         .expect("manifest-backed fetch session")
         .reconstruction_attempts();
     assert_eq!(attempts_after_first, 1);
+    let duplicate = authenticate_payload_chunk(&validated, chunk, &sender)
+        .expect("authenticate an independently received exact duplicate");
     assert_eq!(
         service
-            .accept_authenticated_chunk(&task, authenticated)
+            .accept_authenticated_chunk(&task, duplicate)
             .expect("accept exact duplicate"),
         AuthenticatedChunkDisposition::Accepted
     );
@@ -905,7 +904,6 @@ fn duplicate_authenticated_chunk_skips_reconstruction() {
 #[test]
 fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let mut invalid_body = body.clone();
@@ -979,6 +977,93 @@ fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     assert!(!service.output_guard.restart_required());
 }
 #[test]
+fn noncanonical_parity_manifest_reaches_the_executor_canonicality_gate() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    service.context.da_layout.data_shards = 3;
+    service.context.da_layout.parity_shards = 2;
+    service
+        .context
+        .validate()
+        .expect("multi-shard fixture context");
+    let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let (canonical_manifest, mut chunks) = payload.into_parts();
+    let data_shards = usize::from(service.context.da_layout.data_shards);
+    let stripe_width = usize::from(
+        service.context.da_layout.data_shards + service.context.da_layout.parity_shards,
+    );
+    chunks[data_shards][0] ^= 1;
+    let noncanonical_manifest = wire::PayloadManifest::derive(
+        &service.context,
+        proposal.round,
+        proposal.subject,
+        u64::try_from(body.len()).expect("body length"),
+        &chunks,
+    )
+    .expect("derive structurally valid noncanonical parity manifest");
+    assert_ne!(noncanonical_manifest, canonical_manifest);
+
+    let tag = EventTag::new(
+        service.context.height,
+        proposal.round.view,
+        Generation::new(service.context.height),
+    );
+    let task = BodyFetchTask::ordinary_for_test(62, tag, noncanonical_manifest.clone());
+    service
+        .enqueue_body_fetch(task.clone())
+        .expect("open noncanonical remote reconstruction session");
+    let validated = service.fetches[&task.id()]
+        .chunks
+        .as_ref()
+        .expect("manifest-backed noncanonical fetch session")
+        .validated_manifest()
+        .clone();
+    let sender = service.context.roster[0].validator.clone();
+    for (index, bytes) in chunks.iter().enumerate() {
+        if index % stripe_width >= data_shards {
+            continue;
+        }
+        let mut chunk = wire::PayloadChunk {
+            manifest_hash: validated.manifest_hash(),
+            index: u32::try_from(index).expect("chunk index"),
+            bytes: bytes.clone(),
+            sender: 0,
+            signature: Vec::new(),
+        };
+        chunk.signature = Signature::new(
+            keys[0].private_key(),
+            &chunk
+                .signature_payload(&validated)
+                .expect("chunk signature payload")
+                .signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let authenticated = authenticate_payload_chunk(&validated, chunk, &sender)
+            .expect("authenticate data chunk");
+        assert_eq!(
+            service
+                .accept_authenticated_chunk(&task, authenticated)
+                .expect("the service defers canonicality to the executor"),
+            AuthenticatedChunkDisposition::Accepted
+        );
+    }
+    assert!(service.fetches.is_empty());
+    assert!(service.fetch_by_manifest.is_empty());
+    assert!(matches!(
+        service.local_completions.pop_front(),
+        Some(LocalCompletion::Reconstructed {
+            task: completed_task,
+            manifest,
+            body: completed_body,
+        }) if completed_task == task
+            && manifest == noncanonical_manifest
+            && completed_body.as_ref() == body.as_slice()
+    ));
+    assert!(service.local_completions.is_empty());
+    assert!(!service.output_guard.restart_required());
+}
+#[test]
 fn cancelling_unowned_fetch_fails_closed() {
     let (mut service, keys) = fixture();
     allow_fixture_block_payload(&mut service.context);
@@ -998,7 +1083,6 @@ fn cancelling_unowned_fetch_fails_closed() {
 #[test]
 fn cancelling_fetch_with_overlapping_owners_fails_closed() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1034,7 +1118,6 @@ fn cancelling_fetch_with_overlapping_owners_fails_closed() {
 #[test]
 fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1067,7 +1150,6 @@ fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
         Some(&hybrid.id())
     );
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1104,7 +1186,6 @@ fn service_monotonically_upgrades_body_fetch_authority_in_both_orders() {
 #[test]
 fn certified_completion_retires_exact_live_or_reconstructed_owner() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1209,7 +1290,6 @@ fn certified_completion_retires_exact_live_or_reconstructed_owner() {
 #[test]
 fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1267,7 +1347,6 @@ fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation
 #[test]
 fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1304,7 +1383,6 @@ fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
 #[test]
 fn corrupt_manifest_index_is_preserved_and_fails_closed_before_cancellation() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1362,7 +1440,6 @@ fn duplicate_queued_fetch_owners_fail_closed_without_consumption() {
 #[test]
 fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(
@@ -1408,7 +1485,6 @@ fn missing_orphan_and_wrong_manifest_indices_fail_closed_without_consumption() {
     assert!(service.fetches.is_empty());
     assert!(service.output_guard.restart_required());
     let (mut service, keys) = fixture();
-    let _chunk_root = install_temporary_chunk_root(&mut service);
     allow_fixture_block_payload(&mut service.context);
     let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let tag = EventTag::new(

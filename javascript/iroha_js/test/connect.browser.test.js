@@ -224,13 +224,12 @@ test("Connect session vector fixture matches browser crypto helpers", () => {
   );
 });
 
-test("Connect browser wallet signature encoder validates algorithm labels before byte encoding", () => {
+test("Connect browser keeps wallet signatures on the canonical numeric algorithm tag", () => {
   for (const target of ["../src/connect.browser.js", "../dist/connect.browser.js"]) {
     const source = readFileSync(new URL(target, import.meta.url), "utf8");
-    assert.match(source, /normalizeWalletSignatureAlgorithmTag/);
-    assert.match(source, /algorithm !== algorithm\.trim\(\)/);
-    assert.match(source, /must not contain surrounding whitespace/);
-    assert.doesNotMatch(source, /const normalized = algorithm\.trim\(\)/);
+    assert.match(source, /payload\.signature\.algorithm !== ALGORITHM_ED25519/);
+    assert.doesNotMatch(source, /normalizeWalletSignatureAlgorithmTag/);
+    assert.doesNotMatch(source, /encodeWalletSignature/);
     assert.doesNotMatch(source, /Uint8Array\.of\(signature\.algorithm\)/);
   }
 });

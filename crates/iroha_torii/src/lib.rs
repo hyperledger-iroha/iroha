@@ -2045,15 +2045,37 @@ struct TxHistoryAccessPolicy {
     jwt: Option<TxHistoryJwtConfig>,
     mandatory_aliases: tx_history_alias_policy::MandatoryAliasPolicy,
     allowed_asset_definition_id: Option<String>,
+    startup_error: Option<TxHistoryStartupError>,
 }
 #[cfg(feature = "app_api")]
 impl TxHistoryAccessPolicy {
+    fn with_startup_error(error: TxHistoryStartupError) -> Self {
+        Self {
+            startup_error: Some(error),
+            ..Self::default()
+        }
+    }
+
     fn is_mandatory_alias(&self, dataspace_id: &str, alias: &str) -> bool {
         let dataspace = dataspace_id.trim().to_ascii_lowercase();
         let canonical_alias = normalize_tx_history_alias(alias);
         self.mandatory_aliases
             .contains(dataspace.as_str(), canonical_alias.as_str())
     }
+}
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, thiserror::Error)]
+enum TxHistoryStartupError {
+    #[error("failed to load mandatory-alias policy `{path}`: {reason}")]
+    MandatoryAliasPolicy { path: PathBuf, reason: String },
+    #[error("unsupported JWT algorithm `{algorithm}`")]
+    UnsupportedJwtAlgorithm { algorithm: String },
+    #[error("JWT secret is required for `{algorithm}`")]
+    MissingJwtSecret { algorithm: String },
+    #[error("JWT public key is required for `{algorithm}`")]
+    MissingJwtPublicKey { algorithm: String },
+    #[error("invalid JWT public key for `{algorithm}`: {reason}")]
+    InvalidJwtPublicKey { algorithm: String, reason: String },
 }
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
@@ -2082,7 +2104,7 @@ struct TxHistoryJwtClaims {
 }
 #[cfg(feature = "app_api")]
 fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
-    match value.trim().to_ascii_uppercase().as_str() {
+    match value {
         "HS256" => Some(JwtAlgorithm::HS256),
         "HS384" => Some(JwtAlgorithm::HS384),
         "HS512" => Some(JwtAlgorithm::HS512),
@@ -2094,7 +2116,7 @@ fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
         "PS512" => Some(JwtAlgorithm::PS512),
         "ES256" => Some(JwtAlgorithm::ES256),
         "ES384" => Some(JwtAlgorithm::ES384),
-        "EDDSA" => Some(JwtAlgorithm::EdDSA),
+        "EdDSA" => Some(JwtAlgorithm::EdDSA),
         _ => None,
     }
 }
@@ -2135,9 +2157,9 @@ fn canonical_tx_history_subject_alias(
 fn load_tx_history_access_policy(
     config: Option<&iroha_config::parameters::actual::ToriiTxHistory>,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-) -> TxHistoryAccessPolicy {
+) -> Result<TxHistoryAccessPolicy, TxHistoryStartupError> {
     let Some(config) = config else {
-        return TxHistoryAccessPolicy::default();
+        return Ok(TxHistoryAccessPolicy::default());
     };
     let mandatory_aliases = config
         .mandatory_aliases_path
@@ -2148,32 +2170,34 @@ fn load_tx_history_access_policy(
                 catalog,
                 config.mandatory_aliases_max_file_bytes,
             )
+            .map_err(|error| TxHistoryStartupError::MandatoryAliasPolicy {
+                path: path.to_path_buf(),
+                reason: error.to_string(),
+            })
         })
+        .transpose()?
         .unwrap_or_default();
     let jwt = config.jwt.as_ref().map(|jwt| {
-        let algorithm = parse_tx_history_jwt_algorithm(&jwt.algorithm).unwrap_or_else(|| {
-            panic!(
-                "unsupported torii.tx_history.jwt.algorithm `{}`",
-                jwt.algorithm
-            )
-        });
+        let algorithm = parse_tx_history_jwt_algorithm(&jwt.algorithm).ok_or_else(|| {
+            TxHistoryStartupError::UnsupportedJwtAlgorithm {
+                algorithm: jwt.algorithm.clone(),
+            }
+        })?;
         let key = match algorithm {
             JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
-                let secret = jwt.secret.as_ref().unwrap_or_else(|| {
-                    panic!(
-                        "torii.tx_history.jwt.secret is required for `{}`",
-                        jwt.algorithm
-                    )
-                });
+                let secret = jwt.secret.as_ref().ok_or_else(|| {
+                    TxHistoryStartupError::MissingJwtSecret {
+                        algorithm: jwt.algorithm.clone(),
+                    }
+                })?;
                 TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec())
             }
             _ => {
-                let pem = jwt.public_key_pem.as_ref().unwrap_or_else(|| {
-                    panic!(
-                        "torii.tx_history.jwt.public_key_pem is required for `{}`",
-                        jwt.algorithm
-                    )
-                });
+                let pem = jwt.public_key_pem.as_ref().ok_or_else(|| {
+                    TxHistoryStartupError::MissingJwtPublicKey {
+                        algorithm: jwt.algorithm.clone(),
+                    }
+                })?;
                 TxHistoryJwtKey::Pem(pem.clone())
             }
         };
@@ -2185,14 +2209,26 @@ fn load_tx_history_access_policy(
         };
         cfg.key
             .decoding_key(cfg.algorithm)
-            .unwrap_or_else(|err| panic!("invalid torii.tx_history.jwt config: {err}"));
-        cfg
-    });
-    TxHistoryAccessPolicy {
+            .map_err(|reason| TxHistoryStartupError::InvalidJwtPublicKey {
+                algorithm: jwt.algorithm.clone(),
+                reason,
+            })?;
+        Ok(cfg)
+    }).transpose()?;
+    Ok(TxHistoryAccessPolicy {
         jwt,
         mandatory_aliases,
         allowed_asset_definition_id: config.allowed_asset_definition_id.clone(),
-    }
+        startup_error: None,
+    })
+}
+#[cfg(feature = "app_api")]
+fn ensure_tx_history_access_policy_ready(policy: &TxHistoryAccessPolicy) -> Result<(), Error> {
+    policy.startup_error.as_ref().map_or(Ok(()), |error| {
+        Err(Error::TxHistoryStartup {
+            reason: error.to_string(),
+        })
+    })
 }
 #[cfg(feature = "app_api")]
 fn parse_public_dataspace_upstream_selector(
@@ -15035,6 +15071,13 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
 fn resolve_tx_history_allowed_asset_definition_id(
     app: &AppState,
 ) -> Result<Option<AssetDefinitionId>, Error> {
+    if app.tx_history_access_policy.startup_error.is_some() {
+        return Err(Error::AppServiceUnavailable {
+            code: "tx_history_configuration_invalid",
+            message: "transaction history is unavailable because its runtime configuration is invalid"
+                .to_owned(),
+        });
+    }
     app.tx_history_access_policy
         .allowed_asset_definition_id
         .as_deref()
@@ -43992,6 +44035,13 @@ fn tx_history_viewer_from_headers(
     app: &SharedAppState,
     headers: &HeaderMap,
 ) -> Result<TxHistoryViewerContext, AxResponse> {
+    if app.tx_history_access_policy.startup_error.is_some() {
+        return Err(tx_history_reject(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "tx_history_configuration_invalid",
+            "transaction history is unavailable because its runtime configuration is invalid",
+        ));
+    }
     let Some(jwt) = app.tx_history_access_policy.jwt.as_ref() else {
         return Err(tx_history_reject(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -51684,13 +51734,18 @@ impl Torii {
             Some(service)
         });
         #[cfg(feature = "app_api")]
-        let tx_history_access_policy =
-            Arc::new(if let Some(tx_history) = config.tx_history.as_ref() {
+        let tx_history_access_policy = Arc::new(if let Some(tx_history) = config.tx_history.as_ref() {
+            let result = {
                 let nexus = state.nexus_snapshot();
                 load_tx_history_access_policy(Some(tx_history), &nexus.dataspace_catalog)
-            } else {
-                TxHistoryAccessPolicy::default()
-            });
+            };
+            match result {
+                Ok(policy) => policy,
+                Err(error) => TxHistoryAccessPolicy::with_startup_error(error),
+            }
+        } else {
+            TxHistoryAccessPolicy::default()
+        });
         #[cfg(feature = "app_api")]
         let public_dataspace_upstreams = Arc::new(if emergency_fast {
             BTreeMap::new()
@@ -52869,6 +52924,9 @@ impl Torii {
         shutdown_signal: ShutdownSignal,
     ) -> core::result::Result<(), Report<Error>> {
         let emergency_fast = self.kura.emergency_fast_startup_enabled();
+        #[cfg(feature = "app_api")]
+        ensure_tx_history_access_policy_ready(self.tx_history_access_policy.as_ref())
+            .map_err(Report::new)?;
         #[cfg(feature = "app_api")]
         if let Some(code) = self.sorafs_moderation_startup_error {
             return Err(Report::new(Error::SorafsModerationStartup { code }));
@@ -54450,6 +54508,12 @@ pub enum Error {
         /// Stable payload-free startup failure code.
         code: &'static str,
     },
+    /// Transaction-history runtime configuration failed during startup: {reason}
+    #[cfg(feature = "app_api")]
+    TxHistoryStartup {
+        /// Operator-facing configuration failure reason.
+        reason: String,
+    },
     /// Failed to serialize response payload for `{context}`: {source}
     SerializationFailure {
         /// Logical context for the serialization failure.
@@ -54891,6 +54955,14 @@ impl Error {
                     "SoraFS evidence-viewer runtime failed to start",
                 )
             }
+            #[cfg(feature = "app_api")]
+            Self::TxHistoryStartup { reason } => {
+                iroha_logger::error!(%reason, "transaction-history runtime failed to start");
+                ErrorEnvelope::new(
+                    "tx_history_startup_error",
+                    "transaction-history runtime failed to start",
+                )
+            }
             Self::SerializationFailure { context, source } => {
                 iroha_logger::error!(
                     %context,
@@ -54992,6 +55064,8 @@ impl Error {
             SorafsModerationStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
             #[cfg(feature = "app_api")]
             SorafsEvidenceViewerStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            #[cfg(feature = "app_api")]
+            TxHistoryStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
             LaneLifecycle { .. } => StatusCode::BAD_REQUEST,
             Config(_) => StatusCode::NOT_FOUND,
             SerializationFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,

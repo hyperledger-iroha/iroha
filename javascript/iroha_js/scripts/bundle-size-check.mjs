@@ -18,22 +18,21 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "src", "toriiClient.js"),
     platform: "node",
     target: "node18",
-    // This direct entrypoint intentionally exposes the complete Torii surface. The
-    // protected pre-reset tree measured 945,975 bytes on the same pinned runner.
-    // SCCP, Parliament, and validation-fee proof validation now share one optional
-    // async boundary, leaving a 941,461-byte eager closure (-0.48%). The 930 KiB
-    // ceiling leaves 10,859 bytes while both lazy closures remain independently
-    // inventoried and bounded below.
-    limitKb: 930,
-    reviewedEagerBytes: 941_461,
-    reviewedCombinedBytes: 1_151_436,
+    // The first-release simplification audit measured a 1,082,470-byte eager
+    // closure before moving Norito-heavy validation, Kagemusha, SCCP, and route
+    // governance behind the existing optional boundary. The reviewed eager path
+    // is now 815,608 bytes (-24.7%); the 797 KiB ceiling leaves 520 bytes while
+    // every deferred closure remains independently inventoried below.
+    limitKb: 797,
+    reviewedEagerBytes: 815_608,
+    reviewedCombinedBytes: 1_214_644,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./toriiOptional.js",
         entryPoint: join(ROOT, "src", "toriiOptional.js"),
         edgeCount: 1,
-        reviewedBytes: 137_044,
-        limitKb: 134,
+        reviewedBytes: 326_105,
+        limitKb: 319,
       }),
       Object.freeze({
         specifier: "./sumeragiTyped.js",
@@ -50,12 +49,11 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
-    // shipped entrypoint rather than the Node-capable source graph. The protected
-    // pre-reset tree measured 290,498 bytes. Canonical ProofAttachment handling
-    // and shared validation/finalization corridors bring current V1 to 298,553
-    // bytes (+2.77%).
-    // The 297 KiB ceiling remains below a 5% predecessor regression.
-    limitKb: 297,
+    // shipped entrypoint rather than the Node-capable source graph. The reviewed
+    // first-release codec closure is 310,503 bytes after exact ProofAttachment,
+    // instruction archive, and response-binding validation. The 304 KiB ceiling
+    // leaves 793 bytes and preserves the release-wide 5% regression policy.
+    limitKb: 304,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -111,14 +109,14 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner. Its reviewed eager code-split closure is 477,639 bytes
-    // (+4.27%) after shared validation paths are interned. The unchanged 469 KiB
-    // eager ceiling leaves 2,617 bytes. The typed Sumeragi parser and deployment
-    // submit continuation are audited below as non-overlapping lazy closures.
-    limitKb: 469,
-    reviewedEagerBytes: 477_639,
-    reviewedCombinedBytes: 560_508,
+    // The checked-in first-release aggregate measured a 517,074-byte eager split
+    // closure on the pinned runner. The reviewed strict-response and exact-export
+    // surface is 517,186 bytes; the 506 KiB ceiling leaves 958 bytes. The typed Sumeragi
+    // parser and deployment-submit continuation remain separately inventoried so
+    // aggregate startup and deferred code cannot trade against one another.
+    limitKb: 506,
+    reviewedEagerBytes: 517_186,
+    reviewedCombinedBytes: 600_068,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
@@ -131,7 +129,7 @@ export const BUNDLE_TARGETS = Object.freeze([
         specifier: "./smartContractDeploymentSubmit.js",
         entryPoint: join(ROOT, "dist", "smartContractDeploymentSubmit.js"),
         edgeCount: 1,
-        reviewedBytes: 9_177,
+        reviewedBytes: 9_190,
         limitKb: 9,
       }),
     ]),

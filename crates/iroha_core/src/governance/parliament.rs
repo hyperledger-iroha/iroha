@@ -29,6 +29,7 @@ use iroha_data_model::{
         GovernanceCertificateV1, GovernanceExpectedHeadV1, GovernanceStageV1,
         MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1, MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1,
         MAX_PARLIAMENT_BALLOT_RETRIES_V1, MAX_PARLIAMENT_BODY_TARGET_SEATS_V1,
+        MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1, MAX_PARLIAMENT_CITIZENS_V1,
         MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, MAX_PARLIAMENT_SORTITION_RETRIES_V1,
         ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, ParliamentBallotAttemptV1,
         ParliamentBallotCertificateBindingV1, ParliamentBallotFailureKindV1, ParliamentBody,
@@ -1029,6 +1030,33 @@ pub struct ParliamentAttemptStateV1 {
 
 fn root_is_zero(root: &[u8; 32]) -> bool {
     root.iter().all(|byte| *byte == 0)
+}
+
+fn candidate_snapshot_fits_resource_bounds_v1(candidate_snapshot: &[AccountId]) -> bool {
+    if candidate_snapshot.len()
+        > usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+            .expect("the V1 Parliament citizen cap fits usize")
+    {
+        return false;
+    }
+    let canonical_flags = norito::core::default_encode_flags();
+    let _canonical_flags = norito::core::DecodeFlagsGuard::enter(canonical_flags);
+    candidate_snapshot
+        .iter()
+        .try_fold(norito::core::seq_len_prefix_len(0), |bytes, candidate| {
+            norito::core::encoded_payload_len(candidate)
+                .ok()
+                .and_then(|candidate_bytes| {
+                    bytes
+                        .checked_add(norito::core::len_prefix_len_with_flags(
+                            candidate_bytes,
+                            canonical_flags,
+                        ))?
+                        .checked_add(candidate_bytes)
+                })
+                .filter(|next| *next <= MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1)
+        })
+        .is_some()
 }
 
 fn election_awaiting_pulse_shape_is_empty(election: &ParliamentElectionStateV1) -> bool {
@@ -2108,6 +2136,17 @@ impl ParliamentAttemptStateV1 {
     #[must_use]
     pub const fn certificate(&self) -> Option<&GovernanceCertificateV1> {
         self.certificate.as_ref()
+    }
+
+    /// Return the exact scheduled height while this attempt awaits enactment.
+    #[must_use]
+    pub(crate) fn certified_enactment_height_v1(&self) -> Option<u64> {
+        if !matches!(self.attempt.status, GovernanceAttemptStatusV1::Certified) {
+            return None;
+        }
+        self.certificate
+            .as_ref()
+            .map(|certificate| certificate.enact_at_height)
     }
 
     /// Return the committed height of a terminal enactment outcome.

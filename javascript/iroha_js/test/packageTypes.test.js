@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import ts from "typescript";
 
@@ -188,7 +188,7 @@ test("every public export has a safe runtime target and an explicit declaration 
   );
   assert.deepEqual(packageJson.exports["./norito"], {
     import: "./dist/norito.js",
-    types: "./index.d.ts",
+    types: "./norito.d.ts",
   });
 });
 
@@ -332,10 +332,20 @@ test("runtime namespace declarations expose exactly their module exports", async
     checker.getExportsOfModule(moduleSymbol).map((symbol) => [symbol.name, symbol]),
   );
 
-  for (const [namespaceName, moduleName] of [
+  for (const [namespaceName, moduleName, internalNames = []] of [
     ["Torii", "toriiClient"],
-    ["Norito", "norito"],
-    ["Crypto", "crypto"],
+    ["Norito", "norito", ["_canonicalAccountIdNoritoValue"]],
+    [
+      "Crypto",
+      "crypto",
+      [
+        "CONFIDENTIAL_MEMO_SUITES_V1",
+        "ConfidentialMemoKeypairV1",
+        "generateConfidentialMemoKeypairV1",
+        "openConfidentialMemoV1",
+        "sealConfidentialMemoV1",
+      ],
+    ],
   ]) {
     const namespaceSymbol = declarationExports.get(namespaceName);
     assert.ok(namespaceSymbol, `missing ${namespaceName} declaration`);
@@ -348,12 +358,154 @@ test("runtime namespace declarations expose exactly their module exports", async
       .map((symbol) => symbol.name)
       .sort();
     const runtimeModule = await import(`../src/${moduleName}.js`);
+    const internal = new Set(internalNames);
+    const runtimeNames = Object.keys(runtimeModule).filter((name) => !internal.has(name));
     assert.deepEqual(
       declaredNames,
-      Object.keys(runtimeModule).sort(),
+      runtimeNames.sort(),
       `${namespaceName} declaration diverges from ${moduleName}.js`,
     );
   }
+});
+
+test("root declarations expose exactly the source and distribution values", async () => {
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const program = ts.createProgram([declarationPath], {
+    strict: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    skipLibCheck: false,
+  });
+  const declarations = program.getSourceFile(declarationPath);
+  assert.ok(declarations);
+  const checker = program.getTypeChecker();
+  const moduleSymbol = checker.getSymbolAtLocation(declarations);
+  assert.ok(moduleSymbol);
+  const declaredValues = checker
+    .getExportsOfModule(moduleSymbol)
+    .filter((symbol) => {
+      const target =
+        (symbol.flags & ts.SymbolFlags.Alias) !== 0
+          ? checker.getAliasedSymbol(symbol)
+          : symbol;
+      return (target.flags & ts.SymbolFlags.Value) !== 0;
+    })
+    .map((symbol) => symbol.name)
+    .sort();
+
+  for (const runtimeTarget of ["../src/index.js", "../dist/index.js"]) {
+    const runtime = await import(runtimeTarget);
+    assert.deepEqual(
+      Object.keys(runtime).sort(),
+      declaredValues,
+      `${runtimeTarget} diverges from the root value declarations`,
+    );
+  }
+});
+
+test("Torii client declarations never promise unimplemented methods", async () => {
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const declarationText = fs.readFileSync(declarationPath, "utf8");
+  const source = ts.createSourceFile(
+    declarationPath,
+    declarationText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+
+  for (const [className, runtimeTarget] of [
+    ["ToriiClient", "../src/toriiClient.js"],
+    ["ToriiBrowserClient", "../src/toriiBrowserClient.js"],
+  ]) {
+    const declaration = source.statements.find(
+      (statement) =>
+        ts.isClassDeclaration(statement) && statement.name?.text === className,
+    );
+    assert.ok(declaration, `missing ${className} declaration`);
+    const runtime = await import(runtimeTarget);
+    const runtimeClass = runtime[className];
+    assert.equal(typeof runtimeClass, "function", `missing runtime ${className}`);
+
+    for (const member of declaration.members.filter(ts.isMethodDeclaration)) {
+      const methodName = member.name?.getText(source);
+      assert.ok(methodName, `${className} has an unnamed method declaration`);
+      const isStatic = member.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword,
+      );
+      const owner = isStatic ? runtimeClass : runtimeClass.prototype;
+      assert.equal(
+        typeof owner[methodName],
+        "function",
+        `${className}.${methodName} is declared but not implemented`,
+      );
+    }
+  }
+});
+
+test("narrow subpath declarations never advertise missing runtime values", async () => {
+  const packageJson = readPackageJson();
+  const subpaths = [
+    "./address",
+    "./normalizers",
+    "./blake2b",
+    "./instruction-builders",
+    "./torii",
+    "./torii-browser",
+    "./norito",
+    "./sccp",
+    "./sorafs",
+    "./crypto",
+  ];
+
+  for (const subpath of subpaths) {
+    const descriptor = packageJson.exports[subpath];
+    const declarationPath = path.resolve(PACKAGE_ROOT, descriptor.types);
+    const program = ts.createProgram([declarationPath], {
+      strict: true,
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      skipLibCheck: false,
+    });
+    const declaration = program.getSourceFile(declarationPath);
+    assert.ok(declaration, `${subpath} declaration did not load`);
+    const declaredValues = declaration.statements
+      .filter(
+        (statement) =>
+          ts.isExportDeclaration(statement) &&
+          statement.isTypeOnly !== true &&
+          statement.exportClause !== undefined &&
+          ts.isNamedExports(statement.exportClause),
+      )
+      .flatMap((statement) =>
+        statement.exportClause.elements
+          .filter((element) => element.isTypeOnly !== true)
+          .map((element) => element.name.text),
+      )
+      .sort();
+
+    const runtimeTargets = new Set(
+      [descriptor.import, descriptor.browser].filter(Boolean),
+    );
+    for (const runtimeTarget of runtimeTargets) {
+      const runtimePath = path.resolve(PACKAGE_ROOT, runtimeTarget);
+      const runtime = await import(pathToFileURL(runtimePath).href);
+      for (const name of declaredValues) {
+        assert.equal(
+          Object.hasOwn(runtime, name),
+          true,
+          `${subpath} declares ${name}, but ${runtimeTarget} does not export it`,
+        );
+      }
+    }
+  }
+
+  const addressText = fs.readFileSync(path.join(PACKAGE_ROOT, "address.d.ts"), "utf8");
+  const toriiText = fs.readFileSync(path.join(PACKAGE_ROOT, "torii.d.ts"), "utf8");
+  assert.doesNotMatch(addressText, /\bToriiClient\b/u);
+  assert.doesNotMatch(toriiText, /\bNetworkId\b/u);
 });
 
 test("SoraFS gateway denial declarations expose only governed catalog evidence", () => {

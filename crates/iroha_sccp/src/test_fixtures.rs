@@ -377,7 +377,7 @@ fn ton_outbound_policy() -> SccpOutboundProofPolicyV1 {
         sora_finality_anchor: outbound_policy().sora_finality_anchor,
     }
 }
-/// Build the deterministic proved burn-and-record policy used by SCCP tests.
+/// Build the deterministic contract burn-and-record policy used by SCCP tests.
 #[must_use]
 pub fn sccp_sora_outbound_execution_policy_test_fixture_v1() -> SccpSoraOutboundExecutionPolicyV1 {
     SccpSoraOutboundExecutionPolicyV1 {

@@ -46,7 +46,6 @@ import {
 } from "./noritoGovernanceBoundary.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
-import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1,
   validatePrivacyExact12NetworkBindingsV1,
@@ -75,11 +74,9 @@ const NORITO_SUPPORTED_HEADER_FLAGS =
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const BASE58_ALPHABET = BASE58_ALPHABET_TEXT;
-const UINT128_MASK = (1n << 128n) - 1n;
 const HASH_LITERAL_RE = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/;
 const CANONICAL_HASH_LITERAL_RE = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/;
 const MULTIHASH_LITERAL_RE = /^([0-9a-fA-F]+)$/;
-const DEFAULT_SM2_DISTINGUISHED_ID = new Uint8Array(16);
 const SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID =
   "zk::ScheduleConfidentialPolicyTransition";
 const CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID =
@@ -396,10 +393,6 @@ const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({});
 const BASE58_LOOKUP = new Map(
   Array.from(BASE58_ALPHABET, (char, index) => [char, BigInt(index)]),
 );
-const INSTRUCTION_CACHE_SYMBOL = Symbol.for("iroha.js.noritoInstructionCache");
-const instructionCache =
-  globalThis[INSTRUCTION_CACHE_SYMBOL] ??
-  (globalThis[INSTRUCTION_CACHE_SYMBOL] = new Map());
 let noritoLengthFlags = 0;
 class BufferReader {
   constructor(buffer, context, lengthFlags = noritoLengthFlags) {
@@ -595,9 +588,7 @@ function encodeNormalizedInstruction(normalized) {
   validateGovernanceInstructionBoundary(normalized);
   let encoded;
   if (kaigiInstructionNeedsLosslessPureCodec(normalized)) {
-    encoded = encodePureJsInstruction(normalized);
-    cacheInstructionRoundTrip(encoded, normalized);
-    return encoded;
+    return encodePureJsInstruction(normalized);
   }
   try {
     const native = resolveNative("noritoEncodeInstruction");
@@ -615,7 +606,6 @@ function encodeNormalizedInstruction(normalized) {
       throw error;
     }
   }
-  cacheInstructionRoundTrip(encoded, normalized);
   return encoded;
 }
 
@@ -669,51 +659,6 @@ function isPureJsUnsupportedInstructionError(error) {
   );
 }
 
-function cacheInstructionRoundTrip(bytes, instruction) {
-  try {
-    instructionCache.set(
-      Buffer.from(bytes).toString(HEX_ENCODING),
-      canonicalizeInstructionForCache(instruction),
-    );
-  } catch {
-    // Cache misses must not affect Norito encoding/decoding.
-  }
-}
-
-function getCachedInstruction(bytes) {
-  const cached = instructionCache.get(Buffer.from(bytes).toString(HEX_ENCODING));
-  return cached === undefined ? null : cloneJson(cached);
-}
-
-function canonicalizeInstructionForCache(instruction) {
-  const normalized = normalizeInstructionJsonValue(cloneJson(instruction));
-  let canonicalInstruction = normalized;
-  if (isPlainObject(instruction.Multisig)) {
-    canonicalInstruction = { Custom: { payload: normalized.Multisig } };
-  } else if (isPlainObject(instruction.MultisigRegister)) {
-    canonicalInstruction = {
-      Custom: { payload: { Register: normalized.MultisigRegister } },
-    };
-  } else if (isPlainObject(instruction.MultisigPropose)) {
-    canonicalInstruction = {
-      Custom: { payload: { Propose: normalized.MultisigPropose } },
-    };
-  } else if (isPlainObject(instruction.MultisigApprove)) {
-    canonicalInstruction = {
-      Custom: { payload: { Approve: normalized.MultisigApprove } },
-    };
-  } else if (isPlainObject(instruction.MultisigCancel)) {
-    canonicalInstruction = {
-      Custom: { payload: { Cancel: normalized.MultisigCancel } },
-    };
-  }
-  try {
-    return decodePureJsInstruction(encodePureJsInstruction(canonicalInstruction));
-  } catch {
-    return cloneJson(canonicalInstruction);
-  }
-}
-
 /**
  * Encode an instruction JSON payload to canonical Norito bytes.
  * @param {object | string | ArrayBufferView | ArrayBuffer | Buffer} instruction
@@ -739,13 +684,7 @@ export function noritoEncodeInstruction(instruction) {
           return decoded;
         }
         const native = resolveNative("noritoEncodeInstruction");
-        const encoded = native.noritoEncodeInstruction(instruction);
-        try {
-          cacheInstructionRoundTrip(encoded, JSON.parse(instruction));
-        } catch {
-          // Raw JSON string was not parseable; leave cache empty.
-        }
-        return encoded;
+        return native.noritoEncodeInstruction(instruction);
       }
       throw error;
     }
@@ -1551,7 +1490,6 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
       wireId,
       inner.payload,
       inner.flags,
-      innerFrame,
     ),
   );
   const canonical = noritoEncodeInstructionBoxArchive(decoded);
@@ -3010,11 +2948,11 @@ function encodePureJsInstructionPayload(instruction) {
 function decodePureJsInstruction(buffer) {
   const { wireId, payload, innerFlags } = decodeInstructionEnvelope(buffer);
   return withNoritoLengthFlags(innerFlags, () =>
-    decodePureJsInstructionPayload(wireId, payload, innerFlags, buffer),
+    decodePureJsInstructionPayload(wireId, payload, innerFlags),
   );
 }
 
-function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstruction) {
+function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
   switch (wireId) {
     case "iroha.mint":
       return { Mint: decodeMintPayload(payload) };
@@ -3059,6 +2997,10 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID:
     case CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID:
     case REMOVE_SMART_CONTRACT_BYTES_WIRE_ID:
+    case SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID:
+    case OFFER_CONTRACT_OWNERSHIP_WIRE_ID:
+    case ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID:
+    case CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID:
       return decodeSmartContractInstructionPayload(wireId, payload);
     case CREATE_KAIGI_WIRE_ID:
     case JOIN_KAIGI_WIRE_ID:
@@ -3067,6 +3009,7 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case RECORD_KAIGI_USAGE_WIRE_ID:
     case SET_KAIGI_RELAY_MANIFEST_WIRE_ID:
     case REGISTER_KAIGI_RELAY_WIRE_ID:
+    case UNREGISTER_KAIGI_RELAY_WIRE_ID:
     case REPORT_KAIGI_RELAY_HEALTH_WIRE_ID:
       return decodeKaigiInstructionPayload(wireId, payload);
     case REGISTER_ZK_ASSET_WIRE_ID:
@@ -3080,10 +3023,6 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case UPDATE_VERIFYING_KEY_WIRE_ID:
       return decodeVerifyingKeyInstructionPayload(wireId, payload);
     default:
-      const cached = getCachedInstruction(framedInstruction);
-      if (cached !== null) {
-        return cached;
-      }
       throw new Error(
         `Internal Norito decoder does not support ${wireId}. Run \`npm run build:native\` for full instruction coverage.`,
       );
@@ -4824,8 +4763,8 @@ function decodeFixedByteArrayArchiveValue(payload, length, context) {
   return out;
 }
 
-function encodeByteVecValue(value, context) {
-  const bytes = Buffer.from(normalizeFlexibleBytes(value, context));
+function encodeByteVecValue(value, _context) {
+  const bytes = Buffer.from(normalizeFlexibleBytes(value));
   return Buffer.concat([u64ToLittleEndianBuffer(bytes.length), bytes]);
 }
 
@@ -4846,7 +4785,7 @@ function decodeByteVecAsBase64(payload, context) {
   return decodeByteVecValue(payload, context).toString(BASE64_ENCODING);
 }
 
-function normalizeFlexibleBytes(value, context) {
+function normalizeFlexibleBytes(value) {
   if (typeof value === JS_TYPE_STRING) {
     const base64 = tryDecodeBase64(value.trim());
     if (base64) {
@@ -4863,56 +4802,6 @@ function encodeU64NumberValue(value, context) {
 function decodeU64NumberValue(payload, context) {
   const value = BigInt(decodeU64Value(payload, context));
   return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString(10);
-}
-
-function encodeU128Value(value, context) {
-  const bigint = normalizeU128Input(value, context);
-  const buffer = Buffer.allocUnsafe(16);
-  let remaining = bigint;
-  for (let index = 0; index < 16; index += 1) {
-    buffer[index] = Number(remaining & 0xffn);
-    remaining >>= 8n;
-  }
-  return buffer;
-}
-
-function decodeU128StringValue(payload, context) {
-  return decodeU128BigInt(payload, context).toString();
-}
-
-function decodeU128SafeNumberValue(payload, context) {
-  return bigintToSafeNumber(decodeU128BigInt(payload, context), context);
-}
-
-function decodeU128BigInt(payload, context) {
-  if (payload.length !== 16) {
-    throw new Error(`${context} must contain exactly sixteen bytes`);
-  }
-  let value = 0n;
-  for (let index = 15; index >= 0; index -= 1) {
-    value = (value << 8n) | BigInt(payload[index]);
-  }
-  return value;
-}
-
-function normalizeU128Input(value, context) {
-  let parsed;
-  if (typeof value === JS_TYPE_BIGINT) {
-    parsed = value;
-  } else if (typeof value === JS_TYPE_NUMBER) {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new TypeError(`${context} must be a non-negative safe integer, bigint, or string`);
-    }
-    parsed = BigInt(value);
-  } else if (typeof value === JS_TYPE_STRING && /^\d+$/.test(value.trim())) {
-    parsed = BigInt(value.trim());
-  } else {
-    throw new TypeError(`${context} must be a non-negative safe integer, bigint, or string`);
-  }
-  if (parsed < 0n || parsed > UINT128_MASK) {
-    throw new RangeError(`${context} must fit in an unsigned 128-bit integer`);
-  }
-  return parsed;
 }
 
 function encodeDomainIdValue(value, context) {
@@ -8885,10 +8774,6 @@ function decodeNoritoVec(payload, decode, context, maxCount = null) {
   }
   reader.assertEof();
   return values;
-}
-
-function looksLikeNoritoFrame(buffer) {
-  return buffer.length >= 40 && buffer.subarray(0, 4).toString("ascii") === "NRT0";
 }
 
 function schemaHashForTypeName(typeName) {

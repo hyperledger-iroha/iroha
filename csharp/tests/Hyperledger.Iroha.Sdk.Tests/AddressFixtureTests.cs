@@ -182,26 +182,35 @@ public sealed class AddressFixtureTests
     }
 
     [Fact]
+    public void ParsedAccountAddressesHaveCanonicalValueEquality()
+    {
+        var literal = AccountAddress
+            .FromPublicKey(Enumerable.Repeat((byte)0x42, 32).ToArray())
+            .ToI105();
+        var first = AccountAddress.Parse(literal);
+        var second = AccountAddress.FromCanonicalBytes(first.CanonicalBytes());
+
+        Assert.NotSame(first, second);
+        Assert.Equal(first, second);
+        Assert.True(first == second);
+        Assert.False(first != second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
+        Assert.Single(new HashSet<AccountAddress> { first, second });
+    }
+
+    [Fact]
     public void MlDsaAccountAddressesUseCanonicalExtendedSuite65Keys()
     {
         var publicKey = Enumerable.Repeat((byte)0xA5, 1_952).ToArray();
-        foreach (var algorithm in new[] { "mldsa", "mldsa65", "ml-dsa-65", "ml_dsa_65", "ml_dsa-65" })
-        {
-            var address = AccountAddress.FromPublicKey(publicKey, algorithm);
-            var canonical = address.CanonicalBytes();
-            Assert.Equal(new byte[] { 0x02, 0x02, 0x02, 0x07, 0xA0 }, canonical[..5]);
-            Assert.Equal(publicKey, canonical[5..]);
-            Assert.Equal(canonical, AccountAddress.FromCanonicalBytes(canonical).CanonicalBytes());
-            var literal = address.ToI105(AccountAddress.DevChainDiscriminant);
-            Assert.Equal(canonical, AccountAddress.Parse(literal).CanonicalBytes());
-        }
-        foreach (var algorithm in new[] { "mldsa44", "ml-dsa-44", "ml_dsa_87", "mldsa87" })
-        {
-            Assert.Equal(
-                AccountAddressErrorCode.UnsupportedAlgorithm,
-                Assert.Throws<AccountAddressException>(() =>
-                    AccountAddress.FromPublicKey(publicKey, algorithm)).Code);
-        }
+        var address = AccountAddress.FromPublicKey(publicKey, CurveId.MlDsa);
+        var canonical = address.CanonicalBytes();
+
+        Assert.Equal("ml-dsa", address.Algorithm);
+        Assert.Equal(new byte[] { 0x02, 0x02, 0x02, 0x07, 0xA0 }, canonical[..5]);
+        Assert.Equal(publicKey, canonical[5..]);
+        Assert.Equal(canonical, AccountAddress.FromCanonicalBytes(canonical).CanonicalBytes());
+        var literal = address.ToI105(AccountAddress.DevChainDiscriminant);
+        Assert.Equal(canonical, AccountAddress.Parse(literal).CanonicalBytes());
     }
 
     [Fact]
@@ -219,7 +228,7 @@ public sealed class AddressFixtureTests
         })
         {
             var exception = Assert.Throws<AccountAddressException>(() =>
-                AccountAddress.FromPublicKey(publicKey, "ml-dsa-65"));
+                AccountAddress.FromPublicKey(publicKey, CurveId.MlDsa));
             Assert.Equal(AccountAddressErrorCode.InvalidPublicKey, exception.Code);
             Assert.Contains("1952-byte ML-DSA-65", exception.Message, StringComparison.Ordinal);
         }
@@ -321,45 +330,35 @@ public sealed class AddressFixtureTests
     }
 
     [Fact]
-    public void CurveAlgorithmAliasesRejectConfusableOrControlLabels()
+    public void UnknownCurveIdentifiersAreRejected()
     {
         var publicKey = Enumerable.Repeat((byte)0x11, 32).ToArray();
-        var algorithms = new (string Algorithm, string ExpectedMessage)[]
-        {
-            ("", "non-empty string"),
-            ("   ", "non-empty string"),
-            ("\u00A0", "non-empty string"),
-            (" ed25519", "surrounding whitespace"),
-            ("ed25519 ", "surrounding whitespace"),
-            ("\ted25519", "surrounding whitespace"),
-            ("ed25519\t", "surrounding whitespace"),
-            ("ed25519\n", "surrounding whitespace"),
-            ("\u00A0ed25519", "surrounding whitespace"),
-            ("ed25519\u00A0", "surrounding whitespace"),
-            ("ED25519", "ED25519"),
-            ("Ed25519", "Ed25519"),
-            ("ML-DSA", "ML-DSA"),
-            ("Gost256A", "Gost256A"),
-            ("future-curve", "future-curve"),
-            ("ed 25519", "must not contain whitespace"),
-            ("ed\t25519", "must not contain whitespace"),
-            ("ed\u00A025519", "must not contain whitespace"),
-            ("ed\u000025519", "unsupported signing algorithm"),
-            ("ed\u001F25519", "unsupported signing algorithm"),
-            ("ed\u007F25519", "unsupported signing algorithm"),
-            ("ed\u200B25519", "ed\u200B25519"),
-            ("\u0435d25519", "\u0435d25519"),
-            ("ml\uFF0Ddsa", "ml\uFF0Ddsa"),
-            ("gost256\u0430", "gost256\u0430"),
-        };
-
-        foreach (var (algorithm, expectedMessage) in algorithms)
+        foreach (var curveIdentifier in new byte[] { 0, 3, 4, 5, 9, 16, byte.MaxValue })
         {
             var exception = Assert.Throws<AccountAddressException>(() =>
-                AccountAddress.FromPublicKey(publicKey, algorithm));
+                AccountAddress.FromPublicKey(publicKey, (CurveId)curveIdentifier));
 
-            Assert.Equal(AccountAddressErrorCode.UnsupportedAlgorithm, exception.Code);
-            Assert.Contains(expectedMessage, exception.Message, StringComparison.Ordinal);
+            Assert.Equal(AccountAddressErrorCode.UnknownCurve, exception.Code);
+            Assert.Contains(curveIdentifier.ToString(), exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Ed25519AccountAddressesRejectMalformedKeyMaterial()
+    {
+        foreach (var publicKey in new[]
+        {
+            Array.Empty<byte>(),
+            new byte[31],
+            new byte[32],
+            new byte[33],
+        })
+        {
+            var exception = Assert.Throws<AccountAddressException>(() =>
+                AccountAddress.FromPublicKey(publicKey));
+
+            Assert.Equal(AccountAddressErrorCode.InvalidPublicKey, exception.Code);
+            Assert.Contains("nonzero 32-byte key", exception.Message, StringComparison.Ordinal);
         }
     }
 

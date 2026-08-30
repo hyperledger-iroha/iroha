@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 import pytest
+import requests
 
 from iroha_python import (
     CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
@@ -29,8 +30,11 @@ FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 TRANSACTION_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 
 
-class NoRequestSession:
+class NoRequestSession(requests.Session):
     """Fail if a helper unexpectedly performs network I/O."""
+
+    def __init__(self) -> None:
+        super().__init__()
 
     def request(self, method: str, url: str, **kwargs: object) -> Any:
         raise AssertionError(f"unexpected request {method} {url}")

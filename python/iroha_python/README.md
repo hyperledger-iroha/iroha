@@ -36,14 +36,14 @@ network_id = NetworkId.parse(
 )
 instruction = Instruction.register_domain("wonderland")
 
-client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
-envelope, status = client.build_and_submit_transaction(
-    network_id=network_id,
-    authority=authority,
-    private_key=pair.private_key,
-    instructions=[instruction],
-    wait=True,
-)
+with ToriiClient("http://127.0.0.1:8080", auth_token="dev-token") as client:
+    envelope, status = client.build_and_submit_transaction(
+        network_id=network_id,
+        authority=authority,
+        private_key=pair.private_key,
+        instructions=[instruction],
+        wait=True,
+    )
 
 print("Final status:", status)
 
@@ -64,6 +64,24 @@ client = create_torii_client(
     resolved_config=resolved,
 )
 ```
+
+### First-release defaults
+
+- Torii base URLs are origins, request paths stay on that origin, and redirects
+  are disabled. Automatic retries are limited to idempotent methods by default;
+  mutation helpers dispatch once.
+- A client owns and closes only the HTTP session it creates. Prefer the context
+  manager form shown above. Caller-supplied sessions remain caller-owned.
+- Public configuration and network-time reads return validated dataclasses from
+  their unsuffixed method names. There are no duplicate raw/`*_typed` variants
+  for those routes; use the generic transport only when raw JSON is truly
+  required.
+- Resolved configuration and transaction configuration snapshot mutable inputs.
+  Authentication tokens and private key material are omitted from object
+  representations, and private keys require exact immutable bytes or canonical
+  lowercase hex.
+- The wheel ships a `py.typed` marker, so type checkers consume the SDK's inline
+  annotations without extra stub packages.
 
 Account onboarding uses a dedicated credential in addition to any global
 `X-API-Token`. V1 is explicitly plan, prepare, then exact submit; there is no
@@ -1836,10 +1854,10 @@ peers = operator_client.list_peers_typed()
 for peer in peers:
     print(peer.address, peer.id.public_key, peer.metadata)
 
-now = client.get_time_now_typed()
+now = client.get_time_now()
 print("cluster time:", now.now_ms, "offset", now.offset_ms)
 
-status = operator_client.get_time_status_typed()
+status = operator_client.get_time_status()
 for sample in status.samples:
     print(sample.peer, sample.last_offset_ms, sample.last_rtt_ms, sample.count)
 print("RTT buckets:", status.rtt.buckets)
@@ -1957,7 +1975,7 @@ Configuration snapshots also expose the active Norito-RPC transport policy witho
 requiring callers to parse raw JSON:
 
 ```python
-snapshot = client.get_configuration_typed()
+snapshot = client.get_configuration()
 transport = snapshot.transport
 if transport and transport.norito_rpc:
     print("Norito-RPC stage:", transport.norito_rpc.stage)
@@ -2180,20 +2198,25 @@ integration`.
 ## Norito RPC helper
 
 Use `NoritoRpcClient` to call Torii endpoints that speak the Norito RPC surface.
-The helper wraps `requests.Session`, automatically attaches Norito headers, and
-shares retry/auth configuration with the HTTP client.
+The helper is a bounded binary facade over the same fail-closed transport as
+`ToriiClient`. It automatically attaches Norito headers, rejects cross-origin
+targets and redirects, disables automatic retries, and closes every response.
 
 ```python
 from iroha_python.norito_rpc import NoritoRpcClient, NoritoRpcConfig
 
-config = NoritoRpcConfig(base_url="http://127.0.0.1:8080")
+config = NoritoRpcConfig(
+    base_url="http://127.0.0.1:8080",
+    max_response_bytes=8 * 1024 * 1024,
+)
 with NoritoRpcClient(config) as rpc:
     response_bytes = rpc.call("/v1/pipeline/transactions", payload_bytes)
 ```
 
-Override headers, query parameters, or target URLs per call via keyword
-arguments. The pytest suite (`tests/test_norito_rpc.py`) provides additional
-usage examples.
+Callers may supply non-authentication headers and query parameters, but every
+route must be an origin-relative path. Pass bearer and API tokens explicitly
+on `NoritoRpcConfig`; they are redacted from its representation. The pytest
+suite (`tests/norito_rpc_test.py`) provides additional usage examples.
 
 ### Norito RPC smoke tests
 
@@ -2433,10 +2456,11 @@ rejected before dispatch.
 ## Configuration & overrides
 
 `resolve_torii_client_config` keeps Python clients aligned with the operational
-policy embedded in `iroha_config`. It merges (1) the parsed config file, (2)
-developer overrides supplied via environment variables, and (3) inline overrides
-passed directly to the resolver/`create_torii_client`. The following environment
-variables are available for local tweaking:
+policy embedded in `iroha_config`. It merges a parsed config file with explicit
+inline overrides. Ambient process environment is deliberately ignored: pass an
+`env` mapping when a development tool intentionally opts into environment
+configuration. This keeps tests and production startup deterministic. The
+following keys are recognized in that explicit mapping:
 
 | Variable | Purpose |
 |----------|---------|
@@ -2451,7 +2475,8 @@ variables are available for local tweaking:
 | `IROHA_TORII_API_TOKEN` | Default `X-API-Token` header |
 
 Environment overrides are meant for development convenience; production nodes
-should rely on the canonical `iroha_config`.
+should rely on the canonical `iroha_config`. Explicit keyword arguments passed
+to `create_torii_client` take precedence over a resolved configuration.
 
 The test harness automatically loads this library when the file is present, so
 no environment variables need to be exported.

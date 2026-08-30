@@ -144,10 +144,10 @@ impl V2GlobalBeaconLifecycle {
                 .is_some_and(|next| next == context.epoch_end_height);
         let world = state.world_view();
         let logical_beacon_id = BeaconSessionId::for_network_v1(&context.network_id);
-        let parliament_requested_at_height =
-            world.parliament_attempts().iter().any(|(_, attempt)| {
-                attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)
-            });
+        let parliament_requested_at_height = world
+            .parliament_required_beacon_pulse_slots
+            .get(&(logical_beacon_id, context.height))
+            .is_some_and(|attempts| !attempts.is_empty());
         let required_for_consensus = npos_boundary_requested || parliament_requested_at_height;
         if !required_for_consensus {
             return Ok(Self {

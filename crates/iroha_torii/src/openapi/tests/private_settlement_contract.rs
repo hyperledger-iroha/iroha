@@ -141,26 +141,36 @@ fn private_settlement_response_is_private_no_store(operation: &Map, status: &str
 
 #[test]
 fn private_settlement_openapi_covers_the_exact_catalog_family() {
-    use iroha_torii_shared::route_catalog::{HttpMethod, private_settlement};
+    use iroha_torii_shared::route_catalog::{
+        CatalogProjection, EnabledFeatures, HttpMethod, RouteCatalog, private_settlement,
+    };
 
     let documented = PRIVATE_SETTLEMENT_OPERATION_CONTRACTS
         .iter()
         .map(|contract| (contract.path, contract.method))
         .collect::<BTreeSet<_>>();
-    let catalog = private_settlement::ROUTES
-        .iter()
+    let catalog = RouteCatalog::new(private_settlement::ROUTES)
+        .project(
+            CatalogProjection::OpenApi,
+            EnabledFeatures::new(&["app_api"]),
+        )
+        .into_iter()
         .map(|descriptor| {
             let method = match descriptor.method() {
                 HttpMethod::Get => "get",
                 HttpMethod::Post => "post",
                 other => panic!("unexpected private-settlement method: {other:?}"),
             };
-            assert!(descriptor.projections().openapi());
             (descriptor.path(), method)
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(catalog.len(), 13);
     assert_eq!(documented, catalog);
+    assert!(
+        !private_settlement::TEST_NETWORK_STATE_COMMITMENT
+            .projections()
+            .openapi()
+    );
 
     let document = canonical_document();
     let actual = document["paths"]
@@ -510,7 +520,7 @@ fn private_settlement_top_level_v1_dtos_are_strict() {
         ),
         (
             "PrivateSettlementBundleSubmitResponseV1",
-            &["bundle_id", "accepted_at_height", "carrier_id", "lifecycle"][..],
+            &["bundle_id", "accepted_at_height", "carrier_id"][..],
         ),
         (
             "PrivateSettlementBundleStatusResponseV1",

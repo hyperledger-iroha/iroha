@@ -162,7 +162,8 @@ impl SccpReplayArchiveCheckpointBodyV1 {
     pub fn from_snapshot(
         snapshot: &SccpReplayArchiveSnapshotV1,
     ) -> Result<Self, SccpReplayArchiveError> {
-        let validated = validate_snapshot(snapshot, SccpReplayArchiveDecodeLimitsV1::default())?;
+        let validated =
+            validate_snapshot(snapshot, SccpReplayArchiveDecodeLimitsV1::default(), None)?;
         Ok(Self {
             version: CHECKPOINT_VERSION_V1,
             snapshot_sha256: validated.content_sha256,
@@ -496,7 +497,8 @@ impl SccpReplayArchiveV1 {
                 })
                 .collect(),
         };
-        let validated = validate_snapshot(&snapshot, SccpReplayArchiveDecodeLimitsV1::default())?;
+        let validated =
+            validate_snapshot(&snapshot, SccpReplayArchiveDecodeLimitsV1::default(), None)?;
         let head = SnapshotHeadV1 {
             content_sha256: validated.content_sha256,
             finality,
@@ -526,7 +528,7 @@ impl SccpReplayArchiveV1 {
         snapshot: SccpReplayArchiveSnapshotV1,
         limits: SccpReplayArchiveDecodeLimitsV1,
     ) -> Result<(), SccpReplayArchiveError> {
-        let validated = validate_snapshot(&snapshot, limits)?;
+        let validated = validate_snapshot(&snapshot, limits, None)?;
         self.restore_validated_snapshot(snapshot, validated)
     }
 
@@ -538,7 +540,6 @@ impl SccpReplayArchiveV1 {
         let ValidatedSnapshotV1 {
             leaves,
             content_sha256,
-            ..
         } = validated;
         if let Some(existing) = self.accumulators.get(&snapshot.accumulator_id) {
             if existing.domain != snapshot.domain {
@@ -614,10 +615,7 @@ fn decode_validated_snapshot(
     let decode_limits = norito::canonical_decode_limits(bytes.len());
     let snapshot = norito::decode_canonical_with_limits(bytes, decode_limits)
         .map_err(|_| SccpReplayArchiveError::Malformed)?;
-    let validated = validate_snapshot(&snapshot, limits)?;
-    if validated.canonical_bytes.as_slice() != bytes {
-        return Err(SccpReplayArchiveError::Malformed);
-    }
+    let validated = validate_snapshot(&snapshot, limits, Some(bytes))?;
     Ok((snapshot, validated))
 }
 
@@ -735,13 +733,13 @@ fn validate_accumulator_domain(
 
 struct ValidatedSnapshotV1 {
     leaves: BTreeMap<[u8; 32], [u8; 32]>,
-    canonical_bytes: Vec<u8>,
     content_sha256: [u8; 32],
 }
 
 fn validate_snapshot(
     snapshot: &SccpReplayArchiveSnapshotV1,
     limits: SccpReplayArchiveDecodeLimitsV1,
+    expected_canonical_bytes: Option<&[u8]>,
 ) -> Result<ValidatedSnapshotV1, SccpReplayArchiveError> {
     if limits.max_snapshot_bytes == 0
         || limits.max_snapshot_leaves == 0
@@ -757,6 +755,12 @@ fn validate_snapshot(
     if canonical_bytes.len() > limits.max_snapshot_bytes {
         return Err(SccpReplayArchiveError::SnapshotLimit);
     }
+    if expected_canonical_bytes.is_some_and(|expected| canonical_bytes.as_slice() != expected) {
+        return Err(SccpReplayArchiveError::Malformed);
+    }
+    let content_sha256 = sha256(&[&canonical_bytes]);
+    drop(canonical_bytes);
+
     let mut leaves = BTreeMap::new();
     let mut previous = None;
     for leaf in &snapshot.leaves {
@@ -772,10 +776,8 @@ fn validate_snapshot(
     if rebuilt != snapshot.forest {
         return Err(SccpReplayArchiveError::RebuildMismatch);
     }
-    let content_sha256 = sha256(&[&canonical_bytes]);
     Ok(ValidatedSnapshotV1 {
         leaves,
-        canonical_bytes,
         content_sha256,
     })
 }
@@ -1132,6 +1134,12 @@ mod tests {
         typed_restored
             .restore_snapshot(snapshot.clone(), exact_encoded_limit)
             .expect("typed snapshot at the exact byte limit restores");
+        let mut mismatched_encoding = encoded.clone();
+        mismatched_encoding[0] ^= 1;
+        assert!(matches!(
+            validate_snapshot(&snapshot, exact_encoded_limit, Some(&mismatched_encoding)),
+            Err(SccpReplayArchiveError::Malformed)
+        ));
 
         let mut restored = SccpReplayArchiveV1::default();
         assert_eq!(

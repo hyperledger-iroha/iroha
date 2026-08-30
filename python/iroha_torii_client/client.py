@@ -1953,9 +1953,13 @@ _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
 _OFFLINE_MAX_ASSET_SCALE = 28
-# Reserve 64 branch-depth outputs, eight optional peer-change outputs, and the
-# proof circuit's final dummy leaf at the tail of the 16-level tree.
-_OFFLINE_TOP_UP_SHIELD_INSERTION_CAPACITY = 65_463
+_OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY = 1 << 16
+_OFFLINE_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS = 64 + 8
+_OFFLINE_TOP_UP_SHIELD_INSERTION_CAPACITY = (
+    _OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY
+    - _OFFLINE_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS
+    - 1
+)
 _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
 _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
 _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
@@ -9713,7 +9717,7 @@ class ToriiClient(
                 "operator_signing_context must be ToriiOperatorSigningContext"
             )
         self._base_url = base_url.rstrip("/")
-        self._session = session or requests.Session()
+        self._session = session if session is not None else requests.Session()
         self._status_state = _StatusMetricsState()
         self._local_signing_context = local_signing_context
         self._operator_signing_context = operator_signing_context

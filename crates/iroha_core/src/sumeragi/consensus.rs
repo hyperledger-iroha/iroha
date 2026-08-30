@@ -1,4 +1,4 @@
-//! Sumeragi bootstrap helpers and lane-consensus carrier re-exports.
+//! Sumeragi bootstrap helpers.
 //!
 //! Global consensus messages, signatures, and quorum certificates live only
 //! in [`iroha_data_model::block::consensus_v2`]. This module deliberately does
@@ -16,7 +16,7 @@ use iroha_config::parameters::actual::Sumeragi as SumeragiConfig;
 #[cfg(test)]
 use iroha_crypto::HashOf;
 use iroha_data_model::block::consensus::{
-    CertPhase, ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams,
+    ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams,
 };
 pub use iroha_data_model::block::consensus::{
     Evidence, ExecKv, ExecWitness, LaneBlockProposalV1, ValidatorIndex,
@@ -27,17 +27,14 @@ pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_V
 pub const PERMISSIONED_TAG: &str = iroha_data_model::block::consensus_v2::PERMISSIONED_TAG;
 /// NPoS Sumeragi v2 handshake and signing-domain tag.
 pub const NPOS_TAG: &str = iroha_data_model::block::consensus_v2::NPOS_TAG;
-/// Lane-certificate phase (prepare/commit/new-view).
-pub type Phase = CertPhase;
 use crate::state::{StateView, WorldReadOnly};
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
 /// Compute the genesis-embedded v2 consensus-parameters fingerprint.
 ///
-/// The projection deliberately omits v1 collectors, phase-specific and
-/// adaptive timeouts, the global-RBC switch, and any local fallback. Mode,
-/// cadence, block bound, signed DA/Nexus context,
-/// and the genesis-selected NPoS election inputs are canonical Norito fields.
+/// Mode, cadence, block bound, signed DA/Nexus context, and the
+/// genesis-selected NPoS election inputs are the complete canonical Norito
+/// projection for the first release.
 /// Mutable shared adapter settings are committed separately by
 /// [`SumeragiConfig::v2_config`].
 pub fn compute_consensus_parameters_fingerprint(

@@ -253,11 +253,7 @@ fn applied_height_finality_releases_only_covered_ticketless_payload_chunks() {
         .get(&HashOf::new(&manifest))
         .expect("registered payload owns its exact manifest")
         .messages
-        .iter()
-        .cloned()
-        .map(ProductionV2Services::preencode_v2_network_message)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("preencode exact payload chunks");
+        .clone();
     let chunk_count = messages.len();
 
     let mut ticketless =

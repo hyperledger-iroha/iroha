@@ -1,18 +1,15 @@
 //! Exec-vote helpers: compute `post_state_root` via SMT, build votes, and assemble QCs.
 //!
 //! This module is internal and side-effect free; consumed by the Sumeragi execution pipeline.
-use super::{
-    consensus::ExecWitness,
-    smt::{
-        KvPair, build_kagemusha_topup_block_commitment, compute_consensus_post_state_root,
-        compute_post_state_root,
-    },
+use super::smt::{
+    KvPair, build_kagemusha_topup_block_commitment, compute_consensus_post_state_root,
+    compute_post_state_root,
 };
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{
         SignedBlock,
-        consensus::{LaneBlockCommitment, LaneBlockProposalV1, NativeAmxReceipt},
+        consensus::{ExecWitness, LaneBlockCommitment, LaneBlockProposalV1, NativeAmxReceipt},
         consensus_v2 as wire,
     },
     merge::MergeLedgerEntry,
@@ -742,7 +739,6 @@ pub fn parent_state_from_witness(w: &ExecWitness) -> Hash {
 }
 #[cfg(test)]
 mod tests {
-    use super::super::consensus::{ExecKv, ExecWitness};
     use super::*;
     use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
     use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
@@ -751,8 +747,9 @@ mod tests {
         block::{
             BlockHeader, BlockSignature,
             consensus::{
-                LaneBlockDescriptorV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
-                NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+                ExecKv, ExecWitness, LaneBlockDescriptorV1, LaneSettlementReceipt,
+                NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2, NativeAmxLegRecordV2,
+                NativeAmxPhase, NativeAmxReceipt,
             },
             execution_context::{
                 BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteRole,

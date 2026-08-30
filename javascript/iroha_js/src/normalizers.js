@@ -9,7 +9,6 @@ import { blake3 } from "@noble/hashes/blake3";
 import {
   AccountAddress,
   AccountAddressError,
-  AccountAddressErrorCode,
 } from "./address.js";
 import {
   createValidationError,

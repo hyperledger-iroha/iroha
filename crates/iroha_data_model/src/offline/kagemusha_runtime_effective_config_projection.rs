@@ -251,12 +251,11 @@ mod tests {
         assert!(projection.validate().is_err());
         assert!(projection.consensus_sha256().is_err());
 
-        projection.validators[0].public_address = SocketAddr::Host(
-            iroha_primitives::addr::SocketAddrHost {
+        projection.validators[0].public_address =
+            SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
                 host: "éxample.test".into(),
                 port: 16_000,
-            },
-        );
+            });
         assert!(
             projection.validate().is_err(),
             "Unicode host spelling must use its canonical ASCII IDNA form",

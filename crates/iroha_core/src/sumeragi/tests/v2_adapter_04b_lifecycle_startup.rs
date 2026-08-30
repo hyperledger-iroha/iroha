@@ -1248,10 +1248,9 @@ fn settle_terminal_fixture_runner_handoff(
     lane_work: &mut super::super::v2_lane_work::V2LaneWorkAdapter,
     output_guard: &crate::sumeragi::output_guard::ConsensusOutputGuard,
 ) {
-    let permit =
-        super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
-            .decided_lane_recovery_permit()
-            .expect("settled Apply authorizes its exact runner handoff");
+    let permit = super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+        .decided_lane_recovery_permit()
+        .expect("settled Apply authorizes its exact runner handoff");
     activated
         .with_runner_runtime(
             runner,

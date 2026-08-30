@@ -274,14 +274,14 @@ public sealed partial class SccpExactTests
         var unrelatedArtifact = Convert.ToBase64String(NoritoCodec.Encode("iroha.test.Unrelated", [1]));
         var transaction = CanonicalTransactionPayload(7, destinationProof: true);
         var signature = Convert.ToBase64String(
-            Ed25519Signer.Sign(IrohaHash.Hash(transaction), pair.PrivateKeySeed));
+            Ed25519Signer.Sign(IrohaHash.Hash(transaction), pair.PrivateKeySeedSpan));
         var gasBoundIntent = FeePaymentIntent.Authority([], gasLimit: 9);
         var gasBoundTransaction = CanonicalTransactionPayload(
             7,
             destinationProof: true,
             feePayment: gasBoundIntent);
         var gasBoundSignature = Convert.ToBase64String(
-            Ed25519Signer.Sign(IrohaHash.Hash(gasBoundTransaction), pair.PrivateKeySeed));
+            Ed25519Signer.Sign(IrohaHash.Hash(gasBoundTransaction), pair.PrivateKeySeedSpan));
         _ = new SccpBridgeProofSubmitRequest(
             authority,
             artifact,
@@ -313,7 +313,7 @@ public sealed partial class SccpExactTests
                 artifact,
                 Convert.ToBase64String(Ed25519Signer.Sign(
                     IrohaHash.Hash(invalidTransaction),
-                    pair.PrivateKeySeed)),
+                    pair.PrivateKeySeedSpan)),
                 Convert.ToBase64String(invalidTransaction),
                 creationTimeMs: 7));
         }
@@ -341,7 +341,7 @@ public sealed partial class SccpExactTests
                 nativeBackendTag: nativeBackendTag);
             var taggedSignature = Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(taggedPayload),
-                pair.PrivateKeySeed));
+                pair.PrivateKeySeedSpan));
             var create = () => BridgeMessageRequest(
                 authority,
                 nativeArtifact,
@@ -413,7 +413,7 @@ public sealed partial class SccpExactTests
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(nativePayload),
-                pair.PrivateKeySeed)),
+                pair.PrivateKeySeedSpan)),
             Convert.ToBase64String(nativePayload),
             creationTimeMs: 7));
         var archivedChainPayload = CanonicalTransactionPayload(
@@ -425,7 +425,7 @@ public sealed partial class SccpExactTests
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(archivedChainPayload),
-                pair.PrivateKeySeed)),
+                pair.PrivateKeySeedSpan)),
             Convert.ToBase64String(archivedChainPayload),
             creationTimeMs: 7));
         var legacyPayload = CanonicalTransactionPayload(
@@ -437,7 +437,7 @@ public sealed partial class SccpExactTests
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(legacyPayload),
-                pair.PrivateKeySeed)),
+                pair.PrivateKeySeedSpan)),
             Convert.ToBase64String(legacyPayload),
             creationTimeMs: 7));
         foreach (var payloadKind in new uint[] { 0, 1, uint.MaxValue })
@@ -451,7 +451,7 @@ public sealed partial class SccpExactTests
                 artifact,
                 Convert.ToBase64String(Ed25519Signer.Sign(
                     IrohaHash.Hash(invalidKindPayload),
-                    pair.PrivateKeySeed)),
+                    pair.PrivateKeySeedSpan)),
                 Convert.ToBase64String(invalidKindPayload),
                 creationTimeMs: 7));
         }
@@ -461,7 +461,7 @@ public sealed partial class SccpExactTests
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(truncatedPayload),
-                pair.PrivateKeySeed)),
+                pair.PrivateKeySeedSpan)),
             Convert.ToBase64String(truncatedPayload),
             creationTimeMs: 7));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
@@ -1766,7 +1766,7 @@ public sealed partial class SccpExactTests
         var directPair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray());
         var directSignature = Ed25519Signer.Sign(
             IrohaHash.Hash(transaction),
-            directPair.PrivateKeySeed);
+            directPair.PrivateKeySeedSpan);
         var transactionBase64 = Convert.ToBase64String(transaction);
         var signatureBase64 = Convert.ToBase64String(directSignature);
         var expectedTransactionHash = SccpSubmitValidation.RequireCanonicalDirectSubmission(
@@ -2179,7 +2179,7 @@ public sealed partial class SccpExactTests
             [1],
             flags: 0x02);
         var payload = CanonicalTransactionPayload(7);
-        var signature = Ed25519Signer.Sign(IrohaHash.Hash(payload), pair.PrivateKeySeed);
+        var signature = Ed25519Signer.Sign(IrohaHash.Hash(payload), pair.PrivateKeySeedSpan);
         var payloadBase64 = Convert.ToBase64String(payload);
         var signatureBase64 = Convert.ToBase64String(signature);
         var expectedHash = SccpSubmitValidation.RequireCanonicalDirectSubmission(

@@ -4,7 +4,7 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
+using Hyperledger.Iroha;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
@@ -60,6 +60,66 @@ public sealed class FeeQuoteResponseValidationTests
         AssertRejected(
             quote,
             FeePaymentIntent.Authority(requested.ChargeLimits, 500_001));
+    }
+
+    [Fact]
+    public async Task QuoteAndSignFreezesTheDraftBeforeAwaitingTheQuote()
+    {
+        var requestedIntent = FeePaymentIntent.Authority(
+            [new FeeChargeLimit(FeeChargeKind.Nexus, AssetDefinitionIdA, "9")]);
+        var quote = AuthorityQuote("4", gasLimit: null);
+        var requestObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseResponse = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new AsyncStubHandler(async (request, cancellationToken) =>
+        {
+            Assert.Equal("/v1/fees/quote", request.RequestUri!.AbsolutePath);
+            requestObserved.SetResult();
+            await releaseResponse.Task.WaitAsync(cancellationToken);
+            return JsonResponse(QuoteBody(quote));
+        });
+        using var client = new IrohaClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                NetworkId = QuoteNetworkId,
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    AuthorityAccountId,
+                    AuthorityPrivateKeySeed),
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
+        var transaction = new TransactionBuilder(
+                QuoteNetworkId,
+                AuthorityAccountId,
+                requestedIntent)
+            .TransferDomain("wonderland", AuthorityAccountId)
+            .SetCreationTimeMilliseconds(1_735_000_000_123)
+            .SetTimeToLiveMilliseconds(60_000);
+
+        var pending = client.Ledger.QuoteAndSignAsync(
+            transaction,
+            AuthorityPrivateKeySeed,
+            TestContext.Current.CancellationToken);
+        await requestObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        transaction
+            .TransferDomain("mutated", AuthorityAccountId)
+            .SetNonce(42)
+            .SetMetadata("changed", JsonValue.Create(true));
+        releaseResponse.SetResult();
+
+        var actual = await pending;
+        var expected = new TransactionBuilder(
+                QuoteNetworkId,
+                AuthorityAccountId,
+                quote.Intent)
+            .TransferDomain("wonderland", AuthorityAccountId)
+            .SetCreationTimeMilliseconds(1_735_000_000_123)
+            .SetTimeToLiveMilliseconds(60_000)
+            .BuildSigned(AuthorityPrivateKeySeed);
+        Assert.Equal(expected.VersionedNoritoBytes, actual.Transaction.VersionedNoritoBytes);
     }
 
     [Fact]
@@ -529,7 +589,7 @@ public sealed class FeeQuoteResponseValidationTests
     }
 
     [Fact]
-    public async Task FeeSponsorProgramLookupRejectsPermissiveCallerJsonSettings()
+    public async Task FeeSponsorProgramLookupRejectsNonCanonicalJson()
     {
         var canonical = Encoding.UTF8.GetString(
             SponsorProgramBody(SponsorProgramResponse(SponsorProgram)));
@@ -553,23 +613,11 @@ public sealed class FeeQuoteResponseValidationTests
         };
         Assert.All(invalidBodies, body => Assert.NotEqual(canonical, body));
 
-        var permissiveOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            NumberHandling = JsonNumberHandling.AllowReadingFromString,
-            PropertyNameCaseInsensitive = true,
-        };
-#pragma warning disable SYSLIB0020
-        permissiveOptions.IgnoreNullValues = true;
-#pragma warning restore SYSLIB0020
-
         foreach (var invalidBody in invalidBodies)
         {
             using var handler = new StubHandler(_ =>
                 JsonResponse(Encoding.UTF8.GetBytes(invalidBody)));
-            using var client = CreateQuoteClient(
-                handler,
-                AuthorityAccountId,
-                permissiveOptions);
+            using var client = CreateQuoteClient(handler, AuthorityAccountId);
             await Assert.ThrowsAsync<JsonException>(() =>
                 client.GetFeeSponsorProgramAsync(
                     SponsorProgram,
@@ -760,19 +808,16 @@ public sealed class FeeQuoteResponseValidationTests
 
     private static ToriiClient CreateQuoteClient(
         HttpMessageHandler handler,
-        string accountId,
-        JsonSerializerOptions? serializerOptions = null) =>
+        string accountId) =>
         new(
             new Uri("https://torii.example"),
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(QuoteNetworkId),
+                NetworkId = QuoteNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     accountId,
                     AuthorityPrivateKeySeed),
-                JsonSerializerOptions = serializerOptions
-                    ?? new JsonSerializerOptions(JsonSerializerDefaults.Web),
             },
             TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
@@ -838,5 +883,14 @@ public sealed class FeeQuoteResponseValidationTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken) => Task.FromResult(handler(request));
+    }
+
+    private sealed class AsyncStubHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler)
+        : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) => handler(request, cancellationToken);
     }
 }

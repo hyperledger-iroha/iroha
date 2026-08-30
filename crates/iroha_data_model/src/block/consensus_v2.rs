@@ -1880,6 +1880,43 @@ impl ValidatedPayloadManifest {
             .get(index)
             .ok_or(ValidationError::SignerOutOfRange)
     }
+
+    /// Build the signature payload for a locally encoded committed chunk.
+    ///
+    /// This path deliberately uses the hash already committed by the validated
+    /// manifest and does not inspect chunk bytes. It lets the canonical encoder
+    /// avoid hashing every large shard a second time before signing. Inbound or
+    /// otherwise untrusted chunks must use [`PayloadChunk::signature_payload`],
+    /// which hashes and compares their bytes before returning this payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when `index` is outside the
+    /// manifest or `sender` is outside the frozen roster.
+    pub fn committed_chunk_signature_payload(
+        &self,
+        index: u32,
+        sender: ValidatorIndex,
+    ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
+        let manifest = self.manifest();
+        let chunk_hash = self.chunk_hash(index)?;
+        self.validator(sender)?;
+        Ok(PayloadChunkSignaturePayload {
+            protocol_version: PROTOCOL_VERSION,
+            context_id: manifest.round.context_id,
+            epoch: self.epoch,
+            height: manifest.round.height,
+            view: manifest.round.view,
+            subject: manifest.subject,
+            manifest_hash: self.manifest_hash,
+            encoding: manifest.layout.encoding,
+            index,
+            total_chunks: self.total_chunks,
+            chunk_hash,
+            sender,
+        })
+    }
+
     fn chunk_hash(&self, index: u32) -> Result<Hash, ValidationError> {
         let index = usize::try_from(index).map_err(|_| ValidationError::ChunkIndexOutOfRange)?;
         self.manifest
@@ -1922,33 +1959,18 @@ impl PayloadChunk {
         &self,
         validated: &ValidatedPayloadManifest,
     ) -> Result<PayloadChunkSignaturePayload, ValidationError> {
-        let manifest = validated.manifest();
         if self.manifest_hash != validated.manifest_hash() {
             return Err(ValidationError::ManifestHashMismatch);
         }
         if self.bytes.len() != validated.chunk_size_bytes {
             return Err(ValidationError::InvalidChunkLength);
         }
-        let expected_hash = validated.chunk_hash(self.index)?;
+        let payload = validated.committed_chunk_signature_payload(self.index, self.sender)?;
         let chunk_hash = Hash::new(&self.bytes);
-        if chunk_hash != expected_hash {
+        if chunk_hash != payload.chunk_hash {
             return Err(ValidationError::ChunkHashMismatch);
         }
-        validated.validator(self.sender)?;
-        Ok(PayloadChunkSignaturePayload {
-            protocol_version: PROTOCOL_VERSION,
-            context_id: manifest.round.context_id,
-            epoch: validated.epoch,
-            height: manifest.round.height,
-            view: manifest.round.view,
-            subject: manifest.subject,
-            manifest_hash: self.manifest_hash,
-            encoding: manifest.layout.encoding,
-            index: self.index,
-            total_chunks: validated.total_chunks,
-            chunk_hash,
-            sender: self.sender,
-        })
+        Ok(payload)
     }
     /// Validate signature presence and return the once-hashed signing payload.
     ///
@@ -3895,8 +3917,6 @@ pub enum ValidationError {
     ChunkHashMismatch,
     /// Encoded chunk length is inconsistent with the frozen layout.
     InvalidChunkLength,
-    /// A payload chunk does not carry a sender signature.
-    MissingChunkSignature,
     /// A certified body request's QC does not certify its requested subject
     /// in the exact requested round.
     CertifiedBodyCertificateMismatch,
@@ -4089,7 +4109,6 @@ impl fmt::Display for ValidationError {
             Self::InvalidChunkLength => {
                 f.write_str("payload chunk length is inconsistent with the layout")
             }
-            Self::MissingChunkSignature => f.write_str("payload chunk signature is empty"),
             Self::CertifiedBodyCertificateMismatch => {
                 f.write_str("certified body request does not match its certificate")
             }

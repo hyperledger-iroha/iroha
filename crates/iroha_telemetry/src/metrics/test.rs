@@ -230,24 +230,12 @@ fn records_sns_registrar_status_metrics() {
     );
 }
 #[test]
-fn catalog_retires_global_rbc_metrics_and_keeps_signed_da_metrics() {
+fn catalog_retires_global_rbc_metrics() {
     let catalog = include_str!("catalog_v2.tsv");
     assert!(
         !catalog.contains("sumeragi_rbc_"),
         "retired global-RBC metrics must not remain in the public catalog"
     );
-    for current in [
-        "sumeragi_da_manifest_guard_total",
-        "sumeragi_da_manifest_cache_total",
-        "sumeragi_da_spool_cache_total",
-        "sumeragi_da_pin_intent_spool_total",
-        "sumeragi_da_votes_ingested_total",
-    ] {
-        assert!(
-            catalog.lines().any(|line| line.starts_with(current)),
-            "signed DA metric `{current}` must remain catalogued"
-        );
-    }
 }
 #[test]
 fn catalog_retires_consensus_vrf_metrics() {

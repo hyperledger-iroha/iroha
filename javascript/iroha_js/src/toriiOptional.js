@@ -5,6 +5,27 @@
 // shared governance graph behind one entry avoids duplicate split chunks while
 // leaving the ordinary client startup path small.
 export {
+  noritoEncodeFeePaymentIntentArchive,
+  noritoEncodeMultisigProposeRequest,
+  noritoEncodeSorafsBillingAcknowledgementProofV1,
+  noritoEncodeTransactionPayloadBatch,
+  validateNoritoFrame,
+} from "./norito.js";
+
+export { inspectCanonicalTransactionPayloadBindings } from "./transactionCodec.js";
+export { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
+
+export {
+  normalizeKagemushaOperationId,
+  normalizeKagemushaOperationReference,
+  normalizeKagemushaOperationStatus,
+  normalizeKagemushaRedeemRequestV4,
+  normalizeKagemushaTopUpRequestV4,
+  normalizeOfflineStatus,
+  requireKagemushaJsonContentType,
+} from "./kagemushaOffline.js";
+
+export {
   normalizeSccpCapabilities,
   normalizeSccpMessageBundle,
   normalizeSccpProofRequest,

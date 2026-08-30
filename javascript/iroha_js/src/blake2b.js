@@ -186,13 +186,3 @@ function blake2bDigest(data, outputLength, options = {}) {
 export function blake2b256(data, options = {}) {
   return blake2bDigest(data, 32, options);
 }
-
-/**
- * Compute a BLAKE2b-512 digest.
- * @param {ArrayBufferView | ArrayBuffer} data
- * @param {{ personalization?: ArrayBufferView | ArrayBuffer; includeZeroKeyBlock?: boolean }} [options]
- * @returns {Uint8Array}
- */
-export function blake2b512(data, options = {}) {
-  return blake2bDigest(data, 64, options);
-}

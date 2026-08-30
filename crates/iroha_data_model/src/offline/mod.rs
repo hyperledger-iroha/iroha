@@ -805,6 +805,7 @@ pub use kagemusha_release_verifier::{
 /// platform checks; the hashes provide stable replay keys and compact audit anchors.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct OfflineDeviceAttestationRegistration {
     /// Registration format marker.
     pub version: u16,
@@ -5983,10 +5984,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
             });
         }
         let binding = self.binding_digest_unchecked()?;
-        self.output_branch_claims_for_binding(
-            KagemushaRecursiveSpendBranchV2::Recipient,
-            binding,
-        )?;
+        self.output_branch_claims_for_binding(KagemushaRecursiveSpendBranchV2::Recipient, binding)?;
         if self.change_output.is_some() {
             self.output_branch_claims_for_binding(
                 KagemushaRecursiveSpendBranchV2::Change,
@@ -6214,8 +6212,8 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
         } else {
             None
         };
-        let has_canonical_init_claim = canonical_init_claim
-            .is_some_and(|claim| self.branch_claims.as_slice() == [claim]);
+        let has_canonical_init_claim =
+            canonical_init_claim.is_some_and(|claim| self.branch_claims.as_slice() == [claim]);
         if self.current_note.network_id != self.network_id
             || self.current_note.asset != self.asset
             || self.current_note.amount.scale != self.asset_scale
@@ -6231,10 +6229,9 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
             });
         }
         match &self.transition {
-            None
-                if self.proof_step_count == 1
-                    && self.peer_hop_count == 0
-                    && has_canonical_init_claim => {}
+            None if self.proof_step_count == 1
+                && self.peer_hop_count == 0
+                && has_canonical_init_claim => {}
             Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition))
                 if transition.binding_digest != [0; 32]
                     && transition.recipient_request_digest != [0; 32]

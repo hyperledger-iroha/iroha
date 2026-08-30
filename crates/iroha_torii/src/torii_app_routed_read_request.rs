@@ -1,9 +1,8 @@
 // Allocation-bounded request decoding for application-API routed reads.
 /// Maximum number of non-empty form pairs accepted by the V1 routed-read control plane.
 ///
-/// Current endpoint DTOs use fewer than sixteen fields. Allowing sixty-four pairs preserves
-/// duplicate-last form semantics with ample compatibility headroom while bounding the
-/// allocation-free duplicate scan to 4,096 key comparisons.
+/// Current endpoint DTOs use fewer than sixteen fields. Sixty-four pairs leave room for composed
+/// first-release filters while bounding duplicate detection to 4,096 key comparisons.
 const TORII_ROUTED_READ_MAX_QUERY_PAIRS_V1: usize = 64;
 #[derive(Clone, Copy, Debug)]
 struct ToriiRoutedReadRequestDecodePlan {
@@ -245,7 +244,6 @@ where
         decode_app_routed_read_typed_json(plan, &json, "query parameters")
     })
 }
-#[allow(unsafe_code)]
 fn validate_app_routed_read_form(
     raw: &[u8],
     plan: ToriiRoutedReadRequestDecodePlan,
@@ -257,11 +255,12 @@ fn validate_app_routed_read_form(
             torii_exact_form_component(pair.key, plan.component_limit_bytes).map_err(|error| {
                 app_routed_read_form_encode_response(error, plan.component_limit_bytes)
             })?;
-        // SAFETY: the exact component constructor emits valid UTF-8.
-        let key = unsafe { std::str::from_utf8_unchecked(&key) };
+        torii_exact_form_component(pair.value, plan.component_limit_bytes).map_err(|error| {
+            app_routed_read_form_encode_response(error, plan.component_limit_bytes)
+        })?;
         if torii_form_pairs(raw)
             .skip(index + 1)
-            .any(|later| key.chars().eq(ToriiFormLossyChars::new(later.key)))
+            .any(|later| key.iter().copied().eq(ToriiFormDecodedBytes::new(later.key)))
         {
             return Err(torii_proxy_error_response(
                 StatusCode::BAD_REQUEST,
@@ -544,94 +543,51 @@ const fn torii_hex(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-#[derive(Clone)]
-struct ToriiFormLossyChars<'a> {
-    bytes: ToriiFormDecodedBytes<'a>,
-}
-impl<'a> ToriiFormLossyChars<'a> {
-    fn new(raw: &'a [u8]) -> Self {
-        Self {
-            bytes: ToriiFormDecodedBytes::new(raw),
-        }
-    }
-    fn advance(&mut self, bytes: usize) {
-        for _ in 0..bytes {
-            let _ = self.bytes.next();
-        }
-    }
-}
-impl Iterator for ToriiFormLossyChars<'_> {
-    type Item = char;
-    #[allow(unsafe_code)]
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut probe = self.bytes.clone();
-        let mut encoded = [0_u8; 4];
-        let mut length = 0;
-        while length < encoded.len() {
-            let Some(byte) = probe.next() else {
-                break;
-            };
-            encoded[length] = byte;
-            length += 1;
-        }
-        if length == 0 {
-            return None;
-        }
-        match std::str::from_utf8(&encoded[..length]) {
-            Ok(valid) => {
-                let ch = valid.chars().next().expect("non-empty UTF-8 probe");
-                self.advance(ch.len_utf8());
-                Some(ch)
-            }
-            Err(error) if error.valid_up_to() != 0 => {
-                let valid = &encoded[..error.valid_up_to()];
-                // SAFETY: `Utf8Error::valid_up_to` identifies a valid UTF-8
-                // prefix, and this branch established that it is non-empty.
-                let ch = unsafe { std::str::from_utf8_unchecked(valid) }
-                    .chars()
-                    .next()
-                    .expect("non-empty valid UTF-8 prefix");
-                self.advance(ch.len_utf8());
-                Some(ch)
-            }
-            Err(error) => {
-                // Match `String::from_utf8_lossy`: one replacement character
-                // represents the invalid maximal subpart reported by
-                // `Utf8Error`, including an incomplete terminal sequence.
-                self.advance(error.error_len().unwrap_or(length));
-                Some(char::REPLACEMENT_CHARACTER)
-            }
-        }
-    }
-}
 #[allow(unsafe_code)]
 fn torii_exact_form_component(
     raw: &[u8],
     limit: usize,
 ) -> Result<Box<[u8]>, norito::json::BoundedJsonError> {
-    let length = ToriiFormLossyChars::new(raw).try_fold(0_usize, |length, ch| {
-        length
-            .checked_add(ch.len_utf8())
-            .filter(|next| *next <= limit)
-            .ok_or(norito::json::BoundedJsonError::BodyTooLarge)
-    })?;
-    let mut output = torii_allocate_exact_bytes(length)?;
-    let mut offset = 0;
-    for ch in ToriiFormLossyChars::new(raw) {
-        let mut buffer = [0_u8; 4];
-        let encoded = ch.encode_utf8(&mut buffer).as_bytes();
-        for (slot, byte) in output[offset..offset + encoded.len()]
-            .iter_mut()
-            .zip(encoded)
-        {
-            slot.write(*byte);
-        }
-        offset += encoded.len();
+    if !torii_form_component_has_valid_percent_encoding(raw) {
+        return Err(norito::json::BoundedJsonError::Unsupported);
     }
-    debug_assert_eq!(offset, length);
-    // SAFETY: every byte was initialized above, and each source chunk came
-    // from `char::encode_utf8`, so the complete byte string is valid UTF-8.
-    Ok(unsafe { Box::from_raw(Box::into_raw(output) as *mut [u8]) })
+    let length = ToriiFormDecodedBytes::new(raw).count();
+    if length > limit {
+        return Err(norito::json::BoundedJsonError::BodyTooLarge);
+    }
+    let mut output = torii_allocate_exact_bytes(length)?;
+    for (slot, byte) in output.iter_mut().zip(ToriiFormDecodedBytes::new(raw)) {
+        slot.write(byte);
+    }
+    // SAFETY: the decoded iterator yields exactly `length` bytes, so every
+    // element in the allocation was initialized by the loop above.
+    let output = unsafe { Box::from_raw(Box::into_raw(output) as *mut [u8]) };
+    if std::str::from_utf8(&output).is_err() {
+        return Err(norito::json::BoundedJsonError::Unsupported);
+    }
+    Ok(output)
+}
+fn torii_form_component_has_valid_percent_encoding(raw: &[u8]) -> bool {
+    let mut index = 0;
+    while index < raw.len() {
+        if raw[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        if raw
+            .get(index + 1)
+            .and_then(|byte| torii_hex(*byte))
+            .is_none()
+            || raw
+                .get(index + 2)
+                .and_then(|byte| torii_hex(*byte))
+                .is_none()
+        {
+            return false;
+        }
+        index += 3;
+    }
+    true
 }
 #[allow(unsafe_code)]
 fn torii_allocate_exact_bytes(
@@ -661,7 +617,6 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
     fn write_json(&self, output: &mut String) {
         norito::json::write_json_unbounded(self, output);
     }
-    #[allow(unsafe_code)]
     fn write_json_to(
         &self,
         output: &mut dyn norito::json::JsonWriteSink,
@@ -675,9 +630,8 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
         let mut first = true;
         for pair in torii_form_pairs(self.raw.as_bytes()) {
             let key = torii_exact_form_component(pair.key, self.plan.component_limit_bytes)?;
-            // SAFETY: `torii_exact_form_component` constructs UTF-8 solely
-            // from Unicode scalar encodings.
-            let key_text = unsafe { std::str::from_utf8_unchecked(&key) };
+            let key_text = std::str::from_utf8(&key)
+                .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
             if !first {
                 output.push(',')?;
             }
@@ -686,8 +640,8 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
             drop(key);
             output.push(':')?;
             let value = torii_exact_form_component(pair.value, self.plan.component_limit_bytes)?;
-            // SAFETY: `torii_exact_form_component` constructs valid UTF-8.
-            let value = unsafe { std::str::from_utf8_unchecked(&value) };
+            let value = std::str::from_utf8(&value)
+                .map_err(|_| norito::json::BoundedJsonError::Unsupported)?;
             if self.coerce_scalars {
                 torii_write_form_scalar(value.trim(), output)?;
             } else {
@@ -726,18 +680,15 @@ fn torii_write_form_scalar(
 mod torii_routed_read_request_tests {
     use super::*;
     #[test]
-    fn lossy_form_decoder_matches_url_crate_corpus() {
-        let corpus: &[&[u8]] = &[
+    fn form_decoder_accepts_only_exact_utf8() {
+        let valid: &[&[u8]] = &[
             b"plain",
             b"plus+space",
             b"percent%20space",
             b"%F0%9F%92%96",
-            b"%00%9F%92%96",
-            b"%E2%82tail",
-            b"bad%GGpercent",
             b"%2B+%25",
         ];
-        for raw in corpus {
+        for raw in valid {
             let encoded = [b"k=".as_slice(), *raw].concat();
             let expected = url::form_urlencoded::parse(&encoded)
                 .next()
@@ -747,6 +698,20 @@ mod torii_routed_read_request_tests {
             let actual =
                 torii_exact_form_component(raw, usize::MAX).expect("corpus component decodes");
             assert_eq!(std::str::from_utf8(&actual).expect("valid UTF-8"), expected);
+        }
+        for raw in [
+            b"%00%9F%92%96".as_slice(),
+            b"%E2%82tail".as_slice(),
+            b"bad%GGpercent".as_slice(),
+        ] {
+            assert!(
+                matches!(
+                    torii_exact_form_component(raw, usize::MAX),
+                    Err(norito::json::BoundedJsonError::Unsupported)
+                ),
+                "raw={}",
+                String::from_utf8_lossy(raw)
+            );
         }
     }
     #[test]
@@ -780,7 +745,12 @@ mod torii_routed_read_request_tests {
                 .expect("test geometry")
                 .request_decode_plan()
                 .expect("request plan");
-        for query in ["limit=7&limit=9", "%6cimit=7&limit=9", "limit=%"] {
+        for query in [
+            "limit=7&limit=9",
+            "%6cimit=7&limit=9",
+            "limit=%",
+            "limit=%FF",
+        ] {
             let response = decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(query))
                 .expect_err("noncanonical query must fail");
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
@@ -793,7 +763,12 @@ mod torii_routed_read_request_tests {
                 "query={query}"
             );
         }
-        for query in ["hash=a&hash=b", "%68ash=a&hash=b", "hash=%"] {
+        for query in [
+            "hash=a&hash=b",
+            "%68ash=a&hash=b",
+            "hash=%",
+            "hash=%C0%AF",
+        ] {
             let response =
                 decode_torii_proxy_string_query::<PipelineStatusQuery>(plan, Some(query))
                     .expect_err("noncanonical string query must fail");

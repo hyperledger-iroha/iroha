@@ -276,6 +276,79 @@ test("ToriiBrowserClient strips API suffixes and calls snapshot-bound explorer b
   });
 });
 
+test("ToriiBrowserClient protects credential headers with an exact insecure opt-in", () => {
+  let fetchCalls = 0;
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    throw new Error("unexpected fetch");
+  };
+  for (const allowInsecure of ["false", "true", 0, 1, {}, []]) {
+    assert.throws(
+      () =>
+        new ToriiBrowserClient("http://torii.example", {
+          allowInsecure,
+          defaultHeaders: { Authorization: "Bearer secret" },
+          fetchImpl,
+        }),
+      /allowInsecure must be a boolean/u,
+    );
+  }
+  assert.throws(
+    () =>
+      new ToriiBrowserClient("http://torii.example", {
+        defaultHeaders: { Authorization: "Bearer secret" },
+        fetchImpl,
+      }),
+    /credential headers require an https base URL/u,
+  );
+  assert.doesNotThrow(
+    () =>
+      new ToriiBrowserClient("http://torii.example", {
+        allowInsecure: true,
+        defaultHeaders: { Authorization: "Bearer secret" },
+        fetchImpl,
+      }),
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("ToriiBrowserClient keeps its timeout when a caller signal is supplied", async () => {
+  const fetchImpl = async (_url, init) =>
+    new Promise((_, reject) => {
+      init.signal.addEventListener(
+        "abort",
+        () => reject(new DOMException("Aborted", "AbortError")),
+        { once: true },
+      );
+    });
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl,
+    timeoutMs: 10,
+  });
+  const caller = new AbortController();
+  await assert.rejects(
+    () => client.listExplorerBlocks({ signal: caller.signal }),
+    /AbortError|aborted/iu,
+  );
+});
+
+test("ToriiBrowserClient applies a default bound to JSON response bodies", async () => {
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () =>
+      new Response("{}", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(8 * 1024 * 1024 + 1),
+        },
+      }),
+  });
+  await assert.rejects(
+    () => client.listExplorerBlocks(),
+    /exceeds its 8388608-byte response limit/u,
+  );
+});
+
 test("ToriiBrowserClient uses snapshot cursors on transaction and instruction history routes", async () => {
   const cursor = "Y3Vyc29y";
   const nextCursor = "bmV4dA";

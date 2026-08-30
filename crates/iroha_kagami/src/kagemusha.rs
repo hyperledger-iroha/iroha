@@ -641,12 +641,10 @@ fn configured_device_attestation_policy(
     let policy: OfflineDeviceAttestationPolicy = norito::json::from_slice(&raw)
         .wrap_err("failed to decode governed Offline device-attestation policy JSON")?;
     validate_device_attestation_policy_for_atomic_activation(&policy, policy_evaluation_time_ms)?;
-    let canonical = norito::json::to_string(&policy)
+    let canonical = norito::json::to_vec(&policy)
         .wrap_err("failed to encode canonical Offline device-attestation policy JSON")?;
-    let reparsed: OfflineDeviceAttestationPolicy = norito::json::from_str(&canonical)
-        .wrap_err("failed to reparse canonical Offline device-attestation policy JSON")?;
-    if reparsed != policy {
-        bail!("Offline device-attestation policy JSON is not lossless");
+    if raw != canonical {
+        bail!("Offline device-attestation policy JSON is not the exact canonical encoding");
     }
     Ok(policy)
 }
@@ -1018,8 +1016,12 @@ fn verify_release_directory_v4(
     let manifest_from_json: KagemushaRecursiveSpendArtifactManifestV4 =
         norito::json::from_str(manifest_json)
             .wrap_err("Kagemusha V4 manifest JSON is malformed or non-canonical in shape")?;
-    if manifest_from_json != manifest {
-        bail!("Kagemusha V4 JSON and Norito manifests are not semantically identical");
+    let mut canonical_manifest_json = norito::json::to_string_pretty(&manifest)
+        .wrap_err("Kagemusha V4 manifest JSON cannot be canonically encoded")?;
+    canonical_manifest_json.push('\n');
+    if manifest_from_json != manifest || manifest_json.as_bytes() != canonical_manifest_json.as_bytes()
+    {
+        bail!("Kagemusha V4 JSON manifest is noncanonical or differs from manifest.norito");
     }
     let attestation_bytes = read_regular_bounded(
         &root,
@@ -2987,8 +2989,9 @@ mod tests {
         PROMOTION_RECORD_FILE_NAME_V4, PrepareReleaseCircuitParamsV4Args,
         RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4, RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
         REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, ReleaseInventoryStateV4,
-        insert_expected_release_file_v4, parse_manifest_sha256, parse_nonzero_canonical_u64,
-        parse_promotion_id, prepare_release_circuit_params_v4, read_regular_bounded,
+        configured_device_attestation_policy, insert_expected_release_file_v4,
+        parse_manifest_sha256, parse_nonzero_canonical_u64, parse_promotion_id,
+        prepare_release_circuit_params_v4, read_regular_bounded,
         require_new_promotion_record_path_v4, roster_release_generations_match_v4,
         validate_artifacts_sequentially, validate_device_attestation_policy_for_atomic_activation,
         verify_publish_verify_release_v4,
@@ -4298,6 +4301,27 @@ mod tests {
                 .is_err()
             );
         }
+    }
+    #[test]
+    fn configured_device_policy_requires_exact_canonical_json_bytes() {
+        let policy = valid_device_attestation_policy();
+        let canonical = norito::json::to_vec(&policy).expect("canonical policy JSON");
+        let root = tempfile::tempdir().expect("temporary policy root");
+        let path = root.path().join("policy.json");
+        std::fs::write(&path, &canonical).expect("write canonical policy");
+        assert_eq!(
+            configured_device_attestation_policy(&path, POLICY_EVALUATION_TIME_MS)
+                .expect("canonical policy accepted"),
+            policy
+        );
+
+        let mut padded = Vec::with_capacity(canonical.len() + 1);
+        padded.push(b' ');
+        padded.extend_from_slice(&canonical);
+        std::fs::write(&path, padded).expect("write noncanonical policy");
+        let error = configured_device_attestation_policy(&path, POLICY_EVALUATION_TIME_MS)
+            .expect_err("lexically noncanonical policy must fail closed");
+        assert!(error.to_string().contains("exact canonical encoding"));
     }
     #[test]
     fn atomic_activation_rejects_truncated_sequence_as_trusted_root() {

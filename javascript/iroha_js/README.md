@@ -828,20 +828,11 @@ console.log(formats.i105);
 console.log(formats.i105Warning);
 ```
 
-`secp256k1` account ids are first-class in the JS codec. Optional controller
-families remain opt-in; enable them before encoding or decoding account ids
-that use `ml-dsa`, `gost*`, `sm2`, or feature-gated `bls_*` public keys:
-
-```js
-import { configureCurveSupport } from "@iroha/iroha-js";
-
-configureCurveSupport({
-  allowMlDsa: true,
-  allowGost: true,
-  allowSm2: true,
-  allowBls: true,
-});
-```
+Every V1 controller family is deterministic and always available in the
+address codec: `ed25519`, `secp256k1`, `ml-dsa`, `gost256a`, `gost256b`,
+`gost256c`, `gost512a`, `gost512b`, `sm2`, `bls_normal`, and `bls_small`.
+There is no process-wide curve toggle. Pass exactly one of these canonical
+labels; aliases and case-folded spellings are rejected before encoding.
 
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
 > single-format UX checklist captured in
@@ -2979,9 +2970,11 @@ when governance stages code hashes separately, and the native Norito path
 round-trips the full current manifest metadata surface including
 `entrypoints`, `kotoba`, and `provenance`. Bytecode helpers enforce the 32-byte
 hash length and accept `Buffer`, typed arrays, or base64 strings. Public
-deployment is now alias-first through `ToriiClient.deployContract`, which
-requires `contractAlias`, returns a fresh immutable `contract_address`, and
-reports `kaizen` when the deploy replaces an existing alias binding.
+deployment uses two explicit steps: `ToriiClient.registerContractCode` submits
+the manifest and code transaction, then `ToriiClient.setContractAlias` binds or
+updates the canonical address. The SDK intentionally has no one-shot
+`deployContract` compatibility wrapper, so signing and alias mutation remain
+visible to the caller.
 `buildRemoveSmartContractBytesInstruction/Transaction` wires the bytecode
 reclamation ISI into CI/governance tooling and rejects empty reason strings
 before submission so operators get fast feedback during rehearsals.
@@ -3384,9 +3377,9 @@ The codec is exported by the package root and the browser-safe `./norito` leaf.
 It is intentionally absent from the broad `./browser` facade so applications
 that do not inspect release fixtures do not retain the complete Exact12 codec.
 
-Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Typed
-helpers normalise casing and payload layouts so tests and automation can inspect
-registry state without manual parsing:
+Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Read
+methods validate the canonical response before returning it; there is no parallel
+raw/typed API or compatibility casing layer:
 
 ```js
 import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
@@ -3397,13 +3390,13 @@ const torii = new ToriiClient("http://localhost:8080", {
   // Immutable local-signing context. Read-only clients may omit this.
   localSigningContext: new LocalSigningContext(networkId),
 });
-const list = await torii.listVerifyingKeysTyped({ backend: "halo2/ipa", status: "active" });
+const list = await torii.listVerifyingKeys({ backend: "halo2/ipa", status: "Active" });
 console.log(list[0]?.record?.commitment_hex);
 for await (const item of torii.iterateVerifyingKeys({ backend: "halo2/ipa", pageSize: 1 })) {
   console.log(item.id.name);
 }
 
-const detail = await torii.getVerifyingKeyTyped("halo2/ipa", "vk_main");
+const detail = await torii.getVerifyingKey("halo2/ipa", "vk_main");
 console.log(detail.record.status); // "Active"
 
 const draft = await torii.registerVerifyingKey({
@@ -4058,7 +4051,8 @@ It posts to `/v1/transactions/visible/query`, lets Torii enforce the authenticat
 viewer scope, and accepts convenience filters without hand-writing a QueryEnvelope:
 
 ```js
-import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js/torii";
+import { NetworkId } from "@iroha/iroha-js";
+import { LocalSigningContext, ToriiClient } from "@iroha/iroha-js/torii";
 
 const canonicalAuth = {
   accountId: canonicalI105AccountId,
@@ -4244,7 +4238,8 @@ Explorer health call is never signed by this context. Incomplete contexts,
 caller-precomputed canonical headers, and redirects are rejected.
 
 ```js
-import { NetworkId, ToriiBrowserClient } from "@iroha/iroha-js/torii-browser";
+import { NetworkId } from "@iroha/iroha-js/browser";
+import { ToriiBrowserClient } from "@iroha/iroha-js/torii-browser";
 
 const browserTorii = new ToriiBrowserClient("https://torii.example", {
   networkId: NetworkId.parse(genesisNetworkHash),

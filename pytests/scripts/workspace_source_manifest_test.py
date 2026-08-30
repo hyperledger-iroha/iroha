@@ -680,6 +680,63 @@ def test_source_seal_rejects_out_of_root_symlinks_on_create_and_extract(
     assert list(destination.iterdir()) == []
 
 
+def test_source_seal_rejects_chained_symlink_escape_before_extract(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    source = tmp_path / "source"
+    (source / "a").mkdir(parents=True)
+    (source / "b").mkdir()
+    (source / "a" / "x").symlink_to("../b")
+    (source / "a" / "link").symlink_to("x/../../outside")
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["a/link", "a/x"])
+    manifest = module.workspace_source_manifest_from_path_list(source, path_list)
+
+    archive = tmp_path / "unsafe.seal"
+    with pytest.raises(module.SourceSealError, match="chained out-of-root symlink"):
+        module.create_source_seal(source, path_list, archive, manifest)
+    assert not archive.exists()
+
+    malicious = tmp_path / "malicious.seal"
+    malicious.write_bytes(
+        _seal_bytes(
+            module,
+            [
+                (b"a/link", b"L", 0o777, b"x/../../outside"),
+                (b"a/x", b"L", 0o777, b"../b"),
+            ],
+        )
+    )
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    with pytest.raises(module.SourceSealError, match="chained out-of-root symlink"):
+        module.extract_source_seal(
+            malicious,
+            path_list,
+            destination,
+            "0" * 64,
+            _sha256(malicious),
+            _sha256(path_list),
+        )
+    assert list(destination.iterdir()) == []
+
+    with pytest.raises(module.SourceSealError, match="cyclic symlink chain"):
+        module._validate_symlink_graph({b"a": b"b", b"b": b"a"})
+
+
+@pytest.mark.parametrize(
+    "target",
+    (b"nested\\escape", b"C:/escape", b"C:\\escape"),
+)
+def test_source_seal_rejects_non_posix_symlink_targets(
+    tmp_path: Path, target: bytes
+) -> None:
+    module = load_module()
+    with pytest.raises(module.SourceSealError, match="unsafe symlink target"):
+        module._validate_symlink_target(b"link", target)
+
+
 def test_in_root_dangling_symlink_cannot_smuggle_unsealed_target(
     tmp_path: Path,
 ) -> None:

@@ -725,10 +725,6 @@ impl WireRegistry {
                     self.tc_to_wire(&certificate, aggregator)?,
                 )
             }
-            reducer::ConsensusMessageV2::BodyRequest(_)
-            | reducer::ConsensusMessageV2::BodyChunk(_) => {
-                return Err(AdapterError::TransportPayload);
-            }
         };
         Ok(wire::ConsensusMessageV2::new(payload))
     }

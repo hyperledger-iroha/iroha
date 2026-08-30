@@ -47,6 +47,8 @@ const CREDENTIALS_FILENAME: &str = "operator_webauthn.json";
 pub(crate) const CREDENTIAL_EXCHANGE_BODY_LIMIT: usize = 64 * 1024;
 const CHALLENGE_BYTES: usize = 32;
 const SESSION_TOKEN_BYTES: usize = 32;
+const SESSION_TOKEN_B64URL_BYTES: usize = (SESSION_TOKEN_BYTES * 4 + 2) / 3;
+const SESSION_TOKEN_DECODE_BUFFER_BYTES: usize = SESSION_TOKEN_BYTES + 1;
 const MAX_CREDENTIAL_ID_BYTES: usize = 1_024;
 const MAX_CREDENTIAL_ID_B64URL_BYTES: usize = (MAX_CREDENTIAL_ID_BYTES * 4 + 2) / 3;
 const P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN: usize = 65;
@@ -74,6 +76,12 @@ enum EnrollmentAuthority {
     None,
     BootstrapToken,
     Session(u64),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionHeader<'a> {
+    Missing,
+    Invalid,
+    Valid(&'a str),
 }
 #[derive(Debug, Clone)]
 pub struct OperatorAuthError {
@@ -793,16 +801,20 @@ impl OperatorAuth {
             return Ok(());
         }
         let ctx = self.check_common(headers, remote_ip, ACTION_GATE).await?;
-        if let Some(session) = session_from_headers(headers) {
-            if self.session_generation(session).is_some() {
+        match session_from_headers(headers) {
+            SessionHeader::Valid(session) if self.session_generation(session).is_some() => {
                 self.record_success(&ctx, ACTION_GATE, "session");
-                return Ok(());
+                Ok(())
             }
-            let err = OperatorAuthError::invalid_session();
-            return Err(self.record_error(&ctx, ACTION_GATE, err));
+            SessionHeader::Missing => {
+                let err = OperatorAuthError::missing_session();
+                Err(self.record_error(&ctx, ACTION_GATE, err))
+            }
+            SessionHeader::Invalid | SessionHeader::Valid(_) => {
+                let err = OperatorAuthError::invalid_session();
+                Err(self.record_error(&ctx, ACTION_GATE, err))
+            }
         }
-        let err = OperatorAuthError::missing_session();
-        Err(self.record_error(&ctx, ACTION_GATE, err))
     }
     pub(crate) async fn authorize_bootstrap(
         &self,
@@ -816,11 +828,20 @@ impl OperatorAuth {
             return Err(err);
         }
         let mut ctx = self.check_common(headers, remote_ip, action).await?;
-        if let Some(session) = session_from_headers(headers)
-            && let Some(generation) = self.session_generation(session)
-        {
-            ctx.enrollment_authority = EnrollmentAuthority::Session(generation);
-            return Ok(ctx);
+        match session_from_headers(headers) {
+            SessionHeader::Valid(session) => {
+                if let Some(generation) = self.session_generation(session) {
+                    ctx.enrollment_authority = EnrollmentAuthority::Session(generation);
+                    return Ok(ctx);
+                }
+                let err = OperatorAuthError::invalid_session();
+                return Err(self.record_error(&ctx, action, err));
+            }
+            SessionHeader::Invalid => {
+                let err = OperatorAuthError::invalid_session();
+                return Err(self.record_error(&ctx, action, err));
+            }
+            SessionHeader::Missing => {}
         }
         if !self
             .has_credentials()
@@ -841,11 +862,7 @@ impl OperatorAuth {
                 }
             }
         }
-        let err = if session_from_headers(headers).is_some() {
-            OperatorAuthError::invalid_session()
-        } else {
-            OperatorAuthError::missing_session()
-        };
+        let err = OperatorAuthError::missing_session();
         Err(self.record_error(&ctx, action, err))
     }
     pub(crate) async fn authorize_login(
@@ -1386,7 +1403,11 @@ impl OperatorAuth {
         headers: &HeaderMap,
     ) -> Result<u64, OperatorAuthError> {
         self.webauthn_policy()?;
-        let session = session_from_headers(headers).ok_or_else(OperatorAuthError::missing_session)?;
+        let session = match session_from_headers(headers) {
+            SessionHeader::Missing => return Err(OperatorAuthError::missing_session()),
+            SessionHeader::Invalid => return Err(OperatorAuthError::invalid_session()),
+            SessionHeader::Valid(session) => session,
+        };
         self.session_generation(session)
             .ok_or_else(OperatorAuthError::invalid_session)
     }
@@ -1611,8 +1632,28 @@ fn single_header_text<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<
     let value = values.next()?.to_str().ok()?;
     values.next().is_none().then_some(value)
 }
-fn session_from_headers(headers: &HeaderMap) -> Option<&str> {
-    single_header_text(headers, HEADER_OPERATOR_SESSION).filter(|value| !value.is_empty())
+fn session_from_headers(headers: &HeaderMap) -> SessionHeader<'_> {
+    let mut values = headers.get_all(HEADER_OPERATOR_SESSION).iter();
+    let Some(header) = values.next() else {
+        return SessionHeader::Missing;
+    };
+    if values.next().is_some() || header.as_bytes().len() != SESSION_TOKEN_B64URL_BYTES {
+        return SessionHeader::Invalid;
+    }
+    let Ok(value) = header.to_str() else {
+        return SessionHeader::Invalid;
+    };
+    // `base64` asks `decode_slice` for its one-byte-conservative estimate for a 43-symbol
+    // unpadded value. The fixed buffer remains independent of attacker-controlled input.
+    let mut decoded = [0_u8; SESSION_TOKEN_DECODE_BUFFER_BYTES];
+    let Ok(decoded_len) = URL_SAFE_NO_PAD.decode_slice(value.as_bytes(), &mut decoded) else {
+        return SessionHeader::Invalid;
+    };
+    if decoded_len != SESSION_TOKEN_BYTES || URL_SAFE_NO_PAD.encode(&decoded[..decoded_len]) != value
+    {
+        return SessionHeader::Invalid;
+    }
+    SessionHeader::Valid(value)
 }
 fn operator_token(headers: &HeaderMap) -> Option<&str> {
     single_header_text(headers, HEADER_OPERATOR_TOKEN).filter(|value| !value.trim().is_empty())
@@ -2616,6 +2657,9 @@ mod tests {
     fn test_bootstrap_token(label: &str) -> String {
         format!("iroha-test-bootstrap-token-{label}-0123456789")
     }
+    fn test_session_token(seed: u8) -> String {
+        encode_b64url(&[seed; SESSION_TOKEN_BYTES])
+    }
     fn build_operator_auth(config: ToriiOperatorAuth, data_dir: &Path) -> OperatorAuth {
         OperatorAuth::new(config, data_dir.to_path_buf(), MaybeTelemetry::disabled())
             .expect("operator auth")
@@ -2972,12 +3016,14 @@ mod tests {
 
         let generation = credential_management_authority(&auth);
         let now = Instant::now();
+        let first_session = test_session_token(1);
+        let second_session = test_session_token(2);
         {
             let mut sessions = auth.sessions.lock();
-            for token in ["first-delete-session", "second-delete-session"] {
+            for token in [&first_session, &second_session] {
                 sessions
                     .insert(
-                        token.to_owned(),
+                        token.clone(),
                         SessionEntry {
                             credential_revocation_generation: generation,
                         },
@@ -2990,12 +3036,12 @@ mod tests {
         let mut first_headers = HeaderMap::new();
         first_headers.insert(
             HEADER_OPERATOR_SESSION,
-            HeaderValue::from_static("first-delete-session"),
+            HeaderValue::from_str(&first_session).expect("first session header"),
         );
         let mut second_headers = HeaderMap::new();
         second_headers.insert(
             HEADER_OPERATOR_SESSION,
-            HeaderValue::from_static("second-delete-session"),
+            HeaderValue::from_str(&second_session).expect("second session header"),
         );
         let first_authority = auth
             .credential_management_generation(&first_headers)
@@ -3471,16 +3517,145 @@ mod tests {
         headers
     }
     #[test]
-    fn operator_credentials_reject_duplicate_header_lines() {
-        for name in [HEADER_OPERATOR_SESSION, HEADER_OPERATOR_TOKEN] {
-            let mut headers = HeaderMap::new();
-            headers.append(name, HeaderValue::from_static("first"));
-            headers.append(name, HeaderValue::from_static("second"));
-            assert!(
-                single_header_text(&headers, name).is_none(),
-                "duplicate {name} header lines must fail closed"
+    fn operator_bootstrap_token_rejects_duplicate_header_lines() {
+        let mut headers = HeaderMap::new();
+        headers.append(HEADER_OPERATOR_TOKEN, HeaderValue::from_static("first"));
+        headers.append(HEADER_OPERATOR_TOKEN, HeaderValue::from_static("second"));
+        assert!(
+            single_header_text(&headers, HEADER_OPERATOR_TOKEN).is_none(),
+            "duplicate operator bootstrap token header lines must fail closed"
+        );
+    }
+    #[test]
+    fn operator_session_header_accepts_only_one_canonical_32_byte_token() {
+        let canonical = test_session_token(0);
+        assert_eq!(canonical.len(), SESSION_TOKEN_B64URL_BYTES);
+
+        let mut headers = HeaderMap::new();
+        assert_eq!(session_from_headers(&headers), SessionHeader::Missing);
+        headers.insert(
+            HEADER_OPERATOR_SESSION,
+            HeaderValue::from_str(&canonical).expect("canonical session header"),
+        );
+        assert_eq!(
+            session_from_headers(&headers),
+            SessionHeader::Valid(canonical.as_str())
+        );
+
+        let mut noncanonical = canonical.clone();
+        noncanonical.replace_range(SESSION_TOKEN_B64URL_BYTES - 1.., "B");
+        for malformed in [
+            String::new(),
+            encode_b64url(&[0_u8; SESSION_TOKEN_BYTES - 1]),
+            encode_b64url(&[0_u8; SESSION_TOKEN_BYTES + 1]),
+            format!("{canonical}="),
+            "*".repeat(SESSION_TOKEN_B64URL_BYTES),
+            noncanonical,
+            "A".repeat(64 * 1_024),
+        ] {
+            headers.insert(
+                HEADER_OPERATOR_SESSION,
+                HeaderValue::from_str(&malformed).expect("syntactically valid HTTP header"),
+            );
+            assert_eq!(
+                session_from_headers(&headers),
+                SessionHeader::Invalid,
+                "malformed session header must fail closed: length {}",
+                malformed.len()
             );
         }
+
+        headers.insert(
+            HEADER_OPERATOR_SESSION,
+            HeaderValue::from_bytes(&[0x80; SESSION_TOKEN_B64URL_BYTES])
+                .expect("opaque non-ASCII HTTP header"),
+        );
+        assert_eq!(session_from_headers(&headers), SessionHeader::Invalid);
+
+        headers.clear();
+        let canonical_header = HeaderValue::from_str(&canonical).expect("canonical session header");
+        headers.append(HEADER_OPERATOR_SESSION, canonical_header.clone());
+        headers.append(HEADER_OPERATOR_SESSION, canonical_header);
+        assert_eq!(session_from_headers(&headers), SessionHeader::Invalid);
+    }
+    #[tokio::test]
+    async fn session_header_missing_and_invalid_errors_are_exact_across_auth_paths() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let auth = build_operator_auth(
+            base_operator_auth_config(
+                vec!["bootstrap".to_owned()],
+                OperatorAuthLockout {
+                    failures: None,
+                    ..OperatorAuthLockout::default()
+                },
+                vec![OperatorWebAuthnAlgorithm::Es256],
+            ),
+            tempdir.path(),
+        );
+
+        let missing = base_headers();
+        let error = auth
+            .authorize_operator_endpoint(&missing, loopback_ip())
+            .await
+            .expect_err("ordinary operator routes require a session");
+        assert_eq!(error.code, "operator_session_missing");
+        let error = auth
+            .credential_management_generation(&missing)
+            .expect_err("credential management requires a session");
+        assert_eq!(error.code, "operator_session_missing");
+
+        let mut invalid = base_headers();
+        invalid.insert(HEADER_OPERATOR_SESSION, HeaderValue::from_static(""));
+        let error = auth
+            .authorize_operator_endpoint(&invalid, loopback_ip())
+            .await
+            .expect_err("a supplied malformed session is invalid, not missing");
+        assert_eq!(error.code, "operator_session_invalid");
+        let error = auth
+            .credential_management_generation(&invalid)
+            .expect_err("credential management rejects malformed sessions as invalid");
+        assert_eq!(error.code, "operator_session_invalid");
+
+        let canonical = test_session_token(7);
+        let canonical_header = HeaderValue::from_str(&canonical).expect("canonical session header");
+        let mut duplicate = base_headers();
+        duplicate.append(HEADER_OPERATOR_SESSION, canonical_header.clone());
+        duplicate.append(HEADER_OPERATOR_SESSION, canonical_header);
+        let error = auth
+            .authorize_operator_endpoint(&duplicate, loopback_ip())
+            .await
+            .expect_err("duplicate session headers are invalid");
+        assert_eq!(error.code, "operator_session_invalid");
+
+        let bootstrap = headers_with_operator_token("bootstrap");
+        auth.authorize_bootstrap(&bootstrap, loopback_ip(), ACTION_REGISTER_OPTIONS)
+            .await
+            .expect("a missing session preserves first-credential token bootstrap");
+        let mut unknown_session_bootstrap = bootstrap.clone();
+        unknown_session_bootstrap.insert(
+            HEADER_OPERATOR_SESSION,
+            HeaderValue::from_str(&canonical).expect("canonical unknown session header"),
+        );
+        let error = auth
+            .authorize_bootstrap(
+                &unknown_session_bootstrap,
+                loopback_ip(),
+                ACTION_REGISTER_OPTIONS,
+            )
+            .await
+            .expect_err("bootstrap must not override a supplied unknown session");
+        assert_eq!(error.code, "operator_session_invalid");
+        let mut malformed_bootstrap = bootstrap;
+        malformed_bootstrap.insert(HEADER_OPERATOR_SESSION, HeaderValue::from_static(""));
+        let error = auth
+            .authorize_bootstrap(
+                &malformed_bootstrap,
+                loopback_ip(),
+                ACTION_REGISTER_OPTIONS,
+            )
+            .await
+            .expect_err("bootstrap must not hide a supplied malformed session");
+        assert_eq!(error.code, "operator_session_invalid");
     }
     fn extract_challenge(payload: &norito::json::Value) -> String {
         let obj = payload.as_object().expect("payload object");
@@ -4339,10 +4514,11 @@ mod tests {
         assert!(!auth.lockout.is_locked(&ctx.key));
 
         let now = Instant::now();
+        let session = test_session_token(3);
         auth.sessions
             .lock()
             .insert(
-                "valid-session".to_owned(),
+                session.clone(),
                 SessionEntry {
                     credential_revocation_generation: auth
                         .credential_revocation_generation
@@ -4355,7 +4531,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             HEADER_OPERATOR_SESSION,
-            HeaderValue::from_static("valid-session"),
+            HeaderValue::from_str(&session).expect("session header"),
         );
         auth.authorize_operator_endpoint(
             &headers,

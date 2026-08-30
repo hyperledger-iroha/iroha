@@ -4089,24 +4089,6 @@ fields {
     pub consensus_recovery_stuck_round_seconds: histogram_with_buckets(
         prometheus::exponential_buckets(0.1, 2.0, 10).expect("inputs are valid"),
     );
-    /// Sumeragi DA availability: missing availability artifacts (labeled by reason)
-    pub sumeragi_da_gate_block_total: int_counter_vec(&["reason"]);
-    /// Sumeragi DA availability: last recorded reason code (0=none,1=missing_local_data,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)
-    pub sumeragi_da_gate_last_reason: gauge();
-    /// Sumeragi DA availability: last satisfaction code (0=none,1=missing_data_recovered)
-    pub sumeragi_da_gate_last_satisfied: gauge();
-    /// Sumeragi DA availability: satisfaction transitions (labeled by gate)
-    pub sumeragi_da_gate_satisfied_total: int_counter_vec(&["gate"]);
-    /// Sumeragi DA manifest guard: outcomes labeled by result/reason.
-    pub sumeragi_da_manifest_guard_total: int_counter_vec(&["result", "reason"]);
-    /// Sumeragi DA manifest cache: outcomes labeled by result.
-    pub sumeragi_da_manifest_cache_total: int_counter_vec(&["result"]);
-    /// Sumeragi DA spool cache: outcomes labeled by kind/result.
-    pub sumeragi_da_spool_cache_total: int_counter_vec(&["kind", "result"]);
-    /// Sumeragi DA pin intent spool: outcomes labeled by result/reason.
-    pub sumeragi_da_pin_intent_spool_total: int_counter_vec(&["result", "reason"]);
-    /// Sumeragi availability: votes ingested by this collector (cumulative)
-    pub sumeragi_da_votes_ingested_total: int_counter();
     /// Sumeragi QC assembly latency histogram (milliseconds) labeled by `kind`
     pub sumeragi_qc_assembly_latency_ms: histogram_vec_with_buckets(
         vec![
@@ -5696,12 +5678,8 @@ construct {
         consensus_missing_block_height_escalation_total consensus_sidecar_quarantine_total
         consensus_sidecar_final_drop_total blocksync_range_pull_escalation_total
         blocksync_range_pull_success_total blocksync_range_pull_failure_total
-        consensus_recovery_stuck_round_seconds sumeragi_da_gate_block_total
-        sumeragi_da_gate_last_reason sumeragi_da_gate_last_satisfied
-        sumeragi_da_gate_satisfied_total sumeragi_da_manifest_guard_total
-        sumeragi_da_manifest_cache_total sumeragi_da_spool_cache_total
-        sumeragi_da_pin_intent_spool_total]
-    [sumeragi_da_votes_ingested_total sumeragi_qc_assembly_latency_ms
+        consensus_recovery_stuck_round_seconds]
+    [sumeragi_qc_assembly_latency_ms
         sumeragi_qc_last_latency_ms sumeragi_kura_store_failures_total
         sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
         state_commit_write_lock_wait_ms state_commit_write_lock_hold_ms
@@ -5760,7 +5738,6 @@ construct {
             "quorum_timeout",
             "stake_quorum_timeout",
             "censorship_evidence",
-            "da_gate",
             "missing_payload",
             "missing_qc",
             "validation_reject",
@@ -6190,12 +6167,8 @@ initialize (metrics) {
         consensus_missing_block_height_escalation_total consensus_sidecar_quarantine_total
         consensus_sidecar_final_drop_total blocksync_range_pull_escalation_total
         blocksync_range_pull_success_total blocksync_range_pull_failure_total
-        consensus_recovery_stuck_round_seconds sumeragi_da_gate_block_total
-        sumeragi_da_gate_last_reason sumeragi_da_gate_last_satisfied
-        sumeragi_da_gate_satisfied_total sumeragi_da_manifest_guard_total
-        sumeragi_da_manifest_cache_total sumeragi_da_spool_cache_total
-        sumeragi_da_pin_intent_spool_total sumeragi_da_votes_ingested_total
-        sumeragi_qc_assembly_latency_ms sumeragi_qc_last_latency_ms
+        consensus_recovery_stuck_round_seconds sumeragi_qc_assembly_latency_ms
+        sumeragi_qc_last_latency_ms
         sumeragi_kura_store_failures_total
         sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
         state_commit_write_lock_wait_ms state_commit_write_lock_hold_ms

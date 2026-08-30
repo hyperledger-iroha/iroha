@@ -819,8 +819,8 @@ class KagemushaRecursiveSpendProverTest {
                 "prepareTopUp",
                 "projectOperationReference",
                 "projectOperationStatus",
-                "projectRedeemRequestOperationId",
-                "projectTopUpRequestOperationId",
+                "projectRedeemRequestIdentity",
+                "projectTopUpRequestIdentity",
                 "projectPeerPayment",
                 "projectInitResultV4",
                 "projectRedeemBuildResultV4",
@@ -1776,13 +1776,23 @@ class KagemushaRecursiveSpendProverTest {
         }
         val requestTimeout = Duration.ofSeconds(37)
         val projectedOperationId = ByteArray(32) { 0x11 }
+        val topUpIdentity = KagemushaRecursiveSpendProver.OperationRequestIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            projectedOperationId,
+            1,
+        )
+        val redeemIdentity = KagemushaRecursiveSpendProver.OperationRequestIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+            projectedOperationId,
+            1,
+        )
         val client = KagemushaRecursiveSpendProver.ToriiClient(
             toriiBaseUri,
             transport,
             localSigningContext,
             requestTimeout,
-            topUpRequestOperationIdProjector = { projectedOperationId },
-            redeemRequestOperationIdProjector = { projectedOperationId },
+            topUpRequestIdentityProjector = { topUpIdentity },
+            redeemRequestIdentityProjector = { redeemIdentity },
             operationReferenceProjector = {
                 KagemushaRecursiveSpendProver.OperationReferenceProjection(
                     if (captured.get().uri.path.endsWith("/redeem")) {
@@ -1877,12 +1887,12 @@ class KagemushaRecursiveSpendProverTest {
         assertFalse(verifiesOn(body = lineageRequest.body + byteArrayOf(0)))
 
         val operationId = "11".repeat(32)
-        client.submitTopUp(
+        val topUpHandle = client.submitTopUp(
             KagemushaRecursiveSpendProver.TopUpRequest(
                 archive("iroha.torii.v1.offline.top_up.request"),
             ),
-            operationId,
         ).join()
+        assertEquals(operationId, topUpHandle.operationIdHex())
         assertEquals("POST", captured.get().method)
         assertEquals("/api/v1/offline/top-up", captured.get().uri.path)
         assertEquals(
@@ -1896,12 +1906,11 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.RedeemSubmissionRequest(
                 archive("iroha.torii.v1.offline.redeem.request"),
             ),
-            operationId,
         ).join()
         assertEquals("/api/v1/offline/redeem", captured.get().uri.path)
         assertEquals(requestTimeout, captured.get().timeout)
 
-        client.getOperation(operationId).join()
+        client.getOperation(topUpHandle).join()
         assertEquals("/api/v1/offline/operations/$operationId", captured.get().uri.path)
         assertEquals(requestTimeout, captured.get().timeout)
     }
@@ -2029,7 +2038,13 @@ class KagemushaRecursiveSpendProverTest {
                 },
                 LocalSigningContext(networkId),
                 null,
-                topUpRequestOperationIdProjector = { ByteArray(32) { 0x11 } },
+                topUpRequestIdentityProjector = {
+                    KagemushaRecursiveSpendProver.OperationRequestIdentity(
+                        KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                        ByteArray(32) { 0x11 },
+                        1,
+                    )
+                },
             )
 
         val invalidHeaders = listOf(
@@ -2043,7 +2058,7 @@ class KagemushaRecursiveSpendProverTest {
         )
         invalidHeaders.forEach { (locations, retryAfter) ->
             assertFailsWith<RuntimeException> {
-                client(locations, retryAfter).submitTopUp(request, operationId).join()
+                client(locations, retryAfter).submitTopUp(request).join()
             }
         }
     }
@@ -2053,30 +2068,52 @@ class KagemushaRecursiveSpendProverTest {
         val operationId = ByteArray(32) { 0x11 }
         val otherOperationId = ByteArray(32) { 0x13 }
         val operationIdHex = operationId.toHex()
+        val identity = KagemushaRecursiveSpendProver.OperationRequestIdentity(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            7,
+        )
         val reference = KagemushaRecursiveSpendProver.OperationReferenceProjection(
             KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
             operationId,
             operationId,
             "/v1/offline/operations/$operationIdHex",
-            1,
+            7,
         )
-        KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+        val handle = KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
             reference,
-            operationIdHex,
-            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            identity,
         )
+        assertEquals(operationIdHex, handle.operationIdHex())
+        assertEquals(7, handle.submittedAtMilliseconds)
         assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
                 reference,
-                otherOperationId.toHex(),
-                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                KagemushaRecursiveSpendProver.OperationRequestIdentity(
+                    KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                    otherOperationId,
+                    7,
+                ),
             )
         }
         assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
                 reference,
-                operationIdHex,
-                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                KagemushaRecursiveSpendProver.OperationRequestIdentity(
+                    KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                    operationId,
+                    7,
+                ),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+                reference,
+                KagemushaRecursiveSpendProver.OperationRequestIdentity(
+                    KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                    operationId,
+                    8,
+                ),
             )
         }
         val status = KagemushaRecursiveSpendProver.OperationStatusProjection(
@@ -2084,22 +2121,72 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
             operationId,
             operationId,
-            1,
+            7,
             null,
             null,
             null,
             null,
         )
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(status, handle)
         assertFailsWith<IllegalStateException> {
             KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
                 status,
-                otherOperationId.toHex(),
+                KagemushaRecursiveSpendProver.OperationHandle(
+                    otherOperationId,
+                    KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                    operationId,
+                    7,
+                ),
             )
         }
         assertFailsWith<IllegalStateException> {
-            KagemushaRecursiveSpendProver.ToriiClient.requireSubmittedOperationIdMatches(
-                operationId,
-                otherOperationId.toHex(),
+            KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+                status,
+                KagemushaRecursiveSpendProver.OperationHandle(
+                    operationId,
+                    KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                    operationId,
+                    7,
+                ),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+                status,
+                KagemushaRecursiveSpendProver.OperationHandle(
+                    operationId,
+                    KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                    otherOperationId,
+                    7,
+                ),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+                status,
+                KagemushaRecursiveSpendProver.OperationHandle(
+                    operationId,
+                    KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                    operationId,
+                    8,
+                ),
+            )
+        }
+        val appliedRedeem = KagemushaRecursiveSpendProver.OperationStatusProjection(
+            KagemushaRecursiveSpendProver.OperationState.APPLIED,
+            KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+            operationId,
+            operationId,
+            null,
+            1,
+            1,
+            null,
+            null,
+        )
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+                appliedRedeem,
+                handle,
             )
         }
 
@@ -2117,12 +2204,18 @@ class KagemushaRecursiveSpendProverTest {
             },
             LocalSigningContext(networkId),
             null,
-            topUpRequestOperationIdProjector = { otherOperationId },
+            topUpRequestIdentityProjector = {
+                KagemushaRecursiveSpendProver.OperationRequestIdentity(
+                    KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+                    otherOperationId,
+                    7,
+                )
+            },
         )
         val request = KagemushaRecursiveSpendProver.TopUpRequest(
             archive("iroha.torii.v1.offline.top_up.request"),
         )
-        assertFailsWith<IllegalStateException> { client.submitTopUp(request, operationIdHex) }
+        assertFailsWith<IllegalStateException> { client.submitTopUp(request) }
         assertEquals(null, dispatched.get())
     }
 

@@ -117,6 +117,7 @@ pub mod isi {
             GlobalDataTriggerPermissionGovernanceProposalV1, GovernanceAttemptId,
             GovernanceAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
             GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
+            MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1, MAX_PARLIAMENT_CITIZENS_V1,
             MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentAggregateOutcomeV1,
             ParliamentAggregateTallyV1, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
             SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal, SortitionRequestV1,
@@ -8862,14 +8863,13 @@ pub mod isi {
                         .parliament_attempts
                         .get(&previous_id)
                         .ok_or_else(|| {
-                            InstructionExecutionError::InvariantViolation(
+                            Error::from(InstructionExecutionError::InvariantViolation(
                                 format!(
                                     "Parliament attempt sequence {} requires exact predecessor {previous_sequence}",
                                     self.attempt_sequence
                                 )
                                 .into(),
-                            )
-                            .into()
+                            ))
                         })
                 })
                 .transpose()?;
@@ -8984,20 +8984,64 @@ pub mod isi {
         candidates
     }
 
+    fn canonical_parliament_eligible_candidates_with_limits_v1(
+        state_transaction: &StateTransaction<'_, '_>,
+        max_citizens: usize,
+        max_snapshot_bytes: usize,
+    ) -> Result<Vec<AccountId>, Error> {
+        if state_transaction.world.citizens.len() > max_citizens {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Parliament citizen registry exceeds the V1 protocol cap".into(),
+            )
+            .into());
+        }
+
+        let required_bond = &state_transaction.gov.citizenship_bond_amount;
+        let canonical_flags = norito::core::default_encode_flags();
+        let _canonical_flags = norito::core::DecodeFlagsGuard::enter(canonical_flags);
+        let mut snapshot_bytes = norito::core::seq_len_prefix_len(0);
+        let mut candidates = Vec::new();
+        for (account_id, record) in state_transaction.world.citizens.iter() {
+            if record.amount < *required_bond {
+                continue;
+            }
+            let account_bytes = norito::core::encoded_payload_len(account_id).map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    "failed to measure a Parliament candidate account identifier".into(),
+                )
+            })?;
+            snapshot_bytes = snapshot_bytes
+                .checked_add(norito::core::len_prefix_len_with_flags(
+                    account_bytes,
+                    canonical_flags,
+                ))
+                .and_then(|bytes| bytes.checked_add(account_bytes))
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "Parliament candidate snapshot byte count overflow".into(),
+                    )
+                })?;
+            if snapshot_bytes > max_snapshot_bytes {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "Parliament candidate snapshot exceeds the V1 protocol byte cap".into(),
+                )
+                .into());
+            }
+            candidates.push(account_id.clone());
+        }
+        candidates.sort_unstable();
+        Ok(candidates)
+    }
+
     fn canonical_parliament_eligible_candidates_v1(
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Vec<AccountId> {
-        let required_bond = &state_transaction.gov.citizenship_bond_amount;
-        let mut candidates = state_transaction
-            .world
-            .citizens
-            .iter()
-            .filter_map(|(account_id, record)| {
-                (record.amount >= *required_bond).then(|| account_id.clone())
-            })
-            .collect::<Vec<_>>();
-        candidates.sort_unstable();
-        candidates
+    ) -> Result<Vec<AccountId>, Error> {
+        canonical_parliament_eligible_candidates_with_limits_v1(
+            state_transaction,
+            usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+                .expect("the V1 Parliament citizen cap fits usize"),
+            MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1,
+        )
     }
 
     fn canonical_parliament_candidate_snapshot_v1(
@@ -9005,7 +9049,7 @@ pub mod isi {
         attempt: &crate::governance::parliament::ParliamentAttemptStateV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Vec<AccountId>, Error> {
-        let mut candidates = canonical_parliament_eligible_candidates_v1(state_transaction);
+        let mut candidates = canonical_parliament_eligible_candidates_v1(state_transaction)?;
         if body == ParliamentBody::ConfirmationJury {
             let policy_jury = attempt
                 .sealed_body_for_role(ParliamentBody::PolicyJury)
@@ -9815,7 +9859,7 @@ pub mod isi {
                         })?;
                     let confirmation_candidates = if body_role == ParliamentBody::PolicyJury {
                         let candidates =
-                            canonical_parliament_eligible_candidates_v1(state_transaction);
+                            canonical_parliament_eligible_candidates_v1(state_transaction)?;
                         let policy_jury = attempt
                             .sealed_body_for_role(ParliamentBody::PolicyJury)
                             .ok_or_else(|| {
@@ -10045,6 +10089,20 @@ pub mod isi {
         }
     }
 
+    fn ensure_parliament_citizen_registry_capacity_with_limit_v1(
+        current_citizens: usize,
+        owner_is_already_citizen: bool,
+        max_citizens: usize,
+    ) -> Result<(), Error> {
+        if !owner_is_already_citizen && current_citizens >= max_citizens {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Parliament citizen registry reached the V1 protocol cap".into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     impl Execute for gov::RegisterCitizen {
         fn execute(
             self,
@@ -10064,6 +10122,12 @@ pub mod isi {
                 ));
             }
             let existing = state_transaction.world.citizens.get(&self.owner).cloned();
+            ensure_parliament_citizen_registry_capacity_with_limit_v1(
+                state_transaction.world.citizens.len(),
+                existing.is_some(),
+                usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
+                    .expect("the V1 Parliament citizen cap fits usize"),
+            )?;
             if let Some(ref rec) = existing {
                 if self.amount < rec.amount {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -20651,7 +20715,9 @@ pub mod isi {
     #[cfg(test)]
     mod tests {
         use super::{
-            TonBreakerPriorTransitionV1, ensure_citizenship_bond_releasable,
+            TonBreakerPriorTransitionV1, canonical_parliament_eligible_candidates_with_limits_v1,
+            ensure_citizenship_bond_releasable,
+            ensure_parliament_citizen_registry_capacity_with_limit_v1,
             ton_breaker_anchor_matches_current_governance_v1,
             ton_breaker_disabled_latch_transition_v1, ton_breaker_observation_allows_outbound_v1,
         };
@@ -21075,7 +21141,8 @@ pub mod isi {
                     .put_parliament_attempt(attempt)
                     .expect("store capacity fixture attempt");
 
-                let candidates = canonical_parliament_eligible_candidates_v1(&state_transaction);
+                let candidates = canonical_parliament_eligible_candidates_v1(&state_transaction)
+                    .expect("capacity fixture candidate snapshot fits V1 resource bounds");
                 assert_eq!(
                     u32::try_from(candidates.len()).expect("candidate count fits u32"),
                     candidate_count
@@ -21652,6 +21719,88 @@ pub mod isi {
                 parliament_certificate_enactment_height_v1(current_height, delay)
                     .expect_err("a zero-delay or overflowing enactment height must fail");
             }
+        }
+
+        #[test]
+        fn parliament_candidate_snapshot_derivation_has_preallocation_resource_bounds() {
+            assert!(
+                ensure_parliament_citizen_registry_capacity_with_limit_v1(2, true, 2).is_ok(),
+                "an existing citizen may top up at the cardinality ceiling"
+            );
+            let capacity_error =
+                ensure_parliament_citizen_registry_capacity_with_limit_v1(2, false, 2)
+                    .expect_err("a new citizen must not exceed the registry ceiling");
+            assert!(
+                format!("{capacity_error:?}").contains("citizen registry reached"),
+                "unexpected capacity error: {capacity_error:?}"
+            );
+
+            let state = blank_test_state();
+            let header = first_test_block_header();
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            let mut expected = vec![
+                parliament_test_account(0xD3),
+                parliament_test_account(0xD1),
+                parliament_test_account(0xD2),
+            ];
+            for candidate in &expected {
+                state_transaction.world.citizens.insert(
+                    candidate.clone(),
+                    crate::state::CitizenshipRecord {
+                        owner: candidate.clone(),
+                        amount: Quantity::zero(),
+                        bonded_height: 1,
+                    },
+                );
+            }
+
+            let registry_error = canonical_parliament_eligible_candidates_with_limits_v1(
+                &state_transaction,
+                2,
+                usize::MAX,
+            )
+            .expect_err("the registry count must be checked before candidate collection");
+            assert!(
+                format!("{registry_error:?}").contains("citizen registry exceeds"),
+                "unexpected registry-bound error: {registry_error:?}"
+            );
+
+            let byte_error = canonical_parliament_eligible_candidates_with_limits_v1(
+                &state_transaction,
+                3,
+                norito::core::seq_len_prefix_len(0),
+            )
+            .expect_err("the first candidate must exceed an empty-sequence-only byte budget");
+            assert!(
+                format!("{byte_error:?}").contains("snapshot exceeds"),
+                "unexpected snapshot-bound error: {byte_error:?}"
+            );
+
+            expected.sort_unstable();
+            let exact_snapshot_bytes = norito::core::encoded_payload_len(&expected)
+                .expect("measure the canonical candidate snapshot payload");
+            assert_eq!(
+                canonical_parliament_eligible_candidates_with_limits_v1(
+                    &state_transaction,
+                    3,
+                    exact_snapshot_bytes,
+                )
+                .expect("bounded complete candidate snapshot"),
+                expected,
+                "resource admission must preserve the complete canonical electorate"
+            );
+            let exact_byte_error = canonical_parliament_eligible_candidates_with_limits_v1(
+                &state_transaction,
+                3,
+                exact_snapshot_bytes - 1,
+            )
+            .expect_err("the canonical byte cap must be exact");
+            assert!(
+                format!("{exact_byte_error:?}").contains("snapshot exceeds"),
+                "unexpected exact byte-bound error: {exact_byte_error:?}"
+            );
         }
 
         #[test]

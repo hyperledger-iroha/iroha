@@ -521,13 +521,6 @@ def decode_i105_digits(payload: str) -> List[int]:
         ) from exc
 
 
-def i105_digit(symbol: str) -> int:
-    try:
-        return I105_INDEX[symbol]
-    except KeyError as exc:
-        raise AccountAddressError(f"invalid i105 alphabet symbol: {symbol}") from exc
-
-
 def encode_base_n(data: bytes, base: int) -> List[int]:
     if base < 2:
         raise AccountAddressError("invalid base for encoding")

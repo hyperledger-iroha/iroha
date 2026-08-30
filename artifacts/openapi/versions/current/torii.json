@@ -29854,7 +29854,7 @@
         "properties": {
           "transaction": {
             "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact sponsor-signed finalization transaction."
+            "description": "Exact sponsor-signed finalization or abort transaction."
           }
         },
         "required": [
@@ -29880,16 +29880,12 @@
           },
           "carrier_id": {
             "$ref": "#/components/schemas/Hash"
-          },
-          "lifecycle": {
-            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
           }
         },
         "required": [
           "bundle_id",
           "accepted_at_height",
-          "carrier_id",
-          "lifecycle"
+          "carrier_id"
         ],
         "type": "object",
         "x-iroha-redaction-v1": {
@@ -76361,13 +76357,50 @@
         "operationId": "operatorAuthCredentials",
         "parameters": [
           {
-            "description": "Non-empty WebAuthn session issued by the operator login verifier.",
+            "description": "Iroha multihash public key of the canonical request signer.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, empty-body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical 32-byte WebAuthn session token issued by the operator login verifier.",
             "in": "header",
             "name": "X-Iroha-Operator-Session",
             "required": true,
             "schema": {
               "maxLength": 43,
-              "minLength": 1,
+              "minLength": 43,
+              "pattern": "^[A-Za-z0-9_-]{43}$",
               "type": "string"
             }
           }
@@ -76496,13 +76529,50 @@
             }
           },
           {
-            "description": "Non-empty WebAuthn session issued by the operator login verifier.",
+            "description": "Iroha multihash public key of the canonical request signer.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Public-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, empty-body hash, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Operator-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical 32-byte WebAuthn session token issued by the operator login verifier.",
             "in": "header",
             "name": "X-Iroha-Operator-Session",
             "required": true,
             "schema": {
               "maxLength": 43,
-              "minLength": 1,
+              "minLength": 43,
+              "pattern": "^[A-Za-z0-9_-]{43}$",
               "type": "string"
             }
           }

@@ -301,27 +301,6 @@ public static class NumericV1
     /// <summary>Maximum canonical decimal scale.</summary>
     public const int MaxScale = 28;
 
-    /// <summary>Encodes an integer as its canonical lossless JSON string value.</summary>
-    public static string EncodeIntJson(IntValue value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        return value.ToString();
-    }
-
-    /// <summary>Encodes a decimal as its canonical lossless JSON string value.</summary>
-    public static string EncodeDecimalJson(DecimalValue value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        return value.ToString();
-    }
-
-    /// <summary>Encodes a quantity as its canonical lossless JSON string value.</summary>
-    public static string EncodeQuantityJson(QuantityValue value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        return value.ToString();
-    }
-
     /// <summary>Decodes a canonical integer JSON string.</summary>
     public static IntValue DecodeIntJson(string value)
     {

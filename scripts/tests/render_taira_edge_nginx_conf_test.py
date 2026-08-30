@@ -269,18 +269,28 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     explorer_server = rendered.split("server_name taira-explorer.sora.org;", 1)[1].split(
         "server_name taira-validator-1.sora.org;", 1
     )[0]
-    for server in (public_server, explorer_server):
-        for marker in (
-            "location = /v1/connect/session",
-            "location ^~ /v1/connect/session/",
-            "location = /v1/connect/status",
-            "location = /v1/connect/status/aggregate",
-            "location = /v1/connect/ws",
-            "location = /v1/mcp",
-        ):
-            block = _location_block(server, marker)
-            assert "proxy_pass http://taira_validator_1_upstream;" in block
-            assert "proxy_next_upstream" not in block
+    for marker in (
+        "location = /v1/connect/session",
+        "location ^~ /v1/connect/session/",
+        "location = /v1/connect/status",
+        "location = /v1/connect/status/aggregate",
+        "location = /v1/connect/ws",
+        "location = /v1/mcp",
+    ):
+        block = _location_block(public_server, marker)
+        assert "proxy_pass http://taira_validator_1_upstream;" in block
+        assert "proxy_next_upstream" not in block
+        assert marker not in explorer_server
+    assert "root /Users/administrator/dev/iroha2-block-explorer-web/dist;" in explorer_server
+    assert "location / {" in explorer_server
+    assert "try_files $uri $uri/ /index.html;" in explorer_server
+    assert "proxy_pass" not in explorer_server
+    assert [
+        line.strip()
+        for line in explorer_server.splitlines()
+        if line.lstrip().startswith("include ")
+    ] == ["include /etc/letsencrypt/options-ssl-nginx.conf;"]
+    assert "client_max_body_size" not in explorer_server
     assert "location = /v1/mcp" in rendered
     assert "location ^~ /v1/app-api/" in rendered
     assert "client_max_body_size 1g;" in rendered

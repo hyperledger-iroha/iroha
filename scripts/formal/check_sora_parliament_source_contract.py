@@ -199,6 +199,14 @@ def main() -> int:
             "crates/iroha_torii/src/lib.rs",
             ("derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context",),
         ),
+        (
+            "crates/iroha_sccp/src/test_fixtures.rs",
+            (
+                "vk_ref: SccpPortableVerifyingKeyRefV1",
+                "Executable::IvmProved(proved) => proved.overlay.iter().collect()",
+                ".with_executable(Executable::IvmProved(IvmProved {",
+            ),
+        ),
     ):
         require_all(ivm_path, read(ivm_path), bindings)
 
@@ -215,6 +223,10 @@ def main() -> int:
             "MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1: u32 = 1_000",
             "PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32",
             "MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1: usize = 16 * 1024 * 1024",
+            "MAX_PARLIAMENT_CITIZENS_V1: u32 = 65_536",
+            "MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1: usize =",
+            "CandidateCountExceedsMaximum",
+            "self.candidate_count > MAX_PARLIAMENT_CITIZENS_V1",
             "pub fn parliament_timed_ovn_required_chunk_blocks_v1",
             "parliament_ballot_failure_root_v1",
             "parliament_ballot_result_root_v1",
@@ -276,6 +288,11 @@ def main() -> int:
             "fn ensure_ballot_redraw_available_v1(",
             "validate_parliament_randomness_redraw_lineage_v1",
             "AttemptStateSizeLimitExceeded",
+            "fn candidate_snapshot_fits_resource_bounds_v1(",
+            "MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1",
+            "MAX_PARLIAMENT_CITIZENS_V1",
+            "!candidate_snapshot_fits_resource_bounds_v1(&candidate_snapshot)",
+            "!candidate_snapshot_fits_resource_bounds_v1(snapshot)",
             "TimedOvnResourceScheduleConflict",
             "TooManyConcurrentCastingContexts",
             "pub fn register_sortition_request_batch(",
@@ -895,6 +912,16 @@ def main() -> int:
         world_path,
         world,
         (
+            "fn canonical_parliament_eligible_candidates_with_limits_v1(",
+            "state_transaction.world.citizens.len() > max_citizens",
+            "let mut snapshot_bytes = norito::core::seq_len_prefix_len(0)",
+            "norito::core::encoded_payload_len(account_id)",
+            "snapshot_bytes > max_snapshot_bytes",
+            "fn ensure_parliament_citizen_registry_capacity_with_limit_v1(",
+            "!owner_is_already_citizen && current_citizens >= max_citizens",
+            "MAX_PARLIAMENT_CITIZENS_V1",
+            "fn parliament_candidate_snapshot_derivation_has_preallocation_resource_bounds()",
+            "exact_snapshot_bytes - 1",
             "fn parliament_progress_authority_partition_is_exact()",
             "fn parliament_hidden_sortition_capacity_is_objective_for_zero_and_one_candidate()",
             "fn parliament_sortition_pulse_consumption_is_permissionless_and_exactly_bound()",
@@ -1554,6 +1581,14 @@ def main() -> int:
             "let mut next_reservations = BTreeMap::new()",
             "insert_parliament_timed_ovn_resource_reservation_v1(",
             "for ballot_attempt_id in stale_reservations",
+            "let previous_enactment_height =",
+            "ParliamentAttemptStateV1::certified_enactment_height_v1",
+            "let next_enactment_height = attempt.certified_enactment_height_v1()",
+            "self.parliament_certified_enactments",
+            "let previous_required_slots =",
+            "let next_required_slots = attempt.required_beacon_pulse_slots_v1()",
+            "previous_required_slots.difference(&next_required_slots)",
+            "self.parliament_required_beacon_pulse_slots",
             "let previous_unavailable_slots =",
             "let next_unavailable_slots = attempt.unavailable_beacon_pulse_slots_v1()",
             "self.global_beacon_pulse_slots.get(slot).is_some()",
@@ -1601,6 +1636,10 @@ def main() -> int:
         state_path,
         attempt_removal,
         (
+            "removed.certified_enactment_height_v1()",
+            ".parliament_certified_enactments",
+            "ParliamentAttemptStateV1::required_beacon_pulse_slots_v1",
+            ".parliament_required_beacon_pulse_slots",
             "ParliamentAttemptStateV1::unavailable_beacon_pulse_slots_v1",
             ".parliament_unavailable_beacon_pulse_slots",
             "attempts.remove(id)",
@@ -1609,9 +1648,26 @@ def main() -> int:
     )
     state_tests_path = "crates/iroha_core/src/state/tests.rs"
     state_tests = read(state_tests_path)
+    certified_enactment_regressions = section(
+        state_tests,
+        "fn parliament_certified_enactment_index_tracks_rebuild_transition_and_removal()",
+        "fn parliament_required_beacon_slot_index_tracks_lifecycle_and_removal()",
+        state_tests_path,
+    )
+    require_all(
+        state_tests_path,
+        certified_enactment_regressions,
+        (
+            "certified_parliament_attempt_for_testing(",
+            ".parliament_certified_enactments",
+            'expect("idempotent replacement retains one index member")',
+            'expect("terminal replacement removes the due index member")',
+            ".remove_parliament_attempt_for_testing(&governance_attempt_id)",
+        ),
+    )
     pulse_slot_regressions = section(
         state_tests,
-        "fn parliament_unavailable_beacon_slot_index_rebuilds_and_tracks_removal()",
+        "fn parliament_required_beacon_slot_index_tracks_lifecycle_and_removal()",
         "fn governance_lock_index_rebuild_rejects_invalid_authoritative_records_fail_atomically()",
         state_tests_path,
     )
@@ -1619,6 +1675,8 @@ def main() -> int:
         state_tests_path,
         pulse_slot_regressions,
         (
+            ".parliament_required_beacon_pulse_slots",
+            'expect("replace the live request with its terminal transcript")',
             "fn parliament_attempt_rejects_unavailable_slot_after_pulse_finalization_atomically()",
             "Err(ParliamentReducerErrorV1::BeaconPulseAlreadyAvailable)",
             '"rejection must not publish a partial unavailable-slot index"',
@@ -1696,9 +1754,17 @@ def main() -> int:
         rebuilt_reservations,
         (
             "-> Result<(), String>",
+            "self.citizens.view().len() > maximum_citizens",
+            "MAX_PARLIAMENT_CITIZENS_V1",
             "let mut timed_ovn_resource_reservations = BTreeMap::new()",
             "insert_parliament_timed_ovn_resource_reservation_v1(",
             "self.parliament_timed_ovn_resource_reservations =",
+            "let mut certified_enactments =",
+            "attempt.certified_enactment_height_v1()",
+            "self.parliament_certified_enactments =",
+            "let mut required_beacon_pulse_slots =",
+            "for pulse_slot in attempt.required_beacon_pulse_slots_v1()",
+            "self.parliament_required_beacon_pulse_slots =",
             "let mut unavailable_beacon_pulse_slots =",
             "for pulse_slot in attempt.unavailable_beacon_pulse_slots_v1()",
             "self.parliament_unavailable_beacon_pulse_slots =",
@@ -1710,6 +1776,31 @@ def main() -> int:
     ):
         raise RuntimeError(
             f"{state_path}: restore publishes the reservation index before complete validation"
+        )
+
+    due_enactment = section(
+        state,
+        "        // Height-trigger: open/close referenda at scheduled heights",
+        "        let current_slot =",
+        state_path,
+    )
+    require_all(
+        state_path,
+        due_enactment,
+        (
+            ".parliament_certified_enactments.iter().next()",
+            "*enact_at_height < now_h",
+            ".parliament_certified_enactments",
+            ".get(&now_h)",
+            "for governance_attempt_id in due_parliament_certificates",
+            "execute_due_parliament_certificate_v1(",
+            "record_due_parliament_execution_failure_v1(",
+            '"Parliament certified-enactment index retained a due bucket',
+        ),
+    )
+    if "sb.world.parliament_attempts.iter()" in due_enactment:
+        raise RuntimeError(
+            f"{state_path}: block-start enactment selection regressed to an unbounded Parliament attempt scan"
         )
 
     tle_release_path = "crates/iroha_core/src/tle_release.rs"
@@ -3091,13 +3182,18 @@ def main() -> int:
         beacon_open,
         (
             "let parliament_requested_at_height =",
-            "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)",
+            ".parliament_required_beacon_pulse_slots",
+            ".get(&(logical_beacon_id, context.height))",
             "let required_for_consensus = npos_boundary_requested || parliament_requested_at_height;",
             "Err(_) if !required_for_consensus => None",
             "requested: true,",
             "required_for_consensus,",
         ),
     )
+    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in beacon_open:
+        raise RuntimeError(
+            f"{beacon_runtime_path}: beacon production regressed to an unbounded Parliament attempt scan"
+        )
     beacon_attach = section(
         beacon_runtime,
         "    pub(crate) fn attach_candidate_effects(",
@@ -3114,6 +3210,23 @@ def main() -> int:
         ),
     )
 
+    beacon_state_path = "crates/iroha_core/src/beacon.rs"
+    beacon_state = read(beacon_state_path)
+    require_all(
+        beacon_state_path,
+        beacon_state,
+        (
+            "fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse()",
+            "fn assert_same_block_key_rotation_persists_requested_pulse(",
+            ".put_parliament_attempt(attempt)",
+            'expect("persist the Parliament request and its beacon-slot index")',
+        ),
+    )
+    if beacon_state.count(".put_parliament_attempt(attempt)") < 2:
+        raise RuntimeError(
+            f"{beacon_state_path}: Parliament pulse fixtures must seed both derived-index consumers through canonical admission"
+        )
+
     block_path = "crates/iroha_core/src/block.rs"
     block = read(block_path)
     pulse_validation = section(
@@ -3126,6 +3239,8 @@ def main() -> int:
         block_path,
         pulse_validation,
         (
+            ".parliament_required_beacon_pulse_slots",
+            ".get(&(logical_beacon_id, context.height))",
             "let pulse_requested = pulse_required_for_successor || parliament_requested;",
             "return if pulse_requested {",
             '"block is missing a finalized global beacon pulse requested by committed pre-state"',
@@ -3140,10 +3255,18 @@ def main() -> int:
         raise RuntimeError(
             f"{block_path}: block validation regressed to an unbounded unavailable-pulse attempt scan"
         )
+    if "attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)" in pulse_validation:
+        raise RuntimeError(
+            f"{block_path}: block validation regressed to an unbounded required-pulse attempt scan"
+        )
     require_all(
         block_path,
         block,
-        ("fn committed_parliament_request_rejects_candidate_without_pulse()",),
+        (
+            "fn committed_parliament_request_rejects_candidate_without_pulse()",
+            ".put_parliament_attempt(attempt)",
+            'expect("persist the committed Parliament pulse request and its indexes")',
+        ),
     )
 
     penalty_path = "crates/iroha_core/src/sumeragi/penalties.rs"

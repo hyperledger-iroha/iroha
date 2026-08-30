@@ -210,9 +210,6 @@ run_mutant ingress-class-runtime-prepare-vote "$INGRESS_CLASS_MODULE" \
 run_mutant ingress-class-runtime-commit-vote "$INGRESS_CLASS_MODULE" \
   ingress_class_runtime_commit_vote_promotion_bug.cfg \
   RuntimeProgressClassAligned
-run_mutant ingress-class-runtime-manifest "$INGRESS_CLASS_MODULE" \
-  ingress_class_runtime_manifest_promotion_bug.cfg \
-  RuntimeProgressClassAligned
 run_mutant ingress-class-runtime-chunk "$INGRESS_CLASS_MODULE" \
   ingress_class_runtime_chunk_promotion_bug.cfg RuntimeProgressClassAligned
 run_mutant ingress-class-runtime-certified "$INGRESS_CLASS_MODULE" \

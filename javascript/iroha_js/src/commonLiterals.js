@@ -8,5 +8,6 @@ export const BASE64_ENCODING = "base64";
 export const HEX_ENCODING = "hex";
 export const UTF8_ENCODING = "utf8";
 export const ED25519_ALGORITHM = "ed25519";
+export const KAIGI_MAX_PARTICIPANTS_V1 = 4_096;
 export const BASE58_ALPHABET_TEXT =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";

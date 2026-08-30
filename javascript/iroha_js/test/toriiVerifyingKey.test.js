@@ -316,47 +316,65 @@ function u64BeBuffer(value) {
   return buffer;
 }
 
-test("listVerifyingKeysTyped normalizes records", async () => {
+function verifyingKeyRecordResponse(overrides = {}) {
+  return {
+    version: 1,
+    circuit_id: "halo2/ipa::transfer_v1",
+    owner_manifest_id: null,
+    namespace: "core",
+    backend: "halo2-ipa-pasta",
+    curve: "pallas",
+    public_inputs_schema_hash: "ab".repeat(32),
+    commitment: "cd".repeat(32),
+    vk_len: 2,
+    max_proof_bytes: 4096,
+    gas_schedule_id: "default",
+    metadata_uri_cid: null,
+    vk_bytes_cid: null,
+    activation_height: 10,
+    withdraw_height: 20,
+    status: "Active",
+    key: {
+      backend: "halo2/ipa",
+      bytes_b64: Buffer.from("vk").toString("base64"),
+    },
+    ...overrides,
+  };
+}
+
+test("listVerifyingKeys validates canonical records", async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
     return createResponse({
       status: 200,
-      jsonData: {
-        items: [
-          {
-            id: { backend: "halo2/ipa", name: "vk_main" },
-            record: {
-              version: 2,
-              circuit_id: "halo2/ipa::transfer_v2",
+      jsonData: [
+        {
+          id: { backend: "halo2/ipa", name: "vk_main" },
+          record: verifyingKeyRecordResponse({
+            version: 2,
+            circuit_id: "halo2/ipa::transfer_v2",
+            owner_manifest_id: "builtin:transfer-v2",
+            namespace: "payments",
+            vk_len: 5,
+            max_proof_bytes: 8192,
+            gas_schedule_id: "halo2_default",
+            vk_bytes_cid: "ipfs://vk",
+            withdraw_height: 30,
+            key: {
               backend: "halo2/ipa",
-              curve: "pallas",
-              public_inputs_schema_hash: "deadbeef",
-              commitment: "0x1234",
-              vk_len: 4096,
-              max_proof_bytes: 8192,
-              gas_schedule_id: "halo2_default",
-              metadata_uri_cid: null,
-              vk_bytes_cid: "ipfs://vk",
-              activation_height: 10,
-              deprecation_height: 20,
-              withdraw_height: 30,
-              status: "active",
-              key: {
-                backend: "halo2/ipa",
-                bytes_b64: Buffer.from("hello").toString("base64"),
-              },
+              bytes_b64: Buffer.from("hello").toString("base64"),
             },
-          },
-        ],
-      },
+          }),
+        },
+      ],
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const list = await client.listVerifyingKeysTyped({
+  const list = await client.listVerifyingKeys({
     backend: "halo2/ipa",
-    status: "active",
+    status: "Active",
     limit: 5,
     order: "asc",
   });
@@ -365,7 +383,10 @@ test("listVerifyingKeysTyped normalizes records", async () => {
   const entry = list[0];
   assert.deepEqual(entry.id, { backend: "halo2/ipa", name: "vk_main" });
   assert.equal(entry.record?.status, "Active");
-  assert.equal(entry.record?.vk_len, 4096);
+  assert.equal(entry.record?.backend, "halo2-ipa-pasta");
+  assert.equal(entry.record?.owner_manifest_id, "builtin:transfer-v2");
+  assert.equal(entry.record?.namespace, "payments");
+  assert.equal(entry.record?.vk_len, 5);
   assert.equal(entry.record?.inline_key?.backend, "halo2/ipa");
   assert.equal(entry.record?.inline_key?.bytes_b64, Buffer.from("hello").toString("base64"));
 
@@ -509,18 +530,8 @@ test("verifying key read paths reject unstable STARK profile aliases before fetc
   assert.equal(calls, 0);
 });
 
-test("listVerifyingKeysTyped rejects noncanonical response backends", async () => {
-  const baseRecord = {
-    version: 1,
-    circuit_id: "halo2/ipa::transfer_v1",
-    backend: "halo2/ipa",
-    curve: "pallas",
-    public_inputs_schema_hash: "deadbeef",
-    commitment: "1234",
-    vk_len: 32,
-    max_proof_bytes: 4096,
-    status: "Active",
-  };
+test("listVerifyingKeys rejects noncanonical response backends", async () => {
+  const baseRecord = verifyingKeyRecordResponse();
   for (const entry of [
     { backend: " halo2/ipa", name: "flat_vk" },
     { id: { backend: "halo2/ipa ", name: "object_vk" } },
@@ -528,7 +539,7 @@ test("listVerifyingKeysTyped rejects noncanonical response backends", async () =
     { id: { backend: "h\u0430lo2/ipa", name: "cyrillic_a_vk" } },
     {
       id: { backend: "halo2/ipa", name: "record_vk" },
-      record: { ...baseRecord, backend: "\thalo2/ipa" },
+      record: { ...baseRecord, backend: "\thalo2-ipa-pasta" },
     },
     {
       id: { backend: "halo2/ipa", name: "inline_vk" },
@@ -555,30 +566,19 @@ test("listVerifyingKeysTyped rejects noncanonical response backends", async () =
       fetchImpl: async () =>
         createResponse({
           status: 200,
-          jsonData: { items: [entry] },
+          jsonData: [entry],
           headers: { "content-type": "application/json" },
         }),
     });
     await assert.rejects(
-      () => client.listVerifyingKeysTyped(),
-      /unsupported production verifier backend|surrounding whitespace/,
+      () => client.listVerifyingKeys(),
+      /unsupported production verifier backend|surrounding whitespace|halo2-ipa-pasta or stark/,
     );
   }
 });
 
-test("listVerifyingKeysTyped rejects padded response selector metadata", async () => {
-  const baseRecord = {
-    version: 1,
-    circuit_id: "halo2/ipa::transfer_v1",
-    backend: "halo2/ipa",
-    curve: "pallas",
-    public_inputs_schema_hash: "deadbeef",
-    commitment: "1234",
-    vk_len: 32,
-    max_proof_bytes: 4096,
-    gas_schedule_id: "default",
-    status: "Active",
-  };
+test("listVerifyingKeys rejects padded response selector metadata", async () => {
+  const baseRecord = verifyingKeyRecordResponse();
   for (const entry of [
     { backend: "halo2/ipa", name: " flat_vk" },
     { id: { backend: "halo2/ipa", name: "object_vk " } },
@@ -595,12 +595,12 @@ test("listVerifyingKeysTyped rejects padded response selector metadata", async (
       fetchImpl: async () =>
         createResponse({
           status: 200,
-          jsonData: { items: [entry] },
+          jsonData: [entry],
           headers: { "content-type": "application/json" },
         }),
     });
     await assert.rejects(
-      () => client.listVerifyingKeysTyped(),
+      () => client.listVerifyingKeys(),
       /must not contain surrounding whitespace/,
     );
   }
@@ -621,9 +621,7 @@ test("iterateVerifyingKeys paginates and forwards filters", async () => {
     }
     return createResponse({
       status: 200,
-      jsonData: {
-        items: [{ id: { backend: "halo2/ipa", name: `vk-${offset}` } }],
-      },
+      jsonData: [{ backend: "halo2/ipa", name: `vk-${offset}` }],
       headers: { "content-type": "application/json" },
     });
   };
@@ -631,7 +629,7 @@ test("iterateVerifyingKeys paginates and forwards filters", async () => {
   const names = [];
   for await (const entry of client.iterateVerifyingKeys({
     backend: "halo2/ipa",
-    status: "active",
+    status: "Active",
     pageSize: 1,
     maxItems: 2,
   })) {
@@ -663,105 +661,86 @@ test("listVerifyingKeys rejects unsupported option fields", async () => {
   );
 });
 
-test("listVerifyingKeys accepts alias option names", async () => {
-  let captured;
-  const fetchImpl = async (url) => {
-    captured = url;
-    return createResponse({
-      status: 200,
-      jsonData: [],
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.listVerifyingKeys({
-    backend_filter: "halo2/ipa",
-    statusFilter: "withdrawn",
-    name_contains: "transfer",
-    limit: 2,
-    offset: 4,
-    sortOrder: "DESC",
-    ids_only: true,
+test("listVerifyingKeys rejects compatibility option aliases", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("unexpected fetch");
+    },
   });
-
-  assert.ok(captured);
-  const params = new URL(captured).searchParams;
-  assert.equal(params.get("backend"), "halo2/ipa");
-  assert.equal(params.get("status"), "Withdrawn");
-  assert.equal(params.get("name_contains"), "transfer");
-  assert.equal(params.get("limit"), "2");
-  assert.equal(params.get("offset"), "4");
-  assert.equal(params.get("order"), "desc");
-  assert.equal(params.get("ids_only"), "true");
+  for (const option of [
+    { backend_filter: "halo2/ipa" },
+    { statusFilter: "Withdrawn" },
+    { verifyingKeyStatus: "Withdrawn" },
+    { name_contains: "transfer" },
+    { sort: "desc" },
+    { sortOrder: "desc" },
+    { ids_only: true },
+  ]) {
+    await assert.rejects(
+      () => client.listVerifyingKeys(option),
+      /unsupported fields/,
+    );
+  }
+  assert.equal(fetchCalls, 0);
 });
 
-test("getVerifyingKeyTyped decodes payload", async () => {
+test("getVerifyingKey validates and returns the canonical payload", async () => {
   const fetchImpl = async (url) => {
     assert.equal(url, `${BASE_URL}/v1/zk/vk/halo2%2Fipa/vk_main`);
     return createResponse({
       status: 200,
       jsonData: {
         id: { backend: "halo2/ipa", name: "vk_main" },
-        record: {
-          version: 1,
-          circuit_id: "halo2/ipa::transfer_v1",
-          backend: "halo2/ipa",
-          curve: null,
-          public_inputs_schema_hash: "abc123",
-          commitment: "0xdead",
+        record: verifyingKeyRecordResponse({
+          curve: "unknown",
           vk_len: 1024,
           max_proof_bytes: 512,
           gas_schedule_id: null,
-          metadata_uri_cid: null,
-          vk_bytes_cid: null,
           activation_height: 5,
           withdraw_height: 7,
           status: "Proposed",
           key: null,
-        },
+        }),
+        record_norito_base64: Buffer.from("canonical record").toString("base64"),
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const detail = await client.getVerifyingKeyTyped("halo2/ipa", "vk_main");
+  const detail = await client.getVerifyingKey("halo2/ipa", "vk_main");
   assert.equal(detail.id.backend, "halo2/ipa");
   assert.equal(detail.id.name, "vk_main");
   assert.equal(detail.record.status, "Proposed");
   assert.equal(detail.record.vk_len, 1024);
   assert.equal(detail.record.inline_key, null);
+  assert.equal(
+    detail.record_norito_base64,
+    Buffer.from("canonical record").toString("base64"),
+  );
 });
 
-test("getVerifyingKeyTyped rejects withdraw height before activation height", async () => {
+test("getVerifyingKey rejects withdraw height at or before activation height", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 200,
       jsonData: {
         id: { backend: "halo2/ipa", name: "vk_main" },
-        record: {
-          version: 1,
-          circuit_id: "halo2/ipa::transfer_v1",
-          backend: "halo2/ipa",
-          curve: "pallas",
-          public_inputs_schema_hash: "abc123",
-          commitment: "0xdead",
-          vk_len: 1024,
-          max_proof_bytes: 512,
-          gas_schedule_id: null,
-          metadata_uri_cid: null,
-          vk_bytes_cid: null,
+        record: verifyingKeyRecordResponse({
           activation_height: 10,
-          withdraw_height: 9,
+          withdraw_height: 10,
           status: "Proposed",
           key: null,
-        },
+        }),
+        record_norito_base64: Buffer.from("canonical record").toString("base64"),
       },
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () => client.getVerifyingKeyTyped("halo2/ipa", "vk_main"),
-    /withdraw_height must be >= activation_height/,
+    () => client.getVerifyingKey("halo2/ipa", "vk_main"),
+    /withdraw_height must be > activation_height/,
   );
 });
 
@@ -789,7 +768,7 @@ test("registerVerifyingKey canonicalizes payload and returns an unsigned draft",
     public_inputs_schema_hash_hex: "22".repeat(32),
     gas_schedule_id: "halo2_default",
     vk_bytes: Buffer.from("abc"),
-    status: "withdrawn",
+    status: "Withdrawn",
     activation_height: 0,
   });
 
@@ -1280,11 +1259,11 @@ test("verifying key requests reject withdraw height before activation height", a
 
   await assert.rejects(
     () => client.registerVerifyingKey(payload),
-    /withdraw_height must be >= activation_height/,
+    /withdraw_height must be > activation_height/,
   );
   await assert.rejects(
     () => client.updateVerifyingKey({ ...payload, version: 2 }),
-    /withdraw_height must be >= activation_height/,
+    /withdraw_height must be > activation_height/,
   );
   assert.equal(fetchCount, 0);
 });

@@ -463,9 +463,16 @@ authorization headers in this repository.
   the twelve rows as `production-qualified`; missing release, audit, security,
   or deployment evidence therefore halts rollout.
 - `dns_records.json`, `explorer.runtime-config.json`, `sorafs_sites.json`, and
-  `taira-canary-client.example.toml` describe the live public profile.
+  `taira-canary-client.example.toml` describe the live public profile. The
+  Explorer runtime config carries the exact genesis-derived `NETWORK_ID`, the
+  fixed public Torii origin, and `toriiForceBaseUrl: true`; retired feature
+  flags are not accepted by the first-release Explorer.
 - `validator_roster.example.toml`, the edge renderer, nginx template, and edge
-  installer remain the public-ingress configuration surface.
+  installer remain the public-ingress configuration surface. The production
+  `taira-explorer.sora.org` TLS vhost serves only the Explorer release symlink
+  at `/Users/administrator/dev/iroha2-block-explorer-web/dist`; it does not
+  proxy `/status` or `/v1`. Both Torii CORS and the public-edge CORS map admit
+  the exact `https://taira-explorer.sora.org` browser origin.
 
 The edge installer validates with the fixed production executable
 `/usr/sbin/nginx`. Dry runs may run unprivileged; installation and reload must

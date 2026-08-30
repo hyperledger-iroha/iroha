@@ -65,6 +65,7 @@ use iroha_data_model::{
         consensus::{
             LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
             NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            ValidatorIndex,
         },
         *,
     },
@@ -6714,7 +6715,7 @@ pub(crate) mod valid {
         }
         fn verify_signer_set(
             topology: &Topology,
-            signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+            signers: &BTreeSet<ValidatorIndex>,
             allow_quorum_bypass: bool,
         ) -> Result<(), SignatureVerificationError> {
             let roster_len = topology.as_ref().len();
@@ -8489,9 +8490,10 @@ pub(crate) mod valid {
                 iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
                     &context.network_id,
                 );
-            let parliament_requested = world.parliament_attempts().iter().any(|(_, attempt)| {
-                attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)
-            });
+            let parliament_requested = world
+                .parliament_required_beacon_pulse_slots
+                .get(&(logical_beacon_id, context.height))
+                .is_some_and(|attempts| !attempts.is_empty());
             let pulse_requested = pulse_required_for_successor || parliament_requested;
             let Some(pulse) = pulse else {
                 return if pulse_requested {
@@ -15916,7 +15918,7 @@ pub(crate) mod valid {
         pub fn commit_with_signers(
             self,
             topology: &Topology,
-            signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+            signers: &BTreeSet<ValidatorIndex>,
             allow_quorum_bypass: bool,
         ) -> WithCommittedBlockEvents {
             let validation = (|| -> Result<(), SignatureVerificationError> {
@@ -19101,7 +19103,7 @@ pub(crate) mod valid {
                 .iter()
                 .map(|entry| entry.validator.clone())
                 .collect::<Vec<_>>();
-            let (attempt_id, _request_ids, attempt) =
+            let (_attempt_id, _request_ids, attempt) =
                 crate::beacon::tests::pending_batched_sortition_attempt(
                     &context.network_id,
                     &roster,
@@ -19109,7 +19111,16 @@ pub(crate) mod valid {
                 );
             {
                 let mut block = state.world.block();
-                block.parliament_attempts.insert(attempt_id, attempt);
+                {
+                    let mut transaction = block.transaction_without_telemetry(
+                        iroha_config::parameters::actual::LaneConfig::default(),
+                        0,
+                    );
+                    transaction
+                        .put_parliament_attempt(attempt)
+                        .expect("persist the committed Parliament pulse request and its indexes");
+                    transaction.apply();
+                }
                 block.commit();
             }
             let candidate = npos_effects_block(&leader_private, context.height, None);

@@ -1193,9 +1193,6 @@ fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
             tag: current,
             certificate: certificate.clone(),
         },
-        ConsensusMessageV2::BodyRequest(_) | ConsensusMessageV2::BodyChunk(_) => {
-            panic!("transport payloads are outside the consensus model trace")
-        }
     }
 }
 fn model_validator(node: usize) -> ValidatorId {

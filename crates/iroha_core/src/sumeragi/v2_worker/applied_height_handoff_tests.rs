@@ -496,10 +496,7 @@ fn autonomous_payload_carrier_comparison_promotes_only_a_missing_advisory_hint()
     hint_free.origin_proposal.payload_block_hint = None;
     assert!(hint_free.origin_proposal.payload_block_hint.is_none());
     let canonical_hint = LaneBlockProposalPayloadHintV1 {
-        proposal_height: hint_free
-            .origin_proposal
-            .descriptor
-            .proposal_height,
+        proposal_height: hint_free.origin_proposal.descriptor.proposal_height,
         proposal_view: 0,
         proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(
             b"canonical autonomous carrier",
@@ -749,11 +746,7 @@ fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() 
         "durable rollover must retain a frozen-roster archive that did not sign the old QC"
     );
     assert!(
-        !history
-            .artifact
-            .commit_qc
-            .signers
-            .contains(&3),
+        !history.artifact.commit_qc.signers.contains(&3),
         "the regression must exercise archive authority independently of QC signing"
     );
     drop(pending);
@@ -1111,12 +1104,7 @@ fn applied_height_handoff_authenticates_exact_payload_chunk_fanout() {
         .expect("registered payload owns its exact manifest")
         .messages
         .clone();
-    let messages = retained_chunks
-        .iter()
-        .cloned()
-        .map(ProductionV2Services::preencode_v2_network_message)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("preencode exact payload chunks");
+    let messages = retained_chunks.clone();
     let chunk_count = messages.len();
     let claim = ExactOutputRolloverClaim::PayloadChunks {
         scope: service.exact_output_scope(),
@@ -1139,22 +1127,22 @@ fn applied_height_handoff_authenticates_exact_payload_chunk_fanout() {
     );
     assert!(!pending.is_pending());
     let mut tampered_chunks = retained_chunks;
-    let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &mut tampered_chunks[0].payload
-    else {
+    let NetworkMessage::SumeragiBlock(envelope) = &mut tampered_chunks[0] else {
+        unreachable!("registered outbound payload contains only Sumeragi messages")
+    };
+    let BlockMessage::V2(message) = Arc::make_mut(envelope).make_mut() else {
+        unreachable!("registered outbound payload contains only v2 messages")
+    };
+    let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &mut message.payload else {
         unreachable!("registered outbound payload contains only chunks")
     };
     chunk.signature[0] ^= 0x01;
-    let tampered_messages = tampered_chunks
-        .into_iter()
-        .map(ProductionV2Services::preencode_v2_network_message)
-        .collect::<Result<Vec<_>, _>>()
-        .expect("preencode signature-tampered payload chunks");
     let mut tampered = PendingExactOutput::new(1, chunk_count, 1, &[])
         .expect("one tampered payload-chunk fanout corridor");
     tampered
         .enqueue(
             PendingExactFanout::claimed(
-                tampered_messages,
+                tampered_chunks,
                 vec![peer],
                 ExactOutputRolloverClaim::PayloadChunks {
                     scope: service.exact_output_scope(),

@@ -136,12 +136,10 @@ impl V2EffectServices for ProductionV2Services {
                     "local proposal chunks belong to another reducer incarnation".to_owned(),
                 );
             }
-            let encoded_chunks = chunks
-                .messages
-                .iter()
-                .cloned()
-                .map(Self::preencode_v2_network_message)
-                .collect::<Result<Vec<_>, _>>()?;
+            // `NetworkMessage::clone` retains the Arc-backed message and its
+            // canonical cached bytes. Proposal retry must not deep-clone and
+            // re-encode every payload chunk.
+            let encoded_chunks = chunks.messages.clone();
             let committee = self.committee_for_round(proposal.round)?;
             let first_fast_path_send = !self.fast_path_proposals.contains(&proposal.round);
             let payload_targets = if first_fast_path_send {
@@ -258,7 +256,6 @@ impl V2EffectServices for ProductionV2Services {
                 let opened_chunks = manifest_upgrade
                     .then(|| {
                         V2ChunkSession::open(
-                            &self.chunk_root,
                             &self.context,
                             task.manifest()
                                 .expect("manifest upgrade was checked above")
@@ -333,7 +330,7 @@ impl V2EffectServices for ProductionV2Services {
         let chunks = task
             .manifest()
             .cloned()
-            .map(|manifest| V2ChunkSession::open(&self.chunk_root, &self.context, manifest))
+            .map(|manifest| V2ChunkSession::open(&self.context, manifest))
             .transpose()
             .map_err(|error| error.to_string())?;
         let manifest_hash = chunks
@@ -492,9 +489,7 @@ impl V2EffectServices for ProductionV2Services {
             let session = fetch.chunks.as_mut().ok_or_else(|| {
                 "manifest-less certified body fetch cannot accept chunks".to_owned()
             })?;
-            let admission = session
-                .admit_authenticated(chunk.chunk(), chunk.signature_payload())
-                .map_err(|error| error.to_string())?;
+            let admission = session.admit(chunk).map_err(|error| error.to_string())?;
             if admission == crate::sumeragi::v2_chunks::ChunkAdmission::Duplicate {
                 operation.complete();
                 return Ok(AuthenticatedChunkDisposition::Accepted);
@@ -517,15 +512,6 @@ impl V2EffectServices for ProductionV2Services {
             .manifest()
             .expect("chunk reconstruction requires proposal manifest authority")
             .clone();
-        let canonical_manifest =
-            encode_payload(&self.context, manifest.round, manifest.subject, &body)
-                .map_err(|error| error.to_string())?
-                .manifest()
-                .clone();
-        if canonical_manifest != manifest {
-            operation.complete();
-            return Ok(AuthenticatedChunkDisposition::Rejected);
-        }
         if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
             return Err("Sumeragi v2 reconstructed fetch lost its exact live owner".to_owned());
         }

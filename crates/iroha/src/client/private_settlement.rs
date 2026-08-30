@@ -7,7 +7,7 @@
 
 use super::*;
 use iroha_data_model::{
-    isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
+    isi::private_settlement::{AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1},
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
         PRIVATE_SETTLEMENT_BLS_BYTES_V1, PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1,
@@ -60,7 +60,7 @@ fn private_settlement_leg_ordinal_for_payload_v1(
 
 fn exact_private_settlement_carrier_v1(
     transaction: &SignedTransaction,
-) -> Result<&FinalizeAtomicPrivateSettlementV1> {
+) -> Result<&AtomicPrivateSettlementV1> {
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(eyre!(
             "private-settlement bundle submission requires one direct carrier"
@@ -71,10 +71,16 @@ fn exact_private_settlement_carrier_v1(
             "private-settlement bundle submission requires one direct carrier"
         ));
     }
-    instructions[0]
-        .as_any()
-        .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
-        .ok_or_else(|| eyre!("private-settlement bundle submission requires one direct carrier"))
+    let instruction = instructions[0].as_any();
+    if let Some(carrier) = instruction.downcast_ref::<FinalizeAtomicPrivateSettlementV1>() {
+        return Ok(&carrier.commit_bundle.manifest);
+    }
+    if let Some(carrier) = instruction.downcast_ref::<AbortAtomicPrivateSettlementV1>() {
+        return Ok(&carrier.manifest);
+    }
+    Err(eyre!(
+        "private-settlement bundle submission requires one direct carrier"
+    ))
 }
 
 fn validate_availability_certificate_v1(
@@ -855,19 +861,45 @@ impl Client {
     where
         T: norito::json::JsonDeserializeOwned,
     {
-        if !matches!(response.status(), StatusCode::OK | StatusCode::ACCEPTED) {
-            return Err(ResponseReport::with_msg(context, &response)
-                .unwrap_or_else(core::convert::identity)
-                .into());
+        Self::decode_private_settlement_response_with_status_v1(response, StatusCode::OK, context)
+    }
+
+    fn decode_private_settlement_accepted_response_v1<T>(
+        response: Response<Vec<u8>>,
+        context: &'static str,
+    ) -> Result<T>
+    where
+        T: norito::json::JsonDeserializeOwned,
+    {
+        Self::decode_private_settlement_response_with_status_v1(
+            response,
+            StatusCode::ACCEPTED,
+            context,
+        )
+    }
+
+    fn decode_private_settlement_response_with_status_v1<T>(
+        response: Response<Vec<u8>>,
+        expected_status: StatusCode,
+        context: &'static str,
+    ) -> Result<T>
+    where
+        T: norito::json::JsonDeserializeOwned,
+    {
+        if response.status() != expected_status {
+            return Err(eyre!(
+                "{context}: unexpected HTTP status {}; expected {expected_status}",
+                response.status()
+            ));
         }
         let content_type = Self::response_content_type(&response);
         if !Self::is_json_content_type(content_type) {
             return Err(eyre!(
-                "{context}: invalid content-type `{content_type}` (expected application/json)"
+                "{context}: invalid content-type (expected application/json)"
             ));
         }
         norito::json::from_slice(response.body())
-            .map_err(|error| eyre!("{context}: invalid JSON response: {error}"))
+            .map_err(|_| eyre!("{context}: invalid JSON response"))
     }
 
     fn send_private_settlement_builder_v1(
@@ -2115,7 +2147,7 @@ impl Client {
         Ok(decoded)
     }
 
-    /// Submit one exact sponsor-signed global finalization carrier.
+    /// Submit one exact sponsor-signed global finalization or abort carrier.
     ///
     /// # Errors
     ///
@@ -2126,17 +2158,16 @@ impl Client {
         &self,
         request: &PrivateSettlementBundleSubmitRequestV1,
     ) -> Result<PrivateSettlementBundleSubmitResponseV1> {
-        let carrier = exact_private_settlement_carrier_v1(&request.transaction)?;
-        if carrier.commit_bundle.manifest.sponsor != self.account
+        let manifest = exact_private_settlement_carrier_v1(&request.transaction)?;
+        if manifest.sponsor != self.account
             || request.transaction.authority() != &self.account
-            || request.transaction.fee_payment_intent()
-                != &carrier.commit_bundle.manifest.public_fee_intent
+            || request.transaction.fee_payment_intent() != &manifest.public_fee_intent
         {
             return Err(eyre!(
                 "private-settlement bundle carrier sponsor binding is invalid"
             ));
         }
-        let expected_bundle = carrier.commit_bundle.manifest.bundle_id;
+        let expected_bundle = manifest.bundle_id;
         let expected_carrier = Hash::from(request.transaction.hash());
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode private-settlement bundle carrier")?;
@@ -2147,7 +2178,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         let decoded: PrivateSettlementBundleSubmitResponseV1 =
-            Self::decode_private_settlement_response_v1(
+            Self::decode_private_settlement_accepted_response_v1(
                 response,
                 "private-settlement bundle submission failed",
             )?;
@@ -2528,6 +2559,85 @@ mod tests {
             finalized_height: Some(42),
         };
         assert!(validate_bundle_status_response_v1(bundle_id, &response).is_err());
+    }
+
+    #[test]
+    fn response_decoders_require_the_exact_route_status_without_echoing_bodies() {
+        const CANARY: &str = "private-settlement-response-body-canary";
+        let payload = norito::json!({"canary": CANARY});
+        let body = norito::json::to_vec(&payload).expect("encode response payload");
+        let response = |status| {
+            Response::builder()
+                .status(status)
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .body(body.clone())
+                .expect("response build")
+        };
+
+        let decoded: norito::json::Value = Client::decode_private_settlement_response_v1(
+            response(StatusCode::OK),
+            "private-settlement exact-200 test",
+        )
+        .expect("ordinary routes accept 200");
+        assert_eq!(decoded, payload);
+        let decoded: norito::json::Value = Client::decode_private_settlement_accepted_response_v1(
+            response(StatusCode::ACCEPTED),
+            "private-settlement exact-202 test",
+        )
+        .expect("bundle admission accepts 202");
+        assert_eq!(decoded, payload);
+
+        for status in [
+            StatusCode::ACCEPTED,
+            StatusCode::CREATED,
+            StatusCode::NO_CONTENT,
+        ] {
+            let error = Client::decode_private_settlement_response_v1::<norito::json::Value>(
+                response(status),
+                "private-settlement exact-200 test",
+            )
+            .expect_err("ordinary routes reject alternate 2xx responses");
+            assert!(error.to_string().contains("expected 200 OK"));
+            assert!(!error.to_string().contains(CANARY));
+        }
+        for status in [StatusCode::OK, StatusCode::CREATED, StatusCode::NO_CONTENT] {
+            let error =
+                Client::decode_private_settlement_accepted_response_v1::<norito::json::Value>(
+                    response(status),
+                    "private-settlement exact-202 test",
+                )
+                .expect_err("bundle admission rejects alternate 2xx responses");
+            assert!(error.to_string().contains("expected 202 Accepted"));
+            assert!(!error.to_string().contains(CANARY));
+        }
+
+        let malformed = Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+            .body(format!(r#"{{"{CANARY}":1,"{CANARY}":2}}"#).into_bytes())
+            .expect("malformed response build");
+        let error = Client::decode_private_settlement_response_v1::<norito::json::Value>(
+            malformed,
+            "private-settlement malformed response test",
+        )
+        .expect_err("malformed response is rejected without retaining parser details");
+        assert_eq!(
+            error.to_string(),
+            "private-settlement malformed response test: invalid JSON response"
+        );
+        assert!(!error.to_string().contains(CANARY));
+
+        let malicious_content_type = Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, format!("text/{CANARY}"))
+            .body(body)
+            .expect("malicious content-type response build");
+        let error = Client::decode_private_settlement_response_v1::<norito::json::Value>(
+            malicious_content_type,
+            "private-settlement content-type response test",
+        )
+        .expect_err("untrusted content type is rejected without echoing it");
+        assert!(!error.to_string().contains(CANARY));
     }
 
     #[test]

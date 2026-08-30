@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Final, Sequence, cast
 
 from blake3 import blake3
+from norito.crc64 import crc64 as _crc64_ecma_v1
 
 from .privacy_catalog import PRIVACY_PROTOCOL_IDS_V1, PrivacyProtocolIdV1
 
@@ -351,30 +352,6 @@ def _decode_network_transaction_domain_v1(payload: bytes, context: str) -> bytes
 
 def _schema_hash_v1(type_name: str) -> bytes:
     return hashlib.sha256(_SCHEMA_HASH_DOMAIN_V1 + type_name.encode("utf-8")).digest()[:16]
-
-
-_CRC64_POLYNOMIAL_V1: Final = 0xC96C_5795_D787_0F42
-_CRC64_MASK_V1: Final = 0xFFFF_FFFF_FFFF_FFFF
-
-
-def _crc64_table_v1() -> tuple[int, ...]:
-    table = []
-    for index in range(256):
-        value = index
-        for _ in range(8):
-            value = value >> 1 if value & 1 == 0 else (value >> 1) ^ _CRC64_POLYNOMIAL_V1
-        table.append(value)
-    return tuple(table)
-
-
-_CRC64_TABLE_V1: Final = _crc64_table_v1()
-
-
-def _crc64_ecma_v1(payload: bytes) -> int:
-    value = _CRC64_MASK_V1
-    for byte in payload:
-        value = _CRC64_TABLE_V1[(value ^ byte) & 0xFF] ^ (value >> 8)
-    return (value ^ _CRC64_MASK_V1) & _CRC64_MASK_V1
 
 
 def _encode_frame_v1(payload: bytes, schema_name: str, padding: int) -> bytes:

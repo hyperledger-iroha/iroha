@@ -165,6 +165,7 @@ impl ParliamentAttemptStateV1 {
         let mut unique_candidate_snapshots = BTreeSet::new();
         if self.candidate_snapshots.iter().any(|snapshot| {
             snapshot.is_empty()
+                || !candidate_snapshot_fits_resource_bounds_v1(snapshot)
                 || !snapshot.windows(2).all(|pair| pair[0] < pair[1])
                 || !unique_candidate_snapshots.insert(snapshot)
         }) {
@@ -200,6 +201,7 @@ impl ParliamentAttemptStateV1 {
                     )
                 || failure.sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1
                 || failure.candidate_snapshot.len() >= 2
+                || !candidate_snapshot_fits_resource_bounds_v1(&failure.candidate_snapshot)
                 || !failure
                     .candidate_snapshot
                     .windows(2)

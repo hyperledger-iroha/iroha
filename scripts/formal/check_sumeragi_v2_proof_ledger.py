@@ -67739,7 +67739,6 @@ Self::start_inner(""",
         worker_path,
         reservation_items.get("ProductionV2Services::start"),
         """
-chunk_root,
 body_store,
 None,
 state,

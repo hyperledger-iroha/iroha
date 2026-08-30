@@ -1278,23 +1278,6 @@ function normalizeBase64Payload(value, label) {
   return decoded.toString("base64");
 }
 
-function normalizeBase64PayloadMaybeUrl(value, label) {
-  const trimmed = assertNonEmptyString(value, label);
-  try {
-    return normalizeBase64Payload(trimmed, label);
-  } catch (error) {
-    if (!/[-_]/.test(trimmed)) {
-      throw error;
-    }
-  }
-  const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
-  try {
-    return normalizeBase64Payload(normalized, label);
-  } catch {
-    throw new TypeError(`${label} must be a valid base64 or base64url string`);
-  }
-}
-
 function requireCanonicalGatewayHex32(value, label) {
   if (
     typeof value !== "string" ||

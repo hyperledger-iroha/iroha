@@ -1,6 +1,4 @@
 import { Buffer } from "buffer";
-// Keep the canonical UTF-16 ordering primitive inside the audited Nexus graph.
-import { compareUtf16 } from "./ordering.js";
 import { AccountAddress } from "./address.js";
 import {
   createConnectAppSession,
@@ -22,8 +20,6 @@ import {
   NumericV1,
   NumericV1Error,
 } from "./numericV1.js";
-
-void compareUtf16;
 
 const ALGORITHM_ED25519 = "ed25519";
 const ALGORITHM_ED25519_TAG = 0;
@@ -2753,7 +2749,7 @@ export class NexusAppClient {
       this.config.chainDiscriminant,
       "signable authority",
     );
-    const { payloadBytes, payloadHashHex } = canonicalSignable;
+    const { payloadBytes } = canonicalSignable;
     validateEd25519SignatureForPayload(
       publicKey,
       payloadBytes,

@@ -4,7 +4,7 @@
 The scanner is deliberately format-agnostic so it can cover Torii/P2P packet
 captures, Kura artifacts, snapshots, logs, metrics, and query responses with
 one manifest. It also compares paired public captures and rejects changes in
-file inventory, byte length, JSON structure, or message/record counts when only
+file inventory, byte length, JSON structure, or packet/message/record counts when only
 secrets were varied.
 """
 
@@ -17,13 +17,20 @@ import importlib.util
 import json
 import os
 import stat
+import struct
 import sys
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import private_settlement_capture_split as capture_split
 
 REPORT_VERSION = 1
 DEFAULT_CHUNK_BYTES = 1024 * 1024
@@ -33,15 +40,30 @@ MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_ARTIFACT_FILES = 1_000_000
 ASSET_ADDRESS_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 REQUIRED_COUNT_CHANNELS = (
-    "torii_requests",
-    "torii_responses",
-    "public_p2p_messages",
-    "restricted_p2p_messages",
+    "torii_request_packets",
+    "torii_response_packets",
+    "public_p2p_packets",
+    "restricted_p2p_packets",
     "block_messages",
     "query_responses",
     "event_records",
     "log_records",
     "telemetry_records",
+)
+RESTRICTED_DIFFERENTIAL_SIZE_EXEMPT = frozenset(
+    {"restricted-audit-sources.bin", "raw-loopback.pcap"}
+)
+RESTRICTED_SOURCE_DOMAIN_V1 = b"APSRAW1\0"
+RESTRICTED_FIXED_SHAPE_GROUPS = frozenset(
+    {
+        "block_wire_capture",
+        "confidential_da",
+        "event_capture",
+        "kura_artifact",
+        "merge_artifact",
+        "query_capture",
+        "snapshot_artifact",
+    }
 )
 
 
@@ -506,12 +528,16 @@ def compare_capture_roots(
     common = sorted(left_names & right_names)
     size_mismatches: list[dict[str, Any]] = []
     json_shape_mismatches: list[str] = []
+    packet_length_mismatches: list[dict[str, Any]] = []
     for relative in common:
         left_path = left_files[relative]
         right_path = right_files[relative]
         left_size = left_path.stat().st_size
         right_size = right_path.stat().st_size
-        if left_size != right_size:
+        if (
+            left_size != right_size
+            and relative not in RESTRICTED_DIFFERENTIAL_SIZE_EXEMPT
+        ):
             size_mismatches.append(
                 {"path": relative, "left_bytes": left_size, "right_bytes": right_size}
             )
@@ -535,51 +561,173 @@ def compare_capture_roots(
                 ) from error
             if _json_shape(left_json) != _json_shape(right_json):
                 json_shape_mismatches.append(relative)
+        if relative.lower().endswith(".pcapng"):
+            try:
+                left_link, left_packets = capture_split._pcapng_packets(left_path)
+                right_link, right_packets = capture_split._pcapng_packets(right_path)
+            except (
+                capture_split.CaptureSplitError,
+                capture_split.pcapng.CaptureFormatError,
+                OSError,
+            ) as error:
+                raise AuditInputError(
+                    f"cannot replay differential packet capture {relative}: {error}"
+                ) from error
+            left_lengths = [len(packet) for packet in left_packets]
+            right_lengths = [len(packet) for packet in right_packets]
+            if left_link != right_link or left_lengths != right_lengths:
+                packet_length_mismatches.append(
+                    {
+                        "path": relative,
+                        "left_link_type": left_link,
+                        "right_link_type": right_link,
+                        "left_packet_lengths": left_lengths,
+                        "right_packet_lengths": right_lengths,
+                    }
+                )
+        if relative == "restricted-audit-sources.bin":
+            left_rows = restricted_source_archive_shape(left_path)
+            right_rows = restricted_source_archive_shape(right_path)
+            left_identities = [(surface, path) for surface, path, _size in left_rows]
+            right_identities = [(surface, path) for surface, path, _size in right_rows]
+            if left_identities != right_identities:
+                json_shape_mismatches.append(relative)
+            else:
+                for (surface, path, left_bytes), (_, _, right_bytes) in zip(
+                    left_rows, right_rows
+                ):
+                    if (
+                        surface in RESTRICTED_FIXED_SHAPE_GROUPS
+                        and left_bytes != right_bytes
+                    ):
+                        json_shape_mismatches.append(
+                            f"{relative}:{surface}:{path}"
+                        )
     return {
         "left_only": sorted(left_names - right_names),
         "right_only": sorted(right_names - left_names),
         "size_mismatches": size_mismatches,
         "json_shape_mismatches": json_shape_mismatches,
+        "packet_length_mismatches": packet_length_mismatches,
     }
 
 
-def load_message_counts(path: Path) -> dict[str, int]:
-    """Load one strict capture-derived message/record count manifest."""
+def restricted_source_archive_shape(path: Path) -> list[tuple[str, str, int]]:
+    """Read only canonical source identities and lengths from a restricted archive."""
+
+    descriptor, before = _open_regular_nofollow(path, "restricted source archive")
+    if before.st_size > DEFAULT_MAX_FILE_BYTES:
+        os.close(descriptor)
+        raise AuditInputError("restricted source archive exceeds its file-size bound")
+
+    def read_exact(stream: Any, size: int, label: str) -> bytes:
+        value = stream.read(size)
+        if len(value) != size:
+            raise AuditInputError(f"restricted source archive has a truncated {label}")
+        return value
+
+    rows: list[tuple[str, str, int]] = []
+    try:
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            if read_exact(stream, len(RESTRICTED_SOURCE_DOMAIN_V1), "domain") != RESTRICTED_SOURCE_DOMAIN_V1:
+                raise AuditInputError("restricted source archive has the wrong domain")
+            count = struct.unpack("<I", read_exact(stream, 4, "count"))[0]
+            if count == 0 or count > MAX_ARTIFACT_FILES:
+                raise AuditInputError("restricted source archive count is outside its bound")
+            previous: tuple[str, str] | None = None
+            total = 0
+            for index in range(count):
+                ordinal, surface_length = struct.unpack(
+                    "<IH", read_exact(stream, 6, f"row {index} header")
+                )
+                if ordinal != index or surface_length == 0 or surface_length > 64:
+                    raise AuditInputError("restricted source archive row header is invalid")
+                try:
+                    surface = read_exact(
+                        stream, surface_length, f"row {index} surface"
+                    ).decode("ascii")
+                except UnicodeError as error:
+                    raise AuditInputError("restricted source surface is not ASCII") from error
+                if any(not (character.islower() or character == "_") for character in surface):
+                    raise AuditInputError("restricted source surface is non-canonical")
+                path_length = struct.unpack(
+                    "<I", read_exact(stream, 4, f"row {index} path length")
+                )[0]
+                if path_length == 0 or path_length > 4_096:
+                    raise AuditInputError("restricted source path length is outside its bound")
+                try:
+                    relative = read_exact(
+                        stream, path_length, f"row {index} path"
+                    ).decode("utf-8")
+                except UnicodeError as error:
+                    raise AuditInputError("restricted source path is not UTF-8") from error
+                parsed = PurePosixPath(relative)
+                if (
+                    parsed.is_absolute()
+                    or parsed.as_posix() != relative
+                    or any(part in ("", ".", "..") for part in relative.split("/"))
+                ):
+                    raise AuditInputError("restricted source path is non-canonical")
+                source_bytes = struct.unpack(
+                    "<Q", read_exact(stream, 8, f"row {index} source length")
+                )[0]
+                identity = (surface, relative)
+                if source_bytes == 0 or (previous is not None and identity <= previous):
+                    raise AuditInputError("restricted source row is empty or out of order")
+                previous = identity
+                total += source_bytes
+                if total > DEFAULT_MAX_TOTAL_BYTES:
+                    raise AuditInputError("restricted source archive exceeds its total bound")
+                if stream.seek(source_bytes, os.SEEK_CUR) > before.st_size:
+                    raise AuditInputError("restricted source row escapes its archive")
+                rows.append((surface, relative, source_bytes))
+            if stream.read(1):
+                raise AuditInputError("restricted source archive has trailing bytes")
+            after = os.fstat(stream.fileno())
+    finally:
+        os.close(descriptor)
+    if not _stable_metadata(before, after):
+        raise AuditInputError("restricted source archive changed during shape replay")
+    return rows
+
+
+def load_traffic_counts(path: Path) -> dict[str, int]:
+    """Load one strict capture-derived packet/message/record count manifest."""
 
     if path.is_symlink() or not path.is_file():
-        raise AuditInputError(f"message-count manifest must be a regular file: {path}")
+        raise AuditInputError(f"traffic-count manifest must be a regular file: {path}")
     document = _strict_json_loads(
         _read_regular_file(
             path,
-            f"message-count manifest {path}",
+            f"traffic-count manifest {path}",
             MAX_MANIFEST_BYTES,
         ),
-        f"message-count manifest {path}",
+        f"traffic-count manifest {path}",
     )
     if not isinstance(document, dict) or set(document) != {"version", "channels"}:
         raise AuditInputError(
-            "message-count manifest must contain only version and channels"
+            "traffic-count manifest must contain only version and channels"
         )
     if document["version"] != REPORT_VERSION:
-        raise AuditInputError("message-count manifest version must be 1")
+        raise AuditInputError("traffic-count manifest version must be 1")
     channels = document["channels"]
     if not isinstance(channels, dict) or set(channels) != set(REQUIRED_COUNT_CHANNELS):
         raise AuditInputError(
-            f"message-count channels must be exactly {list(REQUIRED_COUNT_CHANNELS)}"
+            f"traffic-count channels must be exactly {list(REQUIRED_COUNT_CHANNELS)}"
         )
     for name, count in channels.items():
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
             raise AuditInputError(
-                f"message-count channel {name!r} must be a non-negative integer"
+                f"traffic-count channel {name!r} must be a non-negative integer"
             )
     return {name: channels[name] for name in REQUIRED_COUNT_CHANNELS}
 
 
-def compare_message_counts(left: Path, right: Path) -> list[dict[str, Any]]:
+def compare_traffic_counts(left: Path, right: Path) -> list[dict[str, Any]]:
     """Reject traffic-count differences in paired secret-only experiments."""
 
-    left_counts = load_message_counts(left)
-    right_counts = load_message_counts(right)
+    left_counts = load_traffic_counts(left)
+    right_counts = load_traffic_counts(right)
     return [
         {
             "channel": channel,
@@ -597,8 +745,8 @@ def run_audit(
     *,
     differential_left: Path | None = None,
     differential_right: Path | None = None,
-    message_counts_left: Path | None = None,
-    message_counts_right: Path | None = None,
+    traffic_counts_left: Path | None = None,
+    traffic_counts_right: Path | None = None,
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
 ) -> dict[str, Any]:
@@ -610,15 +758,15 @@ def run_audit(
         raise AuditInputError("canary manifest must be a regular non-symlink file")
     if (differential_left is None) != (differential_right is None):
         raise AuditInputError("both differential roots must be supplied together")
-    if (message_counts_left is None) != (message_counts_right is None):
-        raise AuditInputError("both message-count manifests must be supplied together")
-    if differential_left is not None and message_counts_left is None:
+    if (traffic_counts_left is None) != (traffic_counts_right is None):
+        raise AuditInputError("both traffic-count manifests must be supplied together")
+    if differential_left is not None and traffic_counts_left is None:
         raise AuditInputError(
-            "differential experiments require both message-count manifests"
+            "differential experiments require both traffic-count manifests"
         )
-    if differential_left is None and message_counts_left is not None:
+    if differential_left is None and traffic_counts_left is not None:
         raise AuditInputError(
-            "message-count manifests require paired differential roots"
+            "traffic-count manifests require paired differential roots"
         )
     canaries = load_canaries(manifest)
     files = list(iter_artifact_files(artifacts))
@@ -633,14 +781,14 @@ def run_audit(
             raise AuditInputError(
                 "every differential capture file must also be supplied as an artifact"
             )
-    if message_counts_left is not None and message_counts_right is not None:
+    if traffic_counts_left is not None and traffic_counts_right is not None:
         count_paths = {
-            message_counts_left.resolve(strict=True),
-            message_counts_right.resolve(strict=True),
+            traffic_counts_left.resolve(strict=True),
+            traffic_counts_right.resolve(strict=True),
         }
         if not count_paths.issubset(scanned_paths):
             raise AuditInputError(
-                "both message-count manifests must also be supplied as artifacts"
+                "both traffic-count manifests must also be supplied as artifacts"
             )
     total_bytes = 0
     findings: list[dict[str, Any]] = []
@@ -664,21 +812,21 @@ def run_audit(
         differential = compare_capture_roots(
             differential_left, differential_right, max_file_bytes
         )
-    message_count_mismatches = None
-    if message_counts_left is not None and message_counts_right is not None:
-        message_count_mismatches = compare_message_counts(
-            message_counts_left, message_counts_right
+    traffic_count_mismatches = None
+    if traffic_counts_left is not None and traffic_counts_right is not None:
+        traffic_count_mismatches = compare_traffic_counts(
+            traffic_counts_left, traffic_counts_right
         )
     differential_failed = (
         differential is not None and any(differential.values())
-    ) or bool(message_count_mismatches)
+    ) or bool(traffic_count_mismatches)
     scanned_artifacts.sort(key=lambda item: (item["sha256"], item["bytes"]))
-    message_count_manifests = None
-    if message_counts_left is not None and message_counts_right is not None:
-        message_count_manifests = sorted(
+    traffic_count_manifests = None
+    if traffic_counts_left is not None and traffic_counts_right is not None:
+        traffic_count_manifests = sorted(
             (
-                _artifact_binding(message_counts_left.resolve(strict=True)),
-                _artifact_binding(message_counts_right.resolve(strict=True)),
+                _artifact_binding(traffic_counts_left.resolve(strict=True)),
+                _artifact_binding(traffic_counts_right.resolve(strict=True)),
             ),
             key=lambda item: (item["sha256"], item["bytes"]),
         )
@@ -692,8 +840,8 @@ def run_audit(
         "canary_names": sorted({canary.name for canary in canaries}),
         "findings": findings,
         "differential": differential,
-        "message_count_manifests": message_count_manifests,
-        "message_count_mismatches": message_count_mismatches,
+        "traffic_count_manifests": traffic_count_manifests,
+        "traffic_count_mismatches": traffic_count_mismatches,
     }
 
 
@@ -703,8 +851,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--artifact", action="append", required=True, type=Path)
     parser.add_argument("--differential-left", type=Path)
     parser.add_argument("--differential-right", type=Path)
-    parser.add_argument("--message-counts-left", type=Path)
-    parser.add_argument("--message-counts-right", type=Path)
+    parser.add_argument("--traffic-counts-left", type=Path)
+    parser.add_argument("--traffic-counts-right", type=Path)
     parser.add_argument("--max-file-bytes", type=int, default=DEFAULT_MAX_FILE_BYTES)
     parser.add_argument("--max-total-bytes", type=int, default=DEFAULT_MAX_TOTAL_BYTES)
     parser.add_argument("--output", type=Path)
@@ -719,8 +867,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.artifact,
             differential_left=args.differential_left,
             differential_right=args.differential_right,
-            message_counts_left=args.message_counts_left,
-            message_counts_right=args.message_counts_right,
+            traffic_counts_left=args.traffic_counts_left,
+            traffic_counts_right=args.traffic_counts_right,
             max_file_bytes=args.max_file_bytes,
             max_total_bytes=args.max_total_bytes,
         )

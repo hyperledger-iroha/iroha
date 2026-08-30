@@ -2291,11 +2291,6 @@ pub mod torii {
             None
         }
     }
-    /// RAM-LFE runtime defaults (disabled unless explicitly configured).
-    pub mod ram_lfe {
-        /// Master enable switch for in-process RAM-LFE runtime wiring.
-        pub const ENABLED: bool = false;
-    }
     /// Transaction-history visibility policy defaults.
     pub mod tx_history {
         /// Maximum bytes accepted from the mandatory-alias policy file.

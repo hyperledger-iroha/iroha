@@ -19,8 +19,12 @@ use iroha_config::parameters::{
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
     NetworkId,
-    block::consensus_v2::{
-        BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode, ConsensusRound,
+    block::{
+        consensus::Evidence,
+        consensus_v2::{
+            BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
+            ConsensusRound,
+        },
     },
     merge::{
         MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
@@ -481,7 +485,6 @@ mod epoch_schedule_tests {
 }
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
-pub mod da;
 pub(crate) mod evidence;
 pub(crate) mod exec;
 pub(crate) mod lane_planner;
@@ -543,7 +546,7 @@ pub use evidence::evidence_subject_height_view;
 /// Propagates [`EvidenceValidationError`](evidence::EvidenceValidationError) when the payload
 /// fails any of the structural or metadata consistency checks enforced by consensus.
 pub fn validate_evidence(
-    evidence: &consensus::Evidence,
+    evidence: &Evidence,
     context: &EvidenceValidationContext<'_>,
 ) -> Result<(), evidence::EvidenceValidationError> {
     evidence::validate_evidence(evidence, context)

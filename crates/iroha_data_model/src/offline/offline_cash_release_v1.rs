@@ -60,6 +60,7 @@ const RELEASE_ATTESTATION_DIGEST_DOMAIN: &[u8] = b"iroha:offline-cash:v1:release
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "role", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
 #[repr(u8)]
 pub enum OfflineCashArtifactRoleV1 {
     /// Eq/Fp transparent IPA parameters.
@@ -177,6 +178,7 @@ impl OfflineCashArtifactRoleV1 {
 /// Digest and byte length of one authenticated artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct OfflineCashArtifactBindingV1 {
     /// Artifact role.
     pub role: OfflineCashArtifactRoleV1,

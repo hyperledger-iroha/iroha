@@ -27,7 +27,10 @@ from iroha_python import (
     asset_holders_query_envelope,
 )
 from iroha_python.address import AccountAddress, AccountAddressError
-from iroha_python.crypto import Ed25519KeyPair, ed25519_public_key_account_id
+from iroha_python.crypto import (
+    derive_ed25519_keypair_from_seed,
+    ed25519_public_key_account_id,
+)
 
 CANONICAL_ACCOUNT_ID = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 
@@ -1041,10 +1044,10 @@ def test_account_address_rejects_noncanonical_short_extended_controller() -> Non
 
 
 def test_account_identity_constructors_expose_only_the_domainless_api() -> None:
-    public_key = bytes([0x11] * 32)
+    key_pair = derive_ed25519_keypair_from_seed(b"domainless account identity")
+    public_key = key_pair.public_key
     address = AccountAddress.from_account(public_key=public_key)
     expected = address.to_i105(0x0171)
-    key_pair = Ed25519KeyPair(private_key=bytes(32), public_key=public_key)
 
     assert ed25519_public_key_account_id(public_key, discriminant=0x0171) == expected
     assert key_pair.account_id(discriminant=0x0171) == expected

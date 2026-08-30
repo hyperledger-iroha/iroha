@@ -198,9 +198,10 @@ use iroha_torii_shared::{
     PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
     TriggerCompletionListResponse,
     offline_api::{
-        OfflineOperationKind, OfflineOperationReference, OfflineOperationResult,
-        OfflineOperationState, OfflineOperationStatus, OfflineRedeemRequest, OfflineStatus,
-        OfflineTopUpRequest,
+        OFFLINE_OPERATION_REFERENCE_MAX_BYTES, OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+        OFFLINE_OPERATION_STATUS_MAX_BYTES, OFFLINE_STATUS_MAX_BYTES, OfflineOperationKind,
+        OfflineOperationReference, OfflineOperationState, OfflineOperationStatus,
+        OfflineRedeemRequest, OfflineStatus, OfflineTopUpRequest,
     },
     uri as torii_uri,
 };
@@ -9516,97 +9517,9 @@ impl Client {
         status: &OfflineOperationStatus,
         expected_operation_id: &str,
     ) -> Result<()> {
-        let (operation_id, transaction_hash, applied_finality) = match status {
-            OfflineOperationStatus::Pending {
-                operation_id,
-                transaction_hash,
-                submitted_at_ms,
-                ..
-            } => {
-                if *submitted_at_ms == 0 {
-                    return Err(eyre!(
-                        "offline pending result submitted_at_ms must be at least 1"
-                    ));
-                }
-                (operation_id, transaction_hash, None)
-            }
-            OfflineOperationStatus::Rejected {
-                operation_id,
-                transaction_hash,
-                ..
-            } => (operation_id, transaction_hash, None),
-            OfflineOperationStatus::Applied {
-                operation_id,
-                result,
-            } => {
-                let (transaction_hash, finalized_block_height, server_time_ms) = match result {
-                    OfflineOperationResult::TopUp(result) => {
-                        result.anchor.validate_public_binding().map_err(|error| {
-                            eyre!("offline applied top-up contains an invalid anchor: {error}")
-                        })?;
-                        result
-                            .finality_proof
-                            .validate_structure()
-                            .map_err(|error| {
-                                eyre!(
-                                    "offline applied top-up contains an invalid finality proof: {error}"
-                                )
-                            })?;
-                        let anchor_ref = result.anchor.compact_ref().map_err(|error| {
-                            eyre!("offline applied top-up anchor cannot be referenced: {error}")
-                        })?;
-                        if result.finality_proof.anchor != anchor_ref
-                            || result.finality_proof.commit_qc.height_context.network_id
-                                != result.anchor.network_id
-                            || operation_id != &hex::encode(result.anchor.topup_operation_id)
-                            || result.transaction_hash
-                                != hex::encode(result.anchor.finalized_tx_hash)
-                            || result.finalized_block_height != result.anchor.finalized_height
-                            || result.finalized_block_height
-                                != result.finality_proof.commit_qc.height_context.height
-                        {
-                            return Err(eyre!(
-                                "offline applied top-up anchor, finality proof, and terminal result are not mutually bound"
-                            ));
-                        }
-                        (
-                            &result.transaction_hash,
-                            result.finalized_block_height,
-                            result.server_time_ms,
-                        )
-                    }
-                    OfflineOperationResult::Redeem(result) => (
-                        &result.transaction_hash,
-                        result.finalized_block_height,
-                        result.server_time_ms,
-                    ),
-                };
-                (
-                    operation_id,
-                    transaction_hash,
-                    Some((finalized_block_height, server_time_ms)),
-                )
-            }
-        };
-        Self::require_lower_hex_32(operation_id, "operation_id")?;
-        if operation_id != expected_operation_id {
-            return Err(eyre!(
-                "offline operation status id does not match the requested resource"
-            ));
-        }
-        if let Some((finalized_block_height, server_time_ms)) = applied_finality {
-            if finalized_block_height == 0 {
-                return Err(eyre!(
-                    "offline applied result finalized_block_height must be at least 1"
-                ));
-            }
-            if server_time_ms == 0 {
-                return Err(eyre!(
-                    "offline applied result server_time_ms must be at least 1"
-                ));
-            }
-        }
-        Self::require_canonical_transaction_hash(transaction_hash, "transaction_hash")
+        status
+            .validate_for_operation_id(expected_operation_id)
+            .map_err(|error| eyre!("invalid offline operation status: {error}"))
     }
     fn validate_offline_capability(status: &OfflineStatus) -> Result<()> {
         if status.cash_handoff_capability
@@ -9649,7 +9562,8 @@ impl Client {
         let url = join_torii_url(&self.torii_url, torii_uri::OFFLINE_READINESS);
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", self.wire_format_preference.accept_header()),
+                .header("Accept", self.wire_format_preference.accept_header())
+                .max_response_bytes(OFFLINE_STATUS_MAX_BYTES),
         )?;
         let status: OfflineStatus = Self::parse_negotiated_typed_response(
             &response,
@@ -9730,6 +9644,7 @@ impl Client {
                 .header("Content-Type", APPLICATION_NORITO)
                 .header("Accept", self.wire_format_preference.accept_header())
                 .header("Idempotency-Key", &operation_id)
+                .max_response_bytes(OFFLINE_OPERATION_REFERENCE_MAX_BYTES)
                 .body(body),
         )?;
         let reference: OfflineOperationReference = Self::parse_negotiated_typed_response(
@@ -9756,11 +9671,21 @@ impl Client {
         operation_id: &str,
     ) -> Result<OfflineOperationStatus> {
         Self::require_lower_hex_32(operation_id, "operation_id")?;
+        if operation_id.bytes().all(|byte| byte == b'0') {
+            return Err(eyre!("offline operation_id must not be zero"));
+        }
         let path = torii_uri::OFFLINE_OPERATION.replace("{operation_id}", operation_id);
         let url = join_torii_url(&self.torii_url, &path);
+        let max_response_bytes = match self.wire_format_preference {
+            WireFormatPreference::NoritoOnly => OFFLINE_OPERATION_STATUS_MAX_BYTES,
+            WireFormatPreference::NoritoPreferred
+            | WireFormatPreference::JsonPreferred
+            | WireFormatPreference::JsonOnly => OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES,
+        };
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", self.wire_format_preference.accept_header()),
+                .header("Accept", self.wire_format_preference.accept_header())
+                .max_response_bytes(max_response_bytes),
         )?;
         let status: OfflineOperationStatus = Self::parse_negotiated_typed_response(
             &response,
@@ -10150,7 +10075,7 @@ mod offline_client_tests {
         },
         proof::VerifyingKeyId,
     };
-    use iroha_torii_shared::offline_api::OfflineTopUpResult;
+    use iroha_torii_shared::offline_api::{OfflineOperationResult, OfflineTopUpResult};
     use norito::derive::NoritoSerialize;
     use std::sync::{Arc, Mutex};
     #[derive(NoritoSerialize)]
@@ -10370,6 +10295,7 @@ mod offline_client_tests {
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), torii_uri::OFFLINE_READINESS);
         assert!(snapshot.url.query().is_none());
+        assert_eq!(snapshot.max_response_bytes, OFFLINE_STATUS_MAX_BYTES);
         assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
     }
     #[test]
@@ -10436,6 +10362,10 @@ mod offline_client_tests {
             assert_eq!(
                 header(snapshot, "idempotency-key"),
                 Some(operation_id.as_str())
+            );
+            assert_eq!(
+                snapshot.max_response_bytes,
+                OFFLINE_OPERATION_REFERENCE_MAX_BYTES
             );
             assert_single_accept_header(snapshot, ACCEPT_NORITO_PREFERRED);
             assert_eq!(
@@ -10512,11 +10442,27 @@ mod offline_client_tests {
             snapshots[0].url.path(),
             format!("/v1/offline/operations/{operation_id}")
         );
+        assert_eq!(
+            snapshots[0].max_response_bytes,
+            OFFLINE_OPERATION_STATUS_JSON_MAX_BYTES
+        );
         assert_single_accept_header(&snapshots[0], ACCEPT_NORITO_PREFERRED);
         let malformed = client_with_base_url(base_url())
             .get_offline_operation_status("../redeem")
             .expect_err("path injection must fail locally");
         assert!(malformed.to_string().contains("64 lowercase hexadecimal"));
+
+        let zero_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let zero_error = with_mock_http(
+            respond_with(
+                &zero_snapshots,
+                mk_response(StatusCode::INTERNAL_SERVER_ERROR, Vec::new(), None),
+            ),
+            || client_with_base_url(base_url()).get_offline_operation_status(&"0".repeat(64)),
+        )
+        .expect_err("zero operation id must fail before transport");
+        assert!(zero_error.to_string().contains("must not be zero"));
+        assert!(zero_snapshots.lock().expect("snapshots").is_empty());
     }
     #[test]
     fn pending_operation_status_rejects_zero_submission_time() {

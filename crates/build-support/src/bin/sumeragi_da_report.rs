@@ -273,10 +273,6 @@ struct PeerMetricsSummary {
     peers: usize,
     payload_bytes_min: f64,
     payload_bytes_max: f64,
-    manifest_guard_allowed_total_min: f64,
-    manifest_guard_allowed_total_max: f64,
-    votes_ingested_total_min: f64,
-    votes_ingested_total_max: f64,
 }
 impl PeerMetricsSummary {
     fn from_array(list: &[Value], path: &Path) -> Result<Self> {
@@ -288,10 +284,6 @@ impl PeerMetricsSummary {
         }
         let mut payload_bytes_min = f64::INFINITY;
         let mut payload_bytes_max = f64::NEG_INFINITY;
-        let mut manifest_guard_allowed_total_min = f64::INFINITY;
-        let mut manifest_guard_allowed_total_max = f64::NEG_INFINITY;
-        let mut votes_ingested_total_min = f64::INFINITY;
-        let mut votes_ingested_total_max = f64::NEG_INFINITY;
         for value in list {
             let obj = value.as_object().ok_or_else(|| ReportError::InvalidType {
                 path: path.to_path_buf(),
@@ -300,25 +292,13 @@ impl PeerMetricsSummary {
                 actual: value_type(value),
             })?;
             let payload = require_f64(obj, "payload_bytes", path)?;
-            let manifest_allowed = require_f64(obj, "manifest_guard_allowed_total", path)?;
-            let votes_ingested = require_f64(obj, "votes_ingested_total", path)?;
             payload_bytes_min = payload_bytes_min.min(payload);
             payload_bytes_max = payload_bytes_max.max(payload);
-            manifest_guard_allowed_total_min =
-                manifest_guard_allowed_total_min.min(manifest_allowed);
-            manifest_guard_allowed_total_max =
-                manifest_guard_allowed_total_max.max(manifest_allowed);
-            votes_ingested_total_min = votes_ingested_total_min.min(votes_ingested);
-            votes_ingested_total_max = votes_ingested_total_max.max(votes_ingested);
         }
         Ok(Self {
             peers: list.len(),
             payload_bytes_min,
             payload_bytes_max,
-            manifest_guard_allowed_total_min,
-            manifest_guard_allowed_total_max,
-            votes_ingested_total_min,
-            votes_ingested_total_max,
         })
     }
 }
@@ -511,16 +491,6 @@ impl ScenarioSummary {
                 "- per-peer payload bytes: {:.0} - {:.0}",
                 peer.payload_bytes_min, peer.payload_bytes_max
             )?;
-            writeln!(
-                output,
-                "- per-peer allowed manifest guards: {:.0} - {:.0}",
-                peer.manifest_guard_allowed_total_min, peer.manifest_guard_allowed_total_max
-            )?;
-            writeln!(
-                output,
-                "- per-peer availability votes ingested: {:.0} - {:.0}",
-                peer.votes_ingested_total_min, peer.votes_ingested_total_max
-            )?;
         }
         Ok(())
     }
@@ -573,10 +543,6 @@ impl ScenarioSummary {
 struct AggregatePeerMetrics {
     payload_bytes_min: f64,
     payload_bytes_max: f64,
-    manifest_guard_allowed_total_min: f64,
-    manifest_guard_allowed_total_max: f64,
-    votes_ingested_total_min: f64,
-    votes_ingested_total_max: f64,
     first: bool,
 }
 impl AggregatePeerMetrics {
@@ -584,26 +550,10 @@ impl AggregatePeerMetrics {
         if self.first {
             self.payload_bytes_min = metrics.payload_bytes_min;
             self.payload_bytes_max = metrics.payload_bytes_max;
-            self.manifest_guard_allowed_total_min = metrics.manifest_guard_allowed_total_min;
-            self.manifest_guard_allowed_total_max = metrics.manifest_guard_allowed_total_max;
-            self.votes_ingested_total_min = metrics.votes_ingested_total_min;
-            self.votes_ingested_total_max = metrics.votes_ingested_total_max;
             self.first = false;
         } else {
             self.payload_bytes_min = self.payload_bytes_min.min(metrics.payload_bytes_min);
             self.payload_bytes_max = self.payload_bytes_max.max(metrics.payload_bytes_max);
-            self.manifest_guard_allowed_total_min = self
-                .manifest_guard_allowed_total_min
-                .min(metrics.manifest_guard_allowed_total_min);
-            self.manifest_guard_allowed_total_max = self
-                .manifest_guard_allowed_total_max
-                .max(metrics.manifest_guard_allowed_total_max);
-            self.votes_ingested_total_min = self
-                .votes_ingested_total_min
-                .min(metrics.votes_ingested_total_min);
-            self.votes_ingested_total_max = self
-                .votes_ingested_total_max
-                .max(metrics.votes_ingested_total_max);
         }
     }
 }
@@ -612,10 +562,6 @@ impl Default for AggregatePeerMetrics {
         Self {
             payload_bytes_min: f64::INFINITY,
             payload_bytes_max: f64::NEG_INFINITY,
-            manifest_guard_allowed_total_min: f64::INFINITY,
-            manifest_guard_allowed_total_max: f64::NEG_INFINITY,
-            votes_ingested_total_min: f64::INFINITY,
-            votes_ingested_total_max: f64::NEG_INFINITY,
             first: true,
         }
     }
@@ -967,10 +913,10 @@ mod tests {
                 "block_hash": "abcd1234efgh5678"
             },
             "per_peer_metrics": [
-                {"peer_index": 0, "payload_bytes": 11010048, "manifest_guard_allowed_total": 1, "votes_ingested_total": 1},
-                {"peer_index": 1, "payload_bytes": 11010048, "manifest_guard_allowed_total": 1, "votes_ingested_total": 1},
-                {"peer_index": 2, "payload_bytes": 11010048, "manifest_guard_allowed_total": 1, "votes_ingested_total": 1},
-                {"peer_index": 3, "payload_bytes": 11010048, "manifest_guard_allowed_total": 1, "votes_ingested_total": 1}
+                {"peer_index": 0, "payload_bytes": 11010048},
+                {"peer_index": 1, "payload_bytes": 11010048},
+                {"peer_index": 2, "payload_bytes": 11010048},
+                {"peer_index": 3, "payload_bytes": 11010048}
             ]
         }"#;
         File::create(&path)
@@ -1065,7 +1011,7 @@ mod tests {
         throughput: f64,
     ) {
         let json = format!(
-            "{{\n  \"schema\": \"signed_rs16_da_v1\",\n  \"scenario\": \"{scenario}\",\n  \"peers\": {peers},\n  \"payload_bytes\": {payload},\n  \"timings\": {{\n    \"da_available_ms\": {da_ms},\n    \"commit_ms\": {commit_ms},\n    \"da_available_seconds\": {da_s},\n    \"commit_elapsed_seconds\": {commit_s},\n    \"throughput_mib_s\": {throughput}\n  }},\n  \"signed_da\": {{\n    \"height\": 10,\n    \"view\": 1,\n    \"total_chunks\": 168,\n    \"received_chunks\": 168,\n    \"availability_vote_count\": 4,\n    \"block_hash\": \"deadbeefcafebabe{scenario}\"\n  }},\n  \"per_peer_metrics\": [\n    {{\"peer_index\": 0, \"payload_bytes\": {payload}, \"manifest_guard_allowed_total\": 1, \"votes_ingested_total\": 1}},\n    {{\"peer_index\": 1, \"payload_bytes\": {payload}, \"manifest_guard_allowed_total\": 1, \"votes_ingested_total\": 1}},\n    {{\"peer_index\": 2, \"payload_bytes\": {payload}, \"manifest_guard_allowed_total\": 1, \"votes_ingested_total\": 1}},\n    {{\"peer_index\": 3, \"payload_bytes\": {payload}, \"manifest_guard_allowed_total\": 1, \"votes_ingested_total\": 1}}\n  ]\n}}",
+            "{{\n  \"schema\": \"signed_rs16_da_v1\",\n  \"scenario\": \"{scenario}\",\n  \"peers\": {peers},\n  \"payload_bytes\": {payload},\n  \"timings\": {{\n    \"da_available_ms\": {da_ms},\n    \"commit_ms\": {commit_ms},\n    \"da_available_seconds\": {da_s},\n    \"commit_elapsed_seconds\": {commit_s},\n    \"throughput_mib_s\": {throughput}\n  }},\n  \"signed_da\": {{\n    \"height\": 10,\n    \"view\": 1,\n    \"total_chunks\": 168,\n    \"received_chunks\": 168,\n    \"availability_vote_count\": 4,\n    \"block_hash\": \"deadbeefcafebabe{scenario}\"\n  }},\n  \"per_peer_metrics\": [\n    {{\"peer_index\": 0, \"payload_bytes\": {payload}}},\n    {{\"peer_index\": 1, \"payload_bytes\": {payload}}},\n    {{\"peer_index\": 2, \"payload_bytes\": {payload}}},\n    {{\"peer_index\": 3, \"payload_bytes\": {payload}}}\n  ]\n}}",
             scenario = scenario,
             peers = peers,
             payload = payload,

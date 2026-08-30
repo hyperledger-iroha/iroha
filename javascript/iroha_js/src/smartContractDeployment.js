@@ -206,12 +206,6 @@ function normalizeContractAlias(value, context = "contractAlias") {
   });
 }
 
-function u16Be(value) {
-  const output = Buffer.allocUnsafe(2);
-  output.writeUInt16BE(Number(value));
-  return output;
-}
-
 function u32Be(value) {
   const output = Buffer.allocUnsafe(4);
   output.writeUInt32BE(Number(value));

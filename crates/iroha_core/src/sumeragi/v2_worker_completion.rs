@@ -1056,7 +1056,6 @@ impl CleanupWorkerIdentity {
 struct PostFinalityCleanupJob {
     identity: CleanupWorkerIdentity,
     bodies: V2BodyRetirementJob,
-    chunk_root: PathBuf,
 }
 const POST_FINALITY_CLEANUP_QUEUE_CAPACITY: usize = 4;
 #[derive(Clone)]
@@ -1174,18 +1173,6 @@ fn execute_post_finality_cleanup(job: PostFinalityCleanupJob) {
             &error.to_string(),
         );
     }
-    match std::fs::remove_dir_all(&job.chunk_root) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => report_post_finality_cleanup_warning(
-            job.identity,
-            PostFinalityCleanupTarget::PayloadChunks,
-            &format!(
-                "failed to remove Sumeragi v2 chunk root {}: {error}",
-                job.chunk_root.display()
-            ),
-        ),
-    }
 }
 fn report_post_finality_cleanup_warning(
     identity: CleanupWorkerIdentity,
@@ -1255,7 +1242,6 @@ impl V2IoHandle {
                                 retire.cleanup.try_submit(PostFinalityCleanupJob {
                                     identity: CleanupWorkerIdentity::from_receipt(&retire.receipt),
                                     bodies,
-                                    chunk_root: retire.chunk_root,
                                 })
                             }) else {
                                 break;

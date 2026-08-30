@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chacha20orig } from "@noble/ciphers/chacha";
+import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
 import {
   resolveToriiClientConfig,
   extractConfidentialGasConfig,
@@ -13,12 +14,10 @@ import {
   normalizeAccountAliasFqn,
   normalizeAccountAliasLiteral,
   normalizeAccountId,
-  normalizeAccountIdOrAliasLiteral,
   normalizeAssetDefinitionId,
   normalizeAssetId,
   normalizeAssetHoldingId,
   normalizeIdentifierInput,
-  normalizeOpaqueLiteral,
   normalizeRwaId,
 } from "./normalizers.js";
 import {
@@ -56,9 +55,7 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
-import { KAIGI_MAX_PARTICIPANTS_V1 } from "./instructionBuilders.js";
 import {
-  assertNonBlankString,
   normalizeTransactionStatusScope,
   readHeaderValue,
 } from "./toriiClientPrimitives.js";
@@ -105,33 +102,10 @@ import { generateConnectSid, validateConnectSessionResponseIdentity } from "./co
 import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { contractPayloadDigestHex } from "./contractPayload.js";
-import { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
 import {
   createToriiGovernanceNormalizers,
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
 } from "./toriiGovernanceNormalizers.js";
-import {
-  PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
-  PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
-  PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
-  PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
-  PARLIAMENT_TRANSITION_DRAFT_PATH_V1,
-  buildParliamentAttemptDraftRequestV1,
-  buildParliamentTransitionDraftRequestV1,
-  encodeParliamentTimedOvnCastingProofRequestV1,
-  normalizeParliamentAttemptDraftResponseV1,
-  normalizeParliamentAttemptReadResponseV1,
-  normalizeParliamentTimedOvnCastingContextResponseV1,
-  normalizeParliamentTlePartialReleaseShareV1,
-  normalizeParliamentTleReleaseContextResponseV1,
-  normalizeParliamentTransitionDraftResponseV1,
-  parliamentAttemptReadPathV1,
-  parliamentTimedOvnCastingContextReadPathV1,
-  parliamentTimedOvnCastingProofPathV1,
-  parliamentTlePartialReleasePathV1,
-  parliamentTleReleaseContextReadPathV1,
-  validateParliamentTimedOvnCastingProofResponseFrameV1,
-} from "./parliamentApiV1.js";
 import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
 import {
   decodeExactSoracloudJsonResponse,
@@ -162,25 +136,7 @@ import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto
 import {
   getCurveEntryByPublicKeyMulticodec,
 } from "./curveRegistry.js";
-import {
-  noritoEncodeFeePaymentIntentArchive,
-  noritoEncodeSorafsBillingAcknowledgementProofV1,
-  noritoEncodeMultisigProposeRequest,
-  noritoEncodeTransactionPayloadBatch,
-  validateNoritoFrame,
-} from "./norito.js";
-import { inspectCanonicalTransactionPayloadBindings } from "./transactionCodec.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
-import {
-  normalizeKagemushaOperationId,
-  normalizeKagemushaOperationReference,
-  normalizeKagemushaOperationStatus,
-  normalizeKagemushaRedeemRequestV4,
-  normalizeOfflineStatus,
-  normalizeKagemushaTopUpRequestV4,
-  requireKagemushaJsonContentType,
-} from "./kagemushaOffline.js";
-import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 import { createVpnSchema } from "./vpnSchema.js";
 import {
@@ -401,8 +357,6 @@ const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
 function loadToriiOptionalModule() {
   return import("./toriiOptional.js");
 }
-const MAX_SIGNED_INT32 = 0x7fffffff;
-const MAX_SIGNED_INT32_BIGINT = BigInt(MAX_SIGNED_INT32);
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
@@ -1020,7 +974,7 @@ function encodeCanonicalVersionedSignedTransactionV1(payload, nativeBinding) {
   return encoded;
 }
 
-function encodeTransactionPayloadBatch(payloads, nativeBinding) {
+async function encodeTransactionPayloadBatch(payloads, nativeBinding) {
   const native = resolveOptionalNativeBinding(nativeBinding);
   if (
     native &&
@@ -1036,6 +990,7 @@ function encodeTransactionPayloadBatch(payloads, nativeBinding) {
     }
     return encoded;
   }
+  const { noritoEncodeTransactionPayloadBatch } = await loadToriiOptionalModule();
   return noritoEncodeTransactionPayloadBatch(payloads);
 }
 
@@ -1601,7 +1556,7 @@ export class ToriiClient {
     installOperatorSigningContext(this, opts.operatorSigningContext);
     Object.defineProperty(this, "_canonicalRequestAuth", { value: ToriiClient._normalizeCanonicalAuth(opts.canonicalRequestAuth, "ToriiClient options.canonicalRequestAuth"), writable: false });
     const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-    const fetchImpl = opts.fetchImpl ?? opts.fetch ?? globalThis.fetch;
+    const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
     if (typeof fetchImpl !== "function") {
       throw new Error("fetch implementation is required");
     }
@@ -1643,15 +1598,18 @@ export class ToriiClient {
       typeof opts.generateDaProofSummary === "function"
         ? opts.generateDaProofSummary
         : generateDaProofSummary;
-    this._allowInsecure = Boolean(
+    const allowInsecure =
       opts.allowInsecure ??
-        (opts.config &&
-          typeof opts.config === "object" &&
-          opts.config.allowInsecure),
+      (opts.config &&
+        typeof opts.config === "object" &&
+        opts.config.allowInsecure) ??
+      false;
+    this._allowInsecure = requireExactBoolean(
+      allowInsecure,
+      "ToriiClient options.allowInsecure",
     );
     const overrides = { ...opts };
     delete overrides.fetchImpl;
-    delete overrides.fetch;
     delete overrides.config;
     delete overrides.allowInsecure;
     delete overrides.sorafsAliasPolicy;
@@ -1715,12 +1673,17 @@ export class ToriiClient {
       "getOfflineCapability",
     );
     assertSupportedOptionKeys(rest, new Set([]), "getOfflineCapability options");
+    const optionalModulePromise = loadToriiOptionalModule();
     const response = await this._request("GET", "/v1/offline/readiness", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
       redirect: "error",
     });
     await this._expectStatus(response, [200]);
+    const {
+      normalizeOfflineStatus,
+      requireKagemushaJsonContentType,
+    } = await optionalModulePromise;
     requireKagemushaJsonContentType(
       this._getHeader(response, "content-type"),
       "Offline capability response",
@@ -1758,6 +1721,11 @@ export class ToriiClient {
 
   /** Poll one Kagemusha operation through the unchanged operation route. */
   async getKagemushaOperationStatus(operationId, options = {}) {
+    const {
+      normalizeKagemushaOperationId,
+      normalizeKagemushaOperationStatus,
+      requireKagemushaJsonContentType,
+    } = await loadToriiOptionalModule();
     const canonicalId = normalizeKagemushaOperationId(operationId);
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
@@ -1784,6 +1752,12 @@ export class ToriiClient {
   }
 
   async _submitKagemushaCommandV4(path, kind, request, options, context) {
+    const {
+      normalizeKagemushaOperationReference,
+      normalizeKagemushaRedeemRequestV4,
+      normalizeKagemushaTopUpRequestV4,
+      requireKagemushaJsonContentType,
+    } = await loadToriiOptionalModule();
     const normalizeRequest = kind === "top_up"
       ? normalizeKagemushaTopUpRequestV4
       : normalizeKagemushaRedeemRequestV4;
@@ -2858,7 +2832,7 @@ export class ToriiClient {
   /**
    * List verifying keys stored in the registry (`GET /v1/zk/vk`).
    * @param {ToriiVerifyingKeyListOptions} [options]
-   * @returns {Promise<unknown>}
+   * @returns {Promise<ReadonlyArray<ToriiVerifyingKeyListItem>>}
    */
   async listVerifyingKeys(options = {}) {
     const verifyingKeys = await loadVerifyingKeyClient();
@@ -2869,18 +2843,7 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
-  }
-
-  /**
-   * List verifying keys and normalise the payload.
-   * @param {ToriiVerifyingKeyListOptions} [options]
-   * @returns {Promise<ReadonlyArray<ToriiVerifyingKeyListItem>>}
-   */
-  async listVerifyingKeysTyped(options = {}) {
-    const payload = await this.listVerifyingKeys(options);
-    const verifyingKeys = await loadVerifyingKeyClient();
-    return verifyingKeys.list(payload);
+    return verifyingKeys.list(await this._maybeJson(response));
   }
 
   /**
@@ -2890,7 +2853,7 @@ export class ToriiClient {
    */
   iterateVerifyingKeys(options = {}) {
     const fetchPage = async (pageOptions = {}) => {
-      const items = await this.listVerifyingKeysTyped(pageOptions);
+      const items = await this.listVerifyingKeys(pageOptions);
       return { items: items ?? [] };
     };
     return this._iterateOffsetIterable(
@@ -2905,7 +2868,7 @@ export class ToriiClient {
    * @param {string} backend
    * @param {string} name
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<unknown>}
+   * @returns {Promise<ToriiVerifyingKeyDetail>}
    */
   async getVerifyingKey(backend, name, options = {}) {
     const verifyingKeys = await loadVerifyingKeyClient();
@@ -2928,20 +2891,7 @@ export class ToriiClient {
       },
     );
     await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
-  }
-
-  /**
-   * Fetch a verifying key record and normalise the payload.
-   * @param {string} backend
-   * @param {string} name
-   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<ToriiVerifyingKeyDetail>}
-   */
-  async getVerifyingKeyTyped(backend, name, options = {}) {
-    const payload = await this.getVerifyingKey(backend, name, options);
-    const verifyingKeys = await loadVerifyingKeyClient();
-    return verifyingKeys.detail(payload);
+    return verifyingKeys.detail(await this._maybeJson(response));
   }
 
   /**
@@ -4858,6 +4808,8 @@ export class ToriiClient {
       expectedCheckpointFingerprintHex,
       "acknowledgeSorafsBillingStatement.expectedCheckpointFingerprintHex",
     );
+    const { noritoEncodeSorafsBillingAcknowledgementProofV1 } =
+      await loadToriiOptionalModule();
     const body = noritoEncodeSorafsBillingAcknowledgementProofV1(proof);
     const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
       options,
@@ -5955,7 +5907,7 @@ export class ToriiClient {
     throwIfAborted(signal);
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
-    const batchPayload = encodeTransactionPayloadBatch(
+    const batchPayload = await encodeTransactionPayloadBatch(
       versionedPayloads,
       this._nativeBinding,
     );
@@ -7690,6 +7642,12 @@ export class ToriiClient {
   ) {
     const context = "getParliamentTimedOvnCastingProofPageV1";
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const {
+      PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
+      encodeParliamentTimedOvnCastingProofRequestV1,
+      parliamentTimedOvnCastingProofPathV1,
+      validateParliamentTimedOvnCastingProofResponseFrameV1,
+    } = await loadToriiOptionalModule();
     const path = parliamentTimedOvnCastingProofPathV1(ballotAttemptId);
     const body = encodeParliamentTimedOvnCastingProofRequestV1(trustedCheckpointHeight);
     const response = await this._request("POST", path, {
@@ -9671,6 +9629,7 @@ export class ToriiClient {
     const payload = normalizeMultisigProposeRequest(request);
     // Complete native request validation before consulting the off-wire trust
     // intent so malformed instruction archives fail before any network I/O.
+    const { noritoEncodeMultisigProposeRequest } = await loadToriiOptionalModule();
     const requestBody = noritoEncodeMultisigProposeRequest(payload);
     const draftIntent = normalizeLocalTransactionDraftIntent(
       request,
@@ -10953,20 +10912,11 @@ export class ToriiClient {
       attempt += 1;
       const attemptStartedAt = Date.now();
       const callerSignal = options.signal ?? null;
-      const shouldInstallTimeoutController =
-        !callerSignal &&
-        typeof AbortController === "function" &&
-        this._config.timeoutMs > 0;
-      const controller = shouldInstallTimeoutController ? new AbortController() : null;
-      let timeoutId;
-      let timedOut = false;
-      const signal = callerSignal ?? controller?.signal ?? null;
-      if (controller) {
-        timeoutId = setTimeout(() => {
-          timedOut = true;
-          controller.abort();
-        }, this._config.timeoutMs);
-      }
+      const attemptSignal = composeRequestSignal(
+        callerSignal,
+        this._config.timeoutMs,
+      );
+      const signal = attemptSignal.signal;
       try {
         const response = await this._fetch(url.toString(), {
           ...init,
@@ -10975,9 +10925,7 @@ export class ToriiClient {
           headers: cloneHeadersForFetch(initHeaders),
           signal: signal ?? undefined,
         });
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
+        attemptSignal.cleanup();
         let responseStatus;
         try {
           responseStatus = responseStatusWithoutUserGetter(response);
@@ -11013,14 +10961,17 @@ export class ToriiClient {
           durationMs,
         });
       } catch (error) {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
+        attemptSignal.cleanup();
         if (options.signal && signalIsAborted(options.signal)) {
           throw error;
         }
         if (
-          !this._shouldRetryError(error, methodUpper, timedOut, retryPolicy) ||
+          !this._shouldRetryError(
+            error,
+            methodUpper,
+            attemptSignal.didTimeout(),
+            retryPolicy,
+          ) ||
           attempt > maxRetries
         ) {
           throw error;
@@ -11028,7 +10979,7 @@ export class ToriiClient {
         const durationMs = Math.max(0, Date.now() - attemptStartedAt);
         lastError = error;
         this._emitRetryTelemetry({
-          phase: timedOut ? "timeout" : "network",
+          phase: attemptSignal.didTimeout() ? "timeout" : "network",
           attempt,
           nextAttempt: attempt + 1,
           maxRetries,
@@ -11036,7 +10987,7 @@ export class ToriiClient {
           url: url.toString(),
           errorName: error?.name ?? null,
           errorMessage: error?.message ?? null,
-          timedOut,
+          timedOut: attemptSignal.didTimeout(),
           backoffMs,
           profile: retryProfileName,
           durationMs,
@@ -11048,7 +10999,7 @@ export class ToriiClient {
       }
 
       if (backoffMs > 0) {
-        await delay(backoffMs);
+        await delay(backoffMs, callerSignal);
         const multiplier = policyBackoffMultiplier || 1;
         backoffMs = Math.min(
           Math.max(backoffMs * multiplier, policyBackoffInitial || 0),
@@ -15260,7 +15211,8 @@ async function parseGovernanceProposalKind(payload, context) {
           `${context}.payload`,
         ),
       };
-    case "ContractLifecycleGovernance":
+    case "ContractLifecycleGovernance": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
       return {
         variant,
         contract_lifecycle_governance: normalizeGovernanceProposalWireV1(
@@ -15268,7 +15220,9 @@ async function parseGovernanceProposalKind(payload, context) {
           context,
         ).payload,
       };
-    case "ContractEmergencyHold":
+    }
+    case "ContractEmergencyHold": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
       return {
         variant,
         contract_emergency_hold: normalizeGovernanceProposalWireV1(
@@ -15276,7 +15230,9 @@ async function parseGovernanceProposalKind(payload, context) {
           context,
         ).payload,
       };
-    case "GlobalDataTriggerPermissionGovernance":
+    }
+    case "GlobalDataTriggerPermissionGovernance": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
       return {
         variant,
         global_data_trigger_permission_governance: normalizeGovernanceProposalWireV1(
@@ -15284,6 +15240,7 @@ async function parseGovernanceProposalKind(payload, context) {
           context,
         ).payload,
       };
+    }
     default:
       throw new TypeError(`${context}.kind contains unsupported proposal variant: ${variant}`);
   }
@@ -17636,13 +17593,6 @@ function normalizeSnsNameStatus(payload, context) {
   return { status };
 }
 
-function normalizeStringList(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return value.map((entry, index) => requireNonEmptyString(entry, `${context}[${index}]`));
-}
-
 function normalizeExplorerNftRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const id = requireNonEmptyString(record.id ?? "", `${context}.id`);
@@ -18268,16 +18218,6 @@ function parseStringArray(value, context) {
   });
 }
 
-function parseRecordArray(value, context) {
-  if (value == null) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array of objects`);
-  }
-  return value.map((entry, index) => ensureRecord(entry, `${context}[${index}]`));
-}
-
 function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -18349,17 +18289,6 @@ function requireStringArray(value, context) {
     }
     return entry;
   });
-}
-
-function requireUnsignedIntegerArray(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return value.map((entry, index) =>
-    ToriiClient._normalizeUnsignedInteger(entry, `${context}[${index}]`, {
-      allowZero: true,
-    }),
-  );
 }
 
 function normalizeUaidLiteral(value, context = "uaid") {
@@ -19369,6 +19298,49 @@ function bodyContainsSensitiveKeyMaterial(body, headers) {
   );
 }
 
+function composeRequestSignal(callerSignal, timeoutMs) {
+  if (
+    typeof AbortController !== "function" ||
+    !(typeof timeoutMs === "number" && timeoutMs > 0)
+  ) {
+    return {
+      signal: callerSignal,
+      cleanup() {},
+      didTimeout: () => false,
+    };
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeoutId;
+  const onCallerAbort = () => {
+    controller.abort(signalAbortReason(callerSignal));
+  };
+  if (callerSignal) {
+    if (signalIsAborted(callerSignal)) {
+      onCallerAbort();
+    } else {
+      addSignalAbortListener(callerSignal, onCallerAbort);
+    }
+  }
+  if (!signalIsAborted(controller.signal)) {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error(`Torii request timed out after ${timeoutMs} ms`));
+    }, timeoutMs);
+  }
+  let cleaned = false;
+  return {
+    signal: controller.signal,
+    cleanup() {
+      if (cleaned) return;
+      cleaned = true;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (callerSignal) removeSignalAbortListener(callerSignal, onCallerAbort);
+    },
+    didTimeout: () => timedOut,
+  };
+}
+
 function delay(ms, signal) {
   if (!signal) {
     return new Promise((resolve) => {
@@ -19813,41 +19785,6 @@ function requireNonNegativeIntegerLike(value, context) {
     throw new RangeError(`${context} must be >= 0`);
   }
   return numeric;
-}
-
-function requireExactPositiveIntegerLike(value, context) {
-  if (value === undefined || value === null) {
-    throw new TypeError(`${context} is required`);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value <= 0) {
-      throw new RangeError(`${context} must be a positive integer`);
-    }
-    if (value > MAX_SIGNED_INT32) {
-      throw new RangeError(`${context} must fit in signed 32-bit range`);
-    }
-    return value;
-  }
-  if (typeof value === "bigint") {
-    if (value <= 0n) {
-      throw new RangeError(`${context} must be a positive integer`);
-    }
-    if (value > MAX_SIGNED_INT32_BIGINT) {
-      throw new RangeError(`${context} must fit in signed 32-bit range`);
-    }
-    return Number(value);
-  }
-  if (typeof value === "string") {
-    if (value.trim() !== value || !/^[1-9][0-9]*$/.test(value)) {
-      throw new RangeError(`${context} must be an exact positive integer string`);
-    }
-    const integer = BigInt(value);
-    if (integer > MAX_SIGNED_INT32_BIGINT) {
-      throw new RangeError(`${context} must fit in signed 32-bit range`);
-    }
-    return Number(integer);
-  }
-  throw new TypeError(`${context} must be a positive integer`);
 }
 
 function requireEvidencePhase(value, context) {
@@ -21239,13 +21176,6 @@ function normalizeManifestRepeatsPayload(value, context) {
   throw new TypeError(`${context} must be Indefinitely or Exactly`);
 }
 
-function normalizeOptionalBase64Payload(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  return normalizeRequiredBase64Payload(value, name);
-}
-
 function normalizeOptionalExactBase64Payload(value, name) {
   return value === undefined || value === null
     ? null
@@ -21319,49 +21249,6 @@ function normalizeRequiredExactBase64Payload(value, name) {
     );
   }
   return Buffer.from(buffer).toString("base64");
-}
-
-function normalizeBase64Token(value, name) {
-  if (typeof value !== "string") {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must be a string`,
-      name,
-    );
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must be a non-empty base64 string`,
-      name,
-    );
-  }
-  const normalized = tryNormalizeBase64String(trimmed);
-  if (normalized) {
-    return normalized;
-  }
-  const base64UrlCandidate = trimmed.replace(/-/g, "+").replace(/_/g, "/");
-  if (base64UrlCandidate !== trimmed) {
-    const urlNormalized = tryNormalizeBase64String(base64UrlCandidate);
-    if (urlNormalized) {
-      return urlNormalized;
-    }
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_STRING,
-    `${name} must be a valid base64 or base64url string`,
-    name,
-  );
-}
-
-function tryNormalizeBase64String(value) {
-  try {
-    const decoded = strictDecodeBase64(value);
-    return Buffer.from(decoded).toString("base64");
-  } catch {
-    return null;
-  }
 }
 
 function normalizeOptionalHex32(value, name) {
@@ -21469,26 +21356,6 @@ function normalizeHex16String(value, name) {
   return hex.toLowerCase();
 }
 
-function normalizeHex20String(value, name) {
-  const normalized = requireHexString(value, name);
-  const hex =
-    normalized.startsWith("0x") || normalized.startsWith("0X")
-      ? normalized.slice(2)
-      : normalized;
-  if (hex.length !== 40) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must be a 20-byte hex string`,
-      name,
-    );
-  }
-  return hex.toLowerCase();
-}
-
-function normalizeNonZeroHex20String(value, name) {
-  return normalizeNonZeroHexBytesString(value, name, 20);
-}
-
 function normalizeNonZeroHex32String(value, name) {
   return normalizeNonZeroHexBytesString(value, name, 32);
 }
@@ -21521,17 +21388,6 @@ function normalizeHexBytesString(value, name) {
   return hex.toLowerCase();
 }
 
-function normalizeExactHexBytesString(value, name) {
-  if (typeof value === "string" && value.trim() !== value) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must be a canonical hex string`,
-      name,
-    );
-  }
-  return normalizeHexBytesString(value, name);
-}
-
 function normalizeNonZeroHexBytesString(value, name, expectedByteLength) {
   const hex = normalizeHexBytesString(value, name);
   if (hex.length === 0) {
@@ -21558,79 +21414,6 @@ function normalizeNonZeroHexBytesString(value, name, expectedByteLength) {
   return hex;
 }
 
-function normalizeExactNonZeroHexBytesString(value, name, expectedByteLength) {
-  const hex = normalizeExactHexBytesString(value, name);
-  if (hex.length === 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must be a non-empty byte-aligned hex string`,
-      name,
-    );
-  }
-  if (/^(?:00)+$/.test(hex)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must not be all zero`,
-      name,
-    );
-  }
-  if (expectedByteLength !== undefined && hex.length !== expectedByteLength * 2) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${name} must be a ${expectedByteLength}-byte hex string`,
-      name,
-    );
-  }
-  return hex;
-}
-
-function normalizeExactNonZeroHex20String(value, name) {
-  return normalizeExactNonZeroHexBytesString(value, name, 20);
-}
-
-function normalizeExactNonZeroHex32String(value, name) {
-  return normalizeExactNonZeroHexBytesString(value, name, 32);
-}
-
-const TRON_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const TRON_BASE58_INDEX = new Map(
-  Array.from(TRON_BASE58_ALPHABET, (character, index) => [character, index]),
-);
-
-function normalizeTronBase58CheckAddress(value, name) {
-  const normalized = requireNonEmptyString(value, name);
-  if (normalized !== value) {
-    throw invalidTronBase58CheckAddress(name);
-  }
-  decodeTronBase58CheckAddressPayload(normalized, name);
-  return normalized;
-}
-
-function normalizeHashLike32(value, name, options = {}) {
-  if (Buffer.isBuffer(value)) {
-    return normalizeHex32String(value.toString("hex"), name, options);
-  }
-  if (ArrayBuffer.isView(value)) {
-    return normalizeHex32String(
-      Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("hex"),
-      name,
-      options,
-    );
-  }
-  if (value instanceof ArrayBuffer) {
-    return normalizeHex32String(Buffer.from(value).toString("hex"), name, options);
-  }
-  if (Array.isArray(value)) {
-    return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
-  }
-  const normalized = requireNonEmptyString(value, name);
-  const trimmed = normalized.trim();
-  if (/^hash:[0-9a-fA-F]{64}#[0-9a-fA-F]{4}$/.test(trimmed)) {
-    return parseHashLiteralToHex(trimmed, name);
-  }
-  return normalizeHex32String(trimmed, name, options);
-}
-
 function parseHashLiteralToHex(literal, name) {
   const match = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/.exec(literal);
   if (!match) {
@@ -21648,27 +21431,6 @@ function parseHashLiteralToHex(literal, name) {
     throw new TypeError(`${name} must set the Iroha Hash marker bit`);
   }
   return hex;
-}
-
-function formatHashLiteral(bodyHex) {
-  const upper = bodyHex.toUpperCase();
-  const checksum = computeHashLiteralCrc("hash", upper);
-  return `hash:${upper}#${checksum}`;
-}
-
-function normalizeOptionalHashLiteral(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const hex = normalizeHashLike32(value, name);
-  return formatHashLiteral(hex);
-}
-
-function normalizeOptionalHexString(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  return requireHexString(value, name);
 }
 
 function cloneJsonValue(value, path, { nullPrototype = false } = {}) {
@@ -21782,15 +21544,6 @@ function cloneJsonValueInternal(value, path, state, depth) {
 function normalizeSpaceDirectoryManifestPayload(input, context) {
   const manifest = cloneJsonValue(input, context);
   return normalizeUaidManifest(manifest, context);
-}
-
-function normalizeOptionalUnsignedInteger(value, context) {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  return ToriiClient._normalizeUnsignedInteger(value, context, {
-    allowZero: true,
-  });
 }
 
 function normalizeRegisterContractCodeRequest(input) {
@@ -22055,7 +21808,6 @@ const {
   normalizeQuantityInput,
   normalizeRequiredBase64Payload,
   normalizeUint64DecimalString,
-  requireExactLowerHex32String,
   requireCanonicalTransactionHashString,
   requireExactNonEmptyString,
   requireExactTokenString,
@@ -22444,7 +22196,7 @@ function normalizeContractCallResponse(payload) {
   return normalized;
 }
 
-function normalizeContractCallDraftResponse(
+async function normalizeContractCallDraftResponse(
   payload,
   request,
   draftIntent,
@@ -22554,7 +22306,7 @@ function normalizeContractCallDraftResponse(
       "contractCall operation_receipt payload digest changed the caller-trusted draftIntent",
     );
   }
-  validateUnsignedResponsePayloadBinding(
+  await validateUnsignedResponsePayloadBinding(
     response,
     request.authority,
     receipt.fee_payment,
@@ -23597,7 +23349,7 @@ function exactArchiveEquals(left, right) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function validateUnsignedResponsePayloadBinding(
+async function validateUnsignedResponsePayloadBinding(
   response,
   authority,
   feePayment,
@@ -23610,6 +23362,10 @@ function validateUnsignedResponsePayloadBinding(
     throw new TypeError(`${context} requires a caller-trusted draftIntent`);
   }
   requireLocalDraftSigningContext(localSigningContext, context);
+  const {
+    inspectCanonicalTransactionPayloadBindings,
+    noritoEncodeFeePaymentIntentArchive,
+  } = await loadToriiOptionalModule();
   let bindings;
   try {
     bindings = inspectCanonicalTransactionPayloadBindings(
@@ -23655,7 +23411,7 @@ function validateUnsignedResponsePayloadBinding(
   }
 }
 
-function validateMultisigResponseRequestBinding(
+async function validateMultisigResponseRequestBinding(
   response,
   request,
   context,
@@ -23676,7 +23432,7 @@ function validateMultisigResponseRequestBinding(
     );
   }
   if (!response.submitted) {
-    validateUnsignedResponsePayloadBinding(
+    await validateUnsignedResponsePayloadBinding(
       response,
       request.signer_account_id,
       response.fee_payment,
@@ -24007,21 +23763,6 @@ function standardBase64Sextet(code) {
   if (code === 0x2b) return 62;
   if (code === 0x2f) return 63;
   return -1;
-}
-
-function normalizeManifestEntrypointsPayload(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${name} must be an array of entrypoints`);
-  }
-  if (value.length === 0) {
-    return [];
-  }
-  return value.map((entry, index) =>
-    normalizeManifestEntrypointPayload(entry, `${name}[${index}]`),
-  );
 }
 
 function normalizeManifestEntrypointKind(value, name) {
@@ -25147,19 +24888,6 @@ function requireDenseArray(value, context) {
   return value;
 }
 
-function requireCanonicalSortedStringSet(value, context) {
-  const values = requireDenseArray(value, context);
-  let previous = null;
-  values.forEach((entry, index) => {
-    const normalized = requireExactNonEmptyString(entry, `${context}[${index}]`);
-    if (previous !== null && normalized <= previous) {
-      throw new TypeError(`${context} must be sorted and contain unique strings`);
-    }
-    previous = normalized;
-  });
-  return values;
-}
-
 function requireCanonicalIrohaName(value, context) {
   const name = requireExactNonEmptyString(value, context);
   let hasUnpairedSurrogate = false;
@@ -25815,12 +25543,6 @@ function polyAddMod(params, lhs, rhs) {
   );
 }
 
-function polySubMod(params, lhs, rhs) {
-  return lhs.map((value, index) =>
-    subModBigInt(value, rhs[index], params.ciphertextModulus),
-  );
-}
-
 function polyMulMod(params, lhs, rhs) {
   const out = Array.from({ length: params.polynomialDegree }, () => 0n);
   for (let i = 0; i < params.polynomialDegree; i += 1) {
@@ -25938,18 +25660,6 @@ function rustRandomRangeU8Inclusive0To2(rng) {
     }
   }
   return result;
-}
-
-function sampleUniformPoly(params, stream) {
-  const bound = 1n << 64n;
-  const threshold = bound - (bound % params.ciphertextModulus);
-  return Array.from({ length: params.polynomialDegree }, () => {
-    let candidate = stream.nextU64();
-    while (candidate >= threshold) {
-      candidate = stream.nextU64();
-    }
-    return candidate % params.ciphertextModulus;
-  });
 }
 
 function encryptIdentifierScalar(params, scalar, seed) {
@@ -29917,43 +29627,6 @@ function normalizeSorafsManifestResponse(
   };
 }
 
-function normalizeSorafsPinAliasRequest(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const namespace = requireNonEmptyString(record.namespace, `${context}.namespace`);
-  const name = requireNonEmptyString(record.name, `${context}.name`);
-  const proofValue = pickSorafsRegisterField(
-    record,
-    ["proof", "proof_b64", "proofB64", "proof_base64", "proofBase64"],
-    `${context}.proof`,
-  );
-  if (proofValue === SORAFS_REGISTER_FIELD_MISSING || proofValue === null) {
-    throw new TypeError(`${context}.proof is required`);
-  }
-  return {
-    namespace,
-    name,
-    proof_base64: normalizeRequiredBase64Payload(proofValue, `${context}.proof`),
-  };
-}
-
-const SORAFS_REGISTER_FIELD_MISSING = Symbol("sorafs-register-field-missing");
-
-function pickSorafsRegisterField(record, aliases, context) {
-  const present = aliases.filter(
-    (alias) =>
-      Object.prototype.hasOwnProperty.call(record, alias) &&
-      record[alias] !== undefined,
-  );
-  if (present.length > 1) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} has ambiguous aliases: ${present.join(", ")}`,
-      context,
-    );
-  }
-  return present.length === 0 ? SORAFS_REGISTER_FIELD_MISSING : record[present[0]];
-}
-
 function normalizeDaManifestFetchResponse(payload, context = "da manifest response") {
   const record = ensureRecord(payload ?? {}, context);
   const storageTicketHex = normalizeHex32String(
@@ -32081,6 +31754,7 @@ async function readSccpNoritoResponse(
   if (!Array.isArray(closedTypeNames) || closedTypeNames.length === 0) {
     throw new TypeError(`${label} response must declare a closed Norito type set`);
   }
+  const { validateNoritoFrame } = await loadToriiOptionalModule();
   let matchedClosedType = false;
   for (const typeName of closedTypeNames) {
     try {
@@ -32718,19 +32392,12 @@ function normalizeAttachmentMetadataRecord(value, context) {
 const VERIFYING_KEY_LIST_OPTION_KEYS = new Set([
   "signal",
   "backend",
-  "backend_filter",
   "status",
-  "statusFilter",
-  "verifyingKeyStatus",
   "nameContains",
-  "name_contains",
   "limit",
   "offset",
   "order",
-  "sort",
-  "sortOrder",
   "idsOnly",
-  "ids_only",
 ]);
 const VERIFYING_KEY_ITERATOR_OPTION_KEYS = new Set([
   ...VERIFYING_KEY_LIST_OPTION_KEYS,
@@ -32757,10 +32424,8 @@ function loadVerifyingKeyClient() {
           normalizeSignalOption,
           ToriiClient._normalizeUnsignedInteger,
           rejectVerifyingKeyPrivateKeyFields,
-          requireBooleanLike,
           requireExactBoolean,
           requireExactNonEmptyString,
-          requireHexString,
           requireNonEmptyString,
         );
         if (
@@ -34861,6 +34526,7 @@ function buildConnectWebSocketDescriptor(baseUrl, options, context) {
       typeof params.config === "object" &&
       params.config.allowInsecure) ??
     false;
+  requireExactBoolean(allowInsecure, `${context}.allowInsecure`);
   if (!allowInsecure && !isSecureProtocol(endpoint.protocol)) {
     throw new Error(
       `${context}: refusing insecure WebSocket protocol ${endpoint.protocol}; pass allowInsecure: true for local/dev use only.`,
@@ -34922,7 +34588,7 @@ function openConnectWebSocketInternal(options, context) {
       protocol: parsedUrl.protocol,
       pathIsAbsolute,
       originMatches,
-      allowInsecure: Boolean(allowInsecure),
+      allowInsecure,
       hasCredentials: Boolean(token),
     },
   );

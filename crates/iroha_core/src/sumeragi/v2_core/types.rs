@@ -901,46 +901,6 @@ impl PayloadManifest {
         self.chunk_count
     }
 }
-/// One payload chunk transported outside the reducer.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PayloadChunk {
-    subject: Subject,
-    index: u32,
-    bytes: Vec<u8>,
-    proof: Vec<Digest>,
-}
-impl PayloadChunk {
-    /// Constructs a payload chunk and its Merkle proof.
-    #[must_use]
-    pub fn new(subject: Subject, index: u32, bytes: Vec<u8>, proof: Vec<Digest>) -> Self {
-        Self {
-            subject,
-            index,
-            bytes,
-            proof,
-        }
-    }
-    /// Returns the payload subject.
-    #[must_use]
-    pub const fn subject(&self) -> Subject {
-        self.subject
-    }
-    /// Returns the zero-based chunk index.
-    #[must_use]
-    pub const fn index(&self) -> u32 {
-        self.index
-    }
-    /// Returns the chunk bytes.
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-    /// Returns the Merkle proof supplied by the transport adapter.
-    #[must_use]
-    pub fn proof(&self) -> &[Digest] {
-        &self.proof
-    }
-}
 /// Justification required by a proposal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProposalJustification {
@@ -1255,10 +1215,6 @@ pub enum ConsensusMessageV2 {
     TimeoutVote(SignedTimeoutVote),
     /// Timeout certificate.
     TimeoutCertificate(TimeoutCertificate),
-    /// Certified body request addressed by subject.
-    BodyRequest(Subject),
-    /// One body chunk returned by the transport adapter.
-    BodyChunk(PayloadChunk),
 }
 #[cfg(test)]
 mod tests {

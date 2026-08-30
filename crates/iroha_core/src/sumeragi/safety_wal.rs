@@ -117,7 +117,7 @@ pub(crate) enum SafetyWalError {
         /// Validation failure.
         reason: &'static str,
     },
-    /// The WAL belongs to another protocol, network, height context, or consensus key.
+    /// The WAL belongs to another protocol, network, height context, height, or consensus key.
     #[error("sumeragi safety WAL identity mismatch at {path}: {field}")]
     IdentityMismatch {
         /// WAL path.
@@ -1308,7 +1308,8 @@ pub(crate) struct SafetyWal {
     leader_wire_authority_minted: AtomicBool,
 }
 impl SafetyWal {
-    /// Open the production WAL through one descriptor-relative Kura authority.
+    /// Open the production WAL through one descriptor-relative Kura authority and exact
+    /// protocol/network/height-context/height/validator identity.
     #[cfg(all(unix, not(target_os = "espidf")))]
     pub(crate) fn open_with_kura_authority(
         kura: &crate::kura::Kura,
@@ -1355,7 +1356,8 @@ impl SafetyWal {
             reason: "descriptor-relative Kura-root storage is unavailable",
         })
     }
-    /// Open or create a WAL bound to the supplied exact height and validator identity.
+    /// Open or create a WAL bound to the supplied protocol, network, height context, height, and
+    /// consensus-key hash.
     ///
     /// A new header is synchronized under a descriptor-relative temporary and atomically published
     /// before the final name is opened for append. An incomplete final frame is treated as an
@@ -2086,6 +2088,9 @@ mod tests {
     fn read_test_u16(bytes: &[u8]) -> u16 {
         u16::from_le_bytes(bytes.try_into().expect("two-byte fixture field"))
     }
+    fn read_test_u64(bytes: &[u8]) -> u64 {
+        u64::from_le_bytes(bytes.try_into().expect("eight-byte fixture field"))
+    }
     #[test]
     fn file_header_uses_the_declared_canonical_layout() {
         let header = encode_wal_file_header(IDENTITY, &frame_hash);
@@ -2109,14 +2114,7 @@ mod tests {
             &header[context_id_offset..height_offset],
             CONTEXT_ID.as_bytes()
         );
-        assert_eq!(
-            u64::from_le_bytes(
-                header[height_offset..key_offset]
-                    .try_into()
-                    .expect("eight-byte fixture field")
-            ),
-            HEIGHT
-        );
+        assert_eq!(read_test_u64(&header[height_offset..key_offset]), HEIGHT);
         assert_eq!(&header[key_offset..FILE_HEADER_PREFIX_LEN], &KEY);
         assert_eq!(
             &header[FILE_HEADER_PREFIX_LEN..],

@@ -54,8 +54,6 @@ from iroha_python.tx import (
     _normalize_quantity,
     _normalize_rwa_quantity_fields,
     _normalize_u128_quantity,
-    _require_canonical_positive_u128_literal,
-    _require_canonical_public_balance_scope,
 )
 
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
@@ -826,7 +824,7 @@ def test_proof_required_onboarding_never_retries_atomic_post(
         "https://torii.example",
         session=session,
         max_retries=4,
-        backoff_factor=0,
+        backoff_initial=0,
         retry_on_methods=["POST"],
     )
 
@@ -2186,7 +2184,7 @@ def test_asset_balance_rejects_wrong_network_prefix_without_retry() -> None:
             "params": None,
             "data": None,
             "headers": {"Accept": "application/json"},
-            "allow_redirects": True,
+            "allow_redirects": False,
         }
     ]
 
@@ -3835,7 +3833,7 @@ def test_account_permission_listing_accepts_configured_chain_discriminant() -> N
             "params": None,
             "data": None,
             "headers": {"Accept": "application/json"},
-            "allow_redirects": True,
+            "allow_redirects": False,
         }
     ]
 
@@ -3894,7 +3892,7 @@ def test_dataspace_visible_account_reads_remain_anonymous_without_signer() -> No
 
     assert len(session.calls) == 5
     for call in session.calls:
-        assert call["allow_redirects"] is True
+        assert call["allow_redirects"] is False
         headers = call["headers"]
         assert isinstance(headers, dict)
         for header in (
@@ -4306,47 +4304,6 @@ def test_retired_generic_confidential_instruction_and_client_surfaces_are_absent
 
 
 @pytest.mark.parametrize(
-    "hostile",
-    (
-        "",
-        "Global",
-        "GLOBAL",
-        " global",
-        "global ",
-        "universal",
-        "dataspace:",
-        "dataspace:0",
-        "dataspace:00",
-        "dataspace:01",
-        "dataspace:+1",
-        "dataspace:-1",
-        "dataspace: 1",
-        "dataspace:1 ",
-        "dataspace:１",
-        "dataspace:18446744073709551616",
-        "dataspace:999999999999999999999",
-        "dataspace:universal",
-    ),
-)
-def test_public_balance_scope_rejects_aliases_padding_and_numeric_adversaries(
-    hostile: str,
-) -> None:
-    with pytest.raises(ValueError, match="public_balance_scope"):
-        _require_canonical_public_balance_scope(hostile)
-
-
-@pytest.mark.parametrize("hostile", (None, 1, True, b"global"))
-def test_public_balance_scope_rejects_non_strings(hostile: object) -> None:
-    with pytest.raises(TypeError, match="public_balance_scope"):
-        _require_canonical_public_balance_scope(hostile)
-
-
-def test_public_balance_scope_rejects_oversize_decimal_before_integer_conversion() -> None:
-    with pytest.raises(ValueError, match="public_balance_scope"):
-        _require_canonical_public_balance_scope("dataspace:" + "9" * 4096)
-
-
-@pytest.mark.parametrize(
     "entry_surface",
     ("instruction", "transaction_draft", "torii_client"),
 )
@@ -4449,42 +4406,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert captured[0][0].config.metadata == {"purpose": "zk-register"}
     assert captured[0][1]["wait"] is False
     assert captured[1][1]["private_key_hex"] == "bb" * 32
-
-
-def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
-    u128_max = str((1 << 128) - 1)
-    assert _require_canonical_positive_u128_literal("17", "amount") == "17"
-    assert _require_canonical_positive_u128_literal(u128_max, "amount") == u128_max
-
-    for amount in [
-        None,
-        True,
-        False,
-        23,
-        0,
-        -1,
-        1.5,
-        Decimal("1"),
-        "",
-        " ",
-        "0",
-        "00",
-        "01",
-        "00017",
-        "-1",
-        "+1",
-        "1.0",
-        "1e3",
-        1 << 128,
-        str(1 << 128),
-        [],
-        object(),
-    ]:
-        with pytest.raises(
-            (TypeError, ValueError),
-            match="amount must be a canonical positive decimal u128 string",
-        ):
-            _require_canonical_positive_u128_literal(amount, "amount")
 
 
 def test_verify_proof_client_helper_rejects_non_mapping_before_submission() -> None:

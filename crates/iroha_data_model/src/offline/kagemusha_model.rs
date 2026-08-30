@@ -831,6 +831,7 @@ mod model {
     /// Production release manifest for degree-parameterized paired Pasta proofs.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendArtifactManifestV4 {
         /// Exact V4 manifest schema identifier.
         pub schema: String,
@@ -1034,6 +1035,7 @@ mod model {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "decision", content = "value", rename_all = "snake_case")]
+    #[norito(deny_unknown_fields)]
     pub enum KagemushaRecursiveSpendCryptographicReviewDecisionV4 {
         /// The exact candidate is approved for release finalization.
         Approved,
@@ -1044,6 +1046,7 @@ mod model {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "check", content = "value", rename_all = "snake_case")]
+    #[norito(deny_unknown_fields)]
     pub enum KagemushaRecursiveSpendCryptographicReviewCheckV4 {
         /// Recursive-circuit constraints cover every claimed state transition.
         RecursiveCircuitConstraintCoverage,
@@ -1062,6 +1065,7 @@ mod model {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "status", content = "value", rename_all = "snake_case")]
+    #[norito(deny_unknown_fields)]
     pub enum KagemushaRecursiveSpendCryptographicReviewCheckStatusV4 {
         /// The referenced evidence supports the reviewed property.
         Passed,
@@ -1128,6 +1132,7 @@ mod model {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "role", content = "value", rename_all = "snake_case")]
+    #[norito(deny_unknown_fields)]
     pub enum KagemushaRecursiveSpendReleaseApprovalRoleV1 {
         /// Operational release authority approving publication.
         Release,
@@ -1139,6 +1144,7 @@ mod model {
     /// Immutable subject shared by every role-specific V4 release approval.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
         /// SHA-256 of the canonical V4 manifest with its attestation slot zeroed.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1189,6 +1195,7 @@ mod model {
     /// Domain-separated value signed for one independent V4 approval role.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseApprovalPayloadV4 {
         /// Cross-protocol replay separator.
         pub domain: String,
@@ -1200,6 +1207,7 @@ mod model {
     /// One role-bound signature inside a V4 release attestation.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseApprovalV4 {
         /// Independent authority role represented by this signature.
         pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
@@ -1211,6 +1219,7 @@ mod model {
     /// Authenticated release envelope whose digest occupies the V4 manifest slot.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseAttestationV4 {
         /// Exact V4 attestation schema.
         pub schema: String,
@@ -1224,6 +1233,7 @@ mod model {
     /// Trusted signer threshold for one independent release-approval role.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleaseRolePolicyV1 {
         /// Role governed by this threshold.
         pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
@@ -1235,6 +1245,7 @@ mod model {
     /// Locally trusted policy for authenticating a release envelope.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendReleasePolicyV1 {
         /// Exact policy schema.
         pub schema: String,
@@ -1251,6 +1262,7 @@ mod model {
     /// Verified signer identity retained in a machine-readable promotion record.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendApprovedSignerV1 {
         /// Approval role satisfied by this signer.
         pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
@@ -1260,6 +1272,7 @@ mod model {
     /// Deterministic ABI-21 deployment marker written only after V4 release verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendPromotedReleaseV4 {
         /// Exact V4 promotion-record schema.
         pub schema: String,
@@ -1361,6 +1374,7 @@ mod model {
     /// from being interpreted as an ABI-21 release identity.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendArtifactBindingV4 {
         /// Exact ABI-21 binding version. Only `4` is accepted.
         pub version: u16,
@@ -1378,6 +1392,7 @@ mod model {
     /// exact bytes instead of signing a new timestamp.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaReceiverAcknowledgementPayloadV2 {
         /// Sender operation whose reserved inputs may be committed after ACK verification.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1404,6 +1419,7 @@ mod model {
     /// Signed durable receiver acknowledgement for one offline payment.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaReceiverAcknowledgementV2 {
         /// Canonical signed bindings.
         pub payload: KagemushaReceiverAcknowledgementPayloadV2,
@@ -1413,6 +1429,7 @@ mod model {
     /// Typed result returned after native acknowledgement verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaReceiverAcknowledgementVerifyResultV2 {
         /// All request, bundle, key-reference, and signature bindings passed.
         pub valid: bool,
@@ -1432,6 +1449,7 @@ mod model {
     /// Native capability record for the explicitly versioned ABI-21 backend.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendNativeCapabilitiesV4 {
         /// Native bridge ABI reported by the loaded library.
         pub bridge_abi_version: u32,
@@ -1463,6 +1481,7 @@ mod model {
     /// accumulators or fold transcripts.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaPastaCycleProofEnvelopeV4 {
         /// Exact V4 proof-envelope version.
         pub version: u16,
@@ -1519,6 +1538,7 @@ mod model {
     /// Peer-to-peer split transition carried by an ABI-21 recursive output.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendPeerSplitTransitionV4 {
         /// Circuit-exposed digest of the exact local split intent.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1539,6 +1559,7 @@ mod model {
     /// Partial-redemption change transition carried by an ABI-21 child statement.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendRedemptionChangeTransitionV4 {
         /// Circuit-exposed digest of the exact redemption/change intent.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1558,6 +1579,7 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "transition", content = "value", rename_all = "snake_case")]
+    #[norito(deny_unknown_fields)]
     pub enum KagemushaRecursiveSpendTransitionV4 {
         /// Ordinary offline peer split.
         PeerSplit(KagemushaRecursiveSpendPeerSplitTransitionV4),
@@ -1567,6 +1589,7 @@ mod model {
     /// Canonical public statement bound by an ABI-21 recursive proof.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendPublicStatementV4 {
         /// Exact network that scopes this cash state.
         pub network_id: NetworkId,
@@ -1599,6 +1622,7 @@ mod model {
     /// V4 recursive proof whose public instance includes the statement digest.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendProofV4 {
         /// Verifier selected by the statement.
         pub verifier_key_id: VerifyingKeyId,
@@ -1611,6 +1635,7 @@ mod model {
     /// Independently spendable ABI-21 recursive state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendBundleV4 {
         /// Exact public statement bound by the proof.
         pub statement: KagemushaRecursiveSpendPublicStatementV4,
@@ -1622,6 +1647,7 @@ mod model {
     /// Finalized top-up anchor selecting a V4 recursive release.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendTopUpAnchorV4 {
         /// Anchor schema version.
         pub version: u16,
@@ -1712,6 +1738,7 @@ mod model {
     /// Public V4 split transition with an ABI-21 output binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendSplitIntentV4 {
         /// Exact network inherited from the parent state and receiver request.
         pub network_id: NetworkId,
@@ -1741,6 +1768,7 @@ mod model {
     /// Public V4 redemption transition with an optional ABI-21 change binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendRedemptionIntentV4 {
         /// Exact network inherited from the input bundle.
         pub network_id: NetworkId,
@@ -1782,6 +1810,7 @@ mod model {
     /// ABI-21 local initialization request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendInitRequestV4 {
         /// Finalized chain receipt consumed by the initial proof.
         pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV4,
@@ -1795,6 +1824,7 @@ mod model {
     /// ABI-21 initialization result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendInitResultV4 {
         /// Independently spendable state created from the finalized top-up.
         pub bundle: KagemushaRecursiveSpendBundleV4,
@@ -1809,6 +1839,7 @@ mod model {
     /// One V4 previous-proof package consumed by append.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendAppendInputV4 {
         /// Previous spendable ABI-21 recursive state.
         pub previous_bundle: KagemushaRecursiveSpendBundleV4,
@@ -1818,6 +1849,7 @@ mod model {
     /// ABI-21 recursive append request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendAppendRequestV4 {
         /// One or two previous-proof packages in canonical order.
         pub previous_inputs: Vec<KagemushaRecursiveSpendAppendInputV4>,
@@ -1831,6 +1863,7 @@ mod model {
     /// Result of one ABI-21 recursive split append.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendSplitResultV4 {
         /// Exact value-conserving transition shared by both branches.
         pub split: KagemushaRecursiveSpendSplitIntentV4,
@@ -1853,6 +1886,7 @@ mod model {
     /// Recipient-only ABI-21 peer payload emitted from a local split result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendPeerPaymentV4 {
         /// Receiver-owned independently spendable ABI-21 branch.
         pub recipient_bundle: KagemushaRecursiveSpendBundleV4,
@@ -1864,6 +1898,7 @@ mod model {
     /// Complete finalized V4 origin carried to an offline receiver.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
         /// Complete finalized ABI-21 top-up receipt.
         pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV4,
@@ -1873,6 +1908,7 @@ mod model {
     /// Complete authenticated top-up provenance carried by every spendable ABI-21 branch.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendTopUpProvenanceV4 {
         /// Exact manifest-bound validator roster shared by every origin proof.
         pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactV2,
@@ -1882,6 +1918,7 @@ mod model {
     /// ABI-21 receiver-verification request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendVerifyRequestV4 {
         /// Scale- and split-bound ABI-21 recursive bundle.
         pub bundle: KagemushaRecursiveSpendBundleV4,
@@ -1901,6 +1938,7 @@ mod model {
     /// Opaque-safe summary decoded from an ABI-21 bundle.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendBundleSummaryV4 {
         /// Asset definition bound by the proof.
         pub asset: AssetDefinitionId,
@@ -1929,6 +1967,7 @@ mod model {
     /// Typed ABI-21 receiver-verification result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendVerifyResultV4 {
         /// Cryptographic proof and all public bindings verified.
         pub valid: bool,
@@ -1962,6 +2001,7 @@ mod model {
     /// Proof-bound V4 offline change child created by partial redemption.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendRedeemChangeBranchV4 {
         /// Exact change descriptor exposed by unshield-v3.
         pub output: KagemushaSpendableNoteDescriptorV2,
@@ -1973,6 +2013,7 @@ mod model {
     /// ABI-21 native redemption builder input.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendRedeemBuildRequestV4 {
         /// Spendable recursive state being redeemed.
         pub bundle: KagemushaRecursiveSpendBundleV4,
@@ -1993,6 +2034,7 @@ mod model {
     /// Canonical unsigned ABI-21 chain redemption fields.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendRedeemUnsignedV4 {
         /// Exact chain-request wire version. Only `4` is accepted.
         pub version: u16,
@@ -2017,6 +2059,7 @@ mod model {
     /// Prepared unsigned ABI-21 redemption result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendRedeemBuildResultV4 {
         /// Complete unsigned V4 chain-request fields.
         pub unsigned: KagemushaRecursiveSpendRedeemUnsignedV4,
@@ -2064,6 +2107,7 @@ mod model {
     /// Typed native ABI-21 redemption output.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[norito(deny_unknown_fields)]
     pub struct KagemushaRecursiveSpendRedeemResultV4 {
         /// Exact ABI-21 result wire version. Only `4` is accepted.
         pub version: u16,

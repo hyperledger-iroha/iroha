@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -51,7 +52,7 @@ class PrivateSettlementLeakageAuditTests(unittest.TestCase):
         )
         return path
 
-    def write_message_counts(self, path: Path, *, delta: int = 0) -> Path:
+    def write_traffic_counts(self, path: Path, *, delta: int = 0) -> Path:
         path.write_text(
             json.dumps(
                 {
@@ -66,6 +67,24 @@ class PrivateSettlementLeakageAuditTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        return path
+
+    def write_restricted_archive(
+        self, path: Path, rows: list[tuple[str, str, bytes]]
+    ) -> Path:
+        rows.sort(key=lambda row: (row[0], row[1]))
+        body = bytearray(MODULE.RESTRICTED_SOURCE_DOMAIN_V1)
+        body.extend(struct.pack("<I", len(rows)))
+        for ordinal, (surface, relative, source) in enumerate(rows):
+            encoded_surface = surface.encode("ascii")
+            encoded_relative = relative.encode("utf-8")
+            body.extend(struct.pack("<IH", ordinal, len(encoded_surface)))
+            body.extend(encoded_surface)
+            body.extend(struct.pack("<I", len(encoded_relative)))
+            body.extend(encoded_relative)
+            body.extend(struct.pack("<Q", len(source)))
+            body.extend(source)
+        path.write_bytes(bytes(body))
         return path
 
     def test_finds_canaries_across_chunk_boundaries_without_disclosing_values(
@@ -100,20 +119,20 @@ class PrivateSettlementLeakageAuditTests(unittest.TestCase):
                 json.dumps({"roots": ["b" * 64], "status": "finalized"}),
                 encoding="utf-8",
             )
-            left_counts = self.write_message_counts(root / "left-counts.json")
-            right_counts = self.write_message_counts(root / "right-counts.json")
+            left_counts = self.write_traffic_counts(root / "left-counts.json")
+            right_counts = self.write_traffic_counts(root / "right-counts.json")
             report = MODULE.run_audit(
                 manifest,
                 [left, right, left_counts, right_counts],
                 differential_left=left,
                 differential_right=right,
-                message_counts_left=left_counts,
-                message_counts_right=right_counts,
+                traffic_counts_left=left_counts,
+                traffic_counts_right=right_counts,
             )
             self.assertTrue(report["passed"])
             self.assertEqual(report["scanned_files"], 4)
             self.assertEqual(len(report["scanned_artifacts"]), 4)
-            self.assertEqual(len(report["message_count_manifests"]), 2)
+            self.assertEqual(len(report["traffic_count_manifests"]), 2)
 
     def test_differential_rejects_shape_or_size_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -129,22 +148,22 @@ class PrivateSettlementLeakageAuditTests(unittest.TestCase):
             (right / "public.json").write_text(
                 json.dumps({"roots": ["b" * 64, "c" * 64]}), encoding="utf-8"
             )
-            left_counts = self.write_message_counts(root / "left-counts.json")
-            right_counts = self.write_message_counts(root / "right-counts.json")
+            left_counts = self.write_traffic_counts(root / "left-counts.json")
+            right_counts = self.write_traffic_counts(root / "right-counts.json")
             report = MODULE.run_audit(
                 manifest,
                 [left, right, left_counts, right_counts],
                 differential_left=left,
                 differential_right=right,
-                message_counts_left=left_counts,
-                message_counts_right=right_counts,
+                traffic_counts_left=left_counts,
+                traffic_counts_right=right_counts,
             )
             self.assertFalse(report["passed"])
             self.assertEqual(
                 report["differential"]["json_shape_mismatches"], ["public.json"]
             )
 
-    def test_differential_rejects_message_count_drift(self) -> None:
+    def test_differential_rejects_traffic_count_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest = self.write_manifest(root)
@@ -154,8 +173,8 @@ class PrivateSettlementLeakageAuditTests(unittest.TestCase):
             right.mkdir()
             (left / "capture.bin").write_bytes(b"a" * 32)
             (right / "capture.bin").write_bytes(b"b" * 32)
-            left_counts = self.write_message_counts(root / "left-counts.json")
-            right_counts = self.write_message_counts(
+            left_counts = self.write_traffic_counts(root / "left-counts.json")
+            right_counts = self.write_traffic_counts(
                 root / "right-counts.json", delta=1
             )
             report = MODULE.run_audit(
@@ -163,14 +182,51 @@ class PrivateSettlementLeakageAuditTests(unittest.TestCase):
                 [left, right, left_counts, right_counts],
                 differential_left=left,
                 differential_right=right,
-                message_counts_left=left_counts,
-                message_counts_right=right_counts,
+                traffic_counts_left=left_counts,
+                traffic_counts_right=right_counts,
             )
             self.assertFalse(report["passed"])
             self.assertEqual(
-                len(report["message_count_mismatches"]),
+                len(report["traffic_count_mismatches"]),
                 len(MODULE.REQUIRED_COUNT_CHANNELS),
             )
+
+    def test_differential_rejects_malformed_pcap_and_restricted_shape_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            left = root / "left"
+            right = root / "right"
+            left.mkdir()
+            right.mkdir()
+            (left / "capture.pcapng").write_bytes(b"")
+            (right / "capture.pcapng").write_bytes(b"")
+            with self.assertRaisesRegex(MODULE.AuditInputError, "packet capture"):
+                MODULE.compare_capture_roots(left, right, MODULE.DEFAULT_MAX_FILE_BYTES)
+
+            (left / "capture.pcapng").unlink()
+            (right / "capture.pcapng").unlink()
+            left_archive = left / "restricted-audit-sources.bin"
+            right_archive = right / "restricted-audit-sources.bin"
+            self.write_restricted_archive(
+                left_archive, [("query_capture", "peer-000.norito", b"a")]
+            )
+            self.write_restricted_archive(
+                right_archive, [("query_capture", "peer-001.norito", b"a")]
+            )
+            inventory_drift = MODULE.compare_capture_roots(
+                left, right, MODULE.DEFAULT_MAX_FILE_BYTES
+            )
+            self.assertTrue(inventory_drift["json_shape_mismatches"])
+
+            self.write_restricted_archive(
+                right_archive, [("query_capture", "peer-000.norito", b"bb")]
+            )
+            size_drift = MODULE.compare_capture_roots(
+                left, right, MODULE.DEFAULT_MAX_FILE_BYTES
+            )
+            self.assertTrue(size_drift["json_shape_mismatches"])
 
     def test_differential_requires_count_manifests(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -199,17 +255,17 @@ class PrivateSettlementLeakageAuditTests(unittest.TestCase):
             (left / "capture.bin").write_bytes(b"a" * 32)
             (right / "capture.bin").write_bytes(b"b" * 32)
             with self.assertRaisesRegex(
-                MODULE.AuditInputError, "message-count manifests"
+                MODULE.AuditInputError, "traffic-count manifests"
             ):
                 MODULE.run_audit(
                     manifest,
                     [left, right],
                     differential_left=left,
                     differential_right=right,
-                    message_counts_left=self.write_message_counts(
+                    traffic_counts_left=self.write_traffic_counts(
                         root / "left-counts.json"
                     ),
-                    message_counts_right=self.write_message_counts(
+                    traffic_counts_right=self.write_traffic_counts(
                         root / "right-counts.json"
                     ),
                 )
@@ -353,11 +409,11 @@ class PrivateSettlementLeakageAuditTests(unittest.TestCase):
 
             count_path = root / "counts.json"
             count_path.write_text(
-                '{"version":1,"channels":{"torii_requests":NaN}}',
+                '{"version":1,"channels":{"torii_request_packets":NaN}}',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(MODULE.AuditInputError, "non-JSON constant"):
-                MODULE.load_message_counts(count_path)
+                MODULE.load_traffic_counts(count_path)
 
             manifest = self.write_manifest(root)
             artifacts = root / "artifacts"

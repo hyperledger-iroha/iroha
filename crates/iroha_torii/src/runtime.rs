@@ -8,6 +8,7 @@ use axum::{extract::Path, response::IntoResponse};
 use iroha_core::query::index_status::QueryIndexStatus;
 #[cfg(feature = "app_api")]
 use iroha_core::state::StateReadOnly;
+use iroha_core::state::WorldReadOnly;
 use iroha_core::{
     query::projection_checkpoint::{
         QUERY_PROJECTION_DA_BLOB_CLASS_CUSTOM_ID, QUERY_PROJECTION_DA_CODEC,

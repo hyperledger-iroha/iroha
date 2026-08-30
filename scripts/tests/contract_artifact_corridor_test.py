@@ -777,7 +777,8 @@ def test_tvm_smoke_probes_chain_before_real_deployment_and_covers_adversarial_st
     assert "validateNativeVectors" in source
     assert "independentPayloadHash" in source
     assert "decodeSccpTransferLog" in source
-    assert "[0, 1, 127, 128, 129, 255, 256, 257, 511]" in source
+    assert "rejectFunctions(bridge" in source
+    assert '"sccpPayloadHash"' in source
     assert "TRON_MAINNET_PROFILE = 0x43" in source
     assert "TRON_MAINNET_CHAIN_ID = 0x2b6653dcn" in source
     assert "REPLAY_NETWORK_TRON = 0x43" in source
@@ -793,7 +794,7 @@ def test_tvm_smoke_probes_chain_before_real_deployment_and_covers_adversarial_st
     assert "contracts/tron/sccp/TairaXorSccpBridge.sol:TairaXorSccpBridge" in source
     for required_case in (
         "wrong-chain verifier",
-        "wrong-chain bridge",
+        "retired-profile bridge",
         "forged EXTCODEHASH policy",
         "unauthorized direct token mint",
         "hostile invalid BN254 proof",

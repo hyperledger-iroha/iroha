@@ -3496,9 +3496,16 @@ pub(crate) mod tests {
             pending_batched_sortition_attempt(&network_id, &roster, context.height);
         {
             let mut block = state.world.block();
-            block
-                .parliament_attempts
-                .insert(governance_attempt_id, attempt);
+            {
+                let mut transaction = block.transaction_without_telemetry(
+                    iroha_config::parameters::actual::LaneConfig::default(),
+                    0,
+                );
+                transaction
+                    .put_parliament_attempt(attempt)
+                    .expect("persist the Parliament request and its beacon-slot index");
+                transaction.apply();
+            }
             block.commit();
         }
         assert!(matches!(
@@ -3705,9 +3712,16 @@ pub(crate) mod tests {
             let (governance_attempt_id, _request_ids, attempt) =
                 pending_batched_sortition_attempt(&network_id, &roster, context.height);
             let mut block = state.world.block();
-            block
-                .parliament_attempts
-                .insert(governance_attempt_id, attempt);
+            {
+                let mut transaction = block.transaction_without_telemetry(
+                    iroha_config::parameters::actual::LaneConfig::default(),
+                    0,
+                );
+                transaction
+                    .put_parliament_attempt(attempt)
+                    .expect("persist the Parliament request and its beacon-slot index");
+                transaction.apply();
+            }
             block.commit();
             Some(governance_attempt_id)
         } else {

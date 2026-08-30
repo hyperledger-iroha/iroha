@@ -31,8 +31,11 @@ test("browser crypto bundle exposes Kaigi roster proof helper and omits retired 
   }
 });
 
-test("browser crypto normalizes all algorithm labels but only signs Ed25519 locally", () => {
-  assert.ok(supportedCryptoAlgorithms().includes("ml-dsa"));
+test("browser crypto advertises only algorithms it can execute locally", () => {
+  assert.deepEqual(supportedCryptoAlgorithms(), ["ed25519"]);
+  for (const algorithm of supportedCryptoAlgorithms()) {
+    assert.equal(generateKeyPair({ algorithm }).algorithm, algorithm);
+  }
   assert.equal(normalizeCryptoAlgorithm("gost3410-2012-256-paramset-a"), "gost3410-2012-256-paramset-a");
   for (const [label, crypto] of [
     ["src", srcBrowserCrypto],

@@ -4,13 +4,12 @@ use crate::telemetry::StateTelemetry;
 use crate::{
     smartcontracts::isi::staking::{apply_slash_to_validator, max_slash_amount},
     state::{State, StateTransaction, WorldReadOnly, public_lane_validator_record_matches_key},
-    sumeragi::consensus::ValidatorIndex,
 };
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::{
-        consensus::{Evidence, EvidenceRecord},
+        consensus::{Evidence, EvidenceRecord, ValidatorIndex},
         consensus_v2::HeightContext,
     },
     consensus::{

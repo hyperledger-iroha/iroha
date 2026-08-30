@@ -1584,7 +1584,7 @@ mod byte_lifecycle_tests {
     };
     use super::*;
     const IDENTITY: WalFileIdentity =
-        WalFileIdentity::new(3, [0x11; 32], ContextId::repeat(0x33), 9, [0x22; 32]);
+        WalFileIdentity::new(3, [0x51; 32], ContextId::repeat(0x50), 7, [0x22; 32]);
     fn replay_context() -> HeightContext {
         let roster = (1_u8..=4)
             .map(|byte| Validator::new(ValidatorId::repeat(byte), VotingPower::new(1)))
@@ -1929,7 +1929,7 @@ mod byte_lifecycle_tests {
                 WalFileIdentity::new(
                     IDENTITY.protocol_version(),
                     IDENTITY.network_id(),
-                    ContextId::repeat(0x55),
+                    ContextId::repeat(0x45),
                     IDENTITY.height(),
                     IDENTITY.consensus_key_hash(),
                 ),

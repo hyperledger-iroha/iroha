@@ -35,7 +35,6 @@ export function createToriiGovernanceNormalizers({
   normalizeQuantityInput,
   normalizeRequiredBase64Payload,
   normalizeUint64DecimalString,
-  requireExactLowerHex32String,
   requireCanonicalTransactionHashString,
   requireExactNonEmptyString,
   requireExactTokenString,

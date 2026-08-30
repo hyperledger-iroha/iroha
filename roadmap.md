@@ -1,9 +1,90 @@
 # Roadmap
 
-Last updated: 2026-08-30
+Last updated: 2026-08-31
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Python SDK first-release follow-up
+
+- Rebuild `iroha_python_rs` from the settled same-revision candidate, then run
+  the complete high-level Python suite, native cryptography/Connect vectors,
+  clean wheel build/install, typing-consumer smoke test, and four-validator
+  integration corridor. Do not qualify native behavior from the current
+  checkout while unrelated Core overlay/SCCP compilation is broken.
+- Split the remaining monolithic Torii route families into reviewed internal
+  modules, collapse any remaining raw/typed method pairs into one typed public
+  method, and converge the standalone low-level transport package with the
+  high-level client so session ownership, bounds, authentication, and retry
+  rules have one implementation. Generate a public export/signature inventory
+  and reject aliases or response-shape unions instead of preserving them.
+- Benchmark cold import, transaction/key construction, table-driven CRC64, and
+  maximum-size NDJSON/SSE/Norito responses. Set release thresholds for duplicate
+  native derivations, peak response memory, reconnect behavior, and clean-wheel
+  import size, then keep those thresholds in the Python release corridor.
+
+## JavaScript SDK first-release follow-up
+
+- Continue decomposing the 35,000-line Torii implementation into route-family
+  modules with exact constructor and per-method option allowlists. Keep the
+  reviewed eager/deferred/combined budgets hard, benchmark cold import and
+  maximum-response RSS, and remove remaining camel/snake, TTL, asset-definition,
+  and transaction option aliases instead of preserving compatibility paths.
+- Replace process-global native-binding test overrides and mutable curve-policy
+  configuration with explicitly injected, immutable client/runtime contexts.
+  Move the remaining internal-only Norito, SoraFS, and canonical-auth helpers
+  out of public module namespaces, then generate declaration allowlists from
+  the same reviewed runtime export inventory so package conditions cannot drift.
+- Reduce the registry artifact by publishing one source-of-truth runtime tree
+  instead of duplicated `src`/`dist` implementation payloads, move the long
+  protocol inventory out of the SDK README into source-coupled references, and
+  split the serial unit profile into portable and native-qualified lanes. On a
+  same-revision host bridge, run the native SM2/privacy suite and the clean-pack
+  install corridor before release qualification.
+
+## C# SDK release qualification
+
+- Rebuild and stage the same-revision ABI-23 `connect_norito_bridge`, then rerun
+  the 10 native privacy, SoraFS reference, and Hijiri tests that are blocked on
+  the current host. Run formatting with the pinned .NET 8.0.419 SDK and repeat
+  the full build, unit, integration, sample, and package corridor from one
+  settled candidate.
+- Finish the first-release immutable-result pass: stop repeated array and
+  `JsonNode` cloning in hot DTO getters, replace redundant public signed-envelope
+  array constructors with one canonical parse boundary, and benchmark repeated
+  collection access plus large bounded responses before setting allocation
+  thresholds.
+- Establish a reviewed public-API approval baseline after the remaining surface
+  cut, remove the broad `CS1591` suppression, and document every retained public
+  member. Mirror the C# SDK's typed, canonical-only `CurveId` construction API
+  across other SDKs instead of retaining string aliases or compatibility modes.
+
+## Revision-4 DA/RBC release qualification
+
+- From one settled merged candidate, run the focused Core chunk, transport,
+  worker, lifecycle, and proof-harness suites, followed by strict all-target
+  Clippy and the workspace test gate.
+- Rebuild the Swift native bridge and rerun Swift wire fixtures. Then exercise
+  authenticated chunk loss, parity-first reordering, restart recovery, and
+  certified-body fallback with exact 4- and 7-validator committees, preserving
+  mandatory signed RS16 availability throughout.
+- Profile complete inbound chunk sessions and qualify the lifecycle-owned
+  validated-manifest session under view changes, height retirement, malformed
+  chunks, and adversarial shard arrival order. Preserve one fail-closed owner
+  for the exact height context and manifest.
+- Benchmark a systematic-only first fanout with parity emitted on explicit
+  repair or bounded same-view fallback. If the four- and seven-validator loss
+  matrix confirms the expected common-path reduction, make that the sole
+  first-release dispersal policy and update exact-output rollover claims,
+  authenticated repair ownership, formal models, and operator evidence
+  together; do not add a compatibility mode for eager parity fanout.
+- Profile maximum-body retry RSS as well as CPU. Replace decoded-plus-encoded
+  outbound retention with a sealed encoded-only frame plus compact routing
+  metadata if steady residency dominates, cache bounded RS16 decode matrices by
+  frozen layout and present-shard mask, and introduce a single-use validated
+  canonical-body handoff so the durable store need not repeat a full RS16
+  encoding while still independently checking body, block, and manifest
+  authority.
 
 ## SORA Parliament release qualification
 
@@ -68,27 +149,33 @@ Completed history lives in [`status.md`](./status.md).
 
 - Release-candidate-qualify the implemented prepared-leg, audit, coordination,
   restart-certificate recovery, carrier, status, and receipt APIs in Rust/CLI,
-  Kotlin, mirrored Java, Swift, Python, and JavaScript. The checked OpenAPI now
-  covers all 13 operations with strict V1 DTO/auth/redaction contracts; run its
-  focused Rust test and every complete SDK suite from the settled candidate.
-  Rebuild the missing Swift native bridge from that same commit and preserve
-  opaque witness handles and plaintext redaction through packaging and
-  clean-consumer tests.
+  Kotlin, mirrored Java, Swift, Python, and JavaScript. Carrier admission now
+  uses one exact non-terminal three-field acknowledgement in the Rust DTO and
+  all six maintained non-Rust clients, and the packaged OpenAPI source plus
+  both artifact mirrors agree on that shape. Regenerate and verify their stale
+  publication manifests, run the focused Rust/OpenAPI contract test, and run
+  every complete SDK suite from the settled candidate. Rebuild the missing
+  Swift native bridge from that same commit and preserve opaque witness handles
+  and plaintext redaction through packaging and clean-consumer tests.
 - Run real four-validator processes for every participating dataspace at
   N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
   DA/RBC throughout. Exercise one validator unavailable per committee,
   coordinator/global restarts, acknowledged authenticated 5/10/20-percent
-  message loss, phase-cut partitions, delay/healing, and crashes after every
+  message loss, phase-cut partitions, delayed delivery/healing, and crashes after every
   sidecar, staged-delta, QC, Kura, WSV, and receipt-publication boundary.
   The strict campaign planner/validator, acknowledged feature-isolated
   process-cut hooks, and private-profile plus transparent Native-AMX
   N=2,3,4,8,16 real-process benchmark entrypoints exist. Because transparent
   DvP V1 is bilateral, its N-participant control is one atomic carrier with
   N-1 consented star-topology DvPs whose Native-AMX receipt covers exactly N
-  participant routes. Finish the fault and leakage paths; compile and execute
-  the complete matrix; execute every hook; and archive the
-  controller acknowledgements instead of promoting the fixed N=3 smoke test,
-  an unexecuted harness, or synthetic responses.
+  participant routes. The real-process fault path now creates fresh bundles for
+  the required route-loss/hold, validator/coordinator restart, persistence-cut,
+  invalid-leg, replay, and continuous atomicity trials, and the leakage path
+  retains raw packet/source/peer-state inputs for independent replay. Compile
+  these paths from one settled candidate, execute the complete matrix and every
+  hook, and archive the genuine controller acknowledgements instead of
+  promoting the fixed N=3 smoke test, an unexecuted harness, or synthetic
+  responses.
   Continuously assert that no strict subset of legs becomes visible or
   spendable. Bind each raw run to the settled commit, the archived structured
   hardware description, and the exact N-specific configuration through the
@@ -101,12 +188,15 @@ Completed history lives in [`status.md`](./status.md).
   formal-model evidence.
 - Execute the structured-canary and differential leakage matrix over Torii,
   restricted/public P2P, block wire, Kura/merge artifacts, snapshots, queries,
-  events, logs, and telemetry. Bind every exact left/right input in the
-  canonical differential-pair manifest, with no unpaired files in either
-  declared root, so the final verifier can recompute byte-size and JSON-shape
-  equivalence independently. Publish the intentional residual linkability:
-  routes/count, timing, sponsor/fee, stable pools/roots, and possible asset
-  inference in single-CBDC dataspaces.
+  events, logs, and telemetry. Retain each unfiltered pcap, tcpdump statistics,
+  canonical port manifest, restricted raw-source archive, and all 16 peer
+  atomicity traces. Bind every exact left/right input in the canonical
+  differential-pair manifest, with no unpaired files in either declared root,
+  so the final verifier can reconstruct the published packet surfaces, replay
+  source projections and atomicity, compare traffic counts, packet shapes,
+  restricted row shapes, and public JSON/byte shapes independently. Publish the
+  intentional residual linkability: routes/count, timing, sponsor/fee, stable
+  pools/roots, and possible asset inference in single-CBDC dataspaces.
 - On pinned hardware, collect at least five warmups and thirty measured bundles
   per real N and multiple seeds. Publish p50/p95/p99 plus confidence intervals
   for proof, availability, audit, committee verification, Prepare, Commit,
@@ -117,7 +207,10 @@ Completed history lives in [`status.md`](./status.md).
   later-release regression thresholds.
 - Close focused/workspace tests, strict all-target Clippy, formatting, ten
   randomized seeds, two-hour soak, serial privacy-release checks, release
-  inventory, reproducible build, and SBOM from one settled candidate. Qualify
+  inventory, reproducible build, and SBOM from one settled candidate. The
+  fail-closed source-inventory producer and independent verifier are now
+  implemented; run `scripts/private_settlement_source_evidence.py` from the
+  final clean checkout and archive its atomic output with the candidate. Qualify
   the governed `RotatePrivateSettlementPoolPolicyV1` boundary--including
   pre-rotation receipt recovery/idempotence, same-activation-height pool-receipt
   rejection, and fail-closed old-policy in-flight bundles--alongside auditor
@@ -127,9 +220,12 @@ Completed history lives in [`status.md`](./status.md).
   indexed TLC configurations on the settled candidate. After replacing the
   erroneous bundle-global fault budgets with per-committee maps, the N=2
   validator-focused path, four-leg clean path, and three-leg expiry/replay path
-  pass. The earlier combined N=2 result is superseded; focused results do not
-  waive either full fault configuration required by the release-evidence
-  runner.
+  passed against the previously recorded module bytes. A later comment-only
+  clarification changed the current exact module digest; because the release
+  runner authenticates complete input bytes, rerun those tractable rows as well
+  as both full fault configurations. The earlier combined N=2 result is
+  superseded, and no historical focused result waives the frozen-input matrix
+  required by the release-evidence runner.
 - Obtain independent review of the AIR, dummy selectors, asset/capsule and
   reimbursement bindings, hybrid cryptography, auditor/QC domains, and the
   cross-dataspace state machine. Archive the exact commit, manifests, raw
@@ -539,11 +635,12 @@ Completed history lives in [`status.md`](./status.md).
   and sibling-carrier queue retirement across live cleanup and restart.
   Proposal-local runtime lookups now enumerate only the bounded canonical V1
   attempt-key space, while restore retains its complete-map rejection of corrupt
-  key-to-attempt bindings. The derived exact unavailable-pulse-slot index is
-  maintained on attempt replacement/removal and rebuilt from authoritative
-  attempts on restore; the candidate matrix must exercise late-pulse conflict
-  rejection and index reconstruction without weakening the complete restore
-  contradiction scan. Current QueuePlan evidence is composite: the full
+  key-to-attempt bindings. The derived exact required- and
+  unavailable-pulse-slot indexes are maintained on attempt replacement/removal
+  and rebuilt from authoritative attempts on restore; the candidate matrix must
+  exercise bounded consensus lookup, late-pulse conflict rejection, and index
+  reconstruction without weakening the complete restore contradiction scan.
+  Current QueuePlan evidence is composite: the full
   subset produced 34 passes and three stale-control failures, and the corrected
   controls then passed 4/4. It is not a clean single-run qualification result.
 - Candidate-qualify the exact Ready-Proposal-Sign producer-point preemption and
@@ -659,15 +756,16 @@ Completed history lives in [`status.md`](./status.md).
   The changed model's deterministic source/model gate passes; the lifecycle
   corridor passes 15/15 checks and 213 subtests; and the OpenAPI fail-closed
   suite passes 11/11. The authored, embedded, and versioned-current OpenAPI
-  mirrors are reconciled at 3,435,240 bytes with SHA-256
-  `557e833671015821989660aaf80232554515c5fa9a6dc0d87ee6e7dcb8a0d59b`.
+  mirrors are reconciled at 3,437,707 bytes with SHA-256
+  `408041eeaf11dbe5eea7b8d77b8de1857caa49bd7facbc944d78e7a1f8c70420`.
   Their unsigned manifest and versions metadata deliberately remain at the
   committed snapshot so this dirty worktree cannot impersonate an immutable,
   externally signed candidate; version verification is expected to fail closed.
   The existing `Executable::IvmProved` ZK proof-verification and replay surface
-  is preserved. Terminally unavailable Parliament beacon slots are now tracked
-  by one exact logical-session/height derived index, rebuilt and conflict-checked
-  on restore and updated atomically on attempt replacement or removal. Still
+  is preserved. Live-required and terminally unavailable Parliament beacon
+  slots are tracked by exact logical-session/height derived indexes, rebuilt on
+  restore and updated atomically on attempt replacement or removal; block
+  validation and beacon production now use bounded required-slot lookups. Still
   pending are exact four-validator qualification, a full
   pinned TLC run, genuine-HSM evidence, independent review, signed OpenAPI
   provenance, full workspace tests and strict all-target Clippy, a same-source
@@ -3898,8 +3996,8 @@ The remaining SCCP release work is:
   production profiles from one reproducible toolchain; independently audit the
   resulting exact material, since the pre-audit artifacts are non-admissible;
 - implement exact Rust-equivalent prepared-transaction authentication before
-  restoring non-Rust SDK write methods, including payload, prehash, authority,
-  creation-time, route, proof, and tamper-rejection parity;
+  adding authenticated non-Rust SDK write methods, including payload, prehash,
+  authority, creation-time, route, proof, and tamper-rejection parity;
 - rebuild the ABI-23 Swift `NoritoBridge.xcframework` from the settled
   candidate, then run the full Swift and cross-SDK corridor, contract smokes,
   focused Rust tests, and workspace qualification from that same source state;

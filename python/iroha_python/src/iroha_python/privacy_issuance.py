@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
+from norito.crc64 import crc64 as _crc64_v1
 from requests.adapters import HTTPAdapter
 
 BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1 = "/v1/privacy/bootle-lantern/issuance/authorize"
@@ -48,23 +49,6 @@ _ERROR_CONTRACT_V1: dict[int, tuple[str, str, int | None]] = {
     429: ("privacy_issuance_capacity_exhausted", BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1, 1),
     503: ("privacy_issuance_unavailable", BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1, None),
 }
-_CRC64_POLYNOMIAL_V1 = 0xC96C_5795_D787_0F42
-_CRC64_MASK_V1 = 0xFFFF_FFFF_FFFF_FFFF
-
-
-def _crc64_table_v1() -> tuple[int, ...]:
-    table = []
-    for index in range(256):
-        value = index
-        for _ in range(8):
-            value = value >> 1 if value & 1 == 0 else (value >> 1) ^ _CRC64_POLYNOMIAL_V1
-        table.append(value)
-    return tuple(table)
-
-
-_CRC64_TABLE_V1 = _crc64_table_v1()
-
-
 class BootleLanternIssuanceClientErrorV1(RuntimeError):
     """Fail-closed transport or response validation failure."""
 
@@ -357,13 +341,6 @@ def _read_bounded_response_body(response: Any, operation: str, maximum_bytes: in
             f"{operation} error response body has an invalid length"
         )
     return copied
-
-
-def _crc64_v1(payload: bytes) -> int:
-    value = _CRC64_MASK_V1
-    for byte in payload:
-        value = _CRC64_TABLE_V1[(value ^ byte) & 0xFF] ^ (value >> 8)
-    return (value ^ _CRC64_MASK_V1) & _CRC64_MASK_V1
 
 
 def _read_compact_length_v1(payload: bytes, offset: int) -> tuple[int, int]:

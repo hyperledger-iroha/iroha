@@ -5,9 +5,8 @@
 //! canonical JSON strings from `iroha_primitives::json::Json` for metadata maps.
 //!
 //! This module is internal and accessed from execution/merge paths and the actor.
-use super::{
-    consensus::{ExecKv, ExecWitness},
-    smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG},
+use super::smt::{
+    KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG,
 };
 use crate::state::{StateBlock, WorldReadOnly};
 use core::str::FromStr as _;
@@ -15,6 +14,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
+    block::consensus::{ExecKv, ExecWitness},
     domain::DomainId,
     fastpq::{TransferTranscript, TransferTranscriptBundle},
     name::Name,

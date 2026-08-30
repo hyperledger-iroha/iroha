@@ -553,21 +553,36 @@ class KagemushaRecursiveSpendProver private constructor() {
             RedeemSubmissionRequest(archive)
 
         @JvmStatic
-        fun projectTopUpRequestOperationId(request: TopUpRequest): ByteArray {
+        fun projectTopUpRequestIdentity(request: TopUpRequest): OperationRequestIdentity {
             requireArtifactBridge()
-            return requireDigest(
-                nativeProjectTopUpRequestOperationIdV4(request.noritoEncoded()),
-                "operationId",
+            return operationRequestIdentityFromNativeProjection(
+                nativeProjectTopUpRequestIdentityV4(request.noritoEncoded()),
             )
         }
 
         @JvmStatic
-        fun projectRedeemRequestOperationId(request: RedeemSubmissionRequest): ByteArray {
+        fun projectRedeemRequestIdentity(request: RedeemSubmissionRequest): OperationRequestIdentity {
             requireArtifactBridge()
-            return requireDigest(
-                nativeProjectRedeemRequestOperationIdV4(request.noritoEncoded()),
-                "operationId",
+            return operationRequestIdentityFromNativeProjection(
+                nativeProjectRedeemRequestIdentityV4(request.noritoEncoded()),
             )
+        }
+
+        private fun operationRequestIdentityFromNativeProjection(
+            fields: Array<ByteArray>,
+        ): OperationRequestIdentity {
+            requireFieldCount(fields, 3, "operation request identity projection")
+            return OperationRequestIdentity(
+                operationKind(canonicalText(fields[0], "operationKind")),
+                requireDigest(fields[1], "operationId"),
+                longInteger(fields[2], "authorizationIssuedAtMilliseconds"),
+            )
+        }
+
+        private fun operationKind(value: String): OperationKind = when (value) {
+            "top_up" -> OperationKind.TOP_UP
+            "redeem" -> OperationKind.REDEEM
+            else -> error("native Kagemusha operation kind is invalid")
         }
 
         @JvmStatic
@@ -575,11 +590,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             requireArtifactBridge()
             val fields = nativeProjectOperationReferenceV4(reference.noritoEncoded())
             requireFieldCount(fields, 5, "operation reference projection")
-            val kind = when (canonicalText(fields[0], "operationKind")) {
-                "top_up" -> OperationKind.TOP_UP
-                "redeem" -> OperationKind.REDEEM
-                else -> error("native Kagemusha operation kind is invalid")
-            }
+            val kind = operationKind(canonicalText(fields[0], "operationKind"))
             return OperationReferenceProjection(
                 kind,
                 requireDigest(fields[1], "operationId"),
@@ -600,11 +611,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 "rejected" -> OperationState.REJECTED
                 else -> error("native Kagemusha operation state is invalid")
             }
-            val kind = when (canonicalText(fields[1], "operationKind")) {
-                "top_up" -> OperationKind.TOP_UP
-                "redeem" -> OperationKind.REDEEM
-                else -> error("native Kagemusha operation kind is invalid")
-            }
+            val kind = operationKind(canonicalText(fields[1], "operationKind"))
             val heightOrSubmittedAt = fields[4].takeIf { it.isNotEmpty() }
                 ?.let { longInteger(it, "operationHeightOrSubmittedAt") }
             val serverTime = fields[5].takeIf { it.isNotEmpty() }
@@ -2450,8 +2457,8 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeFinalizeTopUpV4(unsigned: ByteArray, authorization: ByteArray): ByteArray
         @JvmStatic private external fun nativeFinalizeRedeemV4(buildResult: ByteArray, authorization: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareTopUpV4(networkId: ByteArray, chainDiscriminant: Int, assetDefinition: ByteArray, payer: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray, leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray, shieldVerifierCommitment: ByteArray, artifactBinding: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativeProjectTopUpRequestOperationIdV4(request: ByteArray): ByteArray
-        @JvmStatic private external fun nativeProjectRedeemRequestOperationIdV4(request: ByteArray): ByteArray
+        @JvmStatic private external fun nativeProjectTopUpRequestIdentityV4(request: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativeProjectRedeemRequestIdentityV4(request: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectOperationReferenceV4(reference: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectOperationStatusV4(status: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBranchClaimsConflictV2(left: ByteArray, right: ByteArray): Boolean
@@ -3916,6 +3923,49 @@ class KagemushaRecursiveSpendProver private constructor() {
 
     enum class OperationKind { TOP_UP, REDEEM }
 
+    /** Native-authenticated identity of one signed Kagemusha command. */
+    class OperationRequestIdentity internal constructor(
+        val kind: OperationKind,
+        operationId: ByteArray,
+        val authorizationIssuedAtMilliseconds: Long,
+    ) {
+        private val operationIdValue = requireDigest(operationId, "operationId")
+
+        init {
+            require(authorizationIssuedAtMilliseconds > 0) {
+                "authorizationIssuedAtMilliseconds must be positive"
+            }
+        }
+
+        fun operationId(): ByteArray = operationIdValue.copyOf()
+
+        fun operationIdHex(): String = hex(operationIdValue)
+    }
+
+    /** Durable continuity key retained from command acceptance through terminal polling. */
+    class OperationHandle(
+        operationId: ByteArray,
+        val kind: OperationKind,
+        transactionHash: ByteArray,
+        val submittedAtMilliseconds: Long,
+    ) {
+        private val operationIdValue = requireDigest(operationId, "operationId")
+        private val transactionHashValue = requireTransactionHash(
+            transactionHash,
+            "transactionHash",
+        )
+
+        init {
+            require(submittedAtMilliseconds > 0) { "submittedAtMilliseconds must be positive" }
+        }
+
+        fun operationId(): ByteArray = operationIdValue.copyOf()
+
+        fun operationIdHex(): String = hex(operationIdValue)
+
+        fun transactionHash(): ByteArray = transactionHashValue.copyOf()
+    }
+
     class OperationReferenceProjection internal constructor(
         val kind: OperationKind,
         operationId: ByteArray,
@@ -4021,10 +4071,10 @@ class KagemushaRecursiveSpendProver private constructor() {
         private val transport: TransportExecutor,
         private val localSigningContext: LocalSigningContext,
         private val requestTimeout: Duration?,
-        private val topUpRequestOperationIdProjector: (TopUpRequest) -> ByteArray =
-            { projectTopUpRequestOperationId(it) },
-        private val redeemRequestOperationIdProjector: (RedeemSubmissionRequest) -> ByteArray =
-            { projectRedeemRequestOperationId(it) },
+        private val topUpRequestIdentityProjector: (TopUpRequest) -> OperationRequestIdentity =
+            { projectTopUpRequestIdentity(it) },
+        private val redeemRequestIdentityProjector: (RedeemSubmissionRequest) -> OperationRequestIdentity =
+            { projectRedeemRequestIdentity(it) },
         private val operationReferenceProjector: (OperationReference) -> OperationReferenceProjection =
             { projectOperationReference(it) },
         private val operationStatusProjector: (OperationStatus) -> OperationStatusProjection =
@@ -4044,16 +4094,6 @@ class KagemushaRecursiveSpendProver private constructor() {
             const val RECEIVER_LINEAGE_PATH: String = "/v1/offline/receiver-lineage"
             const val JSON_MEDIA_TYPE: String = "application/json"
             const val NORITO_MEDIA_TYPE: String = "application/x-norito"
-
-            private fun requireOperationId(value: String?): String {
-                require(
-                    value != null &&
-                        value.length == 64 &&
-                        value != "0".repeat(64) &&
-                        value.all { it in '0'..'9' || it in 'a'..'f' },
-                ) { "operationId must be non-zero lowercase 32-byte hex" }
-                return value
-            }
 
             private fun requireCommandResponseHeaders(
                 response: TransportResponse,
@@ -4083,35 +4123,48 @@ class KagemushaRecursiveSpendProver private constructor() {
 
             internal fun requireOperationReferenceMatches(
                 reference: OperationReferenceProjection,
-                operationId: String,
-                expectedKind: OperationKind,
-            ) {
-                check(hex(reference.operationId()) == operationId) {
+                identity: OperationRequestIdentity,
+            ): OperationHandle {
+                check(reference.operationId().contentEquals(identity.operationId())) {
                     "Kagemusha Torii response operation ID must match the submitted operation"
                 }
-                check(reference.kind == expectedKind) {
+                check(reference.kind == identity.kind) {
                     "Kagemusha Torii response kind must match the submitted command"
                 }
-                check(reference.statusUri == "$OPERATIONS_PATH/$operationId") {
+                check(reference.statusUri == "$OPERATIONS_PATH/${identity.operationIdHex()}") {
                     "Kagemusha Torii response status URI must match the submitted operation"
                 }
-            }
-
-            internal fun requireSubmittedOperationIdMatches(
-                projectedOperationId: ByteArray,
-                operationId: String,
-            ) {
-                check(hex(requireDigest(projectedOperationId, "operationId")) == operationId) {
-                    "Kagemusha Torii Idempotency-Key must match the signed request operation ID"
+                check(
+                    reference.submittedAtMilliseconds ==
+                        identity.authorizationIssuedAtMilliseconds,
+                ) {
+                    "Kagemusha Torii response submission time must match signed authorization issuance"
                 }
+                return OperationHandle(
+                    reference.operationId(),
+                    reference.kind,
+                    reference.transactionHash(),
+                    reference.submittedAtMilliseconds,
+                )
             }
 
             internal fun requireOperationStatusMatches(
                 status: OperationStatusProjection,
-                operationId: String,
+                handle: OperationHandle,
             ) {
-                check(hex(status.operationId()) == operationId) {
+                check(status.operationId().contentEquals(handle.operationId())) {
                     "Kagemusha Torii status operation ID must match the requested operation"
+                }
+                check(status.kind == handle.kind) {
+                    "Kagemusha Torii status kind must match the accepted operation"
+                }
+                check(status.transactionHash().contentEquals(handle.transactionHash())) {
+                    "Kagemusha Torii status transaction hash must match the accepted operation"
+                }
+                status.submittedAtMilliseconds?.let {
+                    check(it == handle.submittedAtMilliseconds) {
+                        "Kagemusha Torii pending status submission time must match command acceptance"
+                    }
                 }
             }
 
@@ -4199,36 +4252,32 @@ class KagemushaRecursiveSpendProver private constructor() {
             ).thenApply { RecipientRegistrationLineage(it.body) }
         }
 
-        fun submitTopUp(
-            request: TopUpRequest,
-            operationId: String,
-        ): CompletableFuture<OperationReference> {
-            val id = requireOperationId(operationId)
-            requireSubmittedOperationIdMatches(topUpRequestOperationIdProjector(request), id)
+        fun submitTopUp(request: TopUpRequest): CompletableFuture<OperationHandle> {
+            val identity = topUpRequestIdentityProjector(request)
+            check(identity.kind == OperationKind.TOP_UP) {
+                "native top-up request identity has the wrong operation kind"
+            }
             return submitCommand(
                 TOP_UP_PATH,
                 request.noritoEncoded(),
-                id,
-                OperationKind.TOP_UP,
+                identity,
             )
         }
 
-        fun submitRedeem(
-            request: RedeemSubmissionRequest,
-            operationId: String,
-        ): CompletableFuture<OperationReference> {
-            val id = requireOperationId(operationId)
-            requireSubmittedOperationIdMatches(redeemRequestOperationIdProjector(request), id)
+        fun submitRedeem(request: RedeemSubmissionRequest): CompletableFuture<OperationHandle> {
+            val identity = redeemRequestIdentityProjector(request)
+            check(identity.kind == OperationKind.REDEEM) {
+                "native redemption request identity has the wrong operation kind"
+            }
             return submitCommand(
                 REDEEM_PATH,
                 request.noritoEncoded(),
-                id,
-                OperationKind.REDEEM,
+                identity,
             )
         }
 
-        fun getOperation(operationId: String): CompletableFuture<OperationStatus> {
-            val id = requireOperationId(operationId)
+        fun getOperation(handle: OperationHandle): CompletableFuture<OperationStatus> {
+            val id = handle.operationIdHex()
             return execute(
                 TransportRequest.builder()
                     .setMethod("GET")
@@ -4240,7 +4289,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 200,
             ).thenApply {
                 val status = OperationStatus(it.body)
-                requireOperationStatusMatches(operationStatusProjector(status), id)
+                requireOperationStatusMatches(operationStatusProjector(status), handle)
                 status
             }
         }
@@ -4248,10 +4297,9 @@ class KagemushaRecursiveSpendProver private constructor() {
         private fun submitCommand(
             path: String,
             request: ByteArray,
-            operationId: String,
-            expectedKind: OperationKind,
-        ): CompletableFuture<OperationReference> {
-            val id = requireOperationId(operationId)
+            identity: OperationRequestIdentity,
+        ): CompletableFuture<OperationHandle> {
+            val id = identity.operationIdHex()
             return execute(
                 TransportRequest.builder()
                     .setMethod("POST")
@@ -4269,10 +4317,8 @@ class KagemushaRecursiveSpendProver private constructor() {
                 val reference = OperationReference(it.body)
                 requireOperationReferenceMatches(
                     operationReferenceProjector(reference),
-                    id,
-                    expectedKind,
+                    identity,
                 )
-                reference
             }
         }
 

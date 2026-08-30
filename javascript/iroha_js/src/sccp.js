@@ -3,7 +3,7 @@ import { sha256 } from "@noble/hashes/sha2";
 
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
-import { _canonicalAccountIdNoritoValue, validateNoritoFrame } from "./norito.js";
+import { _canonicalAccountIdNoritoValue } from "./norito.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 /** First-release SCCP protocol domains. */
@@ -70,7 +70,7 @@ const SORA_TAIRA_CHAIN_ID_HASH =
   "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7";
 const TAIRA_XOR_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 export const SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1 =
-  "ivm_proved_record_sccp_message_v1";
+  "ivm_contract_record_sccp_message_v1";
 export const SCCP_MAX_SORA_OUTBOUND_GAS_LIMIT_V1 = 1_000_000_000;
 const MAX_WIRE_BYTES = 16 * 1024 * 1024;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
@@ -868,17 +868,6 @@ function canonicalBase64(value, label, { maximumBytes = MAX_WIRE_BYTES } = {}) {
   return decoded;
 }
 
-function canonicalNoritoBase64(value, label, typeName, maximumBytes) {
-  const decoded = canonicalBase64(value, label, { maximumBytes });
-  validateNoritoFrame(decoded, {
-    context: label,
-    expectedTypeName: typeName,
-    expectedPaddingLength: 0,
-    requireNonEmptyPayload: true,
-  });
-  return decoded;
-}
-
 function canonicalPath(value, label) {
   const path = canonicalText(value, label, 1024);
   if (
@@ -1433,49 +1422,29 @@ function parseOutboundProofPolicy(value, label, expectedKind = null) {
   });
 }
 
-function portableVerifyingKeyIdField(value, label) {
-  const text = canonicalText(value, label, 256);
-  if (
-    !/^[a-z0-9](?:[a-z0-9_/:.-]*[a-z0-9])?$/u.test(text) ||
-    ["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"].some((part) =>
-      text.includes(part),
-    )
-  ) {
-    throw new TypeError(`${label} must use portable verification-key registry syntax`);
-  }
-  return text;
-}
-
 function parseSoraOutboundExecutionPolicy(value, label) {
   const record = exactFields(
     value,
-    new Set(["version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"]),
+    new Set([
+      "version",
+      "execution_semantics",
+      "contract_artifact_sha256",
+      "gas_limit",
+    ]),
     label,
   );
   integer(record.version, `${label}.version`, 1, 1);
   if (
-    canonicalText(record.semantics, `${label}.semantics`, 64) !==
+    canonicalText(record.execution_semantics, `${label}.execution_semantics`, 64) !==
     SCCP_SORA_OUTBOUND_EXECUTION_SEMANTICS_V1
   ) {
-    throw new TypeError(`${label}.semantics is unsupported or retired`);
+    throw new TypeError(`${label}.execution_semantics is unsupported or retired`);
   }
   const contractArtifactSha256 = bytesFromUpperHex(
     record.contract_artifact_sha256,
     `${label}.contract_artifact_sha256`,
     32,
   );
-  const vkRef = exactFields(
-    record.vk_ref,
-    new Set(["backend", "name", "version", "commitment"]),
-    `${label}.vk_ref`,
-  );
-  const backend = portableVerifyingKeyIdField(vkRef.backend, `${label}.vk_ref.backend`);
-  const name = portableVerifyingKeyIdField(vkRef.name, `${label}.vk_ref.name`);
-  const version = integer(vkRef.version, `${label}.vk_ref.version`, 1, 0xffff_ffff);
-  const commitment = bytesFromUpperHex(vkRef.commitment, `${label}.vk_ref.commitment`, 32);
-  if (commitment.every((byte) => byte === 0)) {
-    throw new TypeError(`${label}.vk_ref.commitment must be nonzero`);
-  }
   const gasLimit = integer(
     record.gas_limit,
     `${label}.gas_limit`,
@@ -1484,10 +1453,6 @@ function parseSoraOutboundExecutionPolicy(value, label) {
   );
   return Object.freeze({
     contractArtifactSha256,
-    backend,
-    name,
-    version,
-    commitment,
     gasLimit,
   });
 }
@@ -2175,7 +2140,6 @@ function parseGovernedRoute(value, lane, label) {
   requireDistinctHashRoles(
     [
       executionPolicy.contractArtifactSha256,
-      executionPolicy.commitment,
       destination.destinationBindingHash,
       destination.routeConfigurationHash,
       ...destination.proofPolicyRoles,
@@ -2702,7 +2666,6 @@ export function normalizeSccpSoraOutboundMaterial(value, expectations = {}) {
       "policy",
       "contract_artifact_b64",
       "contract_code_hash",
-      "verifying_key_version",
     ]),
     label,
   );
@@ -2751,18 +2714,6 @@ export function normalizeSccpSoraOutboundMaterial(value, expectations = {}) {
   exactLowerHex(record.contract_code_hash, `${label}.contract_code_hash`, 32, {
     prefix: true,
   });
-  integer(
-    record.verifying_key_version,
-    `${label}.verifying_key_version`,
-    0,
-    0xffff_ffff,
-  );
-  if (record.verifying_key_version !== policy.version) {
-    throw new TypeError(
-      `${label}.verifying_key_version does not match the governed key version`,
-    );
-  }
-
   const expected = exactFields(
     expectations,
     new Set([
