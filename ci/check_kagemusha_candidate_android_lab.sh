@@ -734,9 +734,12 @@ for needle in (
     ":kagemusha-candidate-evidence-lab:compileDebugKotlin",
     ":kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin",
     "--offline",
+    "--rerun-tasks",
     "--max-workers=2",
     "GRADLE_RO_DEP_CACHE",
     "compile-gradle-read-only-cache",
+    "KAGEMUSHA_CANDIDATE_ALLOW_NETWORK_CACHE_WARM",
+    "warming the isolated Gradle dependency cache before the offline evidence build",
     "chmod -R u+w",
 ):
     if needle not in compile_check:

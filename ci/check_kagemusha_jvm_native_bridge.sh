@@ -123,7 +123,9 @@ fi
 USER_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 USER_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$USER_HOME_DIR")"
 GIT_BINARY="/usr/bin/git"
-RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"
+RUSTUP_BINARY="$("$PYTHON_BINARY" -I -S -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$USER_HOME_DIR/.cargo/bin/rustup")"
 MOBILE_CARGO_HOME="$USER_HOME_DIR/.cargo"
 MOBILE_RUSTUP_HOME="$USER_HOME_DIR/.rustup"
 MOBILE_GRADLE_HOME="$USER_HOME_DIR/.gradle"

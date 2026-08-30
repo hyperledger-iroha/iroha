@@ -508,6 +508,8 @@ jobs:
           echo "MOBILE_SDK_PACKAGE_OUT_DIR=$package_dir" >> "$GITHUB_ENV"
           echo "GRADLE_USER_HOME=$gradle_home" >> "$GITHUB_ENV"
       - name: Compile candidate Android lab main and instrumentation sources only
+        env:
+          KAGEMUSHA_CANDIDATE_ALLOW_NETWORK_CACHE_WARM: "1"
         run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Build host SoraFS reference native bridge
         run: cargo build --locked -p connect_norito_bridge

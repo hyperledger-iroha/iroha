@@ -275,6 +275,42 @@ mkdir -p "$PRIVATE_GRADLE_HOME/caches" "$PRIVATE_GRADLE_HOME/wrapper"
 chmod 0700 "$PRIVATE_GRADLE_HOME" "$PRIVATE_GRADLE_HOME/caches" "$PRIVATE_GRADLE_HOME/wrapper"
 SOURCE_GRADLE_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
 SOURCE_DEPENDENCY_CACHE="$SOURCE_GRADLE_HOME/caches/modules-2"
+ALLOW_NETWORK_CACHE_WARM="${KAGEMUSHA_CANDIDATE_ALLOW_NETWORK_CACHE_WARM:-0}"
+case "$ALLOW_NETWORK_CACHE_WARM" in
+  0|1) ;;
+  *)
+    echo "[kagemusha-candidate-compile] ERROR: KAGEMUSHA_CANDIDATE_ALLOW_NETWORK_CACHE_WARM must be exactly 0 or 1" >&2
+    exit 69
+    ;;
+esac
+if [[ ! -d "$SOURCE_DEPENDENCY_CACHE" && "$ALLOW_NETWORK_CACHE_WARM" == "1" ]]; then
+  echo "[kagemusha-candidate-compile] warming the isolated Gradle dependency cache before the offline evidence build"
+  (
+    cd "$ROOT_DIR/kotlin"
+    /usr/bin/env -i \
+      HOME="$HOME" \
+      PATH="$JAVA_HOME_RESOLVED/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      TMPDIR="${TMPDIR:-/tmp}" \
+      LANG="${LANG:-C.UTF-8}" \
+      JAVA_HOME="$JAVA_HOME_RESOLVED" \
+      ANDROID_HOME="$ANDROID_SDK_RESOLVED" \
+      ANDROID_SDK_ROOT="$ANDROID_SDK_RESOLVED" \
+      GRADLE_USER_HOME="$SOURCE_GRADLE_HOME" \
+      ./gradlew --no-daemon --max-workers=2 \
+      -PkagemushaCandidateCompileOnly=true \
+      -PkagemushaCandidateEvidenceLab=true \
+      -PkagemushaCandidateSha256="$CANDIDATE_SHA256" \
+      -PkagemushaCandidateStageSha256="$STAGE_SHA256" \
+      -PkagemushaCandidateEvidenceRoot="$EVIDENCE_ROOT" \
+      -PkagemushaCandidateSourceCommit="$SOURCE_COMMIT" \
+      -PkagemushaCandidateSourceTreeSha256="$SOURCE_TREE_SHA256" \
+      -PkagemushaCandidateGeneration=compile-only \
+      -PkagemushaCandidateSlotId=compile-only \
+      -PkagemushaCandidateLabNativeLibrary="$NATIVE_LIBRARY" \
+      :kagemusha-candidate-evidence-lab:compileDebugKotlin \
+      :kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin
+  )
+fi
 [[ -d "$SOURCE_DEPENDENCY_CACHE" ]] || {
   echo "[kagemusha-candidate-compile] ERROR: warmed Gradle dependency cache is required" >&2
   exit 69
@@ -314,7 +350,7 @@ fi
     ANDROID_SDK_ROOT="$ANDROID_SDK_RESOLVED" \
     GRADLE_USER_HOME="$PRIVATE_GRADLE_HOME" \
     GRADLE_RO_DEP_CACHE="$READ_ONLY_DEPENDENCY_CACHE" \
-    ./gradlew --no-daemon --offline --max-workers=2 \
+    ./gradlew --no-daemon --offline --rerun-tasks --max-workers=2 \
     -PkagemushaCandidateCompileOnly=true \
     -PkagemushaCandidateEvidenceLab=true \
     -PkagemushaCandidateSha256="$CANDIDATE_SHA256" \
