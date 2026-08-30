@@ -16302,6 +16302,12 @@ pub struct ToriiOperatorAuth {
     pub rate_per_minute: Option<u32>,
     /// Auth attempt burst tokens. None disables.
     pub burst: Option<u32>,
+    /// Per-kind capacity for expiry-bound challenges, sessions, and lockout identities.
+    #[config(default = "default_operator_auth_ephemeral_state_capacity()")]
+    pub ephemeral_state_capacity: NonZeroUsize,
+    /// Maximum number of persisted operator WebAuthn credentials.
+    #[config(default = "default_operator_auth_credential_capacity()")]
+    pub credential_capacity: NonZeroUsize,
     /// Failures before triggering a temporary lockout (0 disables).
     #[config(default = "defaults::torii::operator_auth::LOCKOUT_FAILURES")]
     pub lockout_failures: u32,
@@ -16362,8 +16368,20 @@ impl ToriiOperatorAuth {
             .or(super::defaults::torii::operator_auth::BURST)
             .and_then(std::num::NonZeroU32::new);
         let lockout_failures = std::num::NonZeroU32::new(self.lockout_failures);
-        let lockout_window = Duration::from_secs(self.lockout_window_secs.max(1));
-        let lockout_duration = Duration::from_secs(self.lockout_duration_secs.max(1));
+        if self.lockout_window_secs == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.lockout_window_secs must be greater than zero",
+            );
+        }
+        if self.lockout_duration_secs == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.operator_auth.lockout_duration_secs must be greater than zero",
+            );
+        }
+        let lockout_window = Duration::from_secs(self.lockout_window_secs);
+        let lockout_duration = Duration::from_secs(self.lockout_duration_secs);
         let webauthn = if self.enabled {
             self.webauthn.parse(emitter)
         } else {
@@ -16382,6 +16400,8 @@ impl ToriiOperatorAuth {
             tokens: self.tokens,
             rate_per_minute,
             burst,
+            ephemeral_state_capacity: self.ephemeral_state_capacity,
+            credential_capacity: self.credential_capacity,
             lockout: actual::OperatorAuthLockout {
                 failures: lockout_failures,
                 window: lockout_window,
@@ -18410,6 +18430,14 @@ fn default_app_auth_replay_cache_capacity() -> NonZeroUsize {
 fn default_operator_signature_replay_cache_capacity() -> NonZeroUsize {
     std::num::NonZeroUsize::new(defaults::torii::operator_signatures::REPLAY_CACHE_CAPACITY)
         .expect("operator signature replay cache capacity must be non-zero")
+}
+fn default_operator_auth_ephemeral_state_capacity() -> NonZeroUsize {
+    std::num::NonZeroUsize::new(defaults::torii::operator_auth::EPHEMERAL_STATE_CAPACITY)
+        .expect("operator auth ephemeral state capacity must be non-zero")
+}
+fn default_operator_auth_credential_capacity() -> NonZeroUsize {
+    std::num::NonZeroUsize::new(defaults::torii::operator_auth::CREDENTIAL_CAPACITY)
+        .expect("operator auth credential capacity must be non-zero")
 }
 fn default_webhook_queue_capacity() -> NonZeroUsize {
     std::num::NonZeroUsize::new(defaults::torii::WEBHOOK_QUEUE_CAPACITY)

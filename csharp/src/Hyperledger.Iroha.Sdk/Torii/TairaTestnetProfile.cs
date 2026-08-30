@@ -39,13 +39,19 @@ public static class TairaTestnetProfile
         ArgumentNullException.ThrowIfNull(deployedNetworkId);
         return new ToriiClientOptions
         {
-            LocalSigningContext = new ToriiLocalSigningContext(deployedNetworkId),
+            NetworkId = deployedNetworkId,
         };
     }
 
     /// <summary>Creates a Taira Torii client with an exact caller-supplied network identity.</summary>
+    public static ToriiClient CreateClient(NetworkId deployedNetworkId) =>
+        new(ToriiBaseUri, CreateClientOptions(deployedNetworkId));
+
+    /// <summary>
+    /// Creates a Taira Torii client over a caller-owned transport for read-only operations.
+    /// </summary>
     public static ToriiClient CreateClient(
         NetworkId deployedNetworkId,
-        HttpClient? httpClient = null) =>
+        HttpClient httpClient) =>
         new(ToriiBaseUri, httpClient, CreateClientOptions(deployedNetworkId));
 }

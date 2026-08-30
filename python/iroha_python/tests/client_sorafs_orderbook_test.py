@@ -74,9 +74,11 @@ class SseStubResponse(StubResponse):
         self.headers = CaseInsensitiveDict({"Content-Type": "text/event-stream"})
         self._lines = lines
 
-    def iter_lines(self, decode_unicode: bool = False, **kwargs: Any):
+    def iter_content(self, chunk_size: int = 1, decode_unicode: bool = False):
+        del chunk_size
+        assert decode_unicode is False
         for line in self._lines:
-            yield line if decode_unicode else line.encode("utf-8")
+            yield line.encode("utf-8") + b"\n"
 
 
 class FakeWebSocket:

@@ -1164,25 +1164,34 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
             .get("action")
             .ok_or(ControlError::InvalidField("action"))?,
     )?;
-    let valid_coordinates = if kind == MessageKind::PayloadChunk {
-        height.is_none()
-            && view.is_none()
-            && block_hash.is_none()
-            && chunk_index.is_some()
-            && proposal_binding_valid
-            && (manifest_hash.is_some() || proposal_height.is_some())
-            && (manifest_hash.is_some() || action == Action::Hold)
-    } else {
-        height.is_some_and(|height| height > 0)
-            && view.is_some()
-            && manifest_hash.is_none()
-            && chunk_index.is_none()
-            && proposal_height.is_none()
-            && proposal_view.is_none()
+    let valid_coordinates = match kind {
+        MessageKind::PayloadChunk => {
+            height.is_none()
+                && view.is_none()
+                && block_hash.is_none()
+                && chunk_index.is_some()
+                && proposal_binding_valid
+                && (manifest_hash.is_some() || proposal_height.is_some())
+                && (manifest_hash.is_some() || action == Action::Hold)
+        }
+        MessageKind::CommitCertificateRequest => {
+            height.is_some_and(|height| height > 0)
+                && view.is_none()
+                && block_hash.is_none()
+                && manifest_hash.is_none()
+                && chunk_index.is_none()
+                && proposal_height.is_none()
+                && proposal_view.is_none()
+        }
+        _ => {
+            height.is_some_and(|height| height > 0)
+                && view.is_some()
+                && manifest_hash.is_none()
+                && chunk_index.is_none()
+                && proposal_height.is_none()
+                && proposal_view.is_none()
+        }
     };
-    if kind == MessageKind::CommitCertificateRequest {
-        return Err(ControlError::KindHasNoExactRound);
-    }
     if !valid_coordinates {
         return Err(ControlError::InvalidField("coordinates"));
     }
@@ -1944,7 +1953,6 @@ pub(crate) enum ControlError {
     ReleaseBusy,
     QueueCapacityBelowHeld,
     DrainWithExplicitRelease,
-    KindHasNoExactRound,
     ReleaseNotStrictlyIncreasing,
     UnknownReleaseSequence,
     ReleaseEntryDisappeared,
@@ -1986,7 +1994,6 @@ impl ControlError {
             Self::ReleaseBusy => "release_busy",
             Self::QueueCapacityBelowHeld => "queue_capacity_below_held",
             Self::DrainWithExplicitRelease => "drain_with_explicit_release",
-            Self::KindHasNoExactRound => "kind_has_no_exact_round",
             Self::ReleaseNotStrictlyIncreasing => "release_not_strictly_increasing",
             Self::UnknownReleaseSequence => "unknown_release_sequence",
             Self::ReleaseEntryDisappeared => "release_entry_disappeared",

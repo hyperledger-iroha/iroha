@@ -123,7 +123,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc { number: 224, args: "r10=&Blob(TLV)", ret: "ptr (r10)", gas: "asset:gas/G_input_publish@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 240, args: "r10=bytes:u64", ret: "ptr (r10)", gas: "asset:gas/G_alloc@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 241, args: "r10=&Name", ret: "ptr (&Tlv)", gas: "asset:gas/G_get_pub@ivm.core/v2 + bytes" },
-    crate::syscalls::SyscallDoc { number: 244, args: "-", ret: "r10=0/1", gas: "asset:gas/G_prove@ivm.core/v2" },
+    crate::syscalls::SyscallDoc { number: 244, args: "-", ret: "r10=ptr (&NoritoBytes(ExecutionSummary)), r11=status:u64", gas: "asset:gas/G_execution_summary@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 245, args: "r10=bytes:u64", ret: "u64=new_limit", gas: "asset:gas/G_grow_heap@ivm.core/v2 per page" },
     crate::syscalls::SyscallDoc { number: 246, args: "r10=&NoritoBytes(OpenVerifyEnvelope)", ret: "r10=0/1, r11=status:u64", gas: "asset:gas/G_verify_proof@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 247, args: "r10=addr:u64, r11=out:u64, r12=root_out?:u64", ret: "u64=len", gas: "asset:gas/G_mpath@ivm.core/v2 + len" },

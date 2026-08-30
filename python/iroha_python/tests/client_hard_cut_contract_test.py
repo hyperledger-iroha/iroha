@@ -25,8 +25,9 @@ _CANONICAL_NETWORK_ID = (
 )
 
 
-class FakeSession:
+class FakeSession(requests.Session):
     def __init__(self, responses: list[requests.Response]):
+        super().__init__()
         self.responses = responses
         self.calls: list[dict[str, object]] = []
 

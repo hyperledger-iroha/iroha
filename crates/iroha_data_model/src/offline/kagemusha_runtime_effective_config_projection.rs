@@ -33,7 +33,8 @@ pub const KAGEMUSHA_V4_RUNTIME_EFFECTIVE_CONFIG_SHA256_DOMAIN_V1: &[u8] =
 pub struct KagemushaV4RuntimeValidatorProjectionV1 {
     /// Canonical BLS validator identity.
     pub validator_id: PeerId,
-    /// Effective public P2P address.
+    /// Effective public P2P address; a hostname must use canonical ASCII IDNA,
+    /// non-IP spelling without a trailing root dot.
     pub public_address: SocketAddr,
     /// Exact `PoP` retained by the frozen height-one context.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
@@ -42,8 +43,23 @@ pub struct KagemushaV4RuntimeValidatorProjectionV1 {
 
 impl KagemushaV4RuntimeValidatorProjectionV1 {
     fn validate(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
+        let host_is_canonical = match &self.public_address {
+            SocketAddr::Host(address) => {
+                let host: &str = address.host.as_ref();
+                let unbracketed_host = host
+                    .strip_prefix('[')
+                    .and_then(|host| host.strip_suffix(']'))
+                    .unwrap_or(host);
+                crate::name::canonicalize_domain_label(host)
+                    .is_ok_and(|canonical| canonical == host)
+                    && !host.ends_with('.')
+                    && unbracketed_host.parse::<std::net::IpAddr>().is_err()
+            }
+            SocketAddr::Ipv4(_) | SocketAddr::Ipv6(_) => true,
+        };
         if self.validator_id.public_key().try_algorithm() != Ok(Algorithm::BlsNormal)
             || self.public_address.port() == 0
+            || !host_is_canonical
             || self.bls_pop.is_empty()
             || self.bls_pop.len() > MAX_VALIDATOR_POP_BYTES
             || iroha_crypto::bls_normal_pop_verify(self.validator_id.public_key(), &self.bls_pop)
@@ -120,7 +136,8 @@ impl KagemushaV4RuntimeEffectiveConfigProjectionV1 {
     /// # Errors
     ///
     /// Returns [`KagemushaPromotionReceiptValidationError`] for a non-validator,
-    /// zero commitment, malformed `PoP`, or non-canonical validator order.
+    /// zero commitment, malformed `PoP`, non-canonical validator order, or a
+    /// non-canonical or duplicate public endpoint.
     pub fn validate(&self) -> Result<(), KagemushaPromotionReceiptValidationError> {
         let zero = Hash::prehashed([0; Hash::LENGTH]);
         if !self.is_validator
@@ -134,9 +151,12 @@ impl KagemushaV4RuntimeEffectiveConfigProjectionV1 {
             ));
         }
         let mut previous = None;
+        let mut public_addresses = std::collections::BTreeSet::new();
         for validator in &self.validators {
             validator.validate()?;
-            if previous.is_some_and(|id: &PeerId| id >= &validator.validator_id) {
+            if previous.is_some_and(|id: &PeerId| id >= &validator.validator_id)
+                || !public_addresses.insert(validator.public_address.to_literal())
+            {
                 return Err(KagemushaPromotionReceiptValidationError::InvalidField(
                     "validator_qualification.runtime_effective_config.validators",
                 ));
@@ -144,5 +164,117 @@ impl KagemushaV4RuntimeEffectiveConfigProjectionV1 {
             previous = Some(&validator.validator_id);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::KeyPair;
+
+    fn valid_projection() -> KagemushaV4RuntimeEffectiveConfigProjectionV1 {
+        let mut keys = [0x91_u8, 0x92, 0x93, 0x94]
+            .into_iter()
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let validators = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| KagemushaV4RuntimeValidatorProjectionV1 {
+                validator_id: PeerId::new(key.public_key().clone()),
+                public_address: format!("127.0.0.1:{}", 16_000 + index)
+                    .parse()
+                    .expect("fixture validator address"),
+                bls_pop: iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator PoP"),
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("exactly four runtime validators");
+        KagemushaV4RuntimeEffectiveConfigProjectionV1 {
+            chain: ChainId::from("kagemusha-runtime-projection-test"),
+            chain_discriminant: 42,
+            is_validator: true,
+            genesis_public_key: KeyPair::from_seed(vec![0x90; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+            genesis_expected_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"genesis header",
+            )),
+            validators,
+            sumeragi_config_fingerprint: Hash::new(b"effective Sumeragi V2 config"),
+            genesis_context: SumeragiV2GenesisContextParameters::recommended(),
+            kagemusha_max_decoded_bytes: 64 * 1024 * 1024,
+        }
+    }
+
+    #[test]
+    fn runtime_projection_rejects_duplicate_public_validator_addresses() {
+        let mut projection = valid_projection();
+        projection.validate().expect("valid runtime projection");
+
+        projection.validators[1].public_address = projection.validators[0].public_address.clone();
+
+        assert!(projection.validate().is_err());
+        assert!(projection.consensus_sha256().is_err());
+    }
+
+    #[test]
+    fn runtime_projection_requires_canonical_host_addresses() {
+        let mut projection = valid_projection();
+        projection.validators[0].public_address = "validator.example:16000"
+            .parse()
+            .expect("canonical fixture host address");
+        projection
+            .validate()
+            .expect("lower-case host address is canonical");
+
+        projection.validators[0].public_address = "Validator.EXAMPLE:16000"
+            .parse()
+            .expect("mixed-case fixture host address");
+        assert!(projection.validate().is_err());
+        assert!(projection.consensus_sha256().is_err());
+
+        projection.validators[0].public_address =
+            SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
+                host: "éxample.test".into(),
+                port: 16_000,
+            });
+        assert!(
+            projection.validate().is_err(),
+            "Unicode host spelling must use its canonical ASCII IDNA form",
+        );
+    }
+
+    #[test]
+    fn runtime_projection_rejects_semantically_duplicate_address_variants() {
+        let mut projection = valid_projection();
+        projection.validators[1].public_address =
+            SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
+                host: "127.0.0.1".into(),
+                port: 16_000,
+            });
+
+        assert!(projection.validate().is_err());
+        assert!(projection.consensus_sha256().is_err());
+    }
+
+    #[test]
+    fn runtime_projection_rejects_numeric_host_variants_without_a_duplicate() {
+        let mut projection = valid_projection();
+        projection.validators[0].public_address =
+            SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
+                host: "127.0.0.1".into(),
+                port: 16_000,
+            });
+        assert!(projection.validate().is_err());
+
+        projection.validators[0].public_address =
+            SocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
+                host: "[::1]".into(),
+                port: 16_000,
+            });
+        assert!(projection.validate().is_err());
     }
 }

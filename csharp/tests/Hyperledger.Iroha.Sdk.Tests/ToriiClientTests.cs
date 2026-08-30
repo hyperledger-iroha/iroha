@@ -170,7 +170,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(
             HttpMethod.Get,
@@ -180,6 +181,66 @@ public sealed partial class ToriiClientTests
         Assert.Equal(path, handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.False(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
         Assert.False(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
+    }
+
+    [Fact]
+    public void CanonicalCredentialsRejectUnverifiedInjectedTransportAtConstruction()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("unverified signed request reached HTTP dispatch"));
+        var error = Assert.Throws<ArgumentException>(() => new ToriiClient(
+                new Uri("https://torii.example"),
+                new HttpClient(handler),
+                new ToriiClientOptions
+                {
+                    NetworkId = OnboardingFixtureNetworkId,
+                    CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                        CanonicalAccountId,
+                        CanonicalPrivateKeySeed),
+                }));
+
+        Assert.Equal("options", error.ParamName);
+        Assert.Contains("SDK-managed one-shot transport", error.Message, StringComparison.Ordinal);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public void BearerCredentialsRejectUnverifiedInjectedTransportAtConstruction()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("unverified authenticated request reached HTTP dispatch"));
+        using var httpClient = new HttpClient(handler);
+
+        var error = Assert.Throws<ArgumentException>(() => new ToriiClient(
+            new Uri("https://torii.example"),
+            httpClient,
+            new ToriiClientOptions { BearerToken = "dev-token" }));
+
+        Assert.Equal("options", error.ParamName);
+        Assert.Contains("SDK-managed one-shot transport", error.Message, StringComparison.Ordinal);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public void CallerOwnedHttpClientRejectsDefaultOnboardingTokenWithoutMutation()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("request must not be dispatched"));
+        using var httpClient = new HttpClient(handler);
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation(
+            ToriiClient.AccountOnboardingTokenHeaderName,
+            ["stale-default-token-one", "stale-default-token-two"]);
+
+        var error = Assert.Throws<ArgumentException>(() => new ToriiClient(
+            new Uri("https://torii.example"),
+            httpClient));
+
+        Assert.Equal("httpClient", error.ParamName);
+        Assert.Equal(
+            ["stale-default-token-one", "stale-default-token-two"],
+            httpClient.DefaultRequestHeaders.GetValues(
+                ToriiClient.AccountOnboardingTokenHeaderName));
+        Assert.Null(handler.LastRequest);
     }
 
     [Theory]
@@ -195,11 +256,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(
             HttpMethod.Get,
@@ -242,47 +304,36 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public void ToriiClientOptionsSnapshotJsonSerializerOptionsOnInitAccessAndClientConstruction()
+    public void ToriiClientPublicSurfaceExposesOnlyTypedV1TransportInputs()
     {
-        var sourceOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            WriteIndented = true,
-        };
-        sourceOptions.Converters.Add(new SerializerProbeConverter());
+        var optionProperties = typeof(ToriiClientOptions)
+            .GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            .Select(static property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
-        var options = new ToriiClientOptions
-        {
-            BearerToken = "dev-token",
-            JsonSerializerOptions = sourceOptions,
-        };
-
-        sourceOptions.WriteIndented = false;
-        sourceOptions.Converters.Clear();
-
-        Assert.True(options.JsonSerializerOptions.WriteIndented);
-        Assert.IsType<SerializerProbeConverter>(Assert.Single(options.JsonSerializerOptions.Converters));
-
-        var exposedOptions = options.JsonSerializerOptions;
-        exposedOptions.WriteIndented = false;
-        exposedOptions.Converters.Clear();
-
-        Assert.True(options.JsonSerializerOptions.WriteIndented);
-        Assert.IsType<SerializerProbeConverter>(Assert.Single(options.JsonSerializerOptions.Converters));
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), options: options);
-
-        Assert.NotSame(options, client.Options);
-        Assert.Equal("dev-token", client.Options.BearerToken);
-        Assert.True(client.Options.JsonSerializerOptions.WriteIndented);
-        Assert.IsType<SerializerProbeConverter>(Assert.Single(client.Options.JsonSerializerOptions.Converters));
-
-        var exposedClientOptions = client.Options.JsonSerializerOptions;
-        exposedClientOptions.WriteIndented = false;
-        exposedClientOptions.Converters.Clear();
-
-        Assert.True(client.Options.JsonSerializerOptions.WriteIndented);
-        Assert.IsType<SerializerProbeConverter>(Assert.Single(client.Options.JsonSerializerOptions.Converters));
-        Assert.Throws<ArgumentNullException>(() => new ToriiClientOptions { JsonSerializerOptions = null! });
+        Assert.Equal(
+            ["BearerToken", "CanonicalRequestCredentials", "NetworkId"],
+            optionProperties);
+        Assert.Null(typeof(ToriiClient).GetProperty("HttpClient"));
+        Assert.Null(typeof(ToriiClient).GetProperty("Options"));
+        Assert.Null(typeof(ToriiClient).GetMethod("GetAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("GetJsonDocumentAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("PostAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("PostJsonDocumentAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("SendAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("OpenEventSseAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("OpenExplorerBlocksSseAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("OpenExplorerTransactionsSseAsync"));
+        Assert.Null(typeof(ToriiClient).GetMethod("OpenExplorerInstructionsSseAsync"));
+        Assert.Null(typeof(ToriiClientOptions).Assembly.GetType(
+            "Hyperledger.Iroha.Torii.ToriiLocalSigningContext"));
+        Assert.Null(typeof(AccountAddress).Assembly.GetType(
+            "Hyperledger.Iroha.Address.AddressDisplayFormats"));
+        Assert.Null(typeof(Hyperledger.Iroha.Numeric.NumericV1).GetMethod("EncodeIntJson"));
+        Assert.Null(typeof(Hyperledger.Iroha.Numeric.NumericV1).GetMethod("EncodeDecimalJson"));
+        Assert.Null(typeof(Hyperledger.Iroha.Numeric.NumericV1).GetMethod("EncodeQuantityJson"));
+        Assert.Null(typeof(NoritoHeader).GetMethod("Deconstruct"));
     }
 
     [Theory]
@@ -325,12 +376,16 @@ public sealed partial class ToriiClientTests
         var options = new ToriiClientOptions
         {
             BearerToken = "dev-token",
-            LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+            NetworkId = OnboardingFixtureNetworkId,
             CanonicalRequestCredentials = new CanonicalRequestCredentials(
                 CanonicalAccountId,
                 CanonicalPrivateKeySeed),
         };
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler), options);
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
         using var document = await client.GetJsonDocumentAsync("/v1/query", "gas_units=100&cursor_mode=stored", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(document.RootElement.GetProperty("ok").GetBoolean());
@@ -364,23 +419,26 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task PostJsonDocumentAsyncRejectsDuplicateJsonResponseKeys()
+    public async Task GetJsonDocumentAsyncRejectsUndeclaredResponsesBeyondEightMiB()
     {
-        using var handler = new RecordingHandler(request =>
+        using var handler = new RecordingHandler(_ =>
         {
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/v1/raw", request.RequestUri!.AbsolutePath);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""{"accepted":true,"accepted":false}"""),
-            };
+            var content = new StreamContent(new MemoryStream(
+                new byte[8 * 1024 * 1024 + 1],
+                writable: false));
+            content.Headers.ContentLength = null;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.PostJsonDocumentAsync("/v1/raw", ValidVerifyingKeyRegisterRequest(), cancellationToken: TestContext.Current.CancellationToken));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.GetJsonDocumentAsync(
+                "/v1/query",
+                cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("accepted must not appear more than once", error.Message);
+        Assert.Contains("8388608-byte limit", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -450,11 +508,12 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.GetJsonDocumentAsync("/v1/query", "gas_units=100", cancellationToken: TestContext.Current.CancellationToken));
@@ -480,11 +539,12 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = bearerToken,
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var document = await client.GetJsonDocumentAsync("/v1/query", "gas_units=100", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -542,11 +602,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(HttpMethod.Get, path!, cancellationToken: TestContext.Current.CancellationToken));
 
@@ -566,11 +627,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(new HttpMethod(method), "/v1/query", cancellationToken: TestContext.Current.CancellationToken));
@@ -593,11 +655,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(new HttpMethod(method), "/v1/query", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -639,11 +702,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(HttpMethod.Get, "/v1/query", query: query, cancellationToken: TestContext.Current.CancellationToken));
@@ -682,11 +746,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(HttpMethod.Get, "/v1/query", accept: accept, cancellationToken: TestContext.Current.CancellationToken));
@@ -711,11 +776,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(HttpMethod.Get, "/v1/query", accept: accept, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -736,11 +802,12 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(
             HttpMethod.Get,
@@ -772,11 +839,12 @@ public sealed partial class ToriiClientTests
             new ToriiClientOptions
             {
                 BearerToken = "dev-token",
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(
@@ -831,8 +899,8 @@ public sealed partial class ToriiClientTests
                   "archive_version": 1,
                   "blob_class_custom_id": 1001,
                   "checkpoint_contract_v1": true,
-                  "checkpoint_plan_v1": true,
-                  "checkpoint_publish_v1": true,
+                  "checkpoint_plan_v1": false,
+                  "checkpoint_publish_v1": false,
                   "codec": "application/x-iroha-query-shard+norito+zstd",
                   "compression": "zstd",
                   "da_v1_enabled": false,
@@ -920,8 +988,8 @@ public sealed partial class ToriiClientTests
         var projection = new ToriiNodeProjectionCapabilities
         {
             CheckpointContractV1 = true,
-            CheckpointPlanV1 = true,
-            CheckpointPublishV1 = true,
+            CheckpointPlanV1 = false,
+            CheckpointPublishV1 = false,
             ShardCatalogV1 = true,
             ArchiveExportV1 = true,
             ArchiveVersion = 1,
@@ -1337,9 +1405,9 @@ public sealed partial class ToriiClientTests
         };
         yield return new object?[]
         {
-            "query.projection.checkpoint_publish_v1",
-            NodeCapabilitiesResponseJson("query.projection.checkpoint_publish_v1", false),
-            "must match",
+            "query.projection.checkpoint_plan_v1",
+            NodeCapabilitiesResponseJson("query.projection.checkpoint_plan_v1", true),
+            "must be false",
         };
         yield return new object?[]
         {
@@ -7139,11 +7207,12 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -9306,7 +9375,9 @@ public sealed partial class ToriiClientTests
         });
         using var client = new ToriiClient(
             new Uri("https://torii.example"),
-            new HttpClient(handler));
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var admission = await client.RegisterSoraFsPinManifestAsync(
             transaction,
@@ -9333,7 +9404,9 @@ public sealed partial class ToriiClientTests
             JsonResponse(response.ToJsonString(), HttpStatusCode.Accepted));
         using var client = new ToriiClient(
             new Uri("https://torii.example"),
-            new HttpClient(handler));
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.RegisterSoraFsPinManifestAsync(
@@ -9380,7 +9453,9 @@ public sealed partial class ToriiClientTests
             return response;
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
         using var response = await client.OpenSoraFsCidContentAsync("bafyroot", cancellationToken: TestContext.Current.CancellationToken);
         var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken: TestContext.Current.CancellationToken);
 
@@ -9406,7 +9481,9 @@ public sealed partial class ToriiClientTests
             return response;
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
         var content = await client.GetSoraFsCidContentAsync("bafynested", "assets/app main.js", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("/sorafs/cid/bafynested/assets/app%20main.js", handler.LastRequest!.RequestUri!.AbsolutePath);
@@ -9489,12 +9566,59 @@ public sealed partial class ToriiClientTests
             Content = new ByteArrayContent("payload"u8.ToArray()),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
         var content = await client.GetSoraFsCidContentAsync("bafyroot", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("/sorafs/cid/bafyroot", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Null(content.ContentCid);
         Assert.Equal("payload", System.Text.Encoding.UTF8.GetString(content.Bytes));
+    }
+
+    [Fact]
+    public async Task GetSoraFsCidContentAsyncRequiresAnExplicitBoundForBufferedReads()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent("payload"u8.ToArray()),
+        });
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var content = await client.GetSoraFsCidContentAsync(
+            "bafyroot",
+            maximumBytes: 7,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("payload", System.Text.Encoding.UTF8.GetString(content.Bytes));
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.GetSoraFsCidContentAsync(
+                "bafyroot",
+                maximumBytes: 6,
+                cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains("6-byte limit", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetSoraFsCidContentAsyncRejectsBufferLimitsAboveSixteenMiBBeforeDispatch()
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("oversized buffered read reached HTTP dispatch"));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            client.GetSoraFsCidContentAsync(
+                "bafyroot",
+                maximumBytes: 16 * 1024 * 1024 + 1,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("maximumBytes", error.ParamName);
+        Assert.Contains("16777216 bytes", error.Message, StringComparison.Ordinal);
+        Assert.Null(handler.LastRequest);
     }
 
     public static IEnumerable<object?[]> InvalidSoraFsContentCidHeaders()
@@ -9653,7 +9777,11 @@ public sealed partial class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
         using var response = await client.SubmitSignedQueryAsync(queryBytes, query: "limit=1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("Singular", response.RootElement.GetProperty("kind").GetString());
@@ -9691,7 +9819,11 @@ public sealed partial class ToriiClientTests
                 }
                 """),
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.SubmitSignedQueryAsync(queryBytes, query: "limit=1", cancellationToken: TestContext.Current.CancellationToken));
@@ -9728,7 +9860,6 @@ public sealed partial class ToriiClientTests
     {
         foreach (var methodName in new[]
         {
-            nameof(ToriiClient.OpenEventSseAsync),
             nameof(ToriiClient.StreamEventsAsync),
             nameof(ToriiClient.StreamPipelineEventsAsync),
             nameof(ToriiClient.StreamProofEventsAsync),
@@ -13131,7 +13262,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 }
                 """);
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options: null,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var details = await client.GetPipelineTransactionDetailsAsync(
             signedQuery,
@@ -13537,12 +13672,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         using var httpClient = new HttpClient(handler);
         httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Token", "global-api-token");
-        httpClient.DefaultRequestHeaders.TryAddWithoutValidation(
-            ToriiClient.AccountOnboardingTokenHeaderName,
-            ["stale-default-token-one", "stale-default-token-two"]);
         using var client = new ToriiClient(new Uri("https://torii.example"), httpClient);
-        Assert.False(httpClient.DefaultRequestHeaders.Contains(
-            ToriiClient.AccountOnboardingTokenHeaderName));
         var receipt = await client.PlanAccountOnboardingAsync(new ToriiAccountOnboardingPlanRequest
         {
             Alias = "Merchant@Banka.Paynet",
@@ -14207,7 +14337,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(ToriiTransactionHashResponseJson(field, value)),
+            Content = new StringContent(ToriiTransactionHashResponseJson(operation, field, value)),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -16351,7 +16481,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 request,
                 cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("LocalSigningContext", error.Message);
+        Assert.Contains(nameof(ToriiClientOptions.NetworkId), error.Message);
     }
 
     [Fact]
@@ -19579,6 +19709,24 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.DoesNotContain("\ufffd", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task SendAsyncBoundsErrorBodies()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)
+        {
+            Content = new ByteArrayContent(new byte[64 * 1024 + 1]),
+        });
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var exception = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            client.GetHealthAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.BadGateway, exception.StatusCode);
+        Assert.Equal("<response body exceeds the 65536-byte limit>", exception.ResponseBody);
+    }
+
     private static Task InvokeContractCodeReadOperationAsync(
         ToriiClient client,
         string operation,
@@ -22408,11 +22556,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(OnboardingFixtureNetworkId),
+                NetworkId = OnboardingFixtureNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
     }
 
     private static ToriiClient CreateVerifyingKeyClient(RecordingHandler handler)
@@ -22422,8 +22571,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
+                NetworkId = NetworkId.Parse(CanonicalNetworkId),
             });
     }
 
@@ -23039,8 +23187,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["archive_version"] = 1,
             ["blob_class_custom_id"] = 1001,
             ["checkpoint_contract_v1"] = true,
-            ["checkpoint_plan_v1"] = true,
-            ["checkpoint_publish_v1"] = true,
+            ["checkpoint_plan_v1"] = false,
+            ["checkpoint_publish_v1"] = false,
             ["codec"] = "application/x-iroha-query-shard+norito+zstd",
             ["compression"] = "zstd",
             ["da_v1_enabled"] = false,
@@ -28859,8 +29007,18 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static string ToriiTransactionHashResponseJson(string field, string value)
+    private static string ToriiTransactionHashResponseJson(
+        string operation,
+        string field,
+        string value)
     {
+        if (string.Equals(operation, "contract-call", StringComparison.Ordinal))
+        {
+            var response = ContractCallResponseJsonObject();
+            response[field] = value;
+            return response.ToJsonString();
+        }
+
         return new JsonObject
         {
             ["ok"] = true,
@@ -28948,8 +29106,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new HttpClient(handler),
             new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(CanonicalNetworkId)),
+                NetworkId = NetworkId.Parse(CanonicalNetworkId),
             });
 
     private static ToriiContractCallRequest TrustedContractCallRequest(
@@ -31227,20 +31384,4 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         }
     }
 
-    private sealed record SerializerProbe(string Value);
-
-    private sealed class SerializerProbeConverter : System.Text.Json.Serialization.JsonConverter<SerializerProbe>
-    {
-        public override SerializerProbe Read(
-            ref Utf8JsonReader reader,
-            Type typeToConvert,
-            JsonSerializerOptions options) =>
-            throw new NotSupportedException();
-
-        public override void Write(
-            Utf8JsonWriter writer,
-            SerializerProbe value,
-            JsonSerializerOptions options) =>
-            writer.WriteStringValue(value.Value);
-    }
 }

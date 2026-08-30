@@ -31,10 +31,10 @@ public sealed partial class ToriiClient
         CancellationToken cancellationToken)
     {
         RequireCanonicalRequestCredentials(path);
-        if (Options.LocalSigningContext is null)
+        if (Options.NetworkId is null)
         {
             throw new InvalidOperationException(
-                $"Route `{path}` requires ToriiClientOptions.LocalSigningContext with the exact NetworkId.");
+                $"Route `{path}` requires ToriiClientOptions.NetworkId.");
         }
 
         var expectedUri = BuildRequestUri(path, query: null);

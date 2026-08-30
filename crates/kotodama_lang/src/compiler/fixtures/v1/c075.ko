@@ -1,8 +1,8 @@
 
 seiyaku CompilerFixture {
 
-view fn proof() -> bytes {
-  return crypto::prove_execution();
+view fn summary() -> bytes {
+  return crypto::execution_summary();
 }
 
 }

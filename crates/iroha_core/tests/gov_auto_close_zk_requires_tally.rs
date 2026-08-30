@@ -79,9 +79,7 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
         matches!(
             event.as_data_event(),
             Some(DataEvent::Governance(
-                GovernanceEvent::ReferendumDecided(_)
-                    | GovernanceEvent::ProposalApproved(_)
-                    | GovernanceEvent::ProposalRejected(_)
+                GovernanceEvent::ReferendumDecided(_) | GovernanceEvent::ProposalRejected(_)
             ))
         )
     });

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
+import { AccountAddress } from "../src/address.js";
+import { encodeAccountIdNoritoValue } from "../src/norito.js";
 import {
   SCCP_REPLAY_BOUNDARIES_V1,
   SCCP_REPLAY_SMT_DEPTH_V1,
@@ -14,6 +16,36 @@ import {
 
 const repeat = (byte, length) => `0x${byte.repeat(length)}`;
 const ZERO = repeat("00", 32);
+const SORA_PUBLIC_KEY = Buffer.from(
+  "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
+  "hex",
+);
+const SORA_ACCOUNT = encodeAccountIdNoritoValue(
+  AccountAddress.fromAccount({
+    publicKey: SORA_PUBLIC_KEY,
+  }).toI105(),
+);
+const SORA_MULTISIG_ACCOUNT = encodeAccountIdNoritoValue(
+  new AccountAddress(
+    { version: 0, classId: 1, normVersion: 1, extFlag: false },
+    {
+      tag: 1,
+      version: 1,
+      threshold: 2,
+      members: [
+        { curve: 1, weight: 1, publicKey: SORA_PUBLIC_KEY },
+        {
+          curve: 1,
+          weight: 1,
+          publicKey: Buffer.from(
+            "7EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+            "hex",
+          ),
+        },
+      ],
+    },
+  ).toI105(),
+);
 const GOLDEN = JSON.parse(
   fs.readFileSync(new URL("../../../fixtures/sccp/replay_forest_v1.json", import.meta.url), "utf8"),
 );
@@ -110,4 +142,41 @@ test("replay domains reject testnets, wrong actors, and amount overflow", () => 
     () => sccpReplayRecordDigestV1({ ...RECORD, amount: (1n << 128n).toString() }),
     /exceeds u128/u,
   );
+});
+
+test("SORA replay principals require exact compact AccountId bytes", () => {
+  const valid = {
+    ...RECORD,
+    principal: { kind: "sora_account", canonicalBytes: SORA_ACCOUNT },
+  };
+  assert.match(sccpReplayRecordDigestV1(valid), /^0x[0-9a-f]{64}$/u);
+  assert.match(
+    sccpReplayRecordDigestV1({
+      ...RECORD,
+      principal: { kind: "sora_account", canonicalBytes: SORA_MULTISIG_ACCOUNT },
+    }),
+    /^0x[0-9a-f]{64}$/u,
+  );
+
+  const malformed = [
+    Uint8Array.of(0),
+    SORA_ACCOUNT.slice(0, -1),
+    Uint8Array.from([...SORA_ACCOUNT, 0]),
+    Uint8Array.from([
+      ...SORA_ACCOUNT.slice(0, 4),
+      SORA_ACCOUNT[4] | 0x80,
+      0,
+      ...SORA_ACCOUNT.slice(5),
+    ]),
+  ];
+  for (const canonicalBytes of malformed) {
+    assert.throws(
+      () =>
+        sccpReplayRecordDigestV1({
+          ...RECORD,
+          principal: { kind: "sora_account", canonicalBytes },
+        }),
+      /exact canonical SORA AccountId/u,
+    );
+  }
 });

@@ -8,7 +8,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 
 /** Exact request payload for {@code POST /v1/bridge/proofs/submit}. */
-public final class SccpDestinationProofSubmitRequest {
+final class SccpDestinationProofSubmitRequest {
   private final String authority;
   private final FeePaymentIntent feePayment;
   private final String destinationProofB64;

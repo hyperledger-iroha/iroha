@@ -2376,7 +2376,7 @@ fn durable_lane_payload_availability_for_kura(
     proposal: &LaneBlockProposalV1,
     signer: &KeyPair,
 ) -> DurableLanePayloadAvailabilityCertificateV1 {
-    let body = proposal.vote_body(Phase::Prepare);
+    let body = proposal.vote_body(CertPhase::Prepare);
     let signature = Signature::try_new(signer.private_key(), &body.signature_preimage())
         .expect("availability READY signature");
     let validator_set_pops =

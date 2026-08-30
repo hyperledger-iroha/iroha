@@ -40,7 +40,7 @@ public enum AtomicPrivateSettlementOperationV1 {
       AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
       Set.of("approval"),
       2 * 1024 * 1024),
-  /** Submit one sponsor-signed exact global finalization carrier. */
+  /** Submit one sponsor-signed exact global finalization or abort carrier. */
   BUNDLE_SUBMIT(
       "/v1/nexus/private-settlements/bundles",
       AtomicPrivateSettlementAuthV1.SPONSOR,

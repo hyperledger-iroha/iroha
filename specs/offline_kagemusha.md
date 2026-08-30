@@ -34,9 +34,9 @@ command's validation result rather than changing node admission.
 Every request binds the exact genesis-derived network id, asset definition,
 authoritative asset scale, and an unsigned `u128` atomic-unit amount. The scale
 is read from the live asset definition. Decimal conversion is exact: excess
-precision, negative values, zero payments, and overflow are rejected. Top-up
-debit, note conservation, and redemption credit use the same scaled `Quantity`
-value.
+precision, negative values, zero payments, unsupported decoded scales, and
+overflow are rejected without panicking. Top-up debit, note conservation, and
+redemption credit use the same fallible scaled `Quantity` conversion.
 
 A spend consumes one or two canonically ordered parent notes and creates one
 recipient output plus optional sender change. The transition proves, and every
@@ -47,9 +47,11 @@ sum(inputs) = recipient + change
 ```
 
 The same fixed Eq/Ep circuit and key material accepts initialization, one
-parent, and two parents. Two-parent append is the only merge form: it binds the
-ordered parent states and proves conservation inside the recursive statement;
-host-side hashing or equality checks cannot manufacture a merge.
+parent, and two parents. Initialization has exactly one finalized top-up anchor
+and its root branch claim. Two-parent append is the only merge form: both
+parents must share one exact input root, and it binds the ordered parent states,
+the canonical combined child claims, and conservation inside the recursive
+statement; host-side hashing or equality checks cannot manufacture a merge.
 
 Every non-zero output is an independently spendable branch. Commitments,
 nullifiers, input branches, and output branches must be distinct. Replay,
@@ -73,7 +75,9 @@ Top-up and redemption accept only the canonical typed value with
 an encoded-byte wrapper. The lowercase 64-hex `Idempotency-Key` is the signed
 operation id. An identical retry returns the same operation; reuse with any
 different request conflicts. A client retains its local pending operation until
-Torii reports final chain finality.
+Torii reports final chain finality. Maintained clients bind the operation id and
+kind, canonical status URI, and marker-preserving transaction hash in every
+accepted or polled response to the request they actually submitted.
 
 Canonical request and native-bridge decoding rejects compression and alternate
 Norito layouts from the fixed header before reconstruction. Each route applies
@@ -103,7 +107,12 @@ capability on every deployment; it is not an asset enrollment list and does
 not gate `/health`, `/readyz`, Torii startup, consensus, or block production.
 Asset scale, verifier windows, release material, authorization, and balances
 are validated against the exact top-up or redemption command when that command
-is submitted. The recursive pair uses registry backend `halo2/ipa` and exact roles
+is submitted. Before Torii signs or queues its escrow-manager transaction, it
+also resolves the protected device registration and verifies the request's
+platform lifecycle and hardware signature; consensus repeats the complete
+policy and replay checks against its transactional snapshot. The top-up shield
+uses the fixed portable `halo2/ipa` verifier role. The recursive pair uses
+registry backend `halo2/ipa` and exact roles
 `kagemusha_recursive_step_eq_v4_verifier_record` with circuit
 `kagemusha-recursive-spend-step-eq-compact-layout-v5` and
 `kagemusha_recursive_step_ep_v4_verifier_record` with circuit
@@ -114,7 +123,13 @@ is submitted. The recursive pair uses registry backend `halo2/ipa` and exact rol
 The wallet first obtains the authoritative confidential-tree root, leaf index,
 active top-up-shield verifier record, and committed block context. It builds the
 zero-input shield proof, signs the complete top-up request with its registered
-device authority, and submits it to Torii. Core atomically:
+device authority, and submits it to Torii. A depth-16 tree accepts top-ups only
+at indices `0...65462`. The remaining 73 positions reserve one output for each
+of the 64 permitted branch decisions, a second sender-change output for each of
+the eight permitted peer splits, and the final empty frontier leaf. Thus even
+the last accepted top-up can complete the full recursive lifecycle without
+stranding its private balance.
+Core atomically:
 
 1. validates authorization, operation replay state, exact network, scale, and policy;
 2. recomputes the authoritative root and leaf index;
@@ -158,7 +173,9 @@ disjointness. It atomically persists the received note before signing a durable
 acknowledgement receipt. The receipt is evidence only, not acceptance or a
 sender commit gate. Missing, invalid, or lost acknowledgements never unspend,
 roll back, replace, or claw back the exact outgoing payment. Duplicate delivery
-and exact retransmission remain idempotent. If no receiver ever obtains the
+and exact retransmission remain idempotent. Acknowledgement identities are
+derived only after validating the payload and its receiver signature, so a
+malformed or wrong-key receipt cannot acquire a canonical digest. If no receiver ever obtains the
 committed bytes, the sender bears cash-loss risk exactly as with physical cash.
 
 No network or artifact fetch is permitted during send, receive, proof creation,

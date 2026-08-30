@@ -86,8 +86,8 @@ export function registerToriiClientGovernanceTests({
   ToriiClient,
   ValidationError,
   ValidationErrorCode,
+  assertRequestSignal,
   cloneFixture,
-  configureCurveSupport,
   createResponse,
   parseStrictLosslessIntegerJson,
   readFileSync,
@@ -844,7 +844,11 @@ export function registerToriiClientGovernanceTests({
   });
 
   test("getGovernanceUnlockStats rejects empty payloads", async () => {
-    const fetchImpl = async () => createResponse({ status: 200 });
+    const fetchImpl = async () => createResponse({
+      status: 200,
+      jsonData: null,
+      headers: { "content-type": "application/json" },
+    });
     const client = new ToriiClient(BASE_URL, { fetchImpl });
     await assert.rejects(
       () => client.getGovernanceUnlockStats(governanceReadOptions()),
@@ -1378,32 +1382,27 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       governanceBallotOptions(FIXTURE_ALICE_ID),
     );
 
-    configureCurveSupport({ allowMlDsa: true });
-    try {
-      for (const [label, signer, errorPattern] of [
-        ["one-byte", mlDsaManifestSigner(1), /expected 1952 bytes/u],
-        ["short", mlDsaManifestSigner(1_951), /expected 1952 bytes/u],
-        ["overlong", mlDsaManifestSigner(1_953), /expected 1952 bytes/u],
-        ["all-zero", mlDsaManifestSigner(1_952, 0), /all-zero/u],
-      ]) {
-        // eslint-disable-next-line no-await-in-loop
-        await assert.rejects(
-          () => proposeWithSigner(signer),
-          errorPattern,
-          `${label} ML-DSA signer must be rejected before fetch`,
-        );
-      }
-      assert.equal(fetchCalls, 0);
-
-      await proposeWithSigner(mlDsaManifestSigner(1_952));
-      assert.equal(fetchCalls, 1);
-      assert.equal(
-        capturedBody.manifest_provenance.signer,
-        `ee01a00f${"5A".repeat(1_952)}`,
+    for (const [label, signer, errorPattern] of [
+      ["one-byte", mlDsaManifestSigner(1), /expected 1952 bytes/u],
+      ["short", mlDsaManifestSigner(1_951), /expected 1952 bytes/u],
+      ["overlong", mlDsaManifestSigner(1_953), /expected 1952 bytes/u],
+      ["all-zero", mlDsaManifestSigner(1_952, 0), /all-zero/u],
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        () => proposeWithSigner(signer),
+        errorPattern,
+        `${label} ML-DSA signer must be rejected before fetch`,
       );
-    } finally {
-      configureCurveSupport();
     }
+    assert.equal(fetchCalls, 0);
+
+    await proposeWithSigner(mlDsaManifestSigner(1_952));
+    assert.equal(fetchCalls, 1);
+    assert.equal(
+      capturedBody.manifest_provenance.signer,
+      `ee01a00f${"5A".repeat(1_952)}`,
+    );
   });
 
   test("governanceProposeDeployContract rejects noncanonical draft responses", async () => {
@@ -1794,6 +1793,51 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     assert.equal(fetchCalls, 1);
     assert.equal(ballot.drafted, true);
     assert.equal(ballot.accepted, undefined);
+  });
+
+  test("governance ballot drafts reject noncanonical response contracts", async () => {
+    const responses = [
+      {
+        ok: false,
+        accepted: false,
+        reason: "invalid ballot",
+        tx_instructions: [],
+      },
+      {
+        drafted: true,
+        tx_instructions: [{ wire_id: "Cast ZkBallot", payload_hex: "00" }],
+      },
+      {
+        drafted: true,
+        tx_instructions: [{ wire_id: "CastZkBallot", payload_hex: "AA" }],
+      },
+    ];
+    for (const jsonData of responses) {
+      const client = governanceBallotClient({
+        fetchImpl: async () => createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+      });
+
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        () => client.governanceSubmitPlainBallot(
+          {
+            authority: FIXTURE_ALICE_ID,
+            networkId: GOVERNANCE_NETWORK_ID,
+            referendumId: "ref-plain",
+            owner: FIXTURE_ALICE_ID,
+            amount: "1",
+            durationBlocks: 1,
+            direction: "Aye",
+          },
+          governanceBallotOptions(FIXTURE_ALICE_ID),
+        ),
+        /unsupported fields|drafted|whitespace|lowercase/u,
+      );
+    }
   });
 
   test("governance ballots reject retired identity keys and unbound authentication", async () => {
@@ -2381,7 +2425,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
       },
       governanceBallotOptions(FIXTURE_ALICE_ID, { signal: controller.signal }),
     );
-    assert.equal(observedSignal, controller.signal);
+    assertRequestSignal(observedSignal, controller.signal);
   });
 
   test("protected namespace helpers preserve exact tokens and support AbortSignal", async () => {
@@ -2406,7 +2450,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     );
     assert.equal(captures[0].url, `${BASE_URL}/v1/gov/protected-namespaces`);
     assert.equal(captures[0].init.method, "POST");
-    assert.equal(captures[0].init.signal, controller.signal);
+    assertRequestSignal(captures[0].init.signal, controller.signal);
     assert.deepEqual(JSON.parse(String(captures[0].init.body)), {
       namespaces: ["apps", "system"],
     });
@@ -2418,7 +2462,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
     );
     assert.equal(captures[1].url, `${BASE_URL}/v1/gov/protected-namespaces`);
     assert.equal(captures[1].init.method, "GET");
-    assert.equal(captures[1].init.signal, controller.signal);
+    assertRequestSignal(captures[1].init.signal, controller.signal);
     assert.equal(getResponse.found, true);
     assert.deepEqual(getResponse.namespaces, ["apps", "system"]);
   });
@@ -2541,7 +2585,7 @@ wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
           nullifier: `0x${"DD".repeat(32)}`,
           owner: SAMPLE_ACCOUNT_FORMS.i105,
           amount: "18446744073709551616.25",
-          durationBlocks: "0",
+          durationBlocks: 0,
           direction: "Nay",
         },
       },

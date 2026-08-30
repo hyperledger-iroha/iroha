@@ -12223,7 +12223,10 @@
             "decode_exact_queue_plan_pending_route_member_marker",
             "marker.route != route",
             "queue_plan_pending_obligation_marker_key",
-            "storage.get(&obligation_key).is_none()",
+            "storage.get(&obligation_key).ok_or_else",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "queue_plan_pending_route_member_from_obligation(&obligation, route)",
+            "marker != expected",
             "members.push((key.clone(), marker))"
           ]
         },
@@ -12240,10 +12243,26 @@
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
-          "symbol": "validate_queue_plan_pending_obligation_route_member_in_storage",
+          "symbol": "prevalidate_queue_plan_pending_route_rosters",
           "required_tokens": [
-            "queue_plan_pending_route_members_from_storage(storage, route)?",
-            "require_queue_plan_pending_route_member_marker(storage, obligation, route)?"
+            "routes.into_iter().collect::<BTreeSet<_>>()",
+            "for route in &distinct_routes",
+            "queue_plan_pending_route_members_from_storage(storage, *route)?",
+            "Ok(distinct_routes)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+          "required_tokens": [
+            "prevalidated_routes.contains(route)",
+            "queue_plan_pending_route_member_from_obligation(obligation, *route)?",
+            "decode_exact_queue_plan_pending_route_member_marker",
+            "marker != expected",
+            "QueuePlanPendingRouteMemberState::AllPresent",
+            "QueuePlanPendingRouteMemberState::AllAbsent",
+            "partial exact route-member set"
           ]
         },
         {
@@ -12279,12 +12298,16 @@
           "kind": "fn",
           "symbol": "queue_plan_registry_owner_application_state_in_view",
           "required_tokens": [
-            "validate_queue_plan_pending_obligation_route_member",
+            "queue_plan_pending_exact_route_member_state_in_storage",
             "pending obligation `{key}` survived canonical transaction membership",
+            "queue_plan_signed_identity_committed",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             "QueuePlanAdmissionApplicationState::Pending",
             "QueuePlanAdmissionApplicationState::PendingStale",
-            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)"
+            "directly applied registry owner retains terminal marker",
+            "retains pending reverse index",
+            "conflicts with registry ownership or committed membership",
+            "QueuePlanAdmissionApplicationState::Applied"
           ]
         },
         {
@@ -12306,11 +12329,15 @@
           "symbol": "queue_plan_binding_application_state_in_storage",
           "required_tokens": [
             "current != expected",
-            "validate_queue_plan_pending_obligation_route_member_in_storage",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_pending_exact_route_member_state_in_storage",
             "pending-obligation marker `{key}` survived canonical transaction membership",
             "QueuePlanAdmissionApplicationState::Pending",
             "QueuePlanAdmissionApplicationState::PendingStale",
-            "None if committed => Ok(QueuePlanAdmissionApplicationState::Applied)"
+            "queue_plan_pending_signed_alias_member_from_obligation",
+            "queue_plan_terminal_signed_alias_member_from_obligation",
+            "stored_terminal_alias.as_ref() == terminal_alias.as_ref()",
+            "QueuePlanAdmissionApplicationState::Applied"
           ]
         },
         {
@@ -12368,7 +12395,15 @@
           "symbol": "stage_queue_plan_pending_obligation_marker_in_storage",
           "required_tokens": [
             "&mut impl QueuePlanMarkerStorage",
-            "validate_queue_plan_pending_obligation_route_member_in_storage",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_terminal_signed_alias_member_from_obligation",
+            "queue_plan_signed_alias_terminal_marker_key",
+            "queue_plan_pending_exact_route_member_state_in_storage",
+            "queue_plan_pending_signed_alias_member_from_obligation",
+            "queue_plan_pending_signed_alias_members_from_storage",
+            "members.len() == MAX_QUEUE_PLAN_PENDING_SIGNED_ALIAS_MEMBERS",
+            "queue_plan_pending_signed_alias_member_marker_key",
+            "queue_plan_pending_signed_alias_member_marker_payload",
             "queue_plan_pending_route_members_from_storage",
             "members.len() == MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS",
             "queue_plan_pending_route_member_from_obligation",
@@ -12377,6 +12412,7 @@
             "queue_plan_pending_route_member_marker_payload",
             "route_updates.push",
             "insert_queue_plan_marker(obligation_key, obligation_payload)",
+            "insert_queue_plan_marker(alias_key, alias_payload)",
             "insert_queue_plan_marker(member_key, member_payload)"
           ]
         },
@@ -12386,13 +12422,60 @@
           "symbol": "resolve_queue_plan_pending_obligation_in_storage",
           "required_tokens": [
             "&mut impl QueuePlanMarkerStorage",
+            "queue_plan_pending_obligation_marker_key",
+            "storage.get(&obligation_key)",
+            "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+            "&BTreeSet::new()",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "prevalidate_queue_plan_pending_route_rosters",
+            "obligation.routes.iter().copied()",
+            "&prevalidated_routes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+          "required_tokens": [
+            "&mut impl QueuePlanMarkerStorage",
+            "prevalidated_routes: &BTreeSet",
             "decode_exact_queue_plan_pending_obligation_marker",
             "decode_exact_queue_plan_admission_registry_marker",
-            "queue_plan_pending_route_members_from_storage",
-            "require_queue_plan_pending_route_member_marker",
+            "registry_value.binding_hash != obligation.binding_hash",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_terminal_signed_alias_member_from_obligation",
+            "queue_plan_signed_alias_terminal_marker_key",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
             "member_keys.push",
             "remove_queue_plan_marker(obligation_key)",
+            "remove_queue_plan_marker(alias_key)",
             "remove_queue_plan_marker(member_key)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
+          "required_tokens": [
+            "&mut impl QueuePlanMarkerStorage",
+            "queue_plan_pending_signed_alias_member_marker_key(member)?",
+            "decode_exact_queue_plan_pending_signed_alias_member_marker",
+            "current_alias != member",
+            "decode_exact_queue_plan_pending_obligation_marker",
+            "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
+            "require_queue_plan_pending_signed_alias_member_marker",
+            "queue_plan_pending_exact_route_member_state_after_roster_prevalidation",
+            "prevalidated_routes",
+            "collect::<Result<Vec<_>, MergeLedgerCommitError>>()?",
+            "queue_plan_terminal_signed_alias_member_from_obligation",
+            "terminal_member.entrypoint_hash != member.entrypoint_hash",
+            "queue_plan_signed_alias_terminal_marker_key(&terminal_member)?",
+            "storage.get(&terminal_key).is_some()",
+            "queue_plan_signed_alias_terminal_marker_payload(&terminal_member)?",
+            "remove_queue_plan_marker(obligation_key)",
+            "remove_queue_plan_marker(alias_key)",
+            "remove_queue_plan_marker(member_key)",
+            "insert_queue_plan_marker(terminal_key, terminal_payload)"
           ]
         },
         {
@@ -12453,11 +12536,29 @@
           "kind": "fn",
           "symbol": "resolve_required_queue_plan_pending_obligations",
           "required_tokens": [
+            "committed_signed_identities: impl IntoIterator<Item = HashOf<SignedTransaction>>",
+            "let exact_entrypoints = pending_obligations",
+            "let committed_signed_identities = committed_signed_identities",
+            "let committed_signed_entrypoints = committed_signed_identities",
             "self.world.smart_contract_state.transaction()",
+            "queue_plan_pending_signed_alias_members_from_storage",
+            "let mut affected_routes = BTreeSet::new()",
+            "for (entrypoint_hash, expected_binding_hash) in &pending_obligations",
+            "affected_routes.extend(obligation.routes.iter().copied())",
+            "for member in alias_members.iter().flatten()",
+            "queue_plan_pending_signed_alias_member_from_obligation(&obligation)",
+            "prevalidate_queue_plan_pending_route_rosters",
             "for (entrypoint_hash, expected_binding_hash) in pending_obligations",
             "decode_exact_queue_plan_pending_obligation_marker",
             "obligation.binding_hash != expected_binding_hash",
-            "resolve_queue_plan_pending_obligation_in_storage",
+            "autonomous QueuePlan pending obligation disappeared before resolution",
+            "resolve_queue_plan_pending_obligation_after_roster_prevalidation",
+            "for member in alias_members.into_iter().flatten()",
+            "exact_entrypoints.contains(&member.entrypoint_hash)",
+            "committed_signed_entrypoints.contains(&member.entrypoint_hash)",
+            "QueuePlan direct replay identity lost its exact obligation",
+            "resolve_queue_plan_pending_obligation_by_signed_alias_in_storage",
+            "&prevalidated_routes",
             "markers.apply()"
           ]
         },
@@ -12511,14 +12612,10 @@
         },
         {
           "path": "crates/iroha_core/src/queue.rs",
-          "kind": "fn",
-          "symbol": "reject_exact_queue_plan_admission_claim",
+          "kind": "method",
+          "symbol": "Queue::reject_exact_queue_plan_admission_claim",
           "required_tokens": [
-            "push_remove_lock",
-            "global_admission_binding",
-            "indexed_binding != binding",
-            "tombstone_conflicting_global_admission",
-            "finalize_conflicting_global_admission_locked"
+            "reject_exact_queue_plan_admission_claim_inner(binding, false)"
           ]
         },
         {
@@ -12661,10 +12758,19 @@
             "reservation_shape.durable_owned_hashes.contains(&hash)",
             "reservation_owner.is_present()",
             "reservation_owner.fifo_order()",
-            "state_view.transactions.get(&hash).is_some()",
+            "accepted.has_committed_replay_identity(state_view)",
+            "state_view.has_entrypoint(entrypoint_hash)",
             "recorded_global_admission_identity",
+            "queue_plan_admission_registry_match_in_view",
             "queue_plan_admission_registry_match",
+            "QueuePlanAdmissionRegistryMatch::Absent",
             "QueuePlanAdmissionRegistryMatch::Conflict",
+            "has_materialized_owner || has_durable_reservation_owner",
+            "tombstoned_conflicting_global_admission",
+            "QueuePlanBindingApplicationEvidence::AppliedDirect",
+            "QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias",
+            "queue_plan_binding_application_evidence_in_view",
+            "evidence == expected_evidence",
             "global_registry_match.is_none()",
             "self.is_expired_at_with_enqueue_timestamp(",
             "replay_observed_at",
@@ -12684,7 +12790,61 @@
             "anchors.len() != reservation_shape.durable_fifo_orders.len()",
             "final_fifo.len() > self.tx_hashes.capacity()",
             "terminal_removals",
+            "terminal_removals.push",
             "Ok(PreparedQueuePlanReplay {"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::reject_unreserved_replay_terminal_queue_plan_admission_claim",
+          "required_tokens": [
+            "reject_exact_queue_plan_admission_claim_inner(binding, true)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::reject_exact_queue_plan_admission_claim_inner",
+          "required_tokens": [
+            ".validate_structure()",
+            "self.push_remove_lock.lock()",
+            "self.durability_transition_active(&hash)",
+            "self.wait_for_durability_transitions(&[hash])",
+            ".durable_plan_claims",
+            "indexed_binding != binding",
+            "if require_unreserved_replay_terminal_owner",
+            "reservations.live_by_entrypoint.contains_key(&hash)",
+            ".commit_barriers",
+            ".plan_tombstoned",
+            "reservations.release_barriers",
+            "reservations.completed_releases",
+            "self.global_selection_owners.lock().contains_key(&hash)",
+            "self.inflight_guards.load(Ordering::Acquire) != 0",
+            "self.selection_attempts.load(Ordering::Acquire) != 0",
+            ".begin_durability_transition_locked([hash])",
+            "self.tombstone_conflicting_global_admission(binding)?",
+            "self.finalize_conflicting_global_admission_locked(",
+            "return Ok(true)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::remove_state_committed_replay_owners_preserving_globally_bound",
+          "required_tokens": [
+            "has_committed_replay_identity(state_view)",
+            "CommittedHashCleanupMode::PreserveGloballyBoundOwners",
+            "has_globally_bound_durable_claim(carrier_hash)",
+            "QueuePlanBindingApplicationEvidence::AppliedDirect",
+            "QueuePlanBindingApplicationEvidence::AppliedViaSignedAlias",
+            "global_admission_binding()",
+            "queue_plan_admission_registry_match_in_view",
+            "registry_match == QueuePlanAdmissionRegistryMatch::Exact",
+            "queue_plan_binding_application_evidence_in_view",
+            "evidence == expected_evidence",
+            "replay_terminal_bindings.push(binding)",
+            "reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)?"
           ]
         },
         {

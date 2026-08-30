@@ -163,8 +163,19 @@ pub(crate) async fn handle_top_up(
         drop(submission);
         return Ok(response);
     }
+    preflight_kagemusha_v2_hardware_authorization(
+        &app,
+        &topup_request.authorization,
+        topup_request.asset.definition(),
+    )?;
     validate_kagemusha_v4_topup_snapshot(&app, &topup_request)?;
-    if topup_request.amount.public_quantity() > issuer.max_tx_value.clone() {
+    let public_amount = topup_request.amount.public_quantity().map_err(|source| {
+        validation_owned(
+            "offline_top_up_invalid",
+            format!("Offline top-up amount cannot be represented exactly: {source}"),
+        )
+    })?;
+    if public_amount > issuer.max_tx_value.clone() {
         return Err(validation(
             "offline_amount_exceeds_limit",
             "Offline top-up amount exceeds issuer policy.",
@@ -253,8 +264,19 @@ pub(crate) async fn handle_redeem(
         drop(submission);
         return Ok(response);
     }
+    preflight_kagemusha_v2_hardware_authorization(
+        &app,
+        &redeem_request.authorization,
+        &redeem_request.bundle.statement.asset,
+    )?;
     validate_kagemusha_v4_redeem_snapshot(&app, &redeem_request)?;
-    if redeem_request.amount.public_quantity() > issuer.max_tx_value.clone() {
+    let public_amount = redeem_request.amount.public_quantity().map_err(|source| {
+        validation_owned(
+            "offline_redeem_invalid",
+            format!("Offline redemption amount cannot be represented exactly: {source}"),
+        )
+    })?;
+    if public_amount > issuer.max_tx_value.clone() {
         return Err(validation(
             "offline_amount_exceeds_limit",
             "Offline redemption amount exceeds issuer policy.",
@@ -299,6 +321,27 @@ pub(crate) async fn handle_redeem(
 fn kagemusha_v4_snapshot_time_ms(state: &impl StateReadOnly) -> u64 {
     state.latest_block().map_or(0, |block| {
         u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+    })
+}
+fn preflight_kagemusha_v2_hardware_authorization(
+    app: &SharedAppState,
+    authorization: &iroha_data_model::offline::KagemushaRequestAuthorizationV2,
+    asset: &iroha_data_model::asset::AssetDefinitionId,
+) -> Result<(), Error> {
+    let state = app.state.view();
+    iroha_core::smartcontracts::isi::offline::isi::preflight_registered_kagemusha_v2_hardware_authorization(
+        state.world(),
+        authorization,
+        asset,
+        kagemusha_v4_snapshot_time_ms(&state),
+    )
+    .map_err(|source| {
+        validation_owned(
+            "offline_hardware_authorization_invalid",
+            format!(
+                "Offline hardware authorization does not authenticate against protected registration state: {source}"
+            ),
+        )
     })
 }
 fn validate_kagemusha_v4_topup_snapshot(

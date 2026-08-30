@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { blake3 } from "@noble/hashes/blake3";
 import {
   entropyToMnemonic,
   mnemonicToEntropy,
@@ -14,8 +13,6 @@ import {
   sign as signRaw,
 } from "node:crypto";
 import { verifyEd25519Strict } from "./ed25519Strict.js";
-import { AccountAddress } from "./address.js";
-import { blake2b256 } from "./blake2b.js";
 import { getNativeBinding } from "./native.js";
 import { networkIdBytes } from "./networkId.js";
 
@@ -65,8 +62,6 @@ const CONFIDENTIAL_MEMO_SUITE_PARAMETERS_V1 = Object.freeze({
 const CONFIDENTIAL_MEMO_MAX_RECIPIENTS_V1 = 8;
 const CONFIDENTIAL_MEMO_KEYPAIR_ACCESS = Symbol("ConfidentialMemoKeypairV1.access");
 const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
-const U64_MAX = (1n << 64n) - 1n;
-const U64_MAX_DECIMAL_DIGITS = U64_MAX.toString(10).length;
 export const CRYPTO_ALGORITHMS = Object.freeze({
   ED25519: "ed25519",
   SECP256K1: "secp256k1",
@@ -93,32 +88,6 @@ export const SUPPORTED_CRYPTO_ALGORITHMS = Object.freeze([
   CRYPTO_ALGORITHMS.GOST_2012_512_A,
   CRYPTO_ALGORITHMS.GOST_2012_512_B,
   CRYPTO_ALGORITHMS.SM2,
-]);
-
-const CRYPTO_ALGORITHM_ALIASES = new Map([
-  ["ed25519", CRYPTO_ALGORITHMS.ED25519],
-  ["ed", CRYPTO_ALGORITHMS.ED25519],
-  ["eddsa", CRYPTO_ALGORITHMS.ED25519],
-  ["secp256k1", CRYPTO_ALGORITHMS.SECP256K1],
-  ["secp", CRYPTO_ALGORITHMS.SECP256K1],
-  ["secpk1", CRYPTO_ALGORITHMS.SECP256K1],
-  ["mldsa", CRYPTO_ALGORITHMS.ML_DSA],
-  ["mldsa65", CRYPTO_ALGORITHMS.ML_DSA],
-  ["blsnormal", CRYPTO_ALGORITHMS.BLS_NORMAL],
-  ["bls12381g1", CRYPTO_ALGORITHMS.BLS_NORMAL],
-  ["blssmall", CRYPTO_ALGORITHMS.BLS_SMALL],
-  ["bls12381g2", CRYPTO_ALGORITHMS.BLS_SMALL],
-  ["gost256a", CRYPTO_ALGORITHMS.GOST_2012_256_A],
-  ["gost34102012256paramseta", CRYPTO_ALGORITHMS.GOST_2012_256_A],
-  ["gost256b", CRYPTO_ALGORITHMS.GOST_2012_256_B],
-  ["gost34102012256paramsetb", CRYPTO_ALGORITHMS.GOST_2012_256_B],
-  ["gost256c", CRYPTO_ALGORITHMS.GOST_2012_256_C],
-  ["gost34102012256paramsetc", CRYPTO_ALGORITHMS.GOST_2012_256_C],
-  ["gost512a", CRYPTO_ALGORITHMS.GOST_2012_512_A],
-  ["gost34102012512paramseta", CRYPTO_ALGORITHMS.GOST_2012_512_A],
-  ["gost512b", CRYPTO_ALGORITHMS.GOST_2012_512_B],
-  ["gost34102012512paramsetb", CRYPTO_ALGORITHMS.GOST_2012_512_B],
-  ["sm2", CRYPTO_ALGORITHMS.SM2],
 ]);
 
 const SM2_FIXTURE_REFERENCE = Object.freeze({
@@ -174,14 +143,6 @@ function resolveOptionalNativeBinding() {
   }
 }
 
-function cryptoAlgorithmAliasKey(value) {
-  const raw = String(value);
-  if (!/^[A-Za-z0-9_-]+$/.test(raw)) {
-    throw new Error(`unsupported crypto algorithm: ${raw}`);
-  }
-  return raw.toLowerCase().replace(/[-_]/g, "");
-}
-
 export function supportedCryptoAlgorithms() {
   const native = resolveOptionalNativeBinding();
   if (typeof native?.supportedCryptoAlgorithms === "function") {
@@ -189,18 +150,17 @@ export function supportedCryptoAlgorithms() {
       normalizeCryptoAlgorithm(algorithm),
     );
   }
-  return [...SUPPORTED_CRYPTO_ALGORITHMS];
+  return [CRYPTO_ALGORITHMS.ED25519];
 }
 
 export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) {
-  if (algorithm === undefined || algorithm === null) {
-    return CRYPTO_ALGORITHMS.ED25519;
-  }
-  const normalized = CRYPTO_ALGORITHM_ALIASES.get(cryptoAlgorithmAliasKey(algorithm));
-  if (!normalized) {
+  if (
+    typeof algorithm !== "string" ||
+    !SUPPORTED_CRYPTO_ALGORITHMS.includes(algorithm)
+  ) {
     throw new Error(`unsupported crypto algorithm: ${algorithm}`);
   }
-  return normalized;
+  return algorithm;
 }
 
 

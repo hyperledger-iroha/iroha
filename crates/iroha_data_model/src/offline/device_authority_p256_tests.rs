@@ -368,6 +368,32 @@ mod device_authority_p256_tests {
         );
     }
     #[test]
+    fn acknowledgement_digest_rejects_malformed_payloads_and_signatures() {
+        let issued_at_ms = 1_800_000_000_000;
+        let receiver_key = signing_key(11);
+        let request = recipient_payment_request(&receiver_key, issued_at_ms, issued_at_ms + 30_000);
+        let bundle = recipient_payment_bundle(&request);
+        let acknowledgement =
+            receiver_acknowledgement(&receiver_key, &request, &bundle, issued_at_ms + 1);
+        acknowledgement
+            .digest()
+            .expect("a structurally valid acknowledgement has an identity digest");
+
+        let mut malformed_payload = acknowledgement.clone();
+        malformed_payload.payload.accepted_at_ms = 0;
+        assert!(malformed_payload.digest().is_err());
+
+        let mut malformed_signature = acknowledgement;
+        malformed_signature.signature = sign(
+            &signing_key(12),
+            &malformed_signature
+                .payload
+                .signing_bytes()
+                .expect("wrong-key signature preimage"),
+        );
+        assert!(malformed_signature.digest().is_err());
+    }
+    #[test]
     fn signed_requests_acknowledgements_and_archives_ignore_ambient_norito_layout() {
         let issued_at_ms = 1_800_000_000_000;
         let expires_at_ms = issued_at_ms + 30_000;
@@ -717,6 +743,39 @@ mod device_authority_p256_tests {
         assert!(request.validate_at(issued_at_ms - 1).is_err());
         assert!(request.validate_at(expires_at_ms).is_err());
         assert!(request.validate_at(expires_at_ms + 1).is_err());
+    }
+    #[test]
+    fn online_authorization_expiry_is_exclusive() {
+        let authorization = authorization(&signing_key(13), None);
+        authorization
+            .validate_for_payload_at(
+                authorization.payload_digest,
+                authorization.issued_at_ms,
+            )
+            .expect("authorization is valid at issuance");
+        authorization
+            .validate_for_payload_at(
+                authorization.payload_digest,
+                authorization.expires_at_ms - 1,
+            )
+            .expect("authorization is valid immediately before expiry");
+        assert!(
+            authorization
+                .validate_for_payload_at(
+                    authorization.payload_digest,
+                    authorization.issued_at_ms - 1,
+                )
+                .is_err()
+        );
+        assert!(
+            authorization
+                .validate_for_payload_at(
+                    authorization.payload_digest,
+                    authorization.expires_at_ms,
+                )
+                .is_err(),
+            "authorization at the exclusive expiry must fail closed",
+        );
     }
     #[test]
     fn receiver_acknowledgement_expiry_is_exclusive() {

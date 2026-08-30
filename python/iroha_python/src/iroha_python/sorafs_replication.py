@@ -8,6 +8,8 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Mapping, Union
 
+from norito.crc64 import crc64 as _crc64
+
 from .address import AccountAddress, AccountAddressError, i105_discriminant_from_sentinel
 
 SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024
@@ -19,19 +21,6 @@ _HEX_DIGITS = frozenset("0123456789abcdef")
 _REPLICATION_ORDER_SCHEMA = hashlib.sha256(
     b"norito:v1:type-name\0sorafs_manifest::capacity::ReplicationOrderV1"
 ).digest()[:16]
-_CRC64_POLY = 0xC96C5795D7870F42
-_U64_MASK = (1 << 64) - 1
-
-
-def _crc64(payload: bytes) -> int:
-    crc = _U64_MASK
-    for byte in payload:
-        crc ^= byte
-        for _ in range(8):
-            crc = ((crc >> 1) ^ _CRC64_POLY) if crc & 1 else crc >> 1
-    return (crc ^ _U64_MASK) & _U64_MASK
-
-
 class _NoritoReader:
     def __init__(self, payload: bytes, context: str):
         self.payload = payload

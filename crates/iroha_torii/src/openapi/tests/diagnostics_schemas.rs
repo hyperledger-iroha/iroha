@@ -368,3 +368,210 @@ fn autonomous_lane_execution_diagnostics_schema_is_closed_and_bounded() {
     .map(Value::from);
     assert_eq!(reasons.as_slice(), expected_reasons.as_slice());
 }
+
+#[test]
+fn status_openapi_uses_only_exact_scalar_probe_paths() {
+    let document = canonical_document();
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .expect("OpenAPI paths");
+    assert_eq!(
+        paths
+            .keys()
+            .filter(|path| path.as_str() == "/status" || path.starts_with("/status/"))
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["/status", "/status/blocks", "/status/peers"])
+    );
+    assert!(!paths.contains_key("/status/{tail}"));
+    for retired in [
+        "/v1/node/query/projection/checkpoint/plan",
+        "/v1/node/query/projection/checkpoint/publish",
+    ] {
+        assert!(
+            !paths.contains_key(retired),
+            "retired unverified projection route leaked into OpenAPI: {retired}"
+        );
+    }
+    for path in ["/status/blocks", "/status/peers"] {
+        let item = paths
+            .get(path)
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{path} path item"));
+        assert_eq!(
+            item.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["get"]),
+            "{path} must expose only GET"
+        );
+        let operation = item
+            .get("get")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{path} GET operation"));
+        assert!(
+            operation.get("parameters").is_none(),
+            "exact status probes do not accept path selectors"
+        );
+        let schema = &operation["responses"]["200"]["content"]["application/json"]["schema"];
+        assert_eq!(schema["type"], Value::from("integer"));
+        assert_eq!(schema["format"], Value::from("uint64"));
+        assert_eq!(schema["minimum"], Value::from(0_u64));
+    }
+}
+
+#[test]
+fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
+    fn object_fields<'a>(schema: &'a Value, label: &str) -> BTreeSet<&'a str> {
+        schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{label} properties"))
+            .keys()
+            .map(String::as_str)
+            .collect()
+    }
+    fn required_fields<'a>(schema: &'a Value, label: &str) -> BTreeSet<&'a str> {
+        schema
+            .get("required")
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("{label} required fields"))
+            .iter()
+            .map(|field| {
+                field
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{label} required field name"))
+            })
+            .collect()
+    }
+    let document = canonical_document();
+    let schemas = component_schemas(&document);
+    let credential_fields = BTreeSet::from(["id", "rawId", "response", "type"]);
+    for (request_name, response_name, response_fields) in [
+        (
+            "OperatorWebAuthnAssertionRequest",
+            "OperatorWebAuthnAssertionResponse",
+            BTreeSet::from(["authenticatorData", "clientDataJSON", "signature"]),
+        ),
+        (
+            "OperatorWebAuthnAttestationRequest",
+            "OperatorWebAuthnAttestationResponse",
+            BTreeSet::from(["attestationObject", "clientDataJSON"]),
+        ),
+    ] {
+        let request = schemas
+            .get(request_name)
+            .unwrap_or_else(|| panic!("{request_name} schema"));
+        assert_eq!(request["type"], Value::from("object"));
+        assert_eq!(request["additionalProperties"], Value::from(false));
+        assert_eq!(object_fields(request, request_name), credential_fields);
+        assert_eq!(required_fields(request, request_name), credential_fields);
+        assert_eq!(
+            request["properties"]["type"]["const"],
+            Value::from("public-key")
+        );
+        for id_field in ["id", "rawId"] {
+            assert_eq!(
+                request["properties"][id_field]["$ref"],
+                Value::from("#/components/schemas/OperatorWebAuthnCredentialId")
+            );
+        }
+        assert_eq!(
+            request["properties"]["response"]["$ref"],
+            Value::from(format!("#/components/schemas/{response_name}"))
+        );
+        let response = schemas
+            .get(response_name)
+            .unwrap_or_else(|| panic!("{response_name} schema"));
+        assert_eq!(response["additionalProperties"], Value::from(false));
+        assert_eq!(object_fields(response, response_name), response_fields);
+        assert_eq!(required_fields(response, response_name), response_fields);
+        for field in response_fields {
+            assert_eq!(
+                response["properties"][field]["$ref"],
+                Value::from("#/components/schemas/OperatorWebAuthnBinary")
+            );
+        }
+    }
+    let binary = &schemas["OperatorWebAuthnBinary"];
+    assert_eq!(binary["minLength"], Value::from(1_u64));
+    assert_eq!(binary["maxLength"], Value::from(65_536_u64));
+    assert_eq!(
+        binary["pattern"],
+        Value::from("^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})?$")
+    );
+    let credential_id = &schemas["OperatorWebAuthnCredentialId"];
+    assert_eq!(credential_id["minLength"], Value::from(1_u64));
+    assert_eq!(credential_id["maxLength"], Value::from(1_366_u64));
+    assert_eq!(
+        credential_id["pattern"],
+        Value::from("^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})?$")
+    );
+
+    let paths = document["paths"].as_object().expect("OpenAPI paths");
+    for (path, request_name, expected_responses) in [
+        (
+            "/v1/operator/auth/login/verify",
+            "OperatorWebAuthnAssertionRequest",
+            BTreeSet::from(["200", "400", "401", "403", "413", "415", "429", "503"]),
+        ),
+        (
+            "/v1/operator/auth/registration/verify",
+            "OperatorWebAuthnAttestationRequest",
+            BTreeSet::from([
+                "200", "400", "401", "403", "409", "413", "415", "429", "503",
+            ]),
+        ),
+    ] {
+        let operation = &paths[path]["post"];
+        assert_eq!(
+            operation["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            Value::from(format!("#/components/schemas/{request_name}"))
+        );
+        assert_eq!(operation["requestBody"]["required"], Value::from(true));
+        assert_eq!(
+            operation["x-iroha-max-request-bytes"],
+            Value::from(65_536_u64)
+        );
+        let responses = operation["responses"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{path} responses"));
+        assert_eq!(
+            responses
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            expected_responses
+        );
+        assert!(
+            responses["413"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("request_payload_too_large"))
+        );
+        assert!(
+            responses["503"]["description"]
+                .as_str()
+                .is_some_and(|description| {
+                    description.contains("operator_auth_state_capacity_exhausted")
+                })
+        );
+    }
+    assert!(
+        paths["/v1/operator/auth/registration/verify"]["post"]["responses"]["409"]["description"]
+            .as_str()
+            .is_some_and(|description| {
+                description.contains("operator_webauthn_credential_capacity_exhausted")
+            })
+    );
+    for path in [
+        "/v1/operator/auth/login/options",
+        "/v1/operator/auth/registration/options",
+    ] {
+        assert!(
+            paths[path]["post"]["responses"]["503"]["description"]
+                .as_str()
+                .is_some_and(|description| {
+                    description.contains("operator_auth_state_capacity_exhausted")
+                })
+        );
+    }
+}

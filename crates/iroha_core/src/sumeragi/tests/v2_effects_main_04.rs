@@ -553,8 +553,13 @@ fn authenticated_chunk_reconstruction_rejection_retries_exact_proposal_fetch_non
     let fetch_task = services.fetch_tasks[0].clone();
     let work_id = fetch_task.id();
     services.reject_authenticated_chunks = true;
+    let validated = wire::ValidatedPayloadManifest::new(
+        &fixture.context,
+        fixture.manifest.clone(),
+    )
+    .expect("validate chunk manifest once");
     let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&fixture.manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: fixture.encoded_chunks[0].clone(),
         sender: 0,
@@ -563,8 +568,9 @@ fn authenticated_chunk_reconstruction_rejection_retries_exact_proposal_fetch_non
     chunk.signature = Signature::new(
         fixture.validator_keys[0].private_key(),
         &chunk
-            .signature_preimage(&fixture.context, &fixture.manifest)
-            .expect("chunk preimage"),
+            .signature_payload(&validated)
+            .expect("chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();

@@ -558,13 +558,14 @@ impl Root {
     pub fn uses_multilane_catalogs(&self) -> bool {
         self.nexus.uses_multilane_catalogs()
     }
-    /// Apply the bundled Sora Nexus profile (SoraFS + multi-lane defaults).
+    /// Apply the bundled Sora Nexus geometry and safe SoraFS defaults.
     ///
     /// SoraFS discovery is enabled only when configuration parsing produced a
     /// complete admission trust policy. The profile never manufactures trust
-    /// roots on behalf of the operator.
+    /// roots or an embedded storage-provider role on behalf of the operator.
+    /// Storage remains an explicit deployment choice because it requires a
+    /// governed compliance controller and runtime provider bindings.
     pub fn apply_sora_profile(&mut self) {
-        self.torii.sorafs_storage.enabled = true;
         self.torii.sorafs_discovery.discovery_enabled =
             self.torii.sorafs_discovery.admission.is_some();
         if self.tiered_state.da_store_root.is_none() {
@@ -6909,6 +6910,76 @@ impl SumeragiV2Config {
         preimage.extend_from_slice(&encoded);
         Hash::new(preimage)
     }
+
+    /// Validate outer-ingress ownership for an authenticated maximum roster.
+    ///
+    /// Permissioned callers pass the frozen signed roster length. NPoS callers
+    /// pass the signed `max_validators` ceiling, not merely the current epoch's
+    /// roster, so a later valid election cannot fail-stop at height activation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the maximum is zero, cannot be represented, or
+    /// exceeds either the message-slot or aggregate byte geometry.
+    pub fn validate_ingress_roster_capacity(
+        &self,
+        maximum_validator_roster_len: usize,
+    ) -> core::result::Result<(), SumeragiV2ConfigError> {
+        if maximum_validator_roster_len == 0 {
+            return Err(SumeragiV2ConfigError::NonPositive(
+                "maximum validator roster length",
+            ));
+        }
+        let required_messages = sumeragi_v2_body_ingress_required_message_capacity(
+            maximum_validator_roster_len,
+            usize::try_from(self.limits.authenticated_non_validator_source_capacity).map_err(
+                |_| {
+                    SumeragiV2ConfigError::LimitOverflow(
+                        "Sumeragi v2 authenticated non-validator source capacity",
+                    )
+                },
+            )?,
+        )
+        .and_then(|required| u64::try_from(required).ok())
+        .ok_or(SumeragiV2ConfigError::LimitOverflow(
+            "Sumeragi v2 maximum-roster outer-ingress message minimum",
+        ))?;
+        if self.limits.body_queue_capacity < required_messages {
+            return Err(SumeragiV2ConfigError::BodyQueueTooSmall {
+                actual: self.limits.body_queue_capacity,
+                minimum: required_messages,
+                authenticated_non_validator_sources: self
+                    .limits
+                    .authenticated_non_validator_source_capacity,
+            });
+        }
+
+        let maximum_validator_roster_len =
+            u64::try_from(maximum_validator_roster_len).map_err(|_| {
+                SumeragiV2ConfigError::LimitOverflow("Sumeragi v2 maximum validator roster length")
+            })?;
+        let minimum_sources = maximum_validator_roster_len
+            .checked_add(self.limits.authenticated_non_validator_source_capacity)
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 maximum-roster outer-ingress source count",
+            ))?;
+        let minimum_bytes = self
+            .limits
+            .body_source_bytes
+            .checked_mul(minimum_sources)
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 maximum-roster aggregate outer-ingress byte minimum",
+            ))?;
+        if self.limits.body_bytes < minimum_bytes {
+            return Err(SumeragiV2ConfigError::BodyBytesTooSmall {
+                actual: self.limits.body_bytes,
+                minimum: minimum_bytes,
+                body_source_bytes: self.limits.body_source_bytes,
+                minimum_sources,
+            });
+        }
+        Ok(())
+    }
 }
 /// Finite limits consumed by the serialized v2 runtime and its adapters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
@@ -8075,6 +8146,10 @@ pub struct ToriiOperatorAuth {
     pub rate_per_minute: Option<NonZeroU32>,
     /// Auth attempt burst tokens. None disables.
     pub burst: Option<NonZeroU32>,
+    /// Per-kind capacity for expiry-bound operator-auth state.
+    pub ephemeral_state_capacity: NonZeroUsize,
+    /// Maximum number of persisted operator WebAuthn credentials.
+    pub credential_capacity: NonZeroUsize,
     /// Temporary lockout policy for repeated failures.
     pub lockout: OperatorAuthLockout,
     /// WebAuthn configuration (when enabled).
@@ -8088,6 +8163,14 @@ impl_default!(ToriiOperatorAuth => {
             tokens: defaults::torii::operator_auth::tokens(),
             rate_per_minute: defaults::torii::operator_auth::RATE_PER_MIN.and_then(NonZeroU32::new),
             burst: defaults::torii::operator_auth::BURST.and_then(NonZeroU32::new),
+            ephemeral_state_capacity: NonZeroUsize::new(
+                defaults::torii::operator_auth::EPHEMERAL_STATE_CAPACITY,
+            )
+            .expect("default operator-auth ephemeral state capacity must be non-zero"),
+            credential_capacity: NonZeroUsize::new(
+                defaults::torii::operator_auth::CREDENTIAL_CAPACITY,
+            )
+            .expect("default operator-auth credential capacity must be non-zero"),
             lockout: OperatorAuthLockout::default(),
             webauthn: None,
         }

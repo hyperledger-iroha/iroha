@@ -654,9 +654,9 @@ fn apply_overrides(
     );
     crate::secret_toml::remove(&mut streaming, "identity_private_key_file");
     set_table(config, "streaming", streaming);
-    // `iroha3d --sora` otherwise enables embedded storage. Observer onboarding does not
-    // provision the governed gateway-compliance controller required to operate storage safely,
-    // so make the operator-authored false explicit and let CLI profile resolution preserve it.
+    // Observer onboarding does not provision the governed gateway-compliance controller or
+    // runtime providers required for an embedded storage-provider role, so record that posture
+    // explicitly in the generated operator configuration.
     let mut storage = table(config, "sorafs.storage");
     crate::secret_toml::insert(&mut storage, "enabled".into(), TomlValue::Boolean(false));
     set_table(config, "sorafs.storage", storage);
@@ -1801,11 +1801,7 @@ mod tests {
             );
             let mut actual = actual::Root::from_toml_source(TomlSource::inline(root.clone()))
                 .unwrap_or_else(|error| panic!("Nexus wizard config admission: {error:?}"));
-            let configured_storage_enabled = actual.torii.sorafs_storage.enabled;
             actual.apply_sora_profile();
-            // Mirror `iroha3d` CLI resolution: an explicit authored value survives profile
-            // defaults. The raw assertion above proves the wizard emitted that explicit value.
-            actual.torii.sorafs_storage.enabled = configured_storage_enabled;
             assert!(!actual.torii.sorafs_storage.enabled);
         }
     }

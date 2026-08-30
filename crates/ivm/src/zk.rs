@@ -4,10 +4,10 @@
 //! enabled. `ASSERT` instructions register constraints which can be inspected by a prover. The VM
 //! also pads execution to a fixed cycle length as required by the specification.
 //!
-//! Register and memory Merkle proofs are captured incrementally so that state
-//! hashes do not need to be recomputed after every operation.  The VM records
-//! authentication paths for each access together with the resulting Merkle roots, allowing external
-//! circuits to verify the trace without storing the full register file.
+//! Register authentication paths and memory diagnostic root snapshots are
+//! captured incrementally so that state hashes do not need to be recomputed
+//! after every operation. Memory events do not carry complete leaves or an
+//! authenticated tree size and are not independently verifiable proofs.
 /// Default maximum trace length used for padding.
 ///
 /// The original implementation limited zero-knowledge execution to 2^16
@@ -271,16 +271,16 @@ mod tests {
         super::set_prover_threads(baseline);
     }
     #[test]
-    fn verify_trace_handles_empty_inputs() {
+    fn diagnostic_trace_check_handles_empty_inputs() {
         // Ensure a pre-existing global Rayon pool does not block prover pool creation.
         let _ = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build_global();
-        let result = verify_trace(&[], &[], &[], &[]);
+        let result = check_diagnostic_trace(&[], &[], &[]);
         assert!(result.is_ok());
     }
     #[test]
-    fn verify_trace_accepts_arbitrary_register_data() {
+    fn diagnostic_trace_check_accepts_arbitrary_register_data() {
         let mut gpr = [0u64; 256];
         gpr[0] = 0xDEAD_BEEF_DEAD_BEEF;
         let trace = [RegisterState {
@@ -289,29 +289,10 @@ mod tests {
             tags: [false; 256],
         }];
 
-        assert!(verify_trace(&trace, &[], &[], &[]).is_ok());
+        assert!(check_diagnostic_trace(&trace, &[], &[]).is_ok());
     }
     #[test]
-    fn verify_trace_rejects_cross_chunk_memory_writes() {
-        let root =
-            iroha_crypto::HashOf::<iroha_crypto::MerkleTree<[u8; 32]>>::from_untyped_unchecked(
-                iroha_crypto::Hash::prehashed([0u8; 32]),
-            );
-        let mem_log = vec![MemEvent::Store {
-            addr: 31,
-            value: 0xABCD,
-            size: 8,
-            path: Vec::new(),
-            root,
-        }];
-        let result = verify_trace(&[], &[], &mem_log, &[]);
-        assert!(
-            matches!(result, Err(crate::error::VMError::AssertionFailed)),
-            "cross-chunk writes must fail deterministically"
-        );
-    }
-    #[test]
-    fn verify_trace_rejects_out_of_range_constraints_without_panicking() {
+    fn diagnostic_trace_check_rejects_out_of_range_constraints_without_panicking() {
         let trace = vec![RegisterState {
             pc: 0,
             gpr: [0; 256],
@@ -334,10 +315,11 @@ mod tests {
                 cycle: u64::MAX,
             },
         ] {
-            let result = std::panic::catch_unwind(|| verify_trace(&trace, &[constraint], &[], &[]));
+            let result =
+                std::panic::catch_unwind(|| check_diagnostic_trace(&trace, &[constraint], &[]));
             assert!(
                 matches!(
-                    result.expect("malformed constraint verification must not panic"),
+                    result.expect("malformed diagnostic check must not panic"),
                     Err(crate::error::VMError::AssertionFailed)
                 ),
                 "malformed constraint must fail closed: {constraint:?}"
@@ -369,10 +351,11 @@ impl ConstraintLog {
         self.list.push(c);
     }
 }
-/// A memory access recorded during ZK execution.
-/// Record of a single memory operation together with the Merkle authentication
-/// path to the accessed location.  The path proves inclusion of the affected
-/// byte slice in the memory Merkle tree whose root is tracked by [`Memory`].
+/// A memory access recorded during diagnostic trace collection.
+///
+/// The event carries a path and root snapshot for downstream diagnostics, but
+/// it does not contain the complete 32-byte leaf or an authenticated leaf
+/// count. It is therefore not an independently verifiable Merkle proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemEvent {
     Load {
@@ -569,14 +552,16 @@ impl StepLog {
         });
     }
 }
-/// Verify a trace against recorded constraints.
+/// Check locally recorded trace diagnostics.
 ///
-/// This helper is a lightweight stand‑in for a real proof verifier. It checks that each
-/// `Constraint` logged during execution holds for the corresponding cycle in `TraceLog`.
-pub fn verify_trace(
+/// This checks each recorded [`Constraint`] against the corresponding register
+/// snapshot and authenticates register-log entries against their supplied
+/// fixed-size register-tree commitments. It does not verify VM transition
+/// semantics, trace completeness, or memory-event membership and must not be
+/// used as a proof verifier or admission decision.
+pub fn check_diagnostic_trace(
     trace: &[RegisterState],
     constraints: &[Constraint],
-    mem_log: &[MemEvent],
     reg_log: &[RegEvent],
 ) -> Result<(), crate::error::VMError> {
     prover_pool().install(|| {
@@ -605,57 +590,6 @@ pub fn verify_trace(
                 }
             }
             Ok::<(), crate::error::VMError>(())
-        })?;
-        // Verify memory Merkle proofs
-        mem_log.par_iter().try_for_each(|e| {
-            const CHUNK: usize = 32;
-            let (addr, value, size, path, root) = match e {
-                MemEvent::Load {
-                    addr,
-                    value,
-                    size,
-                    path,
-                    root,
-                } => (*addr, *value, *size as usize, path, root),
-                MemEvent::Store {
-                    addr,
-                    value,
-                    size,
-                    path,
-                    root,
-                } => (*addr, *value, *size as usize, path, root),
-            };
-            let leaf_index = u32::try_from(addr / CHUNK as u64)
-                .map_err(|_| crate::error::VMError::AssertionFailed)?;
-            let mut chunk = [0u8; CHUNK];
-            let offset = usize::try_from(addr % CHUNK as u64)
-                .expect("memory chunk offset always fits usize");
-            let bytes = &value.to_le_bytes()[..size.min(16)];
-            let Some(end) = offset.checked_add(bytes.len()) else {
-                return Err(crate::error::VMError::AssertionFailed);
-            };
-            if end > CHUNK {
-                return Err(crate::error::VMError::AssertionFailed);
-            }
-            chunk[offset..offset + bytes.len()].copy_from_slice(bytes);
-            let mut leaf_hash = [0u8; 32];
-            leaf_hash.copy_from_slice(&Sha256::digest(chunk));
-            let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_hash));
-            let siblings: Vec<Option<HashOf<[u8; 32]>>> = path
-                .iter()
-                .map(|sib| {
-                    (*sib != [0u8; 32])
-                        .then(|| HashOf::from_untyped_unchecked(Hash::prehashed(*sib)))
-                })
-                .collect();
-            let proof = MerkleProof::from_audit_path(leaf_index, siblings);
-            // MemEvent currently carries no authenticated memory leaf count.
-            // This checks only that the supplied path fragment hashes to the
-            // supplied root; it is not a Merkle membership verification.
-            match proof.compute_partial_root_sha256(&leaf, path.len()) {
-                Some(r) if *r.as_ref() == *root.as_ref() => Ok(()),
-                _ => Err(crate::error::VMError::AssertionFailed),
-            }
         })?;
         // Verify register Merkle proofs
         reg_log.par_iter().try_for_each(|e| {

@@ -991,27 +991,6 @@ export function buildSoracloudHfSharedLeaseJoinDraft(input = {}) {
   return { payload, provenancePayloads };
 }
 
-function normalizeStringMap(value, field) {
-  if (value == null) {
-    return {};
-  }
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`${field} must be an object`);
-  }
-  rejectSoracloudSigningSecrets(value);
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => {
-      if (typeof key !== "string" || key.trim() === "") {
-        throw new TypeError(`${field} keys must be non-empty strings`);
-      }
-      if (typeof entry !== "string") {
-        throw new TypeError(`${field}.${key} must be a string`);
-      }
-      return [key.trim(), entry];
-    }),
-  );
-}
-
 function normalizeRouteSpec(route, field) {
   rejectSoracloudSigningSecrets(route);
   if (route == null || typeof route !== "object" || Array.isArray(route)) {

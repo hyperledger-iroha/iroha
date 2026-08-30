@@ -6,6 +6,9 @@ use super::shared::{
 use crate::{Run, RunContext};
 use eyre::{Result, eyre};
 use iroha::client::Client;
+use iroha::data_model::{
+    account::AccountId, smart_contract::MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1,
+};
 use iroha_crypto::Hash;
 use norito::json::{Map, Value};
 #[derive(clap::Args, Debug)]
@@ -269,7 +272,7 @@ fn validate_governed_contract_lifecycle(
     }
     let origin =
         require_nonempty_string_field(object, "origin", "governed contract response.lifecycle")?;
-    require_nonempty_string_field(
+    require_canonical_account_id_field(
         object,
         "origin_account",
         "governed contract response.lifecycle",
@@ -288,15 +291,23 @@ fn validate_governed_contract_lifecycle(
             )?;
         }
         "parliament" => {
-            require_canonical_hex32_field(
+            let proposal_content_id = require_canonical_hex32_field(
                 object,
                 "origin_proposal_content_id_hex",
                 "governed contract response.lifecycle",
             )?;
-            require_canonical_hex32_field(
+            require_nonzero_hex32(
+                proposal_content_id,
+                "governed contract response.lifecycle.origin_proposal_content_id_hex",
+            )?;
+            let governance_attempt_id = require_canonical_hex32_field(
                 object,
                 "origin_governance_attempt_id_hex",
                 "governed contract response.lifecycle",
+            )?;
+            require_nonzero_hex32(
+                governance_attempt_id,
+                "governed contract response.lifecycle.origin_governance_attempt_id_hex",
             )?;
         }
         other => {
@@ -305,17 +316,31 @@ fn validate_governed_contract_lifecycle(
             ));
         }
     }
-    require_nonempty_string_field(object, "owner", "governed contract response.lifecycle")?;
-    require_nullable_nonempty_string_field(
+    let owner = require_contract_lifecycle_owner_field(
+        object,
+        "owner",
+        "governed contract response.lifecycle",
+    )?;
+    let pending_owner = require_nullable_contract_lifecycle_owner_field(
         object,
         "pending_owner",
         "governed contract response.lifecycle",
     )?;
-    require_bool_field(
+    if pending_owner.as_ref() == Some(&owner) {
+        return Err(eyre!(
+            "governed contract response.lifecycle.pending_owner must differ from owner"
+        ));
+    }
+    let parliament_delegated = require_bool_field(
         object,
         "parliament_delegated",
         "governed contract response.lifecycle",
     )?;
+    if owner == GovernedContractLifecycleOwner::Parliament && parliament_delegated {
+        return Err(eyre!(
+            "governed contract response.lifecycle.parliament_delegated must be false for a Parliament-owned contract"
+        ));
+    }
     match active_code_hash {
         Some(expected) => {
             let actual = require_canonical_hex32_field(
@@ -379,17 +404,26 @@ fn validate_governed_contract_emergency_hold(hold: &Value) -> Result<()> {
         "proposal_content_id_hex",
         "governance_attempt_id_hex",
     ] {
-        require_canonical_hex32_field(
+        let value = require_canonical_hex32_field(
             object,
             field,
             "governed contract response.lifecycle.emergency_hold",
         )?;
+        require_nonzero_hex32(
+            value,
+            &format!("governed contract response.lifecycle.emergency_hold.{field}"),
+        )?;
     }
-    require_nonempty_string_field(
+    let reason = require_nonempty_string_field(
         object,
         "reason",
         "governed contract response.lifecycle.emergency_hold",
     )?;
+    if reason.trim().is_empty() {
+        return Err(eyre!(
+            "governed contract response.lifecycle.emergency_hold.reason must contain non-whitespace text"
+        ));
+    }
     let imposed = require_u64_field(
         object,
         "imposed_at_height",
@@ -400,12 +434,76 @@ fn validate_governed_contract_emergency_hold(hold: &Value) -> Result<()> {
         "expires_at_height",
         "governed contract response.lifecycle.emergency_hold",
     )?;
+    if imposed == 0 {
+        return Err(eyre!(
+            "governed contract response.lifecycle.emergency_hold.imposed_at_height must be non-zero"
+        ));
+    }
     if expires <= imposed {
         return Err(eyre!(
             "governed contract response.lifecycle.emergency_hold.expires_at_height must exceed imposed_at_height"
         ));
     }
+    if expires - imposed > MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1 {
+        return Err(eyre!(
+            "governed contract response.lifecycle.emergency_hold duration must not exceed {MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1} blocks"
+        ));
+    }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum GovernedContractLifecycleOwner {
+    Account(AccountId),
+    Parliament,
+}
+
+fn parse_contract_lifecycle_owner(
+    value: &str,
+    context: &str,
+) -> Result<GovernedContractLifecycleOwner> {
+    if value == "parliament" {
+        return Ok(GovernedContractLifecycleOwner::Parliament);
+    }
+    let account = AccountId::parse_encoded(value).map_err(|error| {
+        eyre!("{context} must be `parliament` or a canonical I105 account: {error}")
+    })?;
+    Ok(GovernedContractLifecycleOwner::Account(account))
+}
+
+fn require_contract_lifecycle_owner_field(
+    object: &Map,
+    field: &str,
+    context: &str,
+) -> Result<GovernedContractLifecycleOwner> {
+    let value = require_nonempty_string_field(object, field, context)?;
+    parse_contract_lifecycle_owner(value, &format!("{context}.{field}"))
+}
+
+fn require_nullable_contract_lifecycle_owner_field(
+    object: &Map,
+    field: &str,
+    context: &str,
+) -> Result<Option<GovernedContractLifecycleOwner>> {
+    match object.get(field) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.is_empty() => {
+            parse_contract_lifecycle_owner(value, &format!("{context}.{field}")).map(Some)
+        }
+        _ => Err(eyre!(
+            "{context}.{field} must be `parliament`, a canonical I105 account, or null"
+        )),
+    }
+}
+
+fn require_canonical_account_id_field(
+    object: &Map,
+    field: &str,
+    context: &str,
+) -> Result<AccountId> {
+    let value = require_nonempty_string_field(object, field, context)?;
+    AccountId::parse_encoded(value)
+        .map_err(|error| eyre!("{context}.{field} must be a canonical I105 account: {error}"))
 }
 fn validate_public_entrypoints(object: &Map) -> Result<()> {
     let values = object
@@ -487,15 +585,6 @@ fn require_nonempty_string_field<'a>(
         return Err(eyre!("{context}.{field} must not be empty"));
     }
     Ok(value)
-}
-fn require_nullable_nonempty_string_field(object: &Map, field: &str, context: &str) -> Result<()> {
-    match object.get(field) {
-        Some(Value::Null) => Ok(()),
-        Some(Value::String(value)) if !value.is_empty() => Ok(()),
-        _ => Err(eyre!(
-            "{context}.{field} must be a non-empty string or null"
-        )),
-    }
 }
 fn require_null_field(object: &Map, field: &str, context: &str) -> Result<()> {
     match object.get(field) {
@@ -905,17 +994,26 @@ fn check_hex_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
 
     const CONTRACT_ADDRESS: &str = "contract:test:governed-audit";
 
+    fn account_id(seed: u8) -> String {
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive deterministic account key");
+        AccountId::new(keypair.public_key().clone()).to_string()
+    }
+
     fn lifecycle(active_code_hash_hex: Option<&str>) -> Value {
+        let origin_account = account_id(0x41);
+        let owner = account_id(0x42);
         norito::json!({
             "version": 1,
             "origin": "direct",
-            "origin_account": "ed0120deployer",
+            "origin_account": origin_account,
             "origin_proposal_content_id_hex": null,
             "origin_governance_attempt_id_hex": null,
-            "owner": "ed0120owner",
+            "owner": owner,
             "pending_owner": null,
             "parliament_delegated": false,
             "active_code_hash_hex": active_code_hash_hex,
@@ -1052,17 +1150,117 @@ mod tests {
     }
 
     #[test]
+    fn strict_governed_contract_lifecycle_rejects_consensus_impossible_values() {
+        let mut cases = Vec::new();
+
+        let mut invalid_origin_account = lifecycle(None);
+        invalid_origin_account
+            .as_object_mut()
+            .expect("lifecycle object")
+            .insert("origin_account".into(), Value::from("not-an-account"));
+        cases.push((invalid_origin_account, "origin_account"));
+
+        let mut invalid_owner = lifecycle(None);
+        invalid_owner
+            .as_object_mut()
+            .expect("lifecycle object")
+            .insert("owner".into(), Value::from("not-an-account"));
+        cases.push((invalid_owner, "owner"));
+
+        let mut duplicate_owner_offer = lifecycle(None);
+        let owner = duplicate_owner_offer
+            .as_object()
+            .and_then(|object| object.get("owner"))
+            .cloned()
+            .expect("owner field");
+        duplicate_owner_offer
+            .as_object_mut()
+            .expect("lifecycle object")
+            .insert("pending_owner".into(), owner);
+        cases.push((duplicate_owner_offer, "must differ"));
+
+        let mut parliament_with_delegation = lifecycle(None);
+        let object = parliament_with_delegation
+            .as_object_mut()
+            .expect("lifecycle object");
+        object.insert("owner".into(), Value::from("parliament"));
+        object.insert("parliament_delegated".into(), Value::from(true));
+        cases.push((parliament_with_delegation, "must be false"));
+
+        let mut zero_parliament_origin = lifecycle(None);
+        let object = zero_parliament_origin
+            .as_object_mut()
+            .expect("lifecycle object");
+        object.insert("origin".into(), Value::from("parliament"));
+        object.insert(
+            "origin_proposal_content_id_hex".into(),
+            Value::from("00".repeat(32)),
+        );
+        object.insert(
+            "origin_governance_attempt_id_hex".into(),
+            Value::from("11".repeat(32)),
+        );
+        cases.push((zero_parliament_origin, "must not be all zero"));
+
+        for (field, value, expected) in [
+            (
+                "incident_digest_hex",
+                Value::from("00".repeat(32)),
+                "must not be all zero",
+            ),
+            ("reason", Value::from(" \t "), "non-whitespace"),
+            ("imposed_at_height", Value::from(0_u64), "must be non-zero"),
+            (
+                "expires_at_height",
+                Value::from(MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1 + 2),
+                "must not exceed",
+            ),
+        ] {
+            let mut lifecycle = lifecycle(None);
+            lifecycle.as_object_mut().expect("lifecycle object").insert(
+                "emergency_hold".into(),
+                norito::json!({
+                    "incident_digest_hex": "11".repeat(32),
+                    "proposal_content_id_hex": "22".repeat(32),
+                    "governance_attempt_id_hex": "33".repeat(32),
+                    "reason": "containment",
+                    "imposed_at_height": 1,
+                    "expires_at_height": 2
+                }),
+            );
+            lifecycle
+                .as_object_mut()
+                .and_then(|object| object.get_mut("emergency_hold"))
+                .and_then(Value::as_object_mut)
+                .expect("emergency hold object")
+                .insert(field.into(), value);
+            cases.push((lifecycle, expected));
+        }
+
+        for (lifecycle, expected) in cases {
+            let error = validate_governed_contract_lifecycle(&lifecycle, None, false)
+                .expect_err("consensus-impossible lifecycle must fail closed");
+            assert!(
+                error.to_string().contains(expected),
+                "expected `{expected}` in validation error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
     fn audit_projection_retains_complete_contract_lifecycle_state() {
+        let proposer = account_id(0x51);
+        let owner = account_id(0x52);
         let binding = norito::json!({
             "contract_subject_account": "ed0120subject",
             "active": false,
             "lifecycle": {
                 "version": 1,
                 "origin": "parliament",
-                "origin_account": "ed0120proposer",
+                "origin_account": proposer,
                 "origin_proposal_content_id_hex": "11".repeat(32),
                 "origin_governance_attempt_id_hex": "22".repeat(32),
-                "owner": "ed0120owner",
+                "owner": owner,
                 "pending_owner": "parliament",
                 "parliament_delegated": true,
                 "active_code_hash_hex": null,

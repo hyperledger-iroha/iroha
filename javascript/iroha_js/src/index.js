@@ -9,13 +9,17 @@ export {
   compileKotodamaProgram,
 } from "./kotodamaCompiler/index.js";
 export {
+  KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS,
+  KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
+  KOTODAMA_V1_STATE_MAP_KEY_TYPES,
+} from "./kotodamaIdentifiers.js";
+export {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
   decodeI105AccountAddress,
   encodeI105AccountAddress,
   inspectAccountId,
-  configureCurveSupport,
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
 export { NetworkId } from "./networkId.js";
@@ -37,6 +41,7 @@ export {
   NumericV1,
   NumericV1Error,
 } from "./numericV1.js";
+export { blake2b256 } from "./blake2b.js";
 export {
   computeIvmArtifactHashes,
   IVM_ARTIFACT_MAX_BYTES,
@@ -105,8 +110,12 @@ export {
   encodeIdentifierResolutionReceiptAttestation,
   encodeIdentifierResolutionReceiptPayload,
   buildIdentifierRequestForPolicy,
+  buildSorafsOrderbookEventsWebSocketUrl,
   getIdentifierBfvPublicParameters,
+  isStatusQueueStalled,
   openConnectWebSocket,
+  openSorafsOrderbookEventsWebSocket,
+  statusLivenessElapsedMs,
   verifyIdentifierResolutionReceipt,
 } from "./toriiClient.js";
 export {
@@ -139,6 +148,7 @@ export {
   PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
   PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1,
   PARLIAMENT_PROPOSAL_KINDS_V1,
+  PARLIAMENT_CONTRACT_LIFECYCLE_ACTIONS_V1,
   PARLIAMENT_PUBLIC_TRANSITIONS_V1,
   PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1,
   PARLIAMENT_NO_RESULT_KINDS_V1,
@@ -219,11 +229,6 @@ export {
   deriveConfidentialReceiveAddressV2,
   deriveConfidentialNoteV2,
   deriveConfidentialNullifierV2,
-  ConfidentialMemoKeypairV1,
-  CONFIDENTIAL_MEMO_SUITES_V1,
-  generateConfidentialMemoKeypairV1,
-  sealConfidentialMemoV1,
-  openConfidentialMemoV1,
   generateSm2KeyPair,
   deriveSm2KeyPairFromSeed,
   loadSm2KeyPair,
@@ -323,13 +328,6 @@ export {
   validateNoritoFrame,
   validateSorafsReplicationOrderPayloadV1,
 } from "./norito.js";
-export {
-  buildGatewayRequest,
-  computePayloadHashLiteral,
-  loadComputeFixtures,
-  simulateCompute,
-  validatePayloadHash,
-} from "./compute.js";
 export {
   laneRelayEnvelopeSample,
   verifyLaneRelayEnvelope,
@@ -573,6 +571,7 @@ export {
   SCCP_REPLAY_SMT_DEPTH_V1,
   SCCP_REPLAY_BOUNDARIES_V1,
   SCCP_NETWORK_PROFILES,
+  deriveSccpTonDestinationHashesV1,
   normalizeSccpCodecValue,
   sccpSourceEventDigest,
   sccpReplayDomainHashV1,
@@ -646,8 +645,18 @@ import * as noritoNamespace from "./norito.js";
 import * as cryptoNamespace from "./crypto.js";
 
 export const Torii = toriiNamespace;
-export const Norito = noritoNamespace;
-export const Crypto = cryptoNamespace;
+const { _canonicalAccountIdNoritoValue: _internalAccountIdCodec, ...publicNoritoNamespace } =
+  noritoNamespace;
+const {
+  CONFIDENTIAL_MEMO_SUITES_V1: _nativeMemoSuites,
+  ConfidentialMemoKeypairV1: _nativeMemoKeypair,
+  generateConfidentialMemoKeypairV1: _generateNativeMemoKeypair,
+  openConfidentialMemoV1: _openNativeMemo,
+  sealConfidentialMemoV1: _sealNativeMemo,
+  ...publicCryptoNamespace
+} = cryptoNamespace;
+export const Norito = Object.freeze(publicNoritoNamespace);
+export const Crypto = Object.freeze(publicCryptoNamespace);
 export {
   ConnectError,
   ConnectErrorCategory,

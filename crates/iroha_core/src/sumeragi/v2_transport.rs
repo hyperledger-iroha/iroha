@@ -190,7 +190,7 @@ impl From<wire::ValidationError> for V2TransportError {
     }
 }
 /// Payload chunk admitted through structural, identity, and signature checks.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[must_use]
 pub(crate) struct AuthenticatedPayloadChunk {
     chunk: wire::PayloadChunk,
@@ -324,18 +324,17 @@ impl AuthenticatedCommitCertificateResponse {
 /// Returns an error when structural commitments, the declared roster sender,
 /// the authenticated transport peer, or the sender signature do not match.
 pub(crate) fn authenticate_payload_chunk(
-    context: &wire::HeightContext,
-    manifest: &wire::PayloadManifest,
+    validated: &wire::ValidatedPayloadManifest,
     chunk: wire::PayloadChunk,
     authenticated_sender: &PeerId,
 ) -> Result<AuthenticatedPayloadChunk, V2TransportError> {
-    let claimed_sender = roster_peer(context, chunk.sender)?;
+    let claimed_sender = validated.validator(chunk.sender)?;
     bind_outer_identity(
         TransportIdentityKind::ChunkSender,
         claimed_sender,
         authenticated_sender,
     )?;
-    let signature_payload = chunk.validated_signature_payload(context, manifest)?;
+    let signature_payload = chunk.validate_for_authentication(validated)?;
     let preimage = signature_payload.signature_preimage();
     verify_signature(
         TransportSignatureKind::PayloadChunk,
@@ -1205,16 +1204,20 @@ mod tests {
             PeerId::new(key.public_key().clone())
         }
         fn signed_chunk(&self, sender: wire::ValidatorIndex) -> wire::PayloadChunk {
+            let validated =
+                wire::ValidatedPayloadManifest::new(&self.context, self.manifest.clone())
+                    .expect("validate chunk manifest once");
             let mut chunk = wire::PayloadChunk {
-                manifest_hash: HashOf::new(&self.manifest),
+                manifest_hash: validated.manifest_hash(),
                 index: 0,
                 bytes: self.chunks[0].clone(),
                 sender,
                 signature: Vec::new(),
             };
             let preimage = chunk
-                .signature_preimage(&self.context, &self.manifest)
-                .expect("chunk preimage");
+                .signature_payload(&validated)
+                .expect("chunk signature payload")
+                .signature_preimage();
             let signer = &self.validators[usize::try_from(sender).expect("small index")];
             chunk.signature = Signature::new(signer.private_key(), &preimage)
                 .payload()
@@ -1284,11 +1287,13 @@ mod tests {
     #[test]
     fn payload_chunk_binds_exact_manifest_outer_sender_and_signature() {
         let fixture = Fixture::new();
+        let validated =
+            wire::ValidatedPayloadManifest::new(&fixture.context, fixture.manifest.clone())
+                .expect("validate chunk manifest once");
         let chunk = fixture.signed_chunk(0);
         let sender = Fixture::peer(&fixture.validators[0]);
         let authenticated =
-            authenticate_payload_chunk(&fixture.context, &fixture.manifest, chunk.clone(), &sender)
-                .expect("valid chunk");
+            authenticate_payload_chunk(&validated, chunk.clone(), &sender).expect("valid chunk");
         let (authenticated_chunk, authenticated_hash) = authenticated.into_parts();
         assert_eq!(authenticated_chunk, chunk);
         assert_eq!(authenticated_hash, Hash::new(&chunk.bytes));
@@ -1296,12 +1301,7 @@ mod tests {
         let mut malformed_spoof = chunk.clone();
         malformed_spoof.bytes.pop();
         assert!(matches!(
-            authenticate_payload_chunk(
-                &fixture.context,
-                &fixture.manifest,
-                malformed_spoof,
-                &spoof
-            ),
+            authenticate_payload_chunk(&validated, malformed_spoof, &spoof),
             Err(V2TransportError::OuterIdentityMismatch {
                 kind: TransportIdentityKind::ChunkSender,
                 ..
@@ -1311,18 +1311,14 @@ mod tests {
         wrong_signature.signature = Signature::new(
             fixture.validators[1].private_key(),
             &wrong_signature
-                .signature_preimage(&fixture.context, &fixture.manifest)
-                .expect("preimage"),
+                .signature_payload(&validated)
+                .expect("signature payload")
+                .signature_preimage(),
         )
         .payload()
         .to_vec();
         assert!(matches!(
-            authenticate_payload_chunk(
-                &fixture.context,
-                &fixture.manifest,
-                wrong_signature,
-                &sender
-            ),
+            authenticate_payload_chunk(&validated, wrong_signature, &sender),
             Err(V2TransportError::InvalidSignature {
                 kind: TransportSignatureKind::PayloadChunk,
                 ..
@@ -1331,8 +1327,10 @@ mod tests {
         let mut other_manifest = fixture.manifest.clone();
         other_manifest.subject.block_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"other transport block"));
+        let other_validated = wire::ValidatedPayloadManifest::new(&fixture.context, other_manifest)
+            .expect("validate other chunk manifest once");
         assert!(matches!(
-            authenticate_payload_chunk(&fixture.context, &other_manifest, chunk, &sender),
+            authenticate_payload_chunk(&other_validated, chunk, &sender),
             Err(V2TransportError::Wire(
                 wire::ValidationError::ManifestHashMismatch
             ))

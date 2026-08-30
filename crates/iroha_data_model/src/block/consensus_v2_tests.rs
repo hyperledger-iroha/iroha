@@ -1635,29 +1635,22 @@ mod tests {
     fn signed_payload_chunk_binds_session_and_manifest_fields() {
         let context = context(&[1, 1, 1, 1]);
         let manifest = manifest(&context);
+        let validated = ValidatedPayloadManifest::new(&context, manifest.clone())
+            .expect("validate chunk manifest once");
         let chunk = PayloadChunk {
-            manifest_hash: HashOf::new(&manifest),
+            manifest_hash: validated.manifest_hash(),
             index: 0,
             bytes: b"body".to_vec(),
             sender: 1,
             signature: vec![0x77; 48],
         };
         let payload = chunk
-            .signature_payload(&context, &manifest)
+            .signature_payload(&validated)
             .expect("valid chunk signature payload");
-        let validated_manifest = manifest
-            .validated_for_chunks(&context)
-            .expect("valid manifest chunk seal");
-        assert_eq!(validated_manifest.manifest_hash(), HashOf::new(&manifest));
-        assert_eq!(validated_manifest.signature_payload(&chunk), Ok(payload));
         assert_eq!(
-            validated_manifest.validated_signature_payload(&chunk),
-            Ok(payload)
-        );
-        assert_eq!(
-            chunk
-                .validated_signature_payload(&context, &manifest)
-                .expect("signed chunk validation payload"),
+            validated
+                .committed_chunk_signature_payload(chunk.index, chunk.sender)
+                .expect("reuse the locally committed chunk hash"),
             payload
         );
         assert_eq!(payload.context_id, context.id());
@@ -1670,30 +1663,22 @@ mod tests {
             u32::try_from(manifest.chunk_hashes.len()).expect("fixture chunk count fits u32")
         );
         assert_eq!(payload.chunk_hash, Hash::new(b"body"));
-        let preimage = chunk
-            .signature_preimage(&context, &manifest)
-            .expect("valid signature preimage");
-        assert!(preimage.starts_with(b"iroha:sumeragi:v2:payload-chunk"));
-        assert_eq!(payload.signature_preimage(), preimage);
+        assert!(
+            payload
+                .signature_preimage()
+                .starts_with(b"iroha:sumeragi:v2:payload-chunk")
+        );
         let mut unsigned = chunk.clone();
         unsigned.signature.clear();
-        assert!(unsigned.signature_preimage(&context, &manifest).is_ok());
+        assert!(unsigned.signature_payload(&validated).is_ok());
         assert_eq!(
-            unsigned.validate(&context, &manifest),
-            Err(ValidationError::MissingChunkSignature)
-        );
-        assert_eq!(
-            unsigned.validated_signature_payload(&context, &manifest),
-            Err(ValidationError::MissingChunkSignature)
-        );
-        assert_eq!(
-            validated_manifest.validated_signature_payload(&unsigned),
-            Err(ValidationError::MissingChunkSignature)
+            unsigned.validate_for_authentication(&validated),
+            Err(ValidationError::MissingSignature)
         );
         let mut corrupted = chunk.clone();
         corrupted.bytes.push(0);
         assert_eq!(
-            corrupted.signature_payload(&context, &manifest),
+            corrupted.signature_payload(&validated),
             Err(ValidationError::InvalidChunkLength)
         );
     }
@@ -1701,6 +1686,8 @@ mod tests {
     fn manifest_rejects_mutated_root_size_count_and_chunk_length() {
         let context = context(&[1, 1, 1, 1]);
         let canonical = manifest(&context);
+        let validated = ValidatedPayloadManifest::new(&context, canonical.clone())
+            .expect("validate canonical manifest once");
         assert_eq!(canonical.validate(&context), Ok(()));
         let mut wrong_root = canonical.clone();
         wrong_root.chunk_root = Hash::new(b"not the canonical root");
@@ -1728,7 +1715,7 @@ mod tests {
             signature: vec![0x44; 48],
         };
         assert_eq!(
-            short_chunk.validate(&context, &canonical),
+            short_chunk.validate_for_authentication(&validated),
             Err(ValidationError::InvalidChunkLength)
         );
     }

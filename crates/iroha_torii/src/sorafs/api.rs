@@ -11192,17 +11192,21 @@ pub(crate) async fn handle_get_sorafs_reputation_events_ws(
             }
         };
         let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
+        let shutdown = state.shutdown_signal.clone();
         let mut response = ws
             .on_upgrade(move |socket| async move {
                 let _preauth_guard = preauth_guard;
-                if let Err(err) = reputation_event_websocket_stream(
+                let stream = reputation_event_websocket_stream(
                     socket,
                     initial_backlog.frames,
                     committed_reader,
                     initial_backlog.cursor,
-                )
-                .await
-                {
+                );
+                let result = tokio::select! {
+                    () = shutdown.receive() => return,
+                    result = stream => result,
+                };
+                if let Err(err) = result {
                     debug!(%err, "SoraFS reputation WebSocket stream closed with error");
                 }
             })
@@ -13948,17 +13952,21 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
         let stream_state = state.clone();
         let limit = query.limit();
         let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
+        let shutdown = state.shutdown_signal.clone();
         ws.on_upgrade(move |socket| async move {
             let _preauth_guard = preauth_guard;
-            if let Err(err) = orderbook_finalized_event_websocket_stream(
+            let stream = orderbook_finalized_event_websocket_stream(
                 socket,
                 stream_state,
                 initial_page.events,
                 after,
                 limit,
-            )
-            .await
-            {
+            );
+            let result = tokio::select! {
+                () = shutdown.receive() => return,
+                result = stream => result,
+            };
+            if let Err(err) = result {
                 debug!(%err, "SoraFS orderbook WebSocket stream closed with error");
             }
         })

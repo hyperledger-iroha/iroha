@@ -1515,9 +1515,9 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         "a CommitQC recovery response owns the final physical certified-fence slot"
     );
     let transport = wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
-        manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime transport manifest")),
+        manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime orphan chunk")),
         index: 0,
-        bytes: vec![0, 1],
+        bytes: Vec::new(),
         sender: 0,
         signature: vec![1],
     });

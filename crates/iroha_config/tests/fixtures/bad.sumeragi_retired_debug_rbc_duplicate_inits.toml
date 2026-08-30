@@ -1,0 +1,4 @@
+extends = ["minimal_with_trusted_peers.toml"]
+
+[sumeragi.debug.rbc]
+duplicate_inits = true

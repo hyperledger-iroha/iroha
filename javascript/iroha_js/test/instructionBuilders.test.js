@@ -150,10 +150,7 @@ import {
 } from "../src/index.js";
 import * as sdkExports from "../src/index.js";
 import { ValidationErrorCode } from "../src/validationError.js";
-import {
-  AccountAddress,
-  configureCurveSupport,
-} from "../src/address.js";
+import { AccountAddress } from "../src/address.js";
 
 function hexToBytes(hex) {
   const body = hex.replace(/^0x/i, "");
@@ -2948,29 +2945,24 @@ baseTest("buildProposeDeployContractInstruction validates ML-DSA manifest signer
     },
   });
 
-  configureCurveSupport({ allowMlDsa: true });
-  try {
-    const validSigner = mlDsaManifestSigner(1_952);
-    const instruction = buildProposeDeployContractInstruction(withSigner(validSigner));
-    assert.equal(
-      instruction.ProposeDeployContract.manifest_provenance.signer,
-      `ee01a00f${"5A".repeat(1_952)}`,
-    );
+  const validSigner = mlDsaManifestSigner(1_952);
+  const instruction = buildProposeDeployContractInstruction(withSigner(validSigner));
+  assert.equal(
+    instruction.ProposeDeployContract.manifest_provenance.signer,
+    `ee01a00f${"5A".repeat(1_952)}`,
+  );
 
-    for (const [label, signer, errorPattern] of [
-      ["one-byte", mlDsaManifestSigner(1), /expected 1952 bytes/u],
-      ["short", mlDsaManifestSigner(1_951), /expected 1952 bytes/u],
-      ["overlong", mlDsaManifestSigner(1_953), /expected 1952 bytes/u],
-      ["all-zero", mlDsaManifestSigner(1_952, 0), /all-zero/u],
-    ]) {
-      assert.throws(
-        () => buildProposeDeployContractInstruction(withSigner(signer)),
-        errorPattern,
-        `${label} ML-DSA signer must be rejected before instruction emission`,
-      );
-    }
-  } finally {
-    configureCurveSupport();
+  for (const [label, signer, errorPattern] of [
+    ["one-byte", mlDsaManifestSigner(1), /expected 1952 bytes/u],
+    ["short", mlDsaManifestSigner(1_951), /expected 1952 bytes/u],
+    ["overlong", mlDsaManifestSigner(1_953), /expected 1952 bytes/u],
+    ["all-zero", mlDsaManifestSigner(1_952, 0), /all-zero/u],
+  ]) {
+    assert.throws(
+      () => buildProposeDeployContractInstruction(withSigner(signer)),
+      errorPattern,
+      `${label} ML-DSA signer must be rejected before instruction emission`,
+    );
   }
 });
 

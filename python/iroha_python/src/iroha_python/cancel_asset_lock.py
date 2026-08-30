@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Final
 
+from norito.crc64 import crc64 as _crc64
+
 from .numeric_v1 import MAX_MANTISSA_BYTES, KotodamaQuantity, NumericV1Codec
 
 CANCEL_ASSET_LOCK_WIRE_ID_V1: Final[str] = "iroha.instruction.v1::escrow::CancelAssetLock"
@@ -24,8 +26,6 @@ _COMPACT_LENGTH_FLAG: Final[int] = 0x02
 # schema perform an unbounded payload scan.
 _MIN_CANONICAL_ARCHIVE_BYTES: Final[int] = 85
 _MAX_CANONICAL_ARCHIVE_BYTES: Final[int] = 148
-_U64_MASK: Final[int] = (1 << 64) - 1
-_CRC64_POLY: Final[int] = 0xC96C_5795_D787_0F42
 _SCHEMA_HASH: Final[bytes] = hashlib.sha256(
     b"norito:v1:type-name\0" + _CANCEL_ASSET_LOCK_SCHEMA_NAME_V1.encode("ascii")
 ).digest()[:16]
@@ -33,15 +33,6 @@ _CANONICAL_HASH_LITERAL_RE: Final[re.Pattern[str]] = re.compile(
     r"hash:([0-9A-F]{64})#([0-9A-F]{4})\Z",
     re.ASCII,
 )
-
-
-def _crc64(payload: bytes) -> int:
-    crc = _U64_MASK
-    for byte in payload:
-        crc ^= byte
-        for _ in range(8):
-            crc = ((crc >> 1) ^ _CRC64_POLY) if crc & 1 else crc >> 1
-    return (crc ^ _U64_MASK) & _U64_MASK
 
 
 def _crc16(payload: bytes) -> int:

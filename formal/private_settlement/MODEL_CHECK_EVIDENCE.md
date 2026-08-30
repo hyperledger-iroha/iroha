@@ -1,5 +1,16 @@
 # Atomic private settlement model-check evidence
 
+Post-merge input status (2026-08-30): the current
+`AtomicPrivateSettlementV1CommitteeFaults.tla` SHA-256 is
+`4d7621a44a7f0d789e89703f1c15e860b4a51180a72958839fcbc61565bfbaa1`,
+not the `e638...` input authenticated by the committee-indexed runs below. The
+only source delta is a comment clarifying that the abstract `bundle` value is
+the normalized certified statement rather than a signer bitmap, so it does not
+change TLA semantics. The release runner nevertheless authenticates exact
+input bytes. Consequently every committee-indexed row below is historical
+evidence for its recorded hash and must be rerun from frozen current inputs;
+none is current release-candidate evidence.
+
 Local evidence captured on 2026-08-29 against repository base commit
 `1bdec3b88c348a84776241839fb0e8ad71738b3e` with uncommitted implementation
 changes present.

@@ -1,7 +1,30 @@
 //! Opcode validation checks for instruction slots.
 use ivm::instruction;
+
 #[test]
-fn first_release_extension_opcodes_are_valid_but_reserved_iso_slots_are_invalid() {
+fn first_release_crypto_opcode_layout_is_dense() {
+    assert_eq!(
+        [
+            instruction::wide::crypto::SHA256BLOCK,
+            instruction::wide::crypto::SHA3BLOCK,
+            instruction::wide::crypto::POSEIDON2,
+            instruction::wide::crypto::POSEIDON6,
+            instruction::wide::crypto::AESENC,
+            instruction::wide::crypto::AESDEC,
+            instruction::wide::crypto::BLAKE2S,
+            instruction::wide::crypto::ED25519VERIFY,
+            instruction::wide::crypto::ED25519BATCHVERIFY,
+            instruction::wide::crypto::ECDSAVERIFY,
+            instruction::wide::crypto::DILITHIUMVERIFY,
+        ],
+        [
+            0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A,
+        ]
+    );
+}
+
+#[test]
+fn first_release_extension_opcodes_are_valid_but_unassigned_slots_are_invalid() {
     assert!(instruction::wide::is_valid_opcode(
         instruction::wide::system::SYSTEM
     ));
@@ -22,11 +45,11 @@ fn first_release_extension_opcodes_are_valid_but_reserved_iso_slots_are_invalid(
         );
     }
     for opcode in [
-        instruction::wide::crypto::PUBKGEN,
-        instruction::wide::crypto::VALCOM,
-        instruction::wide::crypto::ECADD,
-        instruction::wide::crypto::ECMUL_VAR,
-        instruction::wide::crypto::PAIRING,
+        0x8B,
+        0x8C,
+        0x8D,
+        0x8E,
+        0x8F,
         instruction::wide::iso20022::MSG_CREATE,
         instruction::wide::iso20022::MSG_CLONE,
         instruction::wide::iso20022::MSG_SET,
@@ -46,12 +69,12 @@ fn first_release_extension_opcodes_are_valid_but_reserved_iso_slots_are_invalid(
     ] {
         assert!(
             !instruction::wide::is_valid_opcode(opcode),
-            "reserved opcode 0x{opcode:02x} must remain invalid in ABI v1"
+            "unassigned opcode 0x{opcode:02x} must be invalid in ABI v1"
         );
         assert_eq!(
             ivm::cost_of(u32::from(opcode) << 24),
             None,
-            "reserved opcode 0x{opcode:02x} must have no gas schedule entry"
+            "unassigned opcode 0x{opcode:02x} must have no gas schedule entry"
         );
     }
 }

@@ -48,6 +48,7 @@ export const PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1 = 1_000;
 export const PARLIAMENT_TLE_MAX_COMMITTEE_SIZE_V1 = 31;
 const PARLIAMENT_BODY_TARGET_SEATS_MAX_V1 = 1_000;
 const PARLIAMENT_BALLOT_RETRIES_MAX_V1 = 16;
+const PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1 = 1;
 export const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1 =
   4 * 1024 * 1024;
 export const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES_V1 =
@@ -65,6 +66,16 @@ export const PARLIAMENT_PROPOSAL_KINDS_V1 = Object.freeze([
   "ContractLifecycleGovernance",
   "ContractEmergencyHold",
   "GlobalDataTriggerPermissionGovernance",
+]);
+
+// Closed ContractLifecycleGovernance action inventory in wire-tag order.
+export const PARLIAMENT_CONTRACT_LIFECYCLE_ACTIONS_V1 = Object.freeze([
+  "Activate",
+  "Deactivate",
+  "OfferOwnership",
+  "CancelOwnershipOffer",
+  "AcceptParliamentOwnership",
+  "CompleteEmergencyHoldRetrospective",
 ]);
 
 export const PARLIAMENT_PUBLIC_TRANSITIONS_V1 = Object.freeze([
@@ -473,7 +484,11 @@ export function normalizeParliamentAttemptReadResponseV1(value, expectedGovernan
     attempt.proposal_content_id,
     "attempt.proposal_content_id",
   );
-  const attemptSequence = uint(attempt.sequence, 0xffff_ffff, "attempt.sequence");
+  const attemptSequence = uint(
+    attempt.sequence,
+    PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
+    "attempt.sequence",
+  );
   const riskTier = validateTaggedUnit(attempt.risk_tier, "tier", ["Routine", "Standard", "Constitutional", "Emergency"], "attempt.risk_tier");
   validateTaggedUnit(attempt.stage, "stage", [
     "Qualification", "Rules", "Agenda", "Interest", "Review", "Coordination",
@@ -484,8 +499,8 @@ export function normalizeParliamentAttemptReadResponseV1(value, expectedGovernan
     "Active", "Certified", "Rejected", "Enacted", "Superseded", "ExecutionFailed",
   ], "attempt.status");
   const policyVersion = unsigned(root.policy_version, "policy_version");
-  if (BigInt(policyVersion) === 0n) {
-    throw new TypeError("policy_version must be positive");
+  if (BigInt(policyVersion) !== BigInt(PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1)) {
+    throw new TypeError("policy_version must equal the first-release Parliament policy version");
   }
   const requiredBodies = validateRequiredBodies(root.required_bodies);
   const bodyStates = validateBodyStates(root.body_states, requiredBodies);
@@ -498,7 +513,7 @@ export function normalizeParliamentAttemptReadResponseV1(value, expectedGovernan
       policyVersion,
       requiredBodies,
       bodyStates,
-    });
+    }, { requirePolicyJury: true });
   }
   if (root.superseding_head !== null) {
     validateExpectedHead(root.superseding_head, "superseding_head");
@@ -1104,7 +1119,7 @@ function validateCertificate(value, expectations = {}, options = {}) {
   }
   const attemptSequence = uint(
     certificate.governance_attempt_sequence,
-    0xffff_ffff,
+    PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1,
     "certificate.governance_attempt_sequence",
   );
   if (expectations.attemptSequence !== undefined
@@ -1136,6 +1151,15 @@ function validateCertificate(value, expectations = {}, options = {}) {
   }
   const bindings = certificate.body_bindings.map((binding, index) =>
     validateBodyCertificateBinding(binding, index, attemptId, certifiedAtHeight));
+  const latestBodyResultHeight = bindings.reduce(
+    (latest, binding) => BigInt(binding.resultHeight) > latest
+      ? BigInt(binding.resultHeight)
+      : latest,
+    0n,
+  );
+  if (BigInt(certifiedAtHeight) !== latestBodyResultHeight) {
+    throw new TypeError("certificate.certified_at_height must equal the latest body result height");
+  }
   for (let index = 1; index < bindings.length; index += 1) {
     if (bindings[index - 1].bodyIndex >= bindings[index].bodyIndex) {
       throw new TypeError("certificate.body_bindings must use strict canonical body order");
@@ -1226,14 +1250,15 @@ function validateCertificate(value, expectations = {}, options = {}) {
     if (narrow) {
       const confirmation = confirmationJuries[0];
       if (
-        confirmation.sortitionRequest.requestHeight <= BigInt(policy.resultHeight) ||
         (
-          confirmation.beaconSessionId === policy.beaconSessionId &&
-          confirmation.sortitionPulseId === policy.sortitionPulseId
-        )
+          confirmation.electionAttemptSequence === 0
+            ? confirmation.sortitionRequest.requestHeight !== BigInt(policy.resultHeight)
+            : confirmation.sortitionRequest.requestHeight <= BigInt(policy.resultHeight)
+        ) ||
+        confirmation.sortitionPulseId === policy.sortitionPulseId
       ) {
         throw new TypeError(
-          "certificate confirmation-jury request and pulse must follow the policy result",
+          "certificate confirmation-jury request height must match the atomic initial request or follow it on retry, with a fresh pulse",
         );
       }
     }
@@ -1241,8 +1266,10 @@ function validateCertificate(value, expectations = {}, options = {}) {
   bytes(certificate.effect_preimage_hash, 32, "certificate.effect_preimage_hash", true);
   validateExpectedHead(certificate.expected_head, "certificate.expected_head");
   const policyVersion = unsigned(certificate.policy_version, "certificate.policy_version");
-  if (BigInt(policyVersion) === 0n) {
-    throw new TypeError("certificate.policy_version must be positive");
+  if (BigInt(policyVersion) !== BigInt(PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1)) {
+    throw new TypeError(
+      "certificate.policy_version must equal the first-release Parliament policy version",
+    );
   }
   if (expectations.policyVersion !== undefined
     && BigInt(policyVersion) !== BigInt(expectations.policyVersion)) {
@@ -1267,7 +1294,11 @@ function validateBodyCertificateBinding(value, index, governanceAttemptId, certi
   for (const field of ["roster_root", "assignment_root", "result_root"]) {
     bytes(binding[field], 32, `${context}.${field}`, true);
   }
-  uint(binding.election_attempt_sequence, 0xffff_ffff, `${context}.election_attempt_sequence`);
+  const electionAttemptSequence = uint(
+    binding.election_attempt_sequence,
+    PARLIAMENT_BALLOT_RETRIES_MAX_V1,
+    `${context}.election_attempt_sequence`,
+  );
   const resultHeight = unsigned(binding.result_height, `${context}.result_height`);
   const sortitionRequest = validateSortitionRequest(
     binding.sortition_request,
@@ -1275,6 +1306,12 @@ function validateBodyCertificateBinding(value, index, governanceAttemptId, certi
     governanceAttemptId,
     `${context}.sortition_request`,
   );
+  if (
+    seats > sortitionRequest.targetSeats ||
+    seats > sortitionRequest.candidateCount
+  ) {
+    throw new TypeError(`${context}.original_seats exceeds its sortition bounds`);
+  }
   if (
     BigInt(resultHeight) <= sortitionRequest.pulseHeight ||
     BigInt(resultHeight) > BigInt(certifiedAtHeight)
@@ -1305,6 +1342,7 @@ function validateBodyCertificateBinding(value, index, governanceAttemptId, certi
     decisionMode: isPrivateJury ? "HiddenBindingBallot" : "PublicFinding",
     bodyInstanceId: binding.body_instance_id,
     electionAttemptId: binding.election_attempt_id,
+    electionAttemptSequence,
     releasePulseId: ballot?.releasePulseId ?? null,
     releaseSlot: ballot?.releaseSlot ?? null,
     resultHeight,
@@ -1331,13 +1369,13 @@ function validateSortitionRequest(value, binding, governanceAttemptId, context) 
     `${context}.beacon_session_id`,
   );
   bytes(request.candidate_root, 32, `${context}.candidate_root`, true);
-  uint(
+  const candidateCount = uint(
     request.candidate_count,
-    PARLIAMENT_TIMED_OVN_CORPUS_ENTRIES_V1,
+    0xffff_ffff,
     `${context}.candidate_count`,
     1,
   );
-  uint(
+  const targetSeats = uint(
     request.target_seats,
     PARLIAMENT_BODY_TARGET_SEATS_MAX_V1,
     `${context}.target_seats`,
@@ -1357,7 +1395,7 @@ function validateSortitionRequest(value, binding, governanceAttemptId, context) 
   ) {
     throw new TypeError(`${context} differs from its repeated certificate bindings`);
   }
-  return { pulseHeight, requestHeight };
+  return { candidateCount, pulseHeight, requestHeight, targetSeats };
 }
 
 function validateBallotCertificate(value, binding, context) {
@@ -1493,7 +1531,7 @@ function validateExpectedHead(value, context) {
   } else if (root.state === "Present") {
     const head = exactObject(root.head, ["subject_id", "version", "head_root"], `${context}.head`);
     bytes(head.subject_id, 32, `${context}.head.subject_id`, true);
-    unsigned(head.version, `${context}.head.version`);
+    nonZeroU64(head.version, `${context}.head.version`);
     bytes(head.head_root, 32, `${context}.head.head_root`, true);
   } else {
     throw new TypeError(`${context}.state must be Absent or Present`);

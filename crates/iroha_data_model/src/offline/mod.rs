@@ -73,6 +73,22 @@ pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 pub const KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 /// Fixed depth-16 confidential tree capacity used by top-up shielding.
 pub const KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2: u32 = 1 << KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
+/// Maximum private output leaves appended after recursive-spend initialization.
+///
+/// Every one of the 64 permitted branch decisions appends one selected output.
+/// Up to eight of those decisions may be peer splits, each of which can append
+/// one additional sender-change output.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2: u32 =
+    KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2 as u32
+        + KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2;
+/// Number of tree positions available for top-up insertions.
+///
+/// After the top-up leaf, the tree reserves the complete recursive-spend
+/// output budget plus one distinct final empty frontier leaf. This ensures the
+/// last admitted top-up can exercise all 64 branch decisions, including eight
+/// two-output peer splits, without stranding its private balance.
+pub const KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2: u32 =
+    KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 - KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2 - 1;
 /// Maximum canonical top-up shield proof envelope accepted at typed ingress.
 pub const KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2: usize = 192 * 1024;
 /// Absolute canonical byte ceiling for one ABI-21 unshield-v3 proof.
@@ -2167,7 +2183,7 @@ impl KagemushaRequestAuthorizationV2 {
         now_ms: u64,
     ) -> Result<(), KagemushaValidationError> {
         self.validate_for_payload(expected_payload_digest)?;
-        if now_ms < self.issued_at_ms || now_ms > self.expires_at_ms {
+        if now_ms < self.issued_at_ms || now_ms >= self.expires_at_ms {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "authorization.expires_at_ms",
             });
@@ -2227,10 +2243,23 @@ impl KagemushaScaledAmountV2 {
         Self::new(atomic_units, asset_scale)
     }
     /// Return the public quantity at the authoritative asset scale.
-    #[must_use]
-    pub fn public_quantity(self) -> Quantity {
-        Quantity::from_canonical_numeric(Numeric::new(self.atomic_units, self.scale))
-            .expect("a u128 scaled amount is always a non-negative quantity")
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when a decoded or manually built
+    /// amount violates the Kagemusha amount contract.
+    pub fn public_quantity(self) -> Result<Quantity, KagemushaValidationError> {
+        self.validate()?;
+        let numeric = Numeric::try_new(self.atomic_units, self.scale).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "amount.scale",
+            }
+        })?;
+        Quantity::from_canonical_numeric(numeric).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "amount.atomic_units",
+            }
+        })
     }
     /// Validate the exact amount contract.
     ///
@@ -3287,7 +3316,7 @@ impl KagemushaTopUpShieldEvidenceV2 {
         if self.initial_root == [0; 32]
             || self.finalized_root == [0; 32]
             || self.initial_root == self.finalized_root
-            || self.leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
+            || self.leaf_index >= KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2
             || self.proof.structural_error().is_some()
             || self.proof.backend.as_str() != KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND
             || commitment == [0; 32]
@@ -3674,12 +3703,42 @@ pub fn kagemusha_confidential_amount_encoding_v2(atomic_units: u128) -> [u8; 32]
     encoded
 }
 impl KagemushaUnshieldPublicInputsBindingV2 {
+    /// Validate the standalone Kagemusha unshield public-input shape.
+    ///
+    /// The exact note, amount, asset, network, and optional change binding is
+    /// checked by the enclosing redemption intent. This boundary rejects the
+    /// structurally impossible zero identities and second-input coordinates
+    /// before they can acquire a canonical digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaValidationError`] when the public-input shape cannot
+    /// represent a Kagemusha redemption.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        let zero = [0_u8; 32];
+        if self.input_commitment_0 == zero
+            || self.input_commitment_1 != zero
+            || self.nullifier_0 == zero
+            || self.nullifier_1 != zero
+            || self.root == zero
+            || self.public_amount == zero
+            || self.public_amount[16..].iter().any(|byte| *byte != 0)
+            || self.asset_tag == zero
+            || self.network_tag == zero
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redemption.v4.unshield_public_inputs",
+            });
+        }
+        Ok(())
+    }
     /// Return the domain-separated digest exposed by the redemption-change circuit.
     ///
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when the value is invalid or its canonical digest preimage cannot be encoded.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaUnshieldPublicInputsDigestPreimageV2 {
             domain: KAGEMUSHA_UNSHIELD_PUBLIC_INPUTS_DIGEST_DOMAIN_V2.to_owned(),
             public_inputs: *self,
@@ -4478,6 +4537,32 @@ mod kagemusha_v4_artifact_contract_tests {
         }
     }
     #[test]
+    fn topup_shield_reserves_the_complete_recursive_lifecycle() {
+        let backend: iroha_schema::Ident = KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into();
+        let mut proof = ProofAttachment::new_ref(
+            backend.clone(),
+            ProofBox::new(backend.clone(), vec![1, 2, 3]),
+            VerifyingKeyId::new(backend, "topup-shield-v2"),
+        );
+        proof.vk_commitment = Some(digest(b"top-up shield verifier"));
+        let mut evidence = KagemushaTopUpShieldEvidenceV2 {
+            initial_root: digest(b"top-up initial root"),
+            finalized_root: digest(b"top-up finalized root"),
+            leaf_index: KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2 - 1,
+            proof,
+        };
+        evidence
+            .validate_public_binding()
+            .expect("the last insertable leaf retains the full lifecycle reserve");
+        evidence.leaf_index = KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2;
+        assert!(matches!(
+            evidence.validate_public_binding(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "shield_evidence"
+            })
+        ));
+    }
+    #[test]
     fn offline_note_inputs_reject_zero_network_identity() {
         let mut note = retired_top_up_fixture().current_note;
         note.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -5273,6 +5358,11 @@ impl KagemushaReceiverAcknowledgementV2 {
     ///
     /// Returns [`KagemushaValidationError`] when the value is invalid or its canonical digest preimage cannot be encoded.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.payload.validate_public_binding()?;
+        self.signature.verify(
+            &self.payload.receiver_public_key,
+            &self.payload.signing_bytes()?,
+        )?;
         kagemusha_poseidon_preimage(&KagemushaReceiverAcknowledgementDigestPreimageV2 {
             domain: KAGEMUSHA_RECEIVER_ACKNOWLEDGEMENT_DIGEST_DOMAIN_V2.to_owned(),
             acknowledgement: self.clone(),
@@ -5525,10 +5615,10 @@ impl KagemushaRecursiveSpendTopUpAnchorV4 {
             || self.initial_root == [0; 32]
             || self.finalized_root == [0; 32]
             || self.initial_root == self.finalized_root
-            || self.shield_leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
+            || self.shield_leaf_index >= KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2
             || self.topup_operation_id == [0; 32]
-            || self.shield_verifier_id.backend.is_empty()
-            || self.shield_verifier_id.name.is_empty()
+            || self.shield_verifier_id.backend.as_str() != KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND
+            || !self.shield_verifier_id.is_portable_registry_id()
             || self.shield_verifier_commitment == [0; 32]
             || self.finalized_height == 0
             || self.finalized_tx_hash == [0; 32]
@@ -5739,6 +5829,27 @@ impl KagemushaRecursiveSpendInitRequestV4 {
     }
 }
 impl KagemushaRecursiveSpendSplitIntentV4 {
+    fn binding_digest_unchecked(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        kagemusha_poseidon_preimage(&KagemushaRecursiveSpendSplitBindingDigestPreimageV4 {
+            domain: KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4.to_owned(),
+            split: self.clone(),
+        })
+    }
+    fn output_branch_claims_for_binding(
+        &self,
+        branch: KagemushaRecursiveSpendBranchV2,
+        binding: [u8; 32],
+    ) -> Result<Vec<KagemushaRecursiveSpendBranchClaimV2>, KagemushaValidationError> {
+        let mut claims = self
+            .inputs
+            .iter()
+            .flat_map(|input| &input.branch_claims)
+            .map(|claim| claim.child(branch, binding))
+            .collect::<Result<Vec<_>, _>>()?;
+        claims.sort_unstable_by_key(|claim| claim.path);
+        validate_kagemusha_recursive_spend_branch_claims_v2(&claims)?;
+        Ok(claims)
+    }
     /// Validate exact conservation, canonical parents, and disjoint V4 outputs.
     #[expect(
         clippy::too_many_lines,
@@ -5754,8 +5865,12 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
         self.recipient_output.validate_public_binding()?;
         let lineage_roots =
             validate_kagemusha_recursive_spend_topup_anchor_refs_v2(&self.topup_anchor_refs)?;
-        if self.inputs.is_empty()
-            || self.inputs.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
+        let common_input_root = self
+            .inputs
+            .first()
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof { field: "split.v4" })?
+            .input_root;
+        if self.inputs.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
             || self.asset_scale != self.transfer_amount.scale
             || self.recipient_request_digest == [0; 32]
             || self.operation_id == [0; 32]
@@ -5778,6 +5893,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
                 || input.input_note.asset != self.asset
                 || input.input_note.amount.scale != self.asset_scale
                 || input.input_root == [0; 32]
+                || input.input_root != common_input_root
                 || input.proof_step_count == 0
                 || input.proof_step_count >= KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
                 || input.peer_hop_count >= KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
@@ -5852,6 +5968,14 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
                 field: "split.v4.output_material",
             });
         }
+        let binding = self.binding_digest_unchecked()?;
+        self.output_branch_claims_for_binding(KagemushaRecursiveSpendBranchV2::Recipient, binding)?;
+        if self.change_output.is_some() {
+            self.output_branch_claims_for_binding(
+                KagemushaRecursiveSpendBranchV2::Change,
+                binding,
+            )?;
+        }
         Ok(())
     }
     /// Return the exact validated input total.
@@ -5878,10 +6002,7 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
     /// Returns [`KagemushaValidationError`] when the value is invalid or its canonical digest preimage cannot be encoded.
     pub fn binding_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate_public_binding()?;
-        kagemusha_poseidon_preimage(&KagemushaRecursiveSpendSplitBindingDigestPreimageV4 {
-            domain: KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4.to_owned(),
-            split: self.clone(),
-        })
+        self.binding_digest_unchecked()
     }
     /// Derive the deterministic conflict claims for one ABI-21 child.
     ///
@@ -5899,16 +6020,8 @@ impl KagemushaRecursiveSpendSplitIntentV4 {
                 field: "split.v4.change_output",
             });
         }
-        let binding = self.binding_digest()?;
-        let mut claims = self
-            .inputs
-            .iter()
-            .flat_map(|input| &input.branch_claims)
-            .map(|claim| claim.child(branch, binding))
-            .collect::<Result<Vec<_>, _>>()?;
-        claims.sort_unstable_by_key(|claim| claim.path);
-        validate_kagemusha_recursive_spend_branch_claims_v2(&claims)?;
-        Ok(claims)
+        let binding = self.binding_digest_unchecked()?;
+        self.output_branch_claims_for_binding(branch, binding)
     }
 }
 impl KagemushaRecursiveSpendRedemptionIntentV4 {
@@ -6070,6 +6183,15 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
             .collect::<Vec<_>>();
         claim_roots.sort_unstable();
         claim_roots.dedup();
+        let canonical_init_claim = if self.topup_anchor_refs.len() == 1 {
+            Some(KagemushaRecursiveSpendBranchClaimV2::root(
+                self.topup_anchor_refs[0].anchor_digest,
+            )?)
+        } else {
+            None
+        };
+        let has_canonical_init_claim =
+            canonical_init_claim.is_some_and(|claim| self.branch_claims.as_slice() == [claim]);
         if self.current_note.network_id != self.network_id
             || self.current_note.asset != self.asset
             || self.current_note.amount.scale != self.asset_scale
@@ -6085,7 +6207,9 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
             });
         }
         match &self.transition {
-            None if self.proof_step_count == 1 && self.peer_hop_count == 0 => {}
+            None if self.proof_step_count == 1
+                && self.peer_hop_count == 0
+                && has_canonical_init_claim => {}
             Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition))
                 if transition.binding_digest != [0; 32]
                     && transition.recipient_request_digest != [0; 32]

@@ -1436,17 +1436,17 @@ async fn telemetry_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    // Status tail
-    let resp = super::handler_status_tail(
-        State(app.clone()),
-        headers.clone(),
-        None,
-        axum::extract::Path("peers".to_string()),
-        axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))),
-    )
-    .await
-    .expect("ok")
-    .into_response();
+    // Exact status probes
+    let remote = axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
+    let resp = super::handler_status_blocks(State(app.clone()), headers.clone(), None, remote)
+        .await
+        .expect("blocks status")
+        .into_response();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let resp = super::handler_status_peers(State(app.clone()), headers.clone(), None, remote)
+        .await
+        .expect("peers status")
+        .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     // Metrics
     let text = super::handler_metrics(
@@ -1647,12 +1647,10 @@ async fn app_api_get_by_id_not_found_returns_404() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
 }
-#[cfg(feature = "app_api")]
 struct RuntimeApiRouterFixture {
     router: axum::Router,
     _kiso_child: iroha_futures::supervisor::Child,
 }
-#[cfg(feature = "app_api")]
 impl RuntimeApiRouterFixture {
     fn standard(chain_id: &'static str) -> Self {
         let kura = Kura::blank_kura_for_testing();
@@ -1702,6 +1700,40 @@ impl RuntimeApiRouterFixture {
             router: torii.api_router_for_tests(),
             _kiso_child: child,
         }
+    }
+}
+#[cfg(not(feature = "app_api"))]
+#[tokio::test]
+async fn public_sorafs_gateway_routes_are_mounted_without_app_api() {
+    use axum::{
+        body::Body,
+        http::{Method, Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
+
+    let fixture = RuntimeApiRouterFixture::standard("sorafs-public-gateway-no-app-api-test");
+    for path in [
+        "/v1/sorafs/cid/example",
+        "/.well-known/sorafs/manifest",
+        "/sorafs/cid/example",
+        "/sorafs/cid/example/index.html",
+    ] {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .body(Body::empty())
+            .expect("public SoraFS gateway mount probe");
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("public SoraFS gateway mount response");
+        assert_eq!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "GET-only public gateway path must remain mounted without app_api: {path}"
+        );
     }
 }
 #[cfg(feature = "app_api")]

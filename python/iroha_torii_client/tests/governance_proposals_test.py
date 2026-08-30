@@ -359,7 +359,7 @@ def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
     ]
 
 
-def test_shared_fixture_pins_closed_proposal_inventory() -> None:
+def test_shared_fixture_pins_closed_proposal_and_lifecycle_action_inventories() -> None:
     fixture_path = (
         Path(__file__).resolve().parents[3]
         / "fixtures"
@@ -369,6 +369,49 @@ def test_shared_fixture_pins_closed_proposal_inventory() -> None:
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
     assert fixture["proposal_kinds"] == [kind.value for kind in GovernanceProposalKindTag]
+    assert fixture["contract_lifecycle_actions"] == [
+        action.value for action in GovernanceContractLifecycleActionKind
+    ]
+
+
+def test_contract_lifecycle_action_inventory_admits_exactly_six_wire_tags() -> None:
+    action_payloads: dict[GovernanceContractLifecycleActionKind, object] = {
+        GovernanceContractLifecycleActionKind.ACTIVATE: {
+            "code_hash": "11" * 32,
+            "abi_hash": "22" * 32,
+            "abi_version": 1,
+            "manifest_provenance": None,
+        },
+        GovernanceContractLifecycleActionKind.DEACTIVATE: {
+            "expected_code_hash": "33" * 32,
+        },
+        GovernanceContractLifecycleActionKind.OFFER_OWNERSHIP: {
+            "new_owner": CANONICAL_OWNER,
+        },
+        GovernanceContractLifecycleActionKind.CANCEL_OWNERSHIP_OFFER: None,
+        GovernanceContractLifecycleActionKind.ACCEPT_PARLIAMENT_OWNERSHIP: None,
+        GovernanceContractLifecycleActionKind.COMPLETE_EMERGENCY_HOLD_RETROSPECTIVE: {
+            "hold_proposal_content_id": [0x42] * 32,
+            "hold_governance_attempt_id": [0x43] * 32,
+            "incident_digest": [0x44] * 32,
+            "retrospective_finding_root": [0x45] * 32,
+        },
+    }
+    assert list(action_payloads) == list(GovernanceContractLifecycleActionKind)
+    for action, payload in action_payloads.items():
+        lifecycle = copy.deepcopy(_variants()[7][1])
+        lifecycle["action"] = {"action": action.value, "payload": payload}
+        proposal = GovernanceProposalKind.from_payload(
+            {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+        )
+        assert proposal.payload.action.action is action  # type: ignore[union-attr]
+
+    lifecycle = copy.deepcopy(_variants()[7][1])
+    lifecycle["action"] = {"action": "Unknown", "payload": None}
+    with pytest.raises(TypeError, match="not a first-release lifecycle action"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "ContractLifecycleGovernance", "payload": lifecycle}
+        )
 
 
 @pytest.mark.parametrize(("tag", "payload", "payload_type"), _variants())

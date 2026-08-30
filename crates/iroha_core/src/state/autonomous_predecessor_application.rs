@@ -43,7 +43,7 @@ impl State {
     /// to contain a receipt.
     fn certified_autonomous_lane_block_is_globally_applied_cached(
         &self,
-        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
     ) -> bool {
         let descriptor = &proposal.descriptor;
         if descriptor.lane_block_height == 0 {
@@ -80,7 +80,7 @@ impl State {
     /// application boundary.
     pub(crate) fn certified_autonomous_lane_block_predecessor_is_globally_applied_cached(
         &self,
-        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
     ) -> bool {
         let descriptor = &proposal.descriptor;
         let previous_height = descriptor.previous_lane_block_height;

@@ -57,6 +57,7 @@ pub use iroha_config::client_api::{
 };
 use iroha_config::parameters::actual::SorafsRolloutPhase;
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
+pub use iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1;
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
     alias::AliasIndex,
@@ -98,8 +99,7 @@ pub use iroha_torii_shared::governance_proposal_api::{
     SccpRouteGovernanceProposalDraftResponseV1,
 };
 pub use iroha_torii_shared::parliament_api::{
-    PARLIAMENT_API_VERSION_V1, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1,
-    PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
+    PARLIAMENT_API_VERSION_V1, PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentAttemptDraftRequestV1,
     ParliamentAttemptDraftResponseV1, ParliamentAttemptReadResponseV1,
     ParliamentDecisionModeProjectionV1, ParliamentInstructionDraftV1,
@@ -267,7 +267,7 @@ const SCCP_JSON_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const GOVERNANCE_PROPOSAL_JSON_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const PARLIAMENT_JSON_RESPONSE_MAX_BYTES: usize =
-    PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1 * 2 + 1024 * 1024;
+    MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1 * 2 + 1024 * 1024;
 const PARLIAMENT_TLE_RELEASE_CONTEXT_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_RESPONSE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES: usize =
@@ -3711,7 +3711,7 @@ fn validate_parliament_transition_draft_response(
 fn validate_parliament_attempt_state_frame(state_payload_hex: &str) -> Result<()> {
     if state_payload_hex.is_empty()
         || state_payload_hex.len() % 2 != 0
-        || state_payload_hex.len() / 2 > PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1
+        || state_payload_hex.len() / 2 > MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1
         || !state_payload_hex
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
@@ -3839,9 +3839,8 @@ mod parliament_draft_response_validation_tests {
 
     #[test]
     fn attempt_read_state_payload_must_be_one_valid_bounded_norito_frame() {
-        let frame =
-            norito::core::to_bytes_bounded(&42_u64, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1)
-                .expect("encode Parliament read state fixture");
+        let frame = norito::core::to_bytes_bounded(&42_u64, MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1)
+            .expect("encode Parliament read state fixture");
         assert!(validate_parliament_attempt_state_frame(&hex::encode(&frame)).is_ok());
 
         let mut corrupted = frame;
@@ -38119,7 +38118,10 @@ mod tests {
                 "backend".into(),
                 JsonValue::from("bridge/sccp/native/tron-dpos-v1"),
             ),
-            ("counterparty_domain".into(), JsonValue::from(5_u64)),
+            (
+                "counterparty_domain".into(),
+                JsonValue::from(iroha_sccp::SCCP_DOMAIN_TRON),
+            ),
             ("counterparty_chain".into(), JsonValue::from("tron-mainnet")),
             (
                 "route_configuration_hash_hex".into(),

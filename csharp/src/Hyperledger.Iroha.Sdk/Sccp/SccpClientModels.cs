@@ -1251,15 +1251,142 @@ internal static class SccpSubmitValidation
         return canonicalController;
     }
 
+    internal static byte[] RequireCanonicalAccountIdPayload(ReadOnlySpan<byte> payload)
+    {
+        var canonical = payload.ToArray();
+        var controller = RequireCanonicalAuthority(canonical);
+        var addressPayload = new byte[controller.Length + 1];
+        addressPayload[0] = controller[0] switch
+        {
+            0 => 0x02,
+            1 => 0x0A,
+            _ => throw new ArgumentException("AccountId uses an unknown controller tag."),
+        };
+        controller.CopyTo(addressPayload, 1);
+
+        var address = AccountAddress.FromCanonicalBytes(addressPayload);
+        var roundTripController = address.ControllerBytes();
+        if (!roundTripController.AsSpan().SequenceEqual(controller))
+        {
+            throw new ArgumentException("AccountId controller does not round-trip canonically.");
+        }
+
+        var roundTrip = EncodeCanonicalAuthority(roundTripController);
+        if (!roundTrip.AsSpan().SequenceEqual(canonical))
+        {
+            throw new ArgumentException("AccountId payload does not round-trip canonically.");
+        }
+
+        return canonical;
+    }
+
+    private static byte[] EncodeCanonicalAuthority(ReadOnlySpan<byte> controller)
+    {
+        var writer = new CanonicalNoritoWriter();
+        switch (controller[0])
+        {
+            case 0:
+                {
+                    var keyLength = controller[2];
+                    if (controller.Length != 3 + keyLength)
+                    {
+                        throw new ArgumentException("Single-key AccountId controller is malformed.");
+                    }
+
+                    var publicKey = new byte[1 + keyLength];
+                    publicKey[0] = CompactAlgorithmTag(controller[1]);
+                    controller[3..].CopyTo(publicKey.AsSpan(1));
+                    writer.WriteUInt32LittleEndian(0);
+                    writer.WriteField(EncodeCompactByteVector(publicKey));
+                    return writer.ToArray();
+                }
+            case 1:
+                {
+                    var version = controller[1];
+                    var threshold = BinaryPrimitives.ReadUInt16BigEndian(controller[2..]);
+                    var memberCount = BinaryPrimitives.ReadUInt16BigEndian(controller[4..]);
+                    var offset = 6;
+                    var policy = new CanonicalNoritoWriter();
+                    var versionField = new CanonicalNoritoWriter();
+                    versionField.WriteByte(version);
+                    policy.WriteField(versionField.ToArray());
+                    var thresholdField = new CanonicalNoritoWriter();
+                    thresholdField.WriteUInt16LittleEndian(threshold);
+                    policy.WriteField(thresholdField.ToArray());
+                    var members = new CanonicalNoritoWriter();
+                    members.WriteUInt64LittleEndian(memberCount);
+                    for (var index = 0; index < memberCount; index++)
+                    {
+                        if (offset > controller.Length - 5)
+                        {
+                            throw new ArgumentException("Multisig AccountId controller is truncated.");
+                        }
+
+                        var curve = controller[offset++];
+                        var weight = BinaryPrimitives.ReadUInt16BigEndian(controller[offset..]);
+                        offset += sizeof(ushort);
+                        var keyLength = BinaryPrimitives.ReadUInt16BigEndian(controller[offset..]);
+                        offset += sizeof(ushort);
+                        if (offset > controller.Length - keyLength)
+                        {
+                            throw new ArgumentException("Multisig AccountId public key is truncated.");
+                        }
+
+                        var publicKey = new byte[1 + keyLength];
+                        publicKey[0] = CompactAlgorithmTag(curve);
+                        controller.Slice(offset, keyLength).CopyTo(publicKey.AsSpan(1));
+                        offset += keyLength;
+
+                        var member = new CanonicalNoritoWriter();
+                        member.WriteField(EncodeCompactByteVector(publicKey));
+                        var weightField = new CanonicalNoritoWriter();
+                        weightField.WriteUInt16LittleEndian(weight);
+                        member.WriteField(weightField.ToArray());
+                        members.WriteField(member.ToArray());
+                    }
+
+                    if (offset != controller.Length)
+                    {
+                        throw new ArgumentException("Multisig AccountId controller contains trailing bytes.");
+                    }
+
+                    policy.WriteField(members.ToArray());
+                    writer.WriteUInt32LittleEndian(1);
+                    writer.WriteField(policy.ToArray());
+                    return writer.ToArray();
+                }
+            default:
+                throw new ArgumentException("AccountId uses an unknown controller tag.");
+        }
+    }
+
+    private static byte[] EncodeCompactByteVector(ReadOnlySpan<byte> bytes)
+    {
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteSequenceLength(checked((ulong)bytes.Length));
+        writer.WriteByteElements(bytes);
+        return writer.ToArray();
+    }
+
     private static byte[] RequireCanonicalMultisigPolicy(ReadOnlySpan<byte> payload)
     {
         var cursor = new CompactTransactionCursor(payload);
-        var version = cursor.TakeByte("authority.multisig.version");
-        var threshold = cursor.TakeUInt16("authority.multisig.threshold");
-        var memberCount = cursor.TakeUInt64("authority.multisig.members");
+        var versionField = new CompactTransactionCursor(
+            cursor.TakeField("authority.multisig.version"));
+        var version = versionField.TakeByte("authority.multisig.version.value");
+        var thresholdField = new CompactTransactionCursor(
+            cursor.TakeField("authority.multisig.threshold"));
+        var threshold = thresholdField.TakeUInt16("authority.multisig.threshold.value");
+        var members = new CompactTransactionCursor(
+            cursor.TakeField("authority.multisig.members"));
+        var memberCount = members.TakeUInt64("authority.multisig.members.count");
         if (version != 1 || threshold == 0 || memberCount is 0 or > ushort.MaxValue)
         {
             throw new ArgumentException("Transaction multisig authority has invalid version, threshold, or member count.");
+        }
+        if (!versionField.IsFinished || !thresholdField.IsFinished)
+        {
+            throw new ArgumentException("Transaction multisig authority fields are not canonical.");
         }
 
         ulong totalWeight = 0;
@@ -1267,9 +1394,9 @@ internal static class SccpSubmitValidation
         var canonicalMembers = new List<(byte[] PublicKey, ushort Weight)>();
         for (var index = 0UL; index < memberCount; index++)
         {
-            var member = new CompactTransactionCursor(cursor.TakeField("authority.multisig.member"));
+            var member = new CompactTransactionCursor(members.TakeField("authority.multisig.member"));
             var publicKey = DecodeByteVector(
-                ref member,
+                member.TakeField("authority.multisig.member.public_key"),
                 "authority.multisig.member.public_key",
                 ushort.MaxValue + 1);
             RequireCanonicalCompactPublicKey(
@@ -1277,8 +1404,11 @@ internal static class SccpSubmitValidation
                 ushort.MaxValue,
                 "authority.multisig.member.public_key");
             var memberSortKey = CompactPublicKeySortKey(publicKey);
-            var weight = member.TakeUInt16("authority.multisig.member.weight");
+            var weightField = new CompactTransactionCursor(
+                member.TakeField("authority.multisig.member.weight"));
+            var weight = weightField.TakeUInt16("authority.multisig.member.weight.value");
             if (weight == 0
+                || !weightField.IsFinished
                 || !member.IsFinished
                 || previousMemberSortKey is not null
                     && previousMemberSortKey.AsSpan().SequenceCompareTo(memberSortKey) >= 0)
@@ -1292,7 +1422,7 @@ internal static class SccpSubmitValidation
             canonicalMembers.Add((publicKey, weight));
         }
 
-        if (!cursor.IsFinished || totalWeight < threshold)
+        if (!members.IsFinished || !cursor.IsFinished || totalWeight < threshold)
         {
             throw new ArgumentException("Transaction multisig authority is not canonical.");
         }
@@ -1338,6 +1468,22 @@ internal static class SccpSubmitValidation
         9 => 14,
         10 => 15,
         _ => throw new ArgumentException("Transaction public key algorithm is unknown."),
+    };
+
+    private static byte CompactAlgorithmTag(byte curve) => curve switch
+    {
+        1 => 0,
+        4 => 1,
+        3 => 2,
+        5 => 3,
+        2 => 4,
+        10 => 5,
+        11 => 6,
+        12 => 7,
+        13 => 8,
+        14 => 9,
+        15 => 10,
+        _ => throw new ArgumentException("Transaction public key curve is unknown."),
     };
 
     private static void WriteBigEndian(Stream output, ushort value)
@@ -1392,7 +1538,10 @@ internal static class SccpSubmitValidation
         int maximumKeyBytes,
         string field)
     {
-        if (payload.Length is < 2 || payload.Length - 1 > maximumKeyBytes || payload[0] > 10)
+        if (payload.Length is < 2
+            || payload.Length - 1 > maximumKeyBytes
+            || payload[0] > 10
+            || payload[0] == 0 && payload.Length != 1 + Ed25519Signer.PublicKeyLength)
         {
             throw new ArgumentException($"{field} is not a closed compact public key.");
         }

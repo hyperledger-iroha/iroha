@@ -1,4 +1,5 @@
 {
+  "networkId": "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94",
   "toriiBaseUrl": "https://taira.sora.org",
-  "toriiEconometricsEndpointsEnabled": true
+  "toriiForceBaseUrl": true
 }

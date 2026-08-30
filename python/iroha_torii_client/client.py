@@ -199,21 +199,17 @@ from .parliament_api import ParliamentApiV1Mixin
 from .private_settlement_client import create_atomic_private_settlement_client_mixin
 from .runtime_governance_auth import RuntimeGovernanceAuthMixin
 from .sccp import (
-    SccpBridgeSubmitResponse,
     SccpCapabilities,
     SccpRecentCursor,
     SccpRecentMessages,
     SccpRegistry,
     SccpRegistryLimits,
     SccpResourceLimits,
-    normalize_bridge_message_submit_payload,
-    normalize_bridge_proof_submit_payload,
     normalize_sccp_capabilities,
     normalize_sccp_message_bundle,
     normalize_sccp_proof_request,
     normalize_sccp_recent_messages,
     normalize_sccp_registry,
-    parse_sccp_bridge_submit_response_json,
     parse_sccp_json_object,
 )
 from .space_directory_client import ToriiLocalSigningContext, create_space_directory_client_mixin
@@ -245,7 +241,6 @@ from .vpn_validation import (
 _SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024
 _SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024
-_SCCP_SUBMIT_RESPONSE_MAX_BYTES = _SCCP_JSON_RESPONSE_MAX_BYTES
 _SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
 _SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES = (
     _SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024
@@ -798,7 +793,6 @@ __all__ = [
     "SccpRegistry",
     "SccpRecentCursor",
     "SccpRecentMessages",
-    "SccpBridgeSubmitResponse",
     "RuntimeAbiActive",
     "RuntimeAbiHash",
     "RuntimeUpgradeEventCounters",
@@ -1942,6 +1936,12 @@ _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
 _OFFLINE_MAX_ASSET_SCALE = 28
 _OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY = 1 << 16
+_OFFLINE_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS = 64 + 8
+_OFFLINE_TOP_UP_SHIELD_INSERTION_CAPACITY = (
+    _OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY
+    - _OFFLINE_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS
+    - 1
+)
 _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
 _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
 _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
@@ -2708,11 +2708,12 @@ OfflineOperationStatus = Union[
 
 def _offline_operation_kind(value: Any, context: str) -> OfflineOperationKind:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(record, context, required=("kind", "value"))
     kind = _offline_required(record, "kind", context)
     if kind not in ("top_up", "redeem"):
         raise RuntimeError(f"{context}.kind must be top_up or redeem")
-    if "value" in record and record["value"] is not None:
-        raise RuntimeError(f"{context}.value must be null when present")
+    if record["value"] is not None:
+        raise RuntimeError(f"{context}.value must be null")
     return OfflineOperationKind(kind=kind)
 
 
@@ -2743,6 +2744,18 @@ def _offline_operation_reference(
 ) -> OfflineOperationReference:
     context = "offline operation reference"
     record = _offline_mapping(payload, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "operation_id",
+            "kind",
+            "state",
+            "transaction_hash",
+            "status_uri",
+            "submitted_at_ms",
+        ),
+    )
     operation_id = _require_offline_operation_id(
         _offline_required(record, "operation_id", context), f"{context}.operation_id"
     )
@@ -2752,10 +2765,13 @@ def _offline_operation_reference(
     if kind.kind != expected_kind:
         raise RuntimeError(f"{context}.kind does not match the submitted command")
     raw_state = _offline_mapping(_offline_required(record, "state", context), f"{context}.state")
+    _offline_exact_object_fields(
+        raw_state, f"{context}.state", required=("state", "value")
+    )
     if _offline_required(raw_state, "state", f"{context}.state") != "pending":
         raise RuntimeError(f"{context}.state.state must be pending")
-    if "value" in raw_state and raw_state["value"] is not None:
-        raise RuntimeError(f"{context}.state.value must be null when present")
+    if raw_state["value"] is not None:
+        raise RuntimeError(f"{context}.state.value must be null")
     status_uri = _offline_required(record, "status_uri", context)
     expected_uri = _offline_status_uri(operation_id)
     if status_uri != expected_uri:
@@ -3847,7 +3863,7 @@ def _offline_top_up_anchor(
     shield_leaf_index = _offline_unsigned(
         _offline_required(record, "shield_leaf_index", context),
         f"{context}.shield_leaf_index",
-        _OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY - 1,
+        _OFFLINE_TOP_UP_SHIELD_INSERTION_CAPACITY - 1,
     )
 
     current_note = _offline_spendable_note(
@@ -4063,11 +4079,34 @@ def _offline_applied_result(
     value: Any, context: str, operation_id: str
 ) -> OfflineAppliedResult:
     record = _offline_mapping(value, context)
+    _offline_exact_object_fields(record, context, required=("kind", "result"))
     kind = _offline_required(record, "kind", context)
     if kind not in ("top_up", "redeem"):
         raise RuntimeError(f"{context}.kind must be top_up or redeem")
     result_context = f"{context}.result"
     result = _offline_mapping(_offline_required(record, "result", context), result_context)
+    if kind == "top_up":
+        _offline_exact_object_fields(
+            result,
+            result_context,
+            required=(
+                "transaction_hash",
+                "finalized_block_height",
+                "server_time_ms",
+                "anchor",
+                "finality_proof",
+            ),
+        )
+    else:
+        _offline_exact_object_fields(
+            result,
+            result_context,
+            required=(
+                "transaction_hash",
+                "finalized_block_height",
+                "server_time_ms",
+            ),
+        )
     transaction_hash = _offline_transaction_hash(
         _offline_required(result, "transaction_hash", result_context),
         f"{result_context}.transaction_hash",
@@ -4127,11 +4166,28 @@ def _offline_operation_status(
 ) -> OfflineOperationStatus:
     context = "offline operation status"
     record = _offline_mapping(payload, context)
+    _offline_exact_object_fields(record, context, required=("state", "value"))
     state = _offline_required(record, "state", context)
     if state not in ("pending", "applied", "rejected"):
         raise RuntimeError(f"{context}.state must be pending, applied, or rejected")
     value_context = f"{context}.value"
     value = _offline_mapping(_offline_required(record, "value", context), value_context)
+    if state == "pending":
+        _offline_exact_object_fields(
+            value,
+            value_context,
+            required=("operation_id", "kind", "transaction_hash", "submitted_at_ms"),
+        )
+    elif state == "applied":
+        _offline_exact_object_fields(
+            value, value_context, required=("operation_id", "result")
+        )
+    else:
+        _offline_exact_object_fields(
+            value,
+            value_context,
+            required=("operation_id", "kind", "transaction_hash", "error"),
+        )
     operation_id = _require_offline_operation_id(
         _offline_required(value, "operation_id", value_context),
         f"{value_context}.operation_id",
@@ -9643,7 +9699,7 @@ class ToriiClient(
                 "operator_signing_context must be ToriiOperatorSigningContext"
             )
         self._base_url = base_url.rstrip("/")
-        self._session = session or requests.Session()
+        self._session = session if session is not None else requests.Session()
         self._status_state = _StatusMetricsState()
         self._local_signing_context = local_signing_context
         self._operator_signing_context = operator_signing_context
@@ -10144,78 +10200,6 @@ class ToriiClient(
         )
         return normalize_sccp_recent_messages(payload)
 
-    def submit_bridge_proof(
-        self,
-        *,
-        authority: str,
-        destination_proof_b64: str,
-        fee_payment: Mapping[str, Any],
-        signature_b64: Optional[str] = None,
-        transaction_payload_b64: Optional[str] = None,
-        creation_time_ms: Optional[int] = None,
-    ) -> SccpBridgeSubmitResponse:
-        """Prepare or submit one exact SORA-origin proof.
-
-        Signed submission requires the byte-identical prepared transaction payload, its detached
-        signature, and the preparation response's creation timestamp.
-        """
-
-        candidate: Dict[str, Any] = {
-            "authority": authority,
-            "fee_payment": fee_payment,
-            "destination_proof_b64": destination_proof_b64,
-        }
-        for key, value in (
-            ("signature_b64", signature_b64),
-            ("transaction_payload_b64", transaction_payload_b64),
-            ("creation_time_ms", creation_time_ms),
-        ):
-            if value is not None:
-                candidate[key] = value
-        payload = normalize_bridge_proof_submit_payload(candidate)
-        return self._submit_sccp_bridge(
-            "/v1/bridge/proofs/submit",
-            payload,
-            context="bridge proof submit",
-        )
-
-    def submit_bridge_message(
-        self,
-        *,
-        authority: str,
-        native_proof_b64: str,
-        replay_witness_b64: str,
-        fee_payment: Mapping[str, Any],
-        signature_b64: Optional[str] = None,
-        transaction_payload_b64: Optional[str] = None,
-        creation_time_ms: Optional[int] = None,
-    ) -> SccpBridgeSubmitResponse:
-        """Prepare or submit one exact native inbound proof.
-
-        Signed submission requires the byte-identical prepared transaction payload, its detached
-        signature, and the preparation response's creation timestamp.
-        """
-
-        candidate: Dict[str, Any] = {
-            "authority": authority,
-            "fee_payment": fee_payment,
-            "native_proof_b64": native_proof_b64,
-            "replay_witness_b64": replay_witness_b64,
-        }
-        for key, value in (
-            ("signature_b64", signature_b64),
-            ("transaction_payload_b64", transaction_payload_b64),
-            ("creation_time_ms", creation_time_ms),
-        ):
-            if value is not None:
-                candidate[key] = value
-        payload = normalize_bridge_message_submit_payload(candidate)
-        return self._submit_sccp_bridge(
-            "/v1/bridge/messages",
-            payload,
-            context="bridge message submit",
-        )
-
     @staticmethod
     def _sccp_message_id(value: Any) -> str:
         if (
@@ -10385,36 +10369,6 @@ class ToriiClient(
             raise TypeError(f"{context} response must use application/json content type")
         body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
         return normalize(parse_sccp_json_object(body, context))
-
-    def _submit_sccp_bridge(
-        self,
-        path: str,
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpBridgeSubmitResponse:
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        response = self._request(
-            "POST", path, headers=headers, data=data, stream=True
-        )
-        self._expect_status(
-            response,
-            {200},
-            maximum_body_bytes=_SCCP_SUBMIT_RESPONSE_MAX_BYTES,
-            context=context,
-        )
-        content_type = response.headers.get("Content-Type", "")
-        if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
-            response.close()
-            raise TypeError(f"{context} response must use application/json content type")
-        expectations: Dict[str, Any] = {"submitted": "signature_b64" in payload}
-        if "creation_time_ms" in payload:
-            expectations["creation_time_ms"] = payload["creation_time_ms"]
-        body = _read_bounded_sccp_response_body(
-            response, _SCCP_SUBMIT_RESPONSE_MAX_BYTES, context
-        )
-        return parse_sccp_bridge_submit_response_json(body, expectations)
 
     def get_runtime_abi_hash(self) -> RuntimeAbiHash:
         """Fetch the canonical ABI hash (`GET /v1/runtime/abi/hash`)."""
@@ -11624,7 +11578,7 @@ class ToriiClient(
         return self._coerce_unsigned(payload.get("count"), "sumeragi evidence count.count")
 
     # ------------------------------------------------------------------
-    # Contract, governance, and council helpers
+    # Contract, governance, and Parliament helpers
     # ------------------------------------------------------------------
 
     @staticmethod

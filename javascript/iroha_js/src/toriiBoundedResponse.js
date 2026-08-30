@@ -10,7 +10,6 @@ const EXACT_JSON_MEDIA_TYPE_PATTERN =
 export function isExactJsonMediaType(value) {
   return (
     typeof value === "string" &&
-    !value.includes(",") &&
     EXACT_JSON_MEDIA_TYPE_PATTERN.test(value)
   );
 }
@@ -31,22 +30,10 @@ export async function maybeJsonResponse(
     signalIsAborted,
   },
 ) {
-  try {
-    return await readBoundedJson(response, maxBytes, context, { signal });
-  } catch (error) {
-    // Preserve the historical optional-JSON contract for malformed or
-    // body-less response shims while keeping resource and cancellation
-    // failures observable. All bytes still pass through the bounded reader.
-    if (
-      signalIsAborted(signal)
-      || error instanceof RangeError
-      || error?.name === "AbortError"
-      || error?.name === "TimeoutError"
-    ) {
-      throw error;
-    }
-    return null;
+  if (signalIsAborted(signal)) {
+    throw signal?.reason ?? new Error(`${context} was aborted`);
   }
+  return readBoundedJson(response, maxBytes, context, { signal });
 }
 
 /** Parse one exact JSON response after a bounded byte-stream read. */
@@ -79,7 +66,7 @@ export async function maybeBoundedJsonResponse(
       response,
       `${context} rejected a non-JSON response body`,
     );
-    return null;
+    throw new TypeError(`${context} must use application/json`);
   }
   const { bytes, body } = await readBoundedResponseBytes(
     response,
@@ -87,6 +74,9 @@ export async function maybeBoundedJsonResponse(
     context,
     { signal },
   );
+  if (bytes.byteLength === 0) {
+    return null;
+  }
   let text;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);

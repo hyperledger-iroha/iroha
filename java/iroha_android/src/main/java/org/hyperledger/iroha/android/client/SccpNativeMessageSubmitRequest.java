@@ -8,7 +8,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 
 /** Exact native-proof request payload for {@code POST /v1/bridge/messages}. */
-public final class SccpNativeMessageSubmitRequest {
+final class SccpNativeMessageSubmitRequest {
   private final String authority;
   private final FeePaymentIntent feePayment;
   private final String nativeProofB64;

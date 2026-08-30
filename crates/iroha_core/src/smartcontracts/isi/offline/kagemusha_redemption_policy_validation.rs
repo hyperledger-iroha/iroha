@@ -1,5 +1,102 @@
 // Release-scoped device-policy authentication for Kagemusha V4 redemption.
 
+/// Preflight the ledger-resolved hardware identity shared by top-up and redemption.
+///
+/// This read-only boundary is intended for Torii before it sponsors an Offline
+/// command with its escrow-manager authority. It verifies the exact protected
+/// registration, request identity, platform lifecycle, and hardware signature.
+/// Consensus execution still performs the complete policy, replay, counter,
+/// and proof checks against its transactional snapshot.
+///
+/// # Errors
+///
+/// Returns an error when the authorization cannot be authenticated against the
+/// protected registration visible in `world` at `evaluated_at_ms`.
+pub fn preflight_registered_kagemusha_v2_hardware_authorization(
+    world: &impl WorldReadOnly,
+    authorization: &KagemushaRequestAuthorizationV2,
+    asset: &AssetDefinitionId,
+    evaluated_at_ms: u64,
+) -> Result<(), String> {
+    if evaluated_at_ms == 0 || &authorization.asset_definition_id != asset {
+        return Err("Kagemusha hardware authorization has an invalid snapshot or asset".to_owned());
+    }
+    let state_key = kagemusha_online_registration_state_key(&authorization.registration_hash)
+        .map_err(|error| format!("Kagemusha registration key is invalid: {error}"))?;
+    let archive = world
+        .smart_contract_state()
+        .get(&state_key)
+        .ok_or_else(|| {
+            "Kagemusha hardware authorization references an unknown registration".to_owned()
+        })?;
+    if archive.len() > KAGEMUSHA_ONLINE_REGISTRATION_STATE_MAX_CANONICAL_BYTES_V4 {
+        return Err("protected Kagemusha registration exceeds the protocol byte limit".to_owned());
+    }
+    let state = decode_kagemusha_online_registration_state_v4(&state_key, archive)
+        .map_err(|error| format!("protected Kagemusha registration is invalid: {error}"))?;
+    let registration = &state.registration;
+    if state.original_registration_hash != authorization.registration_hash
+        || registration.account_id != authorization.authority
+        || registration.device_id != authorization.device_id
+        || registration.asset_definition_id.as_ref() != Some(asset)
+        || authorization.expires_at_ms > registration.expires_at_ms
+        || registration.expires_at_ms <= evaluated_at_ms
+    {
+        return Err(
+            "Kagemusha authorization identity or expiry does not match its registration"
+                .to_owned(),
+        );
+    }
+    validate_offline_attestation_platform_profile(registration)
+        .map_err(|error| error.to_string())?;
+    validate_offline_attestation_optional_metadata(registration)
+        .map_err(|error| error.to_string())?;
+    match (&authorization.hardware_assertion, &state.lifecycle) {
+        (
+            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(_),
+            KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintUnused,
+        ) if registration.platform == OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {}
+        (
+            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(_),
+            KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintConsumed(_),
+        ) if registration.platform == OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
+            return Err(
+                "Kagemusha Android hardware authorization has already been consumed".to_owned(),
+            );
+        }
+        (
+            KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion),
+            KagemushaOnlineHardwareAssertionLifecycleV1::IosAppAttest {
+                last_sign_count, ..
+            },
+        ) if registration.platform == OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
+            let (team_id, bundle_id, _) =
+                ios_attestation_metadata(registration).map_err(|error| error.to_string())?;
+            let authenticator_data = parse_ios_app_attest_assertion_auth_data(
+                &assertion.authenticator_data,
+            )
+            .map_err(|error| error.to_string())?;
+            let expected_rp_id_hash = sha256_bytes(format!("{team_id}.{bundle_id}").as_bytes());
+            validate_ios_app_attest_assertion_identity(&authenticator_data, expected_rp_id_hash)
+                .map_err(|error| error.to_string())?;
+            if authenticator_data.sign_count <= *last_sign_count {
+                return Err(
+                    "Kagemusha iOS hardware authorization counter does not advance".to_owned(),
+                );
+            }
+        }
+        _ => {
+            return Err(
+                "Kagemusha authorization platform does not match its registration lifecycle"
+                    .to_owned(),
+            );
+        }
+    }
+    authorization
+        .verify_hardware_signature(&registration.assertion_public_key)
+        .map_err(|error| error.to_string())
+}
+
 fn ensure_redemption_registration_policy_compatibility(
     registration: &OfflineDeviceAttestationRegistration,
     release_policy: &OfflineDeviceAttestationPolicy,

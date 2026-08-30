@@ -56,6 +56,7 @@ def create_torii_client_governance_ballot_mixin(
         _require_local_signing_context: Callable[..., Any]
         _normalize_canonical_account_id: Callable[..., str]
         _chain_discriminant: int
+        _parse_governance_ballot_draft: Callable[..., Any]
         _post_network_governance_ballot_json: Callable[..., Any]
 
         def _governance_ballot_identity(
@@ -121,13 +122,17 @@ def create_torii_client_governance_ballot_mixin(
                 context=context,
             )
             normalized = normalizer(payload, context=context)
-            return self._post_network_governance_ballot_json(
+            response = self._post_network_governance_ballot_json(
                 path,
                 normalized,
                 network_id=network_id.literal,
                 authority=authority,
                 canonical_auth=canonical_auth,
                 context=context,
+            )
+            return self._parse_governance_ballot_draft(
+                response,
+                context=f"{context} response",
             )
 
         def governance_submit_plain_ballot(

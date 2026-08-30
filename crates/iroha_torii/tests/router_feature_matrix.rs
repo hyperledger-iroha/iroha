@@ -446,19 +446,40 @@ async fn router_exposes_status_with_operator_telemetry_profile() {
         ),
     );
     let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
+    for path in [
+        iroha_torii_shared::uri::STATUS,
+        iroha_torii_shared::uri::STATUS_BLOCKS,
+        iroha_torii_shared::uri::STATUS_PEERS,
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(fixtures::operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .uri(Uri::from_static(path))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ))
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                resp.status(),
+                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS | StatusCode::INTERNAL_SERVER_ERROR
+            ),
+            "path={path}"
+        );
+    }
+
+    let unknown = app
+        .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/status"))
+                .uri(Uri::from_static("/status/not-a-probe"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
-            &[],
-        ))
+        )
         .await
         .unwrap();
-    assert!(matches!(
-        resp.status(),
-        StatusCode::OK | StatusCode::TOO_MANY_REQUESTS | StatusCode::INTERNAL_SERVER_ERROR
-    ));
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
 }

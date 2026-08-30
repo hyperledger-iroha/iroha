@@ -5363,6 +5363,10 @@ macro_rules! wal_header_accepted_body {
         $expected_protocol:expr,
         $actual_network_id:expr,
         $expected_network_id:expr,
+        $actual_context_id:expr,
+        $expected_context_id:expr,
+        $actual_height:expr,
+        $expected_height:expr,
         $actual_key:expr,
         $expected_key:expr,
         $checksum_matches:expr $(,)?
@@ -5372,6 +5376,8 @@ macro_rules! wal_header_accepted_body {
             && $format_matches
             && $actual_protocol == $expected_protocol
             && $actual_network_id == $expected_network_id
+            && $actual_context_id == $expected_context_id
+            && $actual_height == $expected_height
             && $actual_key == $expected_key
             && $checksum_matches
     }};
@@ -5454,6 +5460,23 @@ macro_rules! wal_retirement_authorized_body {
             && $decision_height == $decision_proposal_height
             && $decision_proposal_view == $decision_certificate_view
             && $decision_subject == $decision_certificate_subject
+    }};
+}
+// A durable-finality token is useful to the filesystem adapter only for the
+// exact height-local WAL it names. Keep this small target-binding predicate
+// shared with Verus so a token for another context at the same numeric height,
+// or another height in the same network, cannot authorize unlinking.
+macro_rules! wal_retirement_target_matches_body {
+    (
+        $authorization_valid:expr,
+        $authorization_context:expr,
+        $authorization_height:expr,
+        $wal_context:expr,
+        $wal_height:expr $(,)?
+    ) => {{
+        $authorization_valid
+            && $authorization_context == $wal_context
+            && $authorization_height == $wal_height
     }};
 }
 /// Primitive `(height, view, generation)` lifecycle projection.

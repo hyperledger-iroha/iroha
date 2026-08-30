@@ -28,6 +28,8 @@ from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Mapping, Sequence
 
+from norito.crc64 import crc64 as _crc64
+
 from .address import (
     AccountAddress,
     AccountAddressError,
@@ -103,7 +105,6 @@ _MAX_JSON_BYTES: Final[int] = 1_048_576
 _MAX_JSON_DEPTH: Final[int] = 128
 _U64_MAX: Final[int] = (1 << 64) - 1
 _U32_MAX: Final[int] = (1 << 32) - 1
-_CRC64_POLY: Final[int] = 0xC96C_5795_D787_0F42
 _HASH_LITERAL_RE: Final[re.Pattern[str]] = re.compile(
     r"hash:([0-9A-F]{64})#([0-9A-F]{4})\Z", re.ASCII
 )
@@ -134,26 +135,6 @@ def _schema_hash(type_name: str) -> bytes:
 
 if _schema_hash(_INSTRUCTION_BOX_TYPE_NAME) != _INSTRUCTION_BOX_SCHEMA_HASH:
     raise RuntimeError("pinned InstructionBox schema hash no longer matches its archived type name")
-
-
-def _crc64_table() -> tuple[int, ...]:
-    table = []
-    for value in range(256):
-        crc = value
-        for _ in range(8):
-            crc = (crc >> 1) ^ _CRC64_POLY if crc & 1 else crc >> 1
-        table.append(crc & _U64_MAX)
-    return tuple(table)
-
-
-_CRC64_TABLE: Final[tuple[int, ...]] = _crc64_table()
-
-
-def _crc64(payload: bytes) -> int:
-    crc = _U64_MAX
-    for byte in payload:
-        crc = _CRC64_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
-    return (crc ^ _U64_MAX) & _U64_MAX
 
 
 def _crc16(payload: bytes) -> int:

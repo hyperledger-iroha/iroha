@@ -3,7 +3,6 @@
 //! The first release accepts only complete signed v2 artifact pairs bound to
 //! an authenticated immutable height context. Retired global-v1 evidence
 //! layouts are not decoded, reconstructed, or persisted.
-use super::consensus::Evidence;
 use crate::state::{State, WorldReadOnly};
 #[cfg(feature = "bls")]
 use iroha_crypto::Algorithm;
@@ -11,7 +10,7 @@ use iroha_crypto::Signature;
 use iroha_data_model::{
     NetworkId,
     block::{
-        consensus::{EvidenceRecord, Height, SumeragiV2EquivocationEvidence, View},
+        consensus::{Evidence, EvidenceRecord, Height, SumeragiV2EquivocationEvidence, View},
         consensus_v2 as wire_v2,
     },
     consensus::NposPenaltyAction,
@@ -1208,6 +1207,7 @@ mod tests {
             &mut transaction,
             &effects,
             None,
+            &[],
             height,
             view,
             now_ms,

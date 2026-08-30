@@ -9741,6 +9741,49 @@
         ],
         "type": "object"
       },
+      "GovernanceBallotDraftResponseV1": {
+        "additionalProperties": false,
+        "description": "Successful construction of one unsigned standalone governance ballot instruction. This response does not report transaction acceptance or mutate ledger state.",
+        "properties": {
+          "drafted": {
+            "const": true,
+            "type": "boolean"
+          },
+          "tx_instructions": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceBallotInstructionDraftV1"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "drafted",
+          "tx_instructions"
+        ],
+        "type": "object"
+      },
+      "GovernanceBallotInstructionDraftV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload_hex": {
+            "description": "Non-empty canonical lowercase hexadecimal Norito instruction payload.",
+            "pattern": "^(?:[0-9a-f]{2})+$",
+            "type": "string"
+          },
+          "wire_id": {
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "payload_hex"
+        ],
+        "type": "object"
+      },
       "GovernanceBallotProofV1": {
         "additionalProperties": false,
         "properties": {
@@ -12057,7 +12100,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadDeployContractV1"
               }
             },
             "required": [
@@ -12074,7 +12117,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeV1"
               }
             },
             "required": [
@@ -12091,7 +12134,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadSccpRouteGovernanceV1"
               }
             },
             "required": [
@@ -12108,7 +12151,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePolicyProposalV1"
               }
             },
             "required": [
@@ -12125,7 +12168,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePayoutLifecycleV1"
               }
             },
             "required": [
@@ -12142,7 +12185,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadMusubiRegistryActionV1"
               }
             },
             "required": [
@@ -12159,7 +12202,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadSorafsProviderV1"
               }
             },
             "required": [
@@ -12176,7 +12219,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadContractLifecycleV1"
               }
             },
             "required": [
@@ -12193,7 +12236,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadContractEmergencyHoldV1"
               }
             },
             "required": [
@@ -12210,7 +12253,7 @@
                 "type": "string"
               },
               "payload": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadGlobalDataTriggerPermissionV1"
               }
             },
             "required": [
@@ -12220,6 +12263,1044 @@
             "type": "object"
           }
         ]
+      },
+      "GovernanceParliamentProposalPayloadContractEmergencyHoldV1": {
+        "additionalProperties": false,
+        "description": "Complete, bounded emergency-containment proposal for one active contract.",
+        "properties": {
+          "contract_address": {
+            "description": "Canonical public contract address. Runtime admission verifies the full address grammar and canonical rendering.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "duration_blocks": {
+            "format": "uint64",
+            "maximum": 3600,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expected_code_hash": {
+            "$ref": "#/components/schemas/GovernanceProposalHex32V1"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "incident_digest": {
+            "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+          },
+          "reason": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "contract_address",
+          "expected_revision",
+          "expected_code_hash",
+          "incident_digest",
+          "reason",
+          "duration_blocks"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadContractLifecycleActionV1": {
+        "description": "Closed owner-consented contract lifecycle action union.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "Activate",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "abi_hash": {
+                    "$ref": "#/components/schemas/GovernanceProposalHex32V1"
+                  },
+                  "abi_version": {
+                    "const": 1,
+                    "format": "uint16",
+                    "type": "integer"
+                  },
+                  "code_hash": {
+                    "$ref": "#/components/schemas/GovernanceProposalHex32V1"
+                  },
+                  "manifest_provenance": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/GovernanceManifestProvenanceV1"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "code_hash",
+                  "abi_hash",
+                  "abi_version",
+                  "manifest_provenance"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "Deactivate",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_code_hash": {
+                    "$ref": "#/components/schemas/GovernanceProposalHex32V1"
+                  },
+                  "reason": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "expected_code_hash"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "OfferOwnership",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "new_owner": {
+                    "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+                  }
+                },
+                "required": [
+                  "new_owner"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "CancelOwnershipOffer",
+                "type": "string"
+              },
+              "payload": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "AcceptParliamentOwnership",
+                "type": "string"
+              },
+              "payload": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "CompleteEmergencyHoldRetrospective",
+                "type": "string"
+              },
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "hold_governance_attempt_id": {
+                    "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+                  },
+                  "hold_proposal_content_id": {
+                    "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+                  },
+                  "incident_digest": {
+                    "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+                  },
+                  "retrospective_finding_root": {
+                    "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+                  }
+                },
+                "required": [
+                  "hold_proposal_content_id",
+                  "hold_governance_attempt_id",
+                  "incident_digest",
+                  "retrospective_finding_root"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "action",
+              "payload"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GovernanceParliamentProposalPayloadContractLifecycleV1": {
+        "additionalProperties": false,
+        "description": "Complete compare-and-swap proposal for a certificate-enacted contract lifecycle transition.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadContractLifecycleActionV1"
+          },
+          "contract_address": {
+            "description": "Canonical public contract address. Runtime admission verifies the full address grammar and canonical rendering.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "contract_address",
+          "expected_revision",
+          "action"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadDeployContractV1": {
+        "additionalProperties": false,
+        "description": "Canonical governed contract deployment payload.",
+        "properties": {
+          "abi_hash": {
+            "$ref": "#/components/schemas/GovernanceProposalHex32V1"
+          },
+          "abi_version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          },
+          "code_hash": {
+            "$ref": "#/components/schemas/GovernanceProposalHex32V1"
+          },
+          "contract_address": {
+            "description": "Canonical public contract address. Runtime admission verifies the full address grammar and canonical rendering.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "manifest_provenance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceManifestProvenanceV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "contract_address",
+          "code_hash",
+          "abi_hash",
+          "abi_version",
+          "manifest_provenance"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadGlobalDataTriggerPermissionActionV1": {
+        "description": "Closed grant-or-revoke global data-trigger permission action.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "grant",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "revoke",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GovernanceParliamentProposalPayloadGlobalDataTriggerPermissionV1": {
+        "additionalProperties": false,
+        "description": "Complete proposal for one exact account's global data-trigger capability.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadGlobalDataTriggerPermissionActionV1"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          }
+        },
+        "required": [
+          "authority",
+          "action"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadMusubiRegistryActionV1": {
+        "description": "Closed Parliament-only Musubi recovery, takedown, alias-retarget, and registry-policy action.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "RecoverPackageOwners",
+                "type": "string"
+              },
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "format": "uint64",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "owners": {
+                    "items": {
+                      "$ref": "#/components/schemas/MusubiAccountIdV1"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "package": {
+                    "$ref": "#/components/schemas/MusubiPackageIdV1"
+                  }
+                },
+                "required": [
+                  "package",
+                  "owners",
+                  "expected_revision"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "RetargetAlias",
+                "type": "string"
+              },
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "alias": {
+                    "$ref": "#/components/schemas/MusubiAliasNameV1"
+                  },
+                  "expected_revision": {
+                    "format": "uint64",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "target": {
+                    "$ref": "#/components/schemas/MusubiPackageIdV1"
+                  }
+                },
+                "required": [
+                  "alias",
+                  "target",
+                  "expected_revision"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "TakedownArtifact",
+                "type": "string"
+              },
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_artifact_governance_revision": {
+                    "format": "uint64",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "$ref": "#/components/schemas/MusubiReasonV1"
+                  },
+                  "release": {
+                    "$ref": "#/components/schemas/MusubiReleaseIdV1"
+                  }
+                },
+                "required": [
+                  "release",
+                  "reason",
+                  "expected_artifact_governance_revision"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "SetRegistryPolicy",
+                "type": "string"
+              },
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "format": "uint64",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "policy": {
+                    "$ref": "#/components/schemas/MusubiRegistryPolicyV1"
+                  }
+                },
+                "required": [
+                  "policy",
+                  "expected_revision"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1": {
+        "additionalProperties": false,
+        "description": "Canonical first-release runtime-upgrade manifest. ABI delta lists are reserved and therefore empty.",
+        "properties": {
+          "abi_hash": {
+            "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+          },
+          "abi_version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          },
+          "added_pointer_types": {
+            "items": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 0,
+            "type": "array"
+          },
+          "added_syscalls": {
+            "items": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 0,
+            "type": "array"
+          },
+          "description": {
+            "type": "string"
+          },
+          "end_height": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceManifestProvenanceV1"
+            },
+            "type": "array"
+          },
+          "sbom_digests": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1"
+            },
+            "type": "array"
+          },
+          "slsa_attestation": {
+            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+            "type": "string"
+          },
+          "start_height": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "abi_version",
+          "abi_hash",
+          "added_syscalls",
+          "added_pointer_types",
+          "start_height",
+          "end_height",
+          "sbom_digests",
+          "slsa_attestation",
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "digest": {
+            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadRuntimeUpgradeV1": {
+        "additionalProperties": false,
+        "properties": {
+          "manifest": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1"
+          }
+        },
+        "required": [
+          "manifest"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadSccpRouteGovernanceAnchorV1": {
+        "additionalProperties": false,
+        "description": "Complete network- and action-bound SCCP Parliament effect preimage.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/SccpRouteGovernanceActionV1"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          }
+        },
+        "required": [
+          "network_id",
+          "action"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadSccpRouteGovernanceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadSccpRouteGovernanceAnchorV1"
+          }
+        },
+        "required": [
+          "anchor"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadSorafsProviderActionV1": {
+        "description": "Closed SoraFS provider-owner transition admitted through Parliament.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "establish",
+                "type": "string"
+              },
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "owner": {
+                    "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+                  },
+                  "provider_id": {
+                    "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadSorafsProviderIdV1"
+                  }
+                },
+                "required": [
+                  "provider_id",
+                  "owner"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "rebind",
+                "type": "string"
+              },
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_owner": {
+                    "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+                  },
+                  "next_owner": {
+                    "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+                  },
+                  "provider_id": {
+                    "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadSorafsProviderIdV1"
+                  }
+                },
+                "required": [
+                  "provider_id",
+                  "expected_owner",
+                  "next_owner"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "remove",
+                "type": "string"
+              },
+              "value": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_owner": {
+                    "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+                  },
+                  "provider_id": {
+                    "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadSorafsProviderIdV1"
+                  }
+                },
+                "required": [
+                  "provider_id",
+                  "expected_owner"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GovernanceParliamentProposalPayloadSorafsProviderIdV1": {
+        "description": "Exact one-field ProviderId tuple carrying one non-zero 32-byte digest.",
+        "items": {
+          "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+        },
+        "maxItems": 1,
+        "minItems": 1,
+        "type": "array"
+      },
+      "GovernanceParliamentProposalPayloadSorafsProviderV1": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadSorafsProviderActionV1"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadValidationFeeChargingModeV1": {
+        "description": "Closed first-release validation-fee charging mode.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "charging_mode": {
+                "const": "DISABLED",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "charging_mode",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "charging_mode": {
+                "const": "PER_QUALIFYING_TRANSFER_INSTRUCTION",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "charging_mode",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "GovernanceParliamentProposalPayloadValidationFeePayoutBindingV1": {
+        "additionalProperties": false,
+        "description": "Exact typed contract and six-transfer plan authorized for the validation-fee treasury payout.",
+        "properties": {
+          "batch_ds": {
+            "const": "10",
+            "type": "string"
+          },
+          "code_hash": {
+            "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+          },
+          "contract_address": {
+            "description": "Canonical public contract address. Runtime admission verifies the full address grammar and canonical rendering.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "ds_asset_id": {
+            "description": "Canonical AssetDefinitionId. Runtime admission verifies and re-renders the complete identifier.",
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string"
+          },
+          "entrypoint": {
+            "const": "autonomous_validation_fee_tick",
+            "type": "string"
+          },
+          "max_xor_out": {
+            "const": "100",
+            "type": "string"
+          },
+          "min_xor_out": {
+            "const": "4",
+            "type": "string"
+          },
+          "pool_vault_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "recipients": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePayoutRecipientV1"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "treasury_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "xor_asset_id": {
+            "description": "Canonical AssetDefinitionId. Runtime admission verifies and re-renders the complete identifier.",
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contract_address",
+          "code_hash",
+          "entrypoint",
+          "treasury_account_id",
+          "ds_asset_id",
+          "xor_asset_id",
+          "pool_vault_account_id",
+          "batch_ds",
+          "min_xor_out",
+          "max_xor_out",
+          "recipients"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadValidationFeePayoutLifecycleV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payout_binding": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePayoutBindingV1"
+          },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          }
+        },
+        "required": [
+          "proposal_operator",
+          "payout_binding"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadValidationFeePayoutRecipientV1": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "share": {
+            "const": "0.25",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "share"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadValidationFeePolicyProposalV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payout_lifecycle_proposal_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePolicyV1"
+          },
+          "proposal_operator": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          }
+        },
+        "required": [
+          "proposal_operator",
+          "policy",
+          "payout_lifecycle_proposal_id"
+        ],
+        "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadValidationFeePolicyV1": {
+        "additionalProperties": false,
+        "description": "Complete exact-network validation-fee policy payload.",
+        "properties": {
+          "charging_mode": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeeChargingModeV1"
+          },
+          "ds_asset_id": {
+            "description": "Canonical AssetDefinitionId. Runtime admission verifies and re-renders the complete identifier.",
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string"
+          },
+          "ds_scale": {
+            "const": 2,
+            "format": "uint8",
+            "type": "integer"
+          },
+          "effective_from_height": {
+            "$ref": "#/components/schemas/ValidationFeeDecimalU64StringV1"
+          },
+          "exemption_classes": {
+            "items": {
+              "const": "TREASURY_PAYOUT",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "expires_after_height": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ValidationFeeDecimalU64StringV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fee": {
+            "enum": [
+              "0",
+              "0.1"
+            ],
+            "type": "string"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "policy_version": {
+            "$ref": "#/components/schemas/ValidationFeePositiveDecimalU64StringV1"
+          },
+          "previous_policy_hash": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schema_version": {
+            "const": 1,
+            "format": "uint16",
+            "type": "integer"
+          },
+          "treasury_account_id": {
+            "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "treasury_payout_binding": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadValidationFeePayoutBindingV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "network_id",
+          "policy_version",
+          "previous_policy_hash",
+          "ds_asset_id",
+          "ds_scale",
+          "fee",
+          "treasury_account_id",
+          "charging_mode",
+          "effective_from_height",
+          "expires_after_height",
+          "exemption_classes",
+          "treasury_payout_binding"
+        ],
+        "type": "object"
       },
       "GovernanceParliamentPublicFindingCertificateBindingV1": {
         "additionalProperties": false,
@@ -25086,6 +26167,108 @@
         ],
         "type": "object"
       },
+      "OperatorWebAuthnAssertionRequest": {
+        "additionalProperties": false,
+        "description": "Exact WebAuthn PublicKeyCredential assertion accepted by the operator login verifier.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+          },
+          "rawId": {
+            "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+          },
+          "response": {
+            "$ref": "#/components/schemas/OperatorWebAuthnAssertionResponse"
+          },
+          "type": {
+            "const": "public-key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "rawId",
+          "response",
+          "type"
+        ],
+        "type": "object"
+      },
+      "OperatorWebAuthnAssertionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authenticatorData": {
+            "$ref": "#/components/schemas/OperatorWebAuthnBinary"
+          },
+          "clientDataJSON": {
+            "$ref": "#/components/schemas/OperatorWebAuthnBinary"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/OperatorWebAuthnBinary"
+          }
+        },
+        "required": [
+          "authenticatorData",
+          "clientDataJSON",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "OperatorWebAuthnAttestationRequest": {
+        "additionalProperties": false,
+        "description": "Exact WebAuthn PublicKeyCredential attestation accepted by the operator registration verifier.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+          },
+          "rawId": {
+            "$ref": "#/components/schemas/OperatorWebAuthnCredentialId"
+          },
+          "response": {
+            "$ref": "#/components/schemas/OperatorWebAuthnAttestationResponse"
+          },
+          "type": {
+            "const": "public-key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "rawId",
+          "response",
+          "type"
+        ],
+        "type": "object"
+      },
+      "OperatorWebAuthnAttestationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attestationObject": {
+            "$ref": "#/components/schemas/OperatorWebAuthnBinary"
+          },
+          "clientDataJSON": {
+            "$ref": "#/components/schemas/OperatorWebAuthnBinary"
+          }
+        },
+        "required": [
+          "attestationObject",
+          "clientDataJSON"
+        ],
+        "type": "object"
+      },
+      "OperatorWebAuthnBinary": {
+        "description": "Non-empty canonical unpadded base64url WebAuthn byte string bounded by the 64 KiB request envelope.",
+        "maxLength": 65536,
+        "minLength": 1,
+        "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})?$",
+        "type": "string"
+      },
+      "OperatorWebAuthnCredentialId": {
+        "description": "Canonical unpadded base64url credential identifier; the decoded identifier is at most 1024 bytes.",
+        "maxLength": 1366,
+        "minLength": 1,
+        "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}|[A-Za-z0-9_-]{3})?$",
+        "type": "string"
+      },
       "OperatorWebAuthnLoginResponse": {
         "additionalProperties": false,
         "properties": {
@@ -28587,7 +29770,7 @@
         "properties": {
           "transaction": {
             "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact sponsor-signed finalization transaction."
+            "description": "Exact sponsor-signed finalization or abort transaction."
           }
         },
         "required": [
@@ -28613,16 +29796,12 @@
           },
           "carrier_id": {
             "$ref": "#/components/schemas/Hash"
-          },
-          "lifecycle": {
-            "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
           }
         },
         "required": [
           "bundle_id",
           "accepted_at_height",
-          "carrier_id",
-          "lifecycle"
+          "carrier_id"
         ],
         "type": "object",
         "x-iroha-redaction-v1": {
@@ -51204,33 +52383,48 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/status/{tail}": {
+    "/status/blocks": {
       "get": {
-        "description": "Returns a status sub-tree under the requested tail segment.",
-        "parameters": [
-          {
-            "description": "Status sub-path selector.",
-            "in": "path",
-            "name": "tail",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "description": "Returns the canonical committed block height as a JSON integer.",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
                 }
               }
             },
             "description": "Successful response"
           }
         },
-        "summary": "Fetch a status sub-path snapshot.",
+        "summary": "Fetch the committed block height.",
+        "tags": [
+          "System"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/status/peers": {
+      "get": {
+        "description": "Returns the current online peer count as a JSON integer.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch the online peer count.",
         "tags": [
           "System"
         ],
@@ -62553,11 +63747,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/GovernanceBallotDraftResponseV1"
                 }
               }
             },
-            "description": "Successful response",
+            "description": "An unsigned plain-ballot instruction was drafted; no transaction was submitted.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -62568,6 +63762,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The ballot request is invalid and no draft was constructed."
           }
         },
         "security": [
@@ -62685,11 +63889,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/GovernanceBallotDraftResponseV1"
                 }
               }
             },
-            "description": "Successful response",
+            "description": "An unsigned ZK ballot instruction was drafted; no transaction was submitted.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -62700,6 +63904,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The ballot request is invalid and no draft was constructed."
           }
         },
         "security": [
@@ -62817,11 +64031,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/GovernanceBallotDraftResponseV1"
                 }
               }
             },
-            "description": "Successful response",
+            "description": "An unsigned instruction was drafted from the ballot proof; no transaction was submitted.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -62832,6 +64046,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The ballot request is invalid and no draft was constructed."
           }
         },
         "security": [
@@ -72844,92 +74068,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/node/query/projection/checkpoint/plan": {
-      "post": {
-        "description": "Rebuilds the referenced shard archives from the live node snapshot, validates that the uploaded manifest/ticket set exactly matches the canonical non-empty live shard catalog, and returns the checkpoint descriptor without persisting it.",
-        "operationId": "nodeQueryProjectionCheckpointPlan",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Validated query projection checkpoint descriptor.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Plan a rebuilt query projection checkpoint.",
-        "tags": [
-          "Runtime"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
-    "/v1/node/query/projection/checkpoint/publish": {
-      "post": {
-        "description": "Rebuilds the referenced shard archives from the live node snapshot, validates that the uploaded manifest/ticket set exactly matches the canonical non-empty live shard catalog, and persists the resulting checkpoint descriptor.",
-        "operationId": "nodeQueryProjectionCheckpointPublish",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Persisted query projection checkpoint descriptor.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Publish a rebuilt query projection checkpoint.",
-        "tags": [
-          "Runtime"
-        ],
-        "x-iroha-tool-effect": "operator"
-      }
-    },
     "/v1/node/query/projection/shards/{resource}/{partition_id}": {
       "get": {
         "description": "Builds a Norito-encoded `QueryProjectionShardArchive` for the requested resource partition directly from the node's live query snapshot. Supported resources are `accounts`, `account_assets`, `asset_holders`, `asset_definitions`, and `domains`; `asset_definition_id` is required when `resource=asset_holders`.",
@@ -75248,6 +76386,26 @@
                 }
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded operator-auth ephemeral state is full (`operator_auth_state_capacity_exhausted`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Start operator WebAuthn login.",
@@ -75265,7 +76423,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/OperatorWebAuthnAssertionRequest"
               }
             }
           },
@@ -75352,6 +76510,46 @@
               }
             }
           },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The JSON request body exceeds the 64 KiB credential-exchange limit (`request_payload_too_large`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Content-Type is missing or is not canonical application/json.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "429": {
             "content": {
               "application/json": {
@@ -75371,12 +76569,33 @@
                 }
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded operator-auth ephemeral state is full (`operator_auth_state_capacity_exhausted`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Finish operator WebAuthn login.",
         "tags": [
           "OperatorAuth"
         ],
+        "x-iroha-max-request-bytes": 65536,
         "x-iroha-tool-effect": "operator"
       }
     },
@@ -75464,6 +76683,26 @@
                 }
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded operator-auth ephemeral state is full (`operator_auth_state_capacity_exhausted`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Start operator WebAuthn registration.",
@@ -75481,7 +76720,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/OperatorWebAuthnAttestationRequest"
               }
             }
           },
@@ -75568,6 +76807,66 @@
               }
             }
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded operator WebAuthn credential store is full (`operator_webauthn_credential_capacity_exhausted`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The JSON request body exceeds the 64 KiB credential-exchange limit (`request_payload_too_large`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Content-Type is missing or is not canonical application/json.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "429": {
             "content": {
               "application/json": {
@@ -75587,12 +76886,33 @@
                 }
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded operator-auth ephemeral state is full (`operator_auth_state_capacity_exhausted`).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Finish operator WebAuthn registration.",
         "tags": [
           "OperatorAuth"
         ],
+        "x-iroha-max-request-bytes": 65536,
         "x-iroha-tool-effect": "operator"
       }
     },
@@ -106018,7 +107338,7 @@
       "name": "Proofs"
     },
     {
-      "description": "Governance proposals, ballots, referenda, and council helpers.",
+      "description": "Governance proposals, ballots, referenda, and Parliament helpers.",
       "name": "Governance"
     },
     {

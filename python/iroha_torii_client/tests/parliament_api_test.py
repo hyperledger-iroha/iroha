@@ -495,9 +495,32 @@ def _certificate_attempt_read(*, hidden_ballot: bool = False) -> dict[str, Any]:
         "policy_version": 1,
         "effect_preimage_hash": [0x36] * 32,
         "expected_head": {"state": "Absent", "head": {"subject_id": [0x37] * 32}},
-        "certified_at_height": 30,
+        "certified_at_height": 25,
         "enact_at_height": 40,
     }
+    if not hidden_ballot:
+        policy_payload = _certificate_attempt_read(hidden_ballot=True)
+        policy_required = policy_payload["required_bodies"][0]
+        policy_state = policy_payload["body_states"][0]
+        policy_binding = policy_payload["certificate"]["body_bindings"][0]
+        policy_body_id = "34" * 32
+        policy_election_id = "78" * 32
+        policy_request_id = "89" * 32
+        policy_beacon_session_id = "9a" * 32
+        policy_state["body_instance_id"] = policy_body_id
+        policy_binding["body_instance_id"] = policy_body_id
+        policy_binding["election_attempt_id"] = policy_election_id
+        policy_binding["sortition_request_id"] = policy_request_id
+        policy_binding["beacon_session_id"] = policy_beacon_session_id
+        policy_binding["beacon_pulse_id"] = "ac" * 32
+        policy_request = policy_binding["sortition_request"]
+        policy_request["id"] = policy_request_id
+        policy_request["body_election_attempt_id"] = policy_election_id
+        policy_request["beacon_session_id"] = policy_beacon_session_id
+        policy_binding["ballot"] = _ballot_certificate_binding()
+        payload["required_bodies"].append(policy_required)
+        payload["body_states"].append(policy_state)
+        payload["certificate"]["body_bindings"].append(policy_binding)
     return payload
 
 
@@ -537,6 +560,115 @@ def _ballot_certificate_binding(*, commitment_closed_at_height: int = 12) -> dic
         },
         "outcome": {"outcome": "Approved"},
     }
+
+
+def _narrow_policy_attempt_read(
+    *,
+    confirmation_sequence: int = 0,
+    confirmation_request_height: int = 70,
+    include_confirmation: bool = True,
+) -> dict[str, Any]:
+    payload = _certificate_attempt_read(hidden_ballot=True)
+    policy = payload["certificate"]["body_bindings"][0]
+    policy["original_seats"] = 21
+    policy["sortition_request"]["candidate_count"] = 21
+    policy["sortition_request"]["target_seats"] = 21
+    policy["result_height"] = 70
+    policy_ballot = _ballot_certificate_binding(commitment_closed_at_height=65)
+    policy_ballot.update(
+        {
+            "registered_at_height": 21,
+            "registration_close_height": 43,
+            "survivor_freeze_height": 64,
+            "commitment_close_height": 65,
+            "registration_closed_at_height": 43,
+            "survivors_frozen_at_height": 64,
+            "max_corpus_entries": 21,
+            "release_height": 67,
+            "opening_deadline_height": 73,
+            "opening_height": 68,
+            "tally": {
+                "original_seats": 21,
+                "accepted_ballots": 21,
+                "aye": 11,
+                "nay": 10,
+                "abstain": 0,
+            },
+        }
+    )
+    policy["ballot"] = policy_ballot
+    policy_progress = payload["body_states"][0]["timed_ovn_progress"]
+    policy_progress["frozen_survivor_count"] = 21
+    policy_progress["accepted_ballot_prefix_count"] = 21
+    payload["current_height"] = 130
+    payload["certificate"]["certified_at_height"] = 70
+    payload["certificate"]["enact_at_height"] = 140
+    if not include_confirmation:
+        return payload
+
+    confirmation = copy.deepcopy(policy)
+    confirmation["body"] = "confirmation-jury"
+    confirmation["body_instance_id"] = "41" * 32
+    confirmation["election_attempt_id"] = "42" * 32
+    confirmation["election_attempt_sequence"] = confirmation_sequence
+    confirmation["sortition_request_id"] = "43" * 32
+    confirmation["beacon_session_id"] = "44" * 32
+    confirmation["beacon_pulse_id"] = "45" * 32
+    confirmation_request = confirmation["sortition_request"]
+    confirmation_request.update(
+        {
+            "id": "43" * 32,
+            "body_election_attempt_id": "42" * 32,
+            "body": "confirmation-jury",
+            "request_height": confirmation_request_height,
+            "pulse_height": confirmation_request_height + 1,
+            "beacon_session_id": "44" * 32,
+        }
+    )
+    registered = confirmation_request_height + 2
+    registration_close = registered + 22
+    survivor_freeze = registration_close + 21
+    commitment_close = survivor_freeze + 1
+    release_height = commitment_close + 2
+    opening_height = release_height + 1
+    confirmation["result_height"] = opening_height + 2
+    confirmation_ballot = copy.deepcopy(policy_ballot)
+    confirmation_ballot.update(
+        {
+            "ballot_attempt_id": "46" * 32,
+            "tle_session_id": "47" * 32,
+            "tle_key_session_id": "48" * 32,
+            "release_beacon_session_id": "49" * 32,
+            "registered_at_height": registered,
+            "registration_close_height": registration_close,
+            "survivor_freeze_height": survivor_freeze,
+            "commitment_close_height": commitment_close,
+            "registration_closed_at_height": registration_close,
+            "survivors_frozen_at_height": survivor_freeze,
+            "commitment_closed_at_height": commitment_close,
+            "release_height": release_height,
+            "opening_deadline_height": opening_height + 5,
+            "release_pulse_id": "4a" * 32,
+            "opening_height": opening_height,
+        }
+    )
+    confirmation["ballot"] = confirmation_ballot
+    payload["required_bodies"].append(
+        {
+            "body": "confirmation-jury",
+            "decision_mode": {"mode": "HiddenBindingBallot"},
+        }
+    )
+    confirmation_state = copy.deepcopy(payload["body_states"][0])
+    confirmation_state["body"] = "confirmation-jury"
+    confirmation_state["body_instance_id"] = confirmation["body_instance_id"]
+    confirmation_state["timed_ovn_progress"]["ballot_attempt_id"] = (
+        confirmation_ballot["ballot_attempt_id"]
+    )
+    payload["body_states"].append(confirmation_state)
+    payload["certificate"]["body_bindings"].append(confirmation)
+    payload["certificate"]["certified_at_height"] = confirmation["result_height"]
+    return payload
 
 
 def _partial_release() -> dict[str, Any]:
@@ -1401,10 +1533,10 @@ def test_attempt_certificate_rejects_forged_repeated_and_sortition_bindings() ->
         ),
         (
             lambda payload: payload["certificate"].__setitem__("policy_version", 2),
-            "policy_version differs",
+            "policy_version is not first-release",
         ),
         (
-            lambda payload: payload["certificate"].__setitem__("enact_at_height", 30),
+            lambda payload: payload["certificate"].__setitem__("enact_at_height", 25),
             "must follow certified_at_height",
         ),
         (
@@ -1436,6 +1568,103 @@ def test_attempt_certificate_rejects_forged_repeated_and_sortition_bindings() ->
             ToriiClient(
                 "https://node.test", session=session
             ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+
+
+def test_attempt_certificate_pins_policy_retry_seat_and_present_head_bounds() -> None:
+    unsupported_projection = _attempt_read()
+    unsupported_projection["policy_version"] = 2
+    unsupported_session = RecordingSession()
+    unsupported_session.queue(_json_response(unsupported_projection))
+    with pytest.raises(TypeError, match="policy_version is not first-release"):
+        ToriiClient(
+            "https://node.test", session=unsupported_session
+        ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+
+    mutations = (
+        (
+            lambda payload: payload["certificate"].__setitem__(
+                "expected_head",
+                {
+                    "state": "Present",
+                    "head": {
+                        "subject_id": [0x37] * 32,
+                        "version": 0,
+                        "head_root": [0x38] * 32,
+                    },
+                },
+            ),
+            "head.version",
+        ),
+        (
+            lambda payload: payload["attempt"].__setitem__("sequence", 17),
+            "attempt.sequence",
+        ),
+        (
+            lambda payload: payload["certificate"]["body_bindings"][0].__setitem__(
+                "election_attempt_sequence", 17
+            ),
+            "election_attempt_sequence",
+        ),
+        (
+            lambda payload: payload["certificate"]["body_bindings"][0].__setitem__(
+                "original_seats", 2
+            ),
+            "original_seats exceeds its sortition bounds",
+        ),
+    )
+    for mutate, message in mutations:
+        malformed = _certificate_attempt_read()
+        mutate(malformed)
+        session = RecordingSession()
+        session.queue(_json_response(malformed))
+        with pytest.raises((TypeError, ValueError), match=message):
+            ToriiClient(
+                "https://node.test", session=session
+            ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+
+
+def test_narrow_policy_certificate_uses_atomic_initial_confirmation_height() -> None:
+    valid_initial = RecordingSession()
+    valid_initial.queue(_json_response(_narrow_policy_attempt_read()))
+    ToriiClient(
+        "https://node.test", session=valid_initial
+    ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+
+    valid_retry = RecordingSession()
+    valid_retry.queue(
+        _json_response(
+            _narrow_policy_attempt_read(
+                confirmation_sequence=1,
+                confirmation_request_height=71,
+            )
+        )
+    )
+    ToriiClient(
+        "https://node.test", session=valid_retry
+    ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+
+    malformed = (
+        _narrow_policy_attempt_read(confirmation_request_height=71),
+        _narrow_policy_attempt_read(confirmation_sequence=1),
+        _narrow_policy_attempt_read(include_confirmation=False),
+    )
+    for payload in malformed:
+        session = RecordingSession()
+        session.queue(_json_response(payload))
+        with pytest.raises(ValueError, match="confirmation-jury|atomic initial request"):
+            ToriiClient(
+                "https://node.test", session=session
+            ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
+
+    reused_pulse = _narrow_policy_attempt_read()
+    bindings = reused_pulse["certificate"]["body_bindings"]
+    bindings[1]["beacon_pulse_id"] = bindings[0]["beacon_pulse_id"]
+    reused_session = RecordingSession()
+    reused_session.queue(_json_response(reused_pulse))
+    with pytest.raises(ValueError, match="fresh pulse"):
+        ToriiClient(
+            "https://node.test", session=reused_session
+        ).get_parliament_attempt_v1(ATTEMPT_ID, canonical_auth=_auth())
 
 
 def test_attempt_certificate_allows_nonzero_u32_candidate_count_above_corpus_cap() -> None:

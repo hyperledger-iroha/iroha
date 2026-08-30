@@ -11,7 +11,7 @@ import org.hyperledger.iroha.sdk.sccp.SccpSparseMerkleWitnessV1
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 
 /** Exact request payload for POST /v1/bridge/proofs/submit. */
-class SccpDestinationProofSubmitRequest(
+internal class SccpDestinationProofSubmitRequest(
     authority: String,
     destinationProofB64: String,
     feePayment: FeePaymentIntent,
@@ -37,7 +37,7 @@ class SccpDestinationProofSubmitRequest(
 }
 
 /** Exact native-proof request payload for POST /v1/bridge/messages. */
-class SccpNativeMessageSubmitRequest(
+internal class SccpNativeMessageSubmitRequest(
     authority: String,
     nativeProofB64: String,
     replayWitnessB64: String,

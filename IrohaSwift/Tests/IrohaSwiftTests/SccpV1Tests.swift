@@ -197,28 +197,34 @@ final class SccpV1Tests: XCTestCase {
     }
 
     func testNativeTransferEventSharedVectors() throws {
-        let vectors: [(SccpNetworkV1, String, String, String, String)] = [
-            (
-                .bscMainnet,
-                "020102000000000000000700000000000000000000000103000000786f724d00000000000000000000000000000002140000001111111111111111111111111111111111111111010b000000616c696365407461697261010d00000074616972615f6273635f786f72",
-                "e92d89d1adb34dbe5420fe660a0893f0edfd9493c3c683bdefabc89c24d0e1b7",
-                "6aa2f80325682c6be5466ca2051b274d1e3a7da07ace3a21c31b4ac3a811f201",
-                "0030b2d41f4da251b991659b871cde9e236fe654033d6204d9d6bae02266d3a5"
-            ),
-            (
-                .tronMainnet,
-                "020105000000000000000700000000000000000000000103000000786f724d0000000000000000000000000000000515000000412222222222222222222222222222222222222222010b000000616c696365407461697261010e00000074616972615f74726f6e5f786f72",
-                "fd03a7719fb4a47ec1dadb83cde2ab98e09b4f477e91efc68913d1d6881ab5e3",
-                "ac0f23529cafee260c92167a7df27a7c3c87d0a6188b2b833dba5f1ebc36df89",
-                "6e8843e3f022d5fa810f32fec0bbd0e6ababedbaa64841caea2ece0e64191bec"
-            ),
-        ]
-        for (source, payloadHex, laneHashHex, messageIdHex, digestHex) in vectors {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("fixtures/sccp/native_transfer_event_v1.json")
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any]
+        )
+        let vectors = try XCTUnwrap(fixture["vectors"] as? [[String: Any]])
+        XCTAssertEqual(vectors.count, 4)
+        for vector in vectors {
+            let source = try XCTUnwrap(
+                SccpNetworkV1(rawValue: try XCTUnwrap(vector["source_profile"] as? String))
+            )
+            let payloadHex = try XCTUnwrap(vector["canonical_payload_hex"] as? String)
+            let laneBytesHex = try XCTUnwrap(vector["canonical_lane_hex"] as? String)
+            let laneHashHex = try XCTUnwrap(vector["lane_hash_hex"] as? String)
+            let payloadHashHex = try XCTUnwrap(vector["payload_hash_hex"] as? String)
+            let messageIdHex = try XCTUnwrap(vector["message_id_hex"] as? String)
+            let digestHex = try XCTUnwrap(vector["source_event_digest_hex"] as? String)
             let lane = try SccpLaneIdV1(source: source, target: .soraTaira)
             let payload = try SccpV1.decodeLowerHex(payloadHex)
             let payloadHash = try SccpV1.payloadHash(payload)
             let messageId = try SccpV1.messageId(lane: lane, canonicalPayload: payload)
+            XCTAssertEqual(SccpV1.encodeLowerHex(SccpV1.canonicalLaneBytes(lane)), laneBytesHex)
             XCTAssertEqual(SccpV1.encodeLowerHex(SccpV1.laneHash(lane)), laneHashHex)
+            XCTAssertEqual(SccpV1.encodeLowerHex(payloadHash), payloadHashHex)
             XCTAssertEqual(SccpV1.encodeLowerHex(messageId), messageIdHex)
             XCTAssertEqual(
                 SccpV1.encodeLowerHex(try SccpV1.sourceEventDigest(

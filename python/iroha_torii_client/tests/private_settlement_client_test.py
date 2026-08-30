@@ -89,6 +89,100 @@ def test_shared_route_fixture_matches_python_operation_catalog() -> None:
         assert operation.top_level_fields == frozenset(row["top_level_fields"])
 
 
+def test_bundle_admission_uses_shared_fixture_and_rejects_malformed_dto() -> None:
+    fixture = _fixture()
+    request = AtomicPrivateSettlementPreparedRequestV1.from_native_prepared_json(
+        AtomicPrivateSettlementOperationV1.BUNDLE_SUBMIT,
+        b'{"transaction":{}}',
+    )
+    auth = ToriiCanonicalRequestAuth(
+        network_id=fixture["identifiers"]["bundle_json"],
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"\x55" * 64,
+        timestamp_ms=1_700_000_000_000,
+        nonce="settlement-bundle-submit-1",
+    )
+    response = _ExactResponse(fixture["responses"]["bundle_submit"], status=202)
+    session = _ExactSession(response)
+
+    admitted = ToriiClient(
+        "https://node.test", session=session
+    ).submit_private_settlement_bundle_v1(request, canonical_auth=auth)
+
+    assert json.loads(admitted.bytes()) == fixture["responses"]["bundle_submit"]
+    assert "lifecycle" not in fixture["responses"]["bundle_submit"]
+    assert session.calls[0]["method"] == "POST"
+    assert session.calls[0]["url"].endswith(
+        "/v1/nexus/private-settlements/bundles"
+    )
+
+    valid = fixture["responses"]["bundle_submit"]
+    maximum_height = dict(valid)
+    maximum_height["accepted_at_height"] = (1 << 64) - 1
+    admitted_maximum = ToriiClient(
+        "https://node.test",
+        session=_ExactSession(_ExactResponse(maximum_height, status=202)),
+    ).submit_private_settlement_bundle_v1(request, canonical_auth=auth)
+    assert json.loads(admitted_maximum.bytes()) == maximum_height
+
+    wrong_status = _ExactResponse(valid, status=200)
+    with pytest.raises(
+        AtomicPrivateSettlementToriiErrorV1,
+        match="response status is invalid",
+    ):
+        ToriiClient(
+            "https://node.test",
+            session=_ExactSession(wrong_status),
+        ).submit_private_settlement_bundle_v1(request, canonical_auth=auth)
+    assert wrong_status.was_closed
+
+    malformed: list[dict[str, Any]] = []
+    for field, value in (
+        ("bundle_id", fixture["identifiers"]["bundle_hex"]),
+        ("carrier_id", valid["carrier_id"].lower()),
+        ("bundle_id", 1),
+        ("carrier_id", fixture["identifiers"]["payload_json"][:-1] + "0"),
+        ("carrier_id", None),
+        ("accepted_at_height", True),
+        ("accepted_at_height", -1),
+        ("accepted_at_height", str(valid["accepted_at_height"])),
+        ("accepted_at_height", 105.0),
+        ("accepted_at_height", (1 << 64)),
+    ):
+        candidate = dict(valid)
+        candidate[field] = value
+        malformed.append(candidate)
+    missing = dict(valid)
+    missing.pop("carrier_id")
+    malformed.append(missing)
+    leaked = dict(valid)
+    leaked["lifecycle"] = {"status": "finalized", "value": None}
+    malformed.append(leaked)
+
+    for candidate in malformed:
+        with pytest.raises(
+            AtomicPrivateSettlementToriiErrorV1,
+            match="response is invalid",
+        ):
+            ToriiClient(
+                "https://node.test",
+                session=_ExactSession(_ExactResponse(candidate, status=202)),
+            ).submit_private_settlement_bundle_v1(request, canonical_auth=auth)
+
+    negative_zero = _ExactResponse(valid, status=202)
+    negative_zero._content = negative_zero.content.replace(
+        b'"accepted_at_height":105', b'"accepted_at_height":-0'
+    )
+    with pytest.raises(
+        AtomicPrivateSettlementToriiErrorV1,
+        match="response is invalid",
+    ):
+        ToriiClient(
+            "https://node.test",
+            session=_ExactSession(negative_zero),
+        ).submit_private_settlement_bundle_v1(request, canonical_auth=auth)
+
+
 def test_prepared_request_rejects_duplicate_fields_and_redacts_body() -> None:
     with pytest.raises(ValueError, match="strict JSON object"):
         AtomicPrivateSettlementPreparedRequestV1.from_native_prepared_json(
@@ -107,6 +201,47 @@ def test_prepared_request_rejects_duplicate_fields_and_redacts_body() -> None:
         request.bytes()
 
 
+def test_http_errors_redact_bodies_and_untrusted_reject_codes() -> None:
+    fixture = _fixture()
+    bundle = AtomicPrivateSettlementIdentifierV1(fixture["identifiers"]["bundle_hex"])
+    response = _ExactResponse({"memo": "LEAK_CANARY", "amount": 987654}, status=400)
+    response.headers["X-Iroha-Reject-Code"] = "memo=LEAK_CANARY_987654"
+    client = ToriiClient("https://node.test", session=_ExactSession(response))
+
+    with pytest.raises(AtomicPrivateSettlementToriiErrorV1) as failure:
+        client.private_settlement_bundle_status_v1(bundle)
+    rendered = str(failure.value)
+    assert "LEAK_CANARY" not in rendered
+    assert "987654" not in rendered
+    assert response.was_closed
+
+    valid_code = _ExactResponse({"memo": "LEAK_CANARY"}, status=409)
+    valid_code.headers["X-Iroha-Reject-Code"] = "APS_POLICY_DENIED"
+    with pytest.raises(AtomicPrivateSettlementToriiErrorV1) as valid_failure:
+        ToriiClient(
+            "https://node.test",
+            session=_ExactSession(valid_code),
+        ).private_settlement_bundle_status_v1(bundle)
+    assert "reject_code=APS_POLICY_DENIED" in str(valid_failure.value)
+
+
+def test_invalid_response_drops_secret_bearing_parser_context() -> None:
+    fixture = _fixture()
+    bundle = AtomicPrivateSettlementIdentifierV1(fixture["identifiers"]["bundle_hex"])
+    response = _ExactResponse({})
+    response._content = b'{"LEAK_CANARY_ACCOUNT_AMOUNT":1,"LEAK_CANARY_ACCOUNT_AMOUNT":2}'
+    client = ToriiClient("https://node.test", session=_ExactSession(response))
+
+    with pytest.raises(AtomicPrivateSettlementToriiErrorV1) as failure:
+        client.private_settlement_bundle_status_v1(bundle)
+
+    assert str(failure.value) == "atomic private settlement response is invalid"
+    assert failure.value.__cause__ is None
+    assert failure.value.__context__ is None
+    assert "LEAK_CANARY_ACCOUNT_AMOUNT" not in repr(failure.value)
+    assert response.was_closed
+
+
 def test_public_receipt_is_path_bound_bounded_and_allowlisted() -> None:
     fixture = _fixture()
     bundle = AtomicPrivateSettlementIdentifierV1(fixture["identifiers"]["bundle_hex"])
@@ -122,6 +257,31 @@ def test_public_receipt_is_path_bound_bounded_and_allowlisted() -> None:
     result.close()
     with pytest.raises(RuntimeError, match="closed"):
         result.bytes()
+
+    expected_length = len(response.content)
+    for declared_length in (expected_length - 1, expected_length + 1):
+        mismatched = _ExactResponse(fixture["responses"]["receipt_pending"])
+        mismatched.headers["Content-Length"] = str(declared_length)
+        with pytest.raises(
+            AtomicPrivateSettlementToriiErrorV1,
+            match="response is invalid",
+        ):
+            ToriiClient(
+                "https://node.test",
+                session=_ExactSession(mismatched),
+            ).private_settlement_bundle_receipt_v1(bundle)
+        assert mismatched.was_closed
+
+    wrong_status = _ExactResponse(fixture["responses"]["receipt_pending"], status=201)
+    with pytest.raises(
+        AtomicPrivateSettlementToriiErrorV1,
+        match="response status is invalid",
+    ):
+        ToriiClient(
+            "https://node.test",
+            session=_ExactSession(wrong_status),
+        ).private_settlement_bundle_receipt_v1(bundle)
+    assert wrong_status.was_closed
 
 
 def test_sponsor_phase_certificate_recovery_is_bound_and_strictly_allowlisted() -> None:

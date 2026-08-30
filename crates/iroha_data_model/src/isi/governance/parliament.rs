@@ -696,6 +696,34 @@ pub const PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOME_DIGEST_V1: &[u8] =
     b"iroha.governance.parliament.automatic_execution_outcome.digest.v1";
 
 impl ParliamentLifecycleTransitionV1 {
+    /// Reject an inert or cross-attempt transition before stateful execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable message when the enclosing attempt is zero, an embedded
+    /// sortition request names another attempt, or [`Self::validate_static`]
+    /// rejects the payload.
+    pub fn validate_static_for_attempt(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+    ) -> Result<(), &'static str> {
+        require_nonzero_id(
+            governance_attempt_id.as_bytes(),
+            "governance attempt id must be non-zero",
+        )?;
+        if let Self::RegisterSortitionRequest(payload) = self
+            && payload
+                .requests
+                .iter()
+                .any(|entry| entry.request.governance_attempt_id != governance_attempt_id)
+        {
+            return Err(
+                "sortition request governance attempt id does not match the enclosing attempt",
+            );
+        }
+        self.validate_static()
+    }
+
     /// Reject state-independent malformed or unbounded transition payloads.
     ///
     /// This validation is suitable for untrusted API requests and instruction
@@ -707,6 +735,10 @@ impl ParliamentLifecycleTransitionV1 {
     ///
     /// Returns a stable message when an identifier, commitment, height, derived
     /// binding, batch, or fixed-width cryptographic record is structurally invalid.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the closed V1 transition table stays auditable as one exhaustive match"
+    )]
     pub fn validate_static(&self) -> Result<(), &'static str> {
         match self {
             Self::EscalateRisk(_) | Self::CompleteQualification => {}
@@ -728,7 +760,10 @@ impl ParliamentLifecycleTransitionV1 {
                     if entry.sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
                         return Err("sortition retry sequence exceeds the protocol maximum");
                     }
-                    if entry.request.validate(None).is_err() {
+                    // An empty canonical intent carries the immutable bindings Core needs
+                    // to record typed hidden-electorate capacity evidence. Core still
+                    // authenticates the live snapshot and decision mode before mutation.
+                    if entry.request.validate_capacity_intent(None).is_err() {
                         return Err("sortition request is structurally invalid");
                     }
                     if entry.request.body_election_attempt_id
@@ -1095,19 +1130,8 @@ impl SubmitParliamentLifecycleTransitionV1 {
     /// sortition request names another attempt, or the transition payload is
     /// structurally invalid.
     pub fn validate_static(&self) -> Result<(), &'static str> {
-        require_nonzero_id(
-            self.governance_attempt_id.as_bytes(),
-            "governance attempt id must be non-zero",
-        )?;
-        if let ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) = &self.transition
-            && payload
-                .requests
-                .iter()
-                .any(|entry| entry.request.governance_attempt_id != self.governance_attempt_id)
-        {
-            return Err("sortition request governance attempt id does not match the instruction");
-        }
-        self.transition.validate_static()
+        self.transition
+            .validate_static_for_attempt(self.governance_attempt_id)
     }
 }
 
@@ -1422,6 +1446,41 @@ mod tests {
     }
 
     #[test]
+    fn zero_candidate_sortition_intent_reaches_consensus_capacity_validation() {
+        let governance_attempt_id = GovernanceAttemptId::new([0x71; 32]);
+        let body = ParliamentBody::PolicyJury;
+        let body_election_attempt_id =
+            BodyElectionAttemptId::derive_v1(governance_attempt_id, body, 0);
+        let candidates = Vec::new();
+        let mut request = SortitionRequestV1 {
+            id: SortitionRequestId::new([0; 32]),
+            governance_attempt_id,
+            body_election_attempt_id,
+            body,
+            candidate_root: parliament_candidate_root_v1(governance_attempt_id, body, &candidates),
+            candidate_count: 0,
+            target_seats: 3,
+            request_height: 10,
+            pulse_height: 15,
+            beacon_session_id: BeaconSessionId::new([0x72; 32]),
+        };
+        request.id = request.canonical_id();
+        assert_eq!(
+            ParliamentLifecycleTransitionV1::RegisterSortitionRequest(
+                ParliamentRegisterSortitionRequestV1 {
+                    requests: vec![ParliamentSortitionRequestRegistrationV1 {
+                        sequence: 0,
+                        request,
+                    }],
+                },
+            )
+            .validate_static(),
+            Ok(()),
+            "an empty canonical snapshot is a capacity intent that Core must classify against consensus state"
+        );
+    }
+
+    #[test]
     #[expect(
         clippy::too_many_lines,
         reason = "the table covers every transition payload and each shared structural bound"
@@ -1731,7 +1790,7 @@ mod tests {
                 ),
             }
             .validate_static(),
-            Err("sortition request governance attempt id does not match the instruction")
+            Err("sortition request governance attempt id does not match the enclosing attempt")
         );
         assert_eq!(
             ParliamentLifecycleTransitionV1::RegisterSortitionRequest(

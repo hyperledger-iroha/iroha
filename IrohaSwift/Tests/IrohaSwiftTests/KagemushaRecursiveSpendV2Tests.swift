@@ -857,6 +857,28 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
+    func testTopUpShieldInsertionReservesFinalTreeLeaf() throws {
+        let proofAttachment = framedArchive(
+            typeName: KagemushaRecursiveSpend.proofAttachmentWireName
+        )
+        let lastValidLeaf = KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2 - 1
+        XCTAssertEqual(
+            try KagemushaTopUpShieldEvidence(
+                initialRoot: fixed32(0x11),
+                finalizedRoot: fixed32(0x13),
+                leafIndex: lastValidLeaf,
+                proofAttachment: proofAttachment
+            ).leafIndex,
+            lastValidLeaf
+        )
+        XCTAssertThrowsError(try KagemushaTopUpShieldEvidence(
+            initialRoot: fixed32(0x11),
+            finalizedRoot: fixed32(0x13),
+            leafIndex: KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2,
+            proofAttachment: proofAttachment
+        ))
+    }
+
     func testV4ArtifactManifestArchivePinsSchemaAndDigest() throws {
         let manifestArchive = framedArchive(
             typeName: KagemushaRecursiveSpend.artifactManifestWireName

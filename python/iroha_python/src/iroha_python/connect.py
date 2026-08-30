@@ -6,6 +6,7 @@ import base64
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Type, Union
@@ -62,6 +63,8 @@ __all__ = [
 
 _SID_LENGTH = 32
 _NONCE_LENGTH = 16
+_U16_MAX = (1 << 16) - 1
+_U64_MAX = (1 << 64) - 1
 _CONNECT_URI_VERSION = "1"
 _CONNECT_SESSION_RESPONSE_FIELDS = frozenset(
     {
@@ -95,7 +98,23 @@ def _normalize_connect_wallet_signature_algorithm(algorithm: str) -> str:
     return "ed25519"
 
 
-@dataclass(frozen=True)
+def _require_uint(
+    value: Any,
+    field: str,
+    *,
+    maximum: int,
+    positive: bool = False,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field} must be an integer")
+    minimum = 1 if positive else 0
+    if value < minimum or value > maximum:
+        qualifier = "positive " if positive else ""
+        raise ValueError(f"{field} must be a {qualifier}integer no greater than {maximum}")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
 class ConnectUri:
     """Structured representation of an `iroha://connect` URI."""
 
@@ -110,6 +129,8 @@ class ConnectUri:
 def build_connect_uri(data: ConnectUri) -> str:
     """Return a canonical `iroha://connect?...` URI."""
 
+    if not isinstance(data, ConnectUri):
+        raise TypeError("data must be a ConnectUri")
     network_id = _require_network_id(data.network_id, "network_id")
     app_public_key = _ensure_bytes(data.app_public_key, size=32, field="app_public_key")
     nonce = _ensure_bytes(data.nonce, size=16, field="nonce")
@@ -119,8 +140,10 @@ def build_connect_uri(data: ConnectUri) -> str:
         app_public_key=app_public_key,
         nonce=nonce,
     )
-    if data.version < 1:
-        raise ValueError("version must be >= 1")
+    if isinstance(data.version, bool) or not isinstance(data.version, int):
+        raise TypeError("version must be the integer 1")
+    if data.version != 1:
+        raise ValueError("Connect URI version must be exactly 1")
     query_items = {
         "sid": data.sid,
         "network_id": network_id.literal,
@@ -140,6 +163,8 @@ def build_connect_uri(data: ConnectUri) -> str:
 def parse_connect_uri(uri: str) -> ConnectUri:
     """Parse an `iroha://connect?...` URI into a :class:`ConnectUri`."""
 
+    if not isinstance(uri, str):
+        raise TypeError("uri must be a string")
     parsed: ParseResult = urlparse(uri)
     if parsed.scheme != "iroha":
         raise ValueError("URI scheme must be 'iroha'")
@@ -147,13 +172,15 @@ def parse_connect_uri(uri: str) -> ConnectUri:
     host_is_connect = parsed.netloc == "connect" and parsed.path in {"", "/"}
     if not (path_is_connect or host_is_connect):
         raise ValueError("URI path must be '/connect'")
+    if parsed.params or parsed.fragment:
+        raise ValueError("Connect URI must not contain parameters or a fragment")
     params = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
     retired = {"chain", "chain_id", "chainId", "genesis_hash", "genesisHash"}.intersection(
         params
     )
     if retired:
         raise ValueError("chain identity aliases are retired; provide exact network_id")
-    allowed = {"sid", "network_id", "app_pk", "nonce", "node", "v", "role", "token", "relay"}
+    allowed = {"sid", "network_id", "app_pk", "nonce", "node", "v"}
     unsupported = set(params).difference(allowed)
     if unsupported:
         raise ValueError(f"unsupported Connect URI parameters: {sorted(unsupported)}")
@@ -172,12 +199,9 @@ def parse_connect_uri(uri: str) -> ConnectUri:
         nonce=nonce,
     )
     version_str = _require(_get_single(params, "v", default="1"), "v")
-    try:
-        version = int(version_str)
-    except ValueError as exc:
-        raise ValueError("version must be an integer") from exc
-    if version < 1:
-        raise ValueError("version must be >= 1")
+    if version_str != _CONNECT_URI_VERSION:
+        raise ValueError("Connect URI version must be exactly 1")
+    version = 1
     node = _get_single(params, "node", default=None)
     return ConnectUri(
         sid=sid,
@@ -234,6 +258,8 @@ def _require_codec_module() -> Any:
 
 
 def _ensure_bytes(payload: _BytesLike, *, size: Optional[int], field: str) -> bytes:
+    if not isinstance(payload, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{field} must be bytes-like")
     data = bytes(payload)
     if size is not None and len(data) != size:
         raise ValueError(f"{field} must be {size} bytes, got {len(data)}")
@@ -272,12 +298,12 @@ class ConnectRole(str, Enum):
             raise ValueError(f"invalid connect role {value!r}") from exc
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class ConnectKeyPair:
     """Ephemeral X25519 key pair used for Connect sessions."""
 
-    private_key: bytes
-    public_key: bytes
+    private_key: bytes = dataclass_field(repr=False, compare=False)
+    public_key: bytes = dataclass_field(repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -292,9 +318,37 @@ class ConnectKeyPair:
         )
         if not any(self.private_key) or not any(self.public_key):
             raise ValueError("Connect key material must not be all zero")
+        if connect_public_key_from_private(self.private_key) != self.public_key:
+            raise ValueError("Connect public key does not match its private key")
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(public_key_hex={self.public_key.hex()!r})"
+
+    @classmethod
+    def _from_native_result(
+        cls,
+        private_key: Any,
+        public_key: Any,
+    ) -> "ConnectKeyPair":
+        """Build from one already-validated native key-generation result."""
+
+        instance = object.__new__(cls)
+        object.__setattr__(
+            instance,
+            "private_key",
+            _ensure_bytes(private_key, size=32, field="private_key"),
+        )
+        object.__setattr__(
+            instance,
+            "public_key",
+            _ensure_bytes(public_key, size=32, field="public_key"),
+        )
+        if not any(instance.private_key) or not any(instance.public_key):
+            raise RuntimeError("native Connect key generation returned all-zero material")
+        return instance
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ConnectSid:
     """Deterministic Connect session identifier plus helper encodings."""
 
@@ -303,7 +357,7 @@ class ConnectSid:
     nonce: bytes
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class ConnectSessionPreview:
     """Pre-registration preview bundle used by dashboards and wallets."""
 
@@ -316,18 +370,35 @@ class ConnectSessionPreview:
     wallet_uri: str
     app_uri: str
 
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(network_id={self.network_id!r}, "
+            f"sid_base64url={self.sid_base64url!r}, node={self.node!r})"
+        )
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
 class ConnectPreviewTokens:
     """Convenience container for Torii-issued Connect session tokens."""
 
-    wallet: str
-    app: str
-    management: str
-    relay: str
+    wallet: str = dataclass_field(repr=False)
+    app: str = dataclass_field(repr=False)
+    management: str = dataclass_field(repr=False)
+    relay: str = dataclass_field(repr=False)
+
+    def __post_init__(self) -> None:
+        for name in ("wallet", "app", "management", "relay"):
+            object.__setattr__(
+                self,
+                name,
+                _canonical_connect_token(getattr(self, name), name),
+            )
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(<redacted>)"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ConnectPreviewBootstrapResult:
     """Return value for :func:`bootstrap_connect_preview_session`."""
 
@@ -336,7 +407,7 @@ class ConnectPreviewBootstrapResult:
     tokens: Optional[ConnectPreviewTokens]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
 class ConnectSessionInfo:
     """Response payload returned by `ToriiClient.create_connect_session`."""
 
@@ -344,12 +415,12 @@ class ConnectSessionInfo:
     network_id: NetworkId
     app_public_key: bytes
     nonce: bytes
-    wallet_uri: str
-    app_uri: str
-    app_token: str
-    wallet_token: str
-    management_token: str
-    relay_token: str
+    wallet_uri: str = dataclass_field(repr=False, compare=False)
+    app_uri: str = dataclass_field(repr=False, compare=False)
+    app_token: str = dataclass_field(repr=False, compare=False)
+    wallet_token: str = dataclass_field(repr=False, compare=False)
+    management_token: str = dataclass_field(repr=False, compare=False)
+    relay_token: str = dataclass_field(repr=False, compare=False)
     expires_at: Optional[datetime] = None
 
     def __post_init__(self) -> None:
@@ -405,6 +476,13 @@ class ConnectSessionInfo:
         object.__setattr__(self, "wallet_token", wallet_token)
         object.__setattr__(self, "management_token", management_token)
         object.__setattr__(self, "relay_token", relay_token)
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(sid={self.sid!r}, network_id={self.network_id!r}, "
+            f"app_public_key_hex={self.app_public_key.hex()!r}, "
+            f"expires_at={self.expires_at!r})"
+        )
 
     @classmethod
     def from_mapping(
@@ -838,8 +916,10 @@ class ConnectControlReject(_ConnectControlBase):
 
     def __init__(self, *, code: int, code_id: str, reason: str) -> None:
         super().__init__(variant="Reject")
-        self.code = int(code)
-        self.code_id = code_id
+        self.code = _require_uint(code, "Reject code", maximum=_U16_MAX)
+        self.code_id = _require_exact_non_empty_string(code_id, "Reject code_id")
+        if not isinstance(reason, str):
+            raise TypeError("Reject reason must be a string")
         self.reason = reason
 
     def to_dict(self) -> Dict[str, Any]:
@@ -862,9 +942,13 @@ class ConnectControlClose(_ConnectControlBase):
     ) -> None:
         super().__init__(variant="Close")
         self.role = ConnectRole.normalize(role)
-        self.code = int(code)
+        self.code = _require_uint(code, "Close code", maximum=_U16_MAX)
+        if not isinstance(reason, str):
+            raise TypeError("Close reason must be a string")
         self.reason = reason
-        self.retryable = bool(retryable)
+        if not isinstance(retryable, bool):
+            raise TypeError("Close retryable must be a boolean")
+        self.retryable = retryable
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -890,7 +974,11 @@ class ConnectControlPing(_ConnectControlBase):
 
     def __init__(self, *, nonce: int) -> None:
         super().__init__(variant="Ping")
-        self.nonce = int(nonce)
+        self.nonce = _require_uint(
+            nonce,
+            "Ping nonce",
+            maximum=_U64_MAX,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {"nonce": self.nonce}
@@ -906,7 +994,11 @@ class ConnectControlPong(_ConnectControlBase):
 
     def __init__(self, *, nonce: int) -> None:
         super().__init__(variant="Pong")
-        self.nonce = int(nonce)
+        self.nonce = _require_uint(
+            nonce,
+            "Pong nonce",
+            maximum=_U64_MAX,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {"nonce": self.nonce}
@@ -948,9 +1040,12 @@ class ConnectFrame:
     def __post_init__(self) -> None:
         self.sid = _ensure_bytes(self.sid, size=32, field="sid")
         self.direction = ConnectDirection.normalize(self.direction)
-        self.sequence = int(self.sequence)
-        if self.sequence < 1:
-            raise ValueError("Connect frame sequence must be at least 1")
+        self.sequence = _require_uint(
+            self.sequence,
+            "Connect frame sequence",
+            maximum=_U64_MAX,
+            positive=True,
+        )
         if (self.control is None) == (self.ciphertext is None):
             raise ValueError("provide exactly one of `control` or `ciphertext` for a frame")
         if self.ciphertext is not None and self.ciphertext.direction != self.direction:
@@ -1006,7 +1101,9 @@ class ConnectFrame:
         """Decode Norito-encoded frame bytes."""
 
         codec = _require_codec_module()
-        decoded = codec.decode_connect_frame(bytes(payload))
+        decoded = codec.decode_connect_frame(
+            _ensure_bytes(payload, size=None, field="payload")
+        )
         return cls.from_dict(decoded)
 
 
@@ -1123,12 +1220,26 @@ class ConnectEnvelope:
     sequence: int
     payload: ConnectCiphertextPayload
 
+    def __post_init__(self) -> None:
+        self.sequence = _require_uint(
+            self.sequence,
+            "Connect envelope sequence",
+            maximum=_U64_MAX,
+            positive=True,
+        )
+        _payload_to_dict(self.payload)
+
     def to_dict(self) -> Dict[str, Any]:
-        return {"seq": int(self.sequence), "payload": _payload_to_dict(self.payload)}
+        return {"seq": self.sequence, "payload": _payload_to_dict(self.payload)}
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ConnectEnvelope":
-        seq = int(payload["seq"])
+        seq = _require_uint(
+            payload["seq"],
+            "Connect envelope sequence",
+            maximum=_U64_MAX,
+            positive=True,
+        )
         payload_obj = payload["payload"]
         if not isinstance(payload_obj, Mapping):
             raise TypeError("connect payload must be a mapping")
@@ -1193,7 +1304,9 @@ def decode_connect_frame(payload: _BytesLike) -> ConnectFrame:
     """Decode Norito-encoded Connect frame bytes into a :class:`ConnectFrame`."""
 
     codec = _require_codec_module()
-    decoded = codec.decode_connect_frame(bytes(payload))
+    decoded = codec.decode_connect_frame(
+        _ensure_bytes(payload, size=None, field="payload")
+    )
     return ConnectFrame.from_dict(decoded)
 
 
@@ -1202,7 +1315,7 @@ def generate_connect_keypair() -> ConnectKeyPair:
 
     codec = _require_codec_module()
     private_key, public_key = codec.generate_connect_keypair()
-    return ConnectKeyPair(private_key=bytes(private_key), public_key=bytes(public_key))
+    return ConnectKeyPair._from_native_result(private_key, public_key)
 
 
 def connect_public_key_from_private(private_key: _BytesLike) -> bytes:
@@ -1318,12 +1431,18 @@ def seal_connect_payload(
     """Encrypt a Connect payload and return the resulting ciphertext frame."""
 
     direction_obj = ConnectDirection.normalize(direction)
+    normalized_sequence = _require_uint(
+        sequence,
+        "Connect payload sequence",
+        maximum=_U64_MAX,
+        positive=True,
+    )
     payload_dict = _payload_to_dict(payload)
     frame_bytes = _require_codec_module().seal_connect_payload(
         _ensure_bytes(key, size=32, field="key"),
         _ensure_bytes(sid, size=32, field="sid"),
         direction_obj.value,
-        int(sequence),
+        normalized_sequence,
         payload_dict,
     )
     return ConnectFrame.from_bytes(frame_bytes)
@@ -1348,12 +1467,12 @@ def open_connect_payload(
     return ConnectEnvelope.from_dict(envelope_dict)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, repr=False, eq=False)
 class ConnectSessionKeys:
     """Container for per-direction symmetric keys used after Connect approval."""
 
-    app_to_wallet: bytes
-    wallet_to_app: bytes
+    app_to_wallet: bytes = dataclass_field(repr=False)
+    wallet_to_app: bytes = dataclass_field(repr=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -1366,6 +1485,13 @@ class ConnectSessionKeys:
             "wallet_to_app",
             _ensure_bytes(self.wallet_to_app, size=32, field="wallet_to_app"),
         )
+        if not any(self.app_to_wallet) or not any(self.wallet_to_app):
+            raise ValueError("Connect session keys must not be all zero")
+        if self.app_to_wallet == self.wallet_to_app:
+            raise ValueError("Connect direction keys must be distinct")
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(<redacted>)"
 
     @classmethod
     def derive(
@@ -1390,6 +1516,39 @@ class ConnectSessionState:
     next_sequence_wallet_to_app: int = 1
     last_received_app_to_wallet: Optional[int] = None
     last_received_wallet_to_app: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sid", _ensure_bytes(self.sid, size=32, field="sid"))
+        for field in (
+            "next_sequence_app_to_wallet",
+            "next_sequence_wallet_to_app",
+        ):
+            object.__setattr__(
+                self,
+                field,
+                _require_uint(
+                    getattr(self, field),
+                    f"ConnectSessionState {field}",
+                    maximum=_U64_MAX,
+                    positive=True,
+                ),
+            )
+        for field in (
+            "last_received_app_to_wallet",
+            "last_received_wallet_to_app",
+        ):
+            value = getattr(self, field)
+            if value is not None:
+                object.__setattr__(
+                    self,
+                    field,
+                    _require_uint(
+                        value,
+                        f"ConnectSessionState {field}",
+                        maximum=_U64_MAX,
+                        positive=True,
+                    ),
+                )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert the state into a JSON-friendly dictionary."""
@@ -1431,43 +1590,44 @@ class ConnectSessionState:
         if not isinstance(last_received, Mapping):
             raise TypeError("ConnectSessionState last_received must be a mapping")
 
-        def _coerce_int(
+        def _read_int(
             holder: Mapping[str, Any],
             key: str,
             *,
             default: int,
         ) -> int:
-            value = holder.get(key, default)
-            if not isinstance(value, int):
-                raise TypeError(f"ConnectSessionState field `{key}` must be an integer")
-            if value < 1:
-                raise ValueError(f"ConnectSessionState field `{key}` must be at least 1")
-            return value
+            return _require_uint(
+                holder.get(key, default),
+                f"ConnectSessionState field `{key}`",
+                maximum=_U64_MAX,
+                positive=True,
+            )
 
-        def _coerce_optional_int(holder: Mapping[str, Any], key: str) -> Optional[int]:
+        def _read_optional_int(holder: Mapping[str, Any], key: str) -> Optional[int]:
             value = holder.get(key, None)
             if value is None:
                 return None
-            if not isinstance(value, int):
-                raise TypeError(f"ConnectSessionState field `{key}` must be an integer or null")
-            if value < 1:
-                raise ValueError(f"ConnectSessionState field `{key}` must be at least 1 when present")
-            return value
+            return _require_uint(
+                value,
+                f"ConnectSessionState field `{key}`",
+                maximum=_U64_MAX,
+                positive=True,
+            )
 
         return cls(
             sid=sid,
-            next_sequence_app_to_wallet=_coerce_int(
+            next_sequence_app_to_wallet=_read_int(
                 next_sequence,
                 "app_to_wallet",
                 default=1,
             ),
-            next_sequence_wallet_to_app=_coerce_int(
+            next_sequence_wallet_to_app=_read_int(
                 next_sequence,
                 "wallet_to_app",
                 default=1,
             ),
-            last_received_app_to_wallet=_coerce_optional_int(last_received, "app_to_wallet"),
-            last_received_wallet_to_app=_coerce_optional_int(last_received, "wallet_to_app"),
+            last_received_app_to_wallet=_read_optional_int(last_received, "app_to_wallet"),
+            last_received_wallet_to_app=_read_optional_int(last_received, "wallet_to_app"),
         )
 
 
@@ -1483,14 +1643,22 @@ class ConnectSession:
         wallet_initial_sequence: int = 1,
     ) -> None:
         self._sid = _ensure_bytes(sid, size=32, field="sid")
-        self._keys = keys
         if not isinstance(keys, ConnectSessionKeys):
             raise TypeError("keys must be ConnectSessionKeys")
-        if app_initial_sequence < 1 or wallet_initial_sequence < 1:
-            raise ValueError("Connect initial sequences must be at least 1")
+        self._keys = keys
         self._next_sequence: Dict[ConnectDirection, int] = {
-            ConnectDirection.APP_TO_WALLET: int(app_initial_sequence),
-            ConnectDirection.WALLET_TO_APP: int(wallet_initial_sequence),
+            ConnectDirection.APP_TO_WALLET: _require_uint(
+                app_initial_sequence,
+                "app_initial_sequence",
+                maximum=_U64_MAX,
+                positive=True,
+            ),
+            ConnectDirection.WALLET_TO_APP: _require_uint(
+                wallet_initial_sequence,
+                "wallet_initial_sequence",
+                maximum=_U64_MAX,
+                positive=True,
+            ),
         }
         self._last_received: Dict[ConnectDirection, Optional[int]] = {
             ConnectDirection.APP_TO_WALLET: None,
@@ -1636,9 +1804,9 @@ def create_connect_session_preview(
 
     network_id = _require_network_id(network_id, "network_id")
     normalized_node = _normalize_optional_string(node, "node")
+    if app_key_pair is not None and not isinstance(app_key_pair, ConnectKeyPair):
+        raise TypeError("app_key_pair must be a ConnectKeyPair")
     key_pair = app_key_pair or generate_connect_keypair()
-    if connect_public_key_from_private(key_pair.private_key) != key_pair.public_key:
-        raise ValueError("app_key_pair public key does not match its private key")
     sid = generate_connect_sid(
         network_id=network_id,
         app_public_key=key_pair.public_key,

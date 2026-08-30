@@ -26,8 +26,6 @@ public sealed class SoraFsReputationClientTests
         Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private static readonly NetworkId ExactNetworkId = NetworkId.Parse(
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
-    private static readonly ToriiLocalSigningContext LocalSigningContext = new(ExactNetworkId);
-
     [Fact]
     public async Task AuthenticatedReadsUseExactOneShotEmptyGetsAndFreshCanonicalSignatures()
     {
@@ -134,27 +132,24 @@ public sealed class SoraFsReputationClientTests
     }
 
     [Fact]
-    public async Task ReputationReadFailsClosedForUnverifiedInjectedHttpClient()
+    public void ReputationReadFailsClosedForUnverifiedInjectedHttpClient()
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("unverified transport reached dispatch"));
         using var httpClient = new HttpClient(handler);
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            httpClient,
-            new ToriiClientOptions
-            {
-                LocalSigningContext = LocalSigningContext,
-                CanonicalRequestCredentials = new CanonicalRequestCredentials(
-                    AccountId,
-                    PrivateKeySeed),
-            });
+        var error = Assert.Throws<ArgumentException>(() => new ToriiClient(
+                new Uri("https://torii.example"),
+                httpClient,
+                new ToriiClientOptions
+                {
+                    NetworkId = ExactNetworkId,
+                    CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                        AccountId,
+                        PrivateKeySeed),
+                }));
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            client.GetSoraFsReputationLatestAsync(
-                cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains("internally managed one-shot", error.Message, StringComparison.Ordinal);
+        Assert.Equal("options", error.ParamName);
+        Assert.Contains("SDK-managed one-shot transport", error.Message, StringComparison.Ordinal);
         Assert.Empty(handler.Requests);
     }
 
@@ -613,7 +608,7 @@ public sealed class SoraFsReputationClientTests
             httpClient,
             new ToriiClientOptions
             {
-                LocalSigningContext = LocalSigningContext,
+                NetworkId = ExactNetworkId,
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),

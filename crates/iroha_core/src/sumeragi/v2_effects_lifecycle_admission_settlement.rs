@@ -2767,12 +2767,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(EffectTransportError::FailClosed(reason.clone()));
         }
         let task = self.payload_chunk_reconstruction_task(work_id, services)?;
-        let manifest = task
-            .manifest
-            .as_ref()
-            .ok_or(EffectTransportError::WrongFetchKind)?;
-        let authenticated =
-            authenticate_payload_chunk(&self.context, manifest, chunk, authenticated_sender)?;
+        let authentication = match services.validated_payload_manifest(&self.context, &task) {
+            Ok(validated) => authenticate_payload_chunk(validated, chunk, authenticated_sender),
+            Err(error) => {
+                let reason = EffectExecutorError::Service(error.to_string()).to_string();
+                self.fatal_reason = Some(reason.clone());
+                services.fail_closed(&reason);
+                return Err(EffectTransportError::FailClosed(reason));
+            }
+        };
+        let authenticated = authentication?;
         match services.accept_authenticated_chunk(&task, authenticated) {
             Ok(AuthenticatedChunkDisposition::Accepted) => {}
             Ok(AuthenticatedChunkDisposition::Rejected) => {

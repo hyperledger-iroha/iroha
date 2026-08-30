@@ -823,12 +823,26 @@ impl LoadedCandidateBody {
         self.canonical_wire
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct RetainedOutboundPayload {
     owner: EventTag,
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
-    messages: Vec<wire::ConsensusMessageV2>,
+    /// Full compact commitment used to reject a hash-key collision without
+    /// rescanning the much larger chunk frames.
+    manifest: wire::PayloadManifest,
+    /// Signed chunks with their canonical network bytes cached once.
+    messages: Vec<NetworkMessage>,
+}
+impl RetainedOutboundPayload {
+    /// Whether an incoming manifest has the same reducer-owned identity.
+    ///
+    /// Callers first locate this value by canonical manifest hash. Comparing the
+    /// complete compact manifest preserves collision/conflict detection without
+    /// rescanning the large cached network frames.
+    fn owns_manifest(&self, owner: EventTag, manifest: &wire::PayloadManifest) -> bool {
+        self.owner == owner && self.manifest == *manifest
+    }
 }
 /// Compact semantic fanout owning one message, unique peers, per-peer retry
 /// lanes, and only each recoverable admission's current [`Post`] and ticket.
@@ -1201,7 +1215,10 @@ impl PendingExactFanout {
             message_class_suffixes[message_index] = message_class_suffixes[message_index + 1]
                 | exact_output_class_bit(message_classes[message_index]);
         }
-        let message_hashes = messages.iter().map(HashOf::new).collect();
+        let message_hashes = messages
+            .iter()
+            .map(NetworkMessage::exact_output_hash)
+            .collect();
         let targets = routes
             .into_iter()
             .map(|route| PendingExactTarget {
@@ -1536,7 +1553,7 @@ impl PendingExactFanout {
             .ok_or_else(|| {
                 "Sumeragi v2 exact-output target has no expected payload identity".to_owned()
             })?;
-        if HashOf::new(&post.data) != *expected_hash {
+        if post.data.exact_output_hash() != *expected_hash {
             return Err("Sumeragi v2 network actor changed an exact output payload".to_owned());
         }
         debug_assert!(target.current.is_none());

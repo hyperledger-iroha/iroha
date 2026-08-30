@@ -320,15 +320,6 @@ export interface AccountAddressDisplay {
   i105Warning: string;
 }
 
-export interface CurveSupportOptions {
-  allowMlDsa?: boolean;
-  allowBls?: boolean;
-  allowGost?: boolean;
-  allowSm2?: boolean;
-}
-
-export function configureCurveSupport(options?: CurveSupportOptions): void;
-
 export class AccountAddress {
   static fromAccount(options: {
     publicKey:
@@ -2458,6 +2449,9 @@ export type ToriiVerifierBackendLabelV1 =
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
   | "stark/fri/poseidon-x7-goldilocks-6x64-v1";
 
+/** Canonical low-level proof-engine label stored in a verifier record. */
+export type ToriiVerifierEngineLabelV1 = "halo2-ipa-pasta" | "stark";
+
 export interface ToriiVerifyingKeyInline {
   backend: ToriiVerifierBackendLabelV1;
   bytes_b64: string;
@@ -2466,12 +2460,14 @@ export interface ToriiVerifyingKeyInline {
 export interface ToriiVerifyingKeyRecord {
   version: number;
   circuit_id: string;
-  backend: ToriiVerifierBackendLabelV1;
-  curve: string | null;
+  owner_manifest_id: string | null;
+  namespace: string;
+  backend: ToriiVerifierEngineLabelV1;
+  curve: string;
   public_inputs_schema_hash: string;
   commitment_hex: string;
   vk_len: number;
-  max_proof_bytes: number | null;
+  max_proof_bytes: number;
   gas_schedule_id: string | null;
   metadata_uri_cid: string | null;
   vk_bytes_cid: string | null;
@@ -2489,6 +2485,7 @@ export interface ToriiVerifyingKeyId {
 export interface ToriiVerifyingKeyDetail {
   id: ToriiVerifyingKeyId;
   record: ToriiVerifyingKeyRecord;
+  record_norito_base64: string;
 }
 
 export interface ToriiVerifyingKeyListItem {
@@ -2498,7 +2495,7 @@ export interface ToriiVerifyingKeyListItem {
 
 export interface ToriiVerifyingKeyListOptions {
   backend?: ToriiVerifierBackendLabelV1;
-  status?: ToriiVerifyingKeyStatus | string;
+  status?: ToriiVerifyingKeyStatus;
   nameContains?: string;
   limit?: NumericLike;
   offset?: NumericLike;
@@ -2536,7 +2533,7 @@ export interface ToriiVerifyingKeyRegisterPayload {
   commitment_hex?: string;
   vk_bytes?: Buffer | ArrayBuffer | ArrayBufferView | string;
   vk_len?: NumericLike;
-  status?: ToriiVerifyingKeyStatus | string;
+  status?: ToriiVerifyingKeyStatus;
 }
 
 export interface ToriiVerifyingKeyUpdatePayload {
@@ -2556,7 +2553,7 @@ export interface ToriiVerifyingKeyUpdatePayload {
   commitment_hex?: string;
   vk_bytes?: Buffer | ArrayBuffer | ArrayBufferView | string;
   vk_len?: NumericLike;
-  status?: ToriiVerifyingKeyStatus | string;
+  status?: ToriiVerifyingKeyStatus;
 }
 
 export interface ToriiPeerRecord {
@@ -3065,6 +3062,15 @@ export type ConnectErrorCategory =
   | "queueOverflow"
   | "internal";
 
+export const ConnectErrorCategory: Readonly<{
+  TRANSPORT: "transport";
+  CODEC: "codec";
+  AUTHORIZATION: "authorization";
+  TIMEOUT: "timeout";
+  QUEUE_OVERFLOW: "queueOverflow";
+  INTERNAL: "internal";
+}>;
+
 export interface ConnectErrorTelemetryOptions {
   fatal?: boolean | null;
   httpStatus?: number | null;
@@ -3124,6 +3130,11 @@ export class ConnectQueueError
 }
 
 export type ConnectDirection = "app_to_wallet" | "wallet_to_app";
+
+export const ConnectDirection: Readonly<{
+  APP_TO_WALLET: "app_to_wallet";
+  WALLET_TO_APP: "wallet_to_app";
+}>;
 
 export class ConnectJournalError extends Error {
   constructor(message?: string, options?: { cause?: unknown });
@@ -4012,9 +4023,7 @@ type NoritoRuntimeNamespaceExport =
   | "verifyBlockProofs";
 
 type CryptoRuntimeNamespaceExport =
-    "CONFIDENTIAL_MEMO_SUITES_V1"
-  | "CRYPTO_ALGORITHMS"
-  | "ConfidentialMemoKeypairV1"
+    "CRYPTO_ALGORITHMS"
   | "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES"
   | "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1"
   | "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION"
@@ -4035,7 +4044,6 @@ type CryptoRuntimeNamespaceExport =
   | "deriveSm2KeyPairFromSeed"
   | "ed25519SeedToRecoveryPhrase"
   | "entropyToRecoveryPhrase"
-  | "generateConfidentialMemoKeypairV1"
   | "generateKeyPair"
   | "generateRecoveryPhrase"
   | "generateSm2KeyPair"
@@ -4044,13 +4052,11 @@ type CryptoRuntimeNamespaceExport =
   | "loadSm2KeyPair"
   | "normalizeCryptoAlgorithm"
   | "normalizeRecoveryPhrase"
-  | "openConfidentialMemoV1"
   | "privacyCompiledProfileCatalogV1"
   | "privateKeyMultihash"
   | "publicKeyFromPrivate"
   | "publicKeyMultihash"
   | "recoveryPhraseToEntropy"
-  | "sealConfidentialMemoV1"
   | "sign"
   | "signEd25519"
   | "signSm2"
@@ -5465,6 +5471,16 @@ export type ParliamentProposalTagV1 =
 
 export const PARLIAMENT_PROPOSAL_KINDS_V1: ReadonlyArray<ParliamentProposalTagV1>;
 
+export type ParliamentContractLifecycleActionTagV1 =
+  | "Activate"
+  | "Deactivate"
+  | "OfferOwnership"
+  | "CancelOwnershipOffer"
+  | "AcceptParliamentOwnership"
+  | "CompleteEmergencyHoldRetrospective";
+
+export const PARLIAMENT_CONTRACT_LIFECYCLE_ACTIONS_V1: ReadonlyArray<ParliamentContractLifecycleActionTagV1>;
+
 export type ParliamentPublicTransitionTagV1 =
   | "EscalateRisk"
   | "CompleteQualification"
@@ -6050,7 +6066,7 @@ export interface ToriiGovernanceZkBallotV1Request {
   rootHint?: string | BinaryLike | null;
   owner?: string | null;
   amount?: QuantityInput | null;
-  durationBlocks?: number | string | bigint | null;
+  durationBlocks?: number | bigint | null;
   direction?: ToriiGovernanceBallotDirection | null;
   nullifier?: string | BinaryLike | null;
 }
@@ -6062,7 +6078,7 @@ export interface ToriiGovernanceBallotProof {
   owner?: string | null;
   nullifier?: string | null;
   amount?: QuantityInput | null;
-  durationBlocks?: number | string | bigint | null;
+  durationBlocks?: number | bigint | null;
   direction?: ToriiGovernanceBallotDirection | null;
 }
 
@@ -7019,19 +7035,6 @@ export interface ToriiSumeragiCommitQuorumSummary {
   last_updated_ms: number;
 }
 
-export interface ToriiSumeragiPacemakerResponse {
-  backoff_ms: number;
-  rtt_floor_ms: number;
-  jitter_ms: number;
-  backoff_multiplier: number;
-  rtt_floor_multiplier: number;
-  max_backoff_ms: number;
-  jitter_frac_permille: number;
-  round_elapsed_ms: number;
-  view_timeout_target_ms: number;
-  view_timeout_remaining_ms: number;
-}
-
 export interface ToriiSumeragiV2QcResponse {
   highest_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
   locked_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
@@ -7387,30 +7390,6 @@ export interface ConfidentialKeyset {
   ovkHex: string;
   fvkHex: string;
   asHex(): Record<string, string>;
-}
-
-export type ConfidentialMemoKemSuiteV1 =
-  | "ml-kem-768-xchacha20-poly1305-v1"
-  | "ml-kem-1024-xchacha20-poly1305-v1";
-
-export const CONFIDENTIAL_MEMO_SUITES_V1: Readonly<{
-  ML_KEM_768_XCHACHA20_POLY1305: "ml-kem-768-xchacha20-poly1305-v1";
-  ML_KEM_1024_XCHACHA20_POLY1305: "ml-kem-1024-xchacha20-poly1305-v1";
-}>;
-
-/** Local ML-KEM keypair whose secret bytes are never publicly exposed. */
-export class ConfidentialMemoKeypairV1 {
-  private constructor();
-  readonly suite: ConfidentialMemoKemSuiteV1;
-  readonly publicKey: Buffer;
-  readonly destroyed: boolean;
-  destroy(): void;
-  open(envelope: ArrayBufferView | ArrayBuffer | Buffer): Buffer;
-}
-
-export interface ConfidentialMemoPublicRecipientV1 {
-  suite: ConfidentialMemoKemSuiteV1;
-  publicKey: ArrayBufferView | ArrayBuffer | Buffer;
 }
 
 export interface ConfidentialReceiveAddressV2 {
@@ -8755,48 +8734,6 @@ export interface RegisterContractCodeRequest {
   codeBytes?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
 }
 
-export interface DeployContractRequest {
-  authority: string;
-  privateKey: string;
-  contractAlias: string;
-  codeB64: string | ArrayBufferView | ArrayBuffer | Buffer;
-  leaseExpiryMs?: number | null;
-}
-
-export interface DeployContractReceiptContract {
-  name: string;
-  contract_alias: string;
-  contract_address: string;
-  previous_contract_address: string | null;
-  kaizen: boolean;
-  dataspace: string;
-  deploy_nonce: number;
-  code_hash_hex: string;
-  abi_hash_hex: string;
-  tx_hash_hex: string | null;
-  pipeline_status?: ToriiPipelineTransactionStatus | null;
-  status: string;
-}
-
-export interface DeployContractHajimariCallReceipt {
-  id: string;
-  contract_alias: string;
-  entrypoint: string | null;
-  tx_hash_hex: string | null;
-  pipeline_status?: ToriiPipelineTransactionStatus | null;
-  status: string;
-}
-
-export interface DeployContractAssertionReceipt {
-  id: string;
-  contract_alias: string;
-  entrypoint: string | null;
-  status: string;
-  actual_result?: unknown;
-  expected_result?: unknown;
-  error?: string | null;
-}
-
 export interface ContractOperationReceipt {
   operation_kind: string;
   status: string;
@@ -8813,20 +8750,6 @@ export interface ContractOperationReceipt {
   gas_used: number | null;
   fee_payment: NoritoFeePaymentIntent | null;
   payload_digest_hex: string;
-}
-
-export interface DeployContractResponse {
-  ok: boolean;
-  bundle_name: string;
-  bundle_digest: string;
-  chain_fingerprint: string;
-  dry_run: boolean;
-  completed_stages: string[];
-  failure_point: string | null;
-  contracts: DeployContractReceiptContract[];
-  hajimari_calls: DeployContractHajimariCallReceipt[];
-  assertions: DeployContractAssertionReceipt[];
-  operation_receipt?: ContractOperationReceipt | null;
 }
 
 export interface SetContractAliasRequest {
@@ -10675,13 +10598,6 @@ export declare class IsoMessageTimeoutError extends Error {
   readonly lastStatus: IsoMessageStatusResponse | null;
 }
 
-export declare class ToriiDataModelCompatibilityError extends Error {
-  constructor(expected: number, actual?: number | null, cause?: unknown);
-  readonly expected: number;
-  readonly actual: number | null;
-  readonly cause?: unknown;
-}
-
 export declare function extractPipelineStatusKind(
   payload: unknown,
 ): string | null;
@@ -10725,6 +10641,8 @@ export interface InstructionBuilders {
 
 export interface ToriiBrowserClientOptions {
   fetchImpl?: typeof fetch;
+  /** Explicit local-development opt-in for credential headers over HTTP. */
+  allowInsecure?: boolean;
   /** Exact genesis-derived network identity required by canonical-auth methods. */
   networkId?: NetworkId;
   /**
@@ -11108,10 +11026,6 @@ export declare class ToriiBrowserClient {
   getKaigiRelaysHealth(
     options?: { signal?: AbortSignal },
   ): Promise<KaigiRelayHealthSnapshot>;
-  deployContract(
-    request: Record<string, unknown>,
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
 }
 
 export interface ValidationFeeCheckpointV1 {
@@ -11138,44 +11052,17 @@ export interface NormalizedValidationFeeLedgerBindingV1 {
   readonly checkpoint: NormalizedValidationFeeCheckpointV1;
 }
 
-export interface ValidationFeeVerifiedPlainElectorateSnapshotV1 {
-  readonly rosterRoot: string;
-  readonly memberCount: string;
-  readonly capturedAtHeight: string;
-  readonly approvalGateHeight: string;
-}
-
-export interface ValidationFeeVerifiedEnactmentWindowV1 {
-  readonly opens_at_height: string;
-  readonly closes_at_height: string;
-  readonly enacted_at_height: string;
-}
-
-export interface ValidationFeeVerifiedFinalizationV1 {
-  readonly proposal_id: string;
-  readonly referendum_id: string;
-  readonly finalized_at_height: string;
-  readonly mode: "PLAIN";
-  readonly approve: string;
-  readonly reject: string;
-  readonly abstain: string;
-  readonly min_turnout: string;
-  readonly approval_threshold_numerator: string;
-  readonly approval_threshold_denominator: string;
-  readonly approved: true;
-}
-
 export interface ValidationFeeVerifiedParliamentProposalV1 {
   readonly proposal_kind:
     | "ValidationFeePolicyV1"
     | "ValidationFeePayoutLifecycleV1";
+  readonly proposal_operator: string;
   readonly proposal_id: string;
   readonly payload_hash: string;
-  readonly parliament_roster_root: string;
-  readonly plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>;
-  readonly plainElectorateSnapshot: Readonly<ValidationFeeVerifiedPlainElectorateSnapshotV1>;
-  readonly enactment_window: Readonly<ValidationFeeVerifiedEnactmentWindowV1>;
-  readonly finalization: Readonly<ValidationFeeVerifiedFinalizationV1>;
+  readonly governance_certificate_id: string;
+  readonly governance_certificate: Readonly<Record<string, unknown>>;
+  readonly certified_at_height: string;
+  readonly enacted_at_height: string;
 }
 
 export interface ValidationFeeVerifiedParliamentV1 {
@@ -11488,19 +11375,13 @@ export declare class ToriiClient {
     attachmentId: string,
     options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<void>;
-  listVerifyingKeys(options?: ToriiVerifyingKeyListOptions): Promise<unknown>;
-  listVerifyingKeysTyped(
+  listVerifyingKeys(
     options?: ToriiVerifyingKeyListOptions,
   ): Promise<ReadonlyArray<ToriiVerifyingKeyListItem>>;
   iterateVerifyingKeys(
     options?: ToriiVerifyingKeyListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<ToriiVerifyingKeyListItem, void, unknown>;
   getVerifyingKey(
-    backend: ToriiVerifierBackendLabelV1,
-    name: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<unknown>;
-  getVerifyingKeyTyped(
     backend: ToriiVerifierBackendLabelV1,
     name: string,
     options?: { signal?: AbortSignal },
@@ -12119,9 +12000,6 @@ export declare class ToriiClient {
   getSumeragiDiagnosticsTyped(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiDiagnostics>;
-  getSumeragiPacemaker(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiPacemakerResponse | null>;
   getSumeragiQc(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiV2QcResponse>;
@@ -12316,9 +12194,6 @@ export declare class ToriiClient {
   registerContractCode(
     request: RegisterContractCodeRequest,
   ): Promise<unknown | null>;
-  deployContract(
-    request: DeployContractRequest,
-  ): Promise<DeployContractResponse | null>;
   setContractAlias(
     request: SetContractAliasRequest,
   ): Promise<SetContractAliasResponse>;
@@ -12631,23 +12506,6 @@ export function deriveConfidentialKeyset(
 export function deriveConfidentialKeysetFromHex(
   spendKeyHex: string,
 ): ConfidentialKeyset;
-
-export function generateConfidentialMemoKeypairV1(input: {
-  suite: ConfidentialMemoKemSuiteV1;
-}): ConfidentialMemoKeypairV1;
-
-export function sealConfidentialMemoV1(input: {
-  suite: ConfidentialMemoKemSuiteV1;
-  recipients: ReadonlyArray<
-    ConfidentialMemoKeypairV1 | Readonly<ConfidentialMemoPublicRecipientV1>
-  >;
-  plaintext: ArrayBufferView | ArrayBuffer | Buffer;
-}): Buffer;
-
-export function openConfidentialMemoV1(input: {
-  keypair: ConfidentialMemoKeypairV1;
-  envelope: ArrayBufferView | ArrayBuffer | Buffer;
-}): Buffer;
 
 export function deriveConfidentialOwnerTagV2(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -13009,43 +12867,15 @@ export function inspectSubscriptionTriggerAction(
 ): SubscriptionTriggerActionSummary;
 
 /**
- * Exact first-release PLAIN eligibility rule bound into validation-fee proposals.
- */
-export interface ValidationFeePlainEligibilityRuleV1 {
-  readonly rule: "proposal_operator_at_or_before_gate_others_after_gate";
-  readonly value: null;
-}
-
-/**
- * Exact first-release PLAIN electorate contract bound into a proposal fingerprint.
- */
-export interface ValidationFeePlainElectorateRulesV1 {
-  readonly voting_asset_id: string;
-  readonly bond_escrow_account: string;
-  readonly slash_receiver_account: string;
-  readonly ballot_amount: string;
-  readonly ballot_duration_blocks: string;
-  readonly citizenship_amount: string;
-  readonly max_members: string;
-  readonly conviction_step_blocks: string;
-  readonly max_conviction: string;
-  readonly min_turnout: string;
-  readonly approval_threshold_numerator: string;
-  readonly approval_threshold_denominator: string;
-  readonly eligibility_rule: Readonly<ValidationFeePlainEligibilityRuleV1>;
-}
-
-/**
  * Compute the exact native Parliament fingerprint for a validation-fee policy.
  *
  * The policy must use the native snake-case `ValidationFeePolicyV1` JSON
- * contract. The electorate rules must use the exact first-release PLAIN
- * contract. Missing, unknown, and legacy fields are rejected natively.
+ * contract. Missing, unknown, and retired fields are rejected natively.
  */
 export function computeValidationFeePolicyProposalFingerprintV1(
+  proposalOperator: string,
   policy: Readonly<Record<string, JsonValue>>,
-  payoutLifecycleProposalId: string | null,
-  plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
+  payoutLifecycleProposalId?: string | null,
 ): string;
 
 /**
@@ -13055,8 +12885,8 @@ export function computeValidationFeePolicyProposalFingerprintV1(
  * Missing, unknown, legacy, and non-canonical fields are rejected natively.
  */
 export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
+  proposalOperator: string,
   payoutBinding: Readonly<Record<string, JsonValue>>,
-  plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
 ): string;
 
 export interface LaneRelaySample {

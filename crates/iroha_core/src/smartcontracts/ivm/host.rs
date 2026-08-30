@@ -10682,7 +10682,7 @@ impl<QS> CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_PRIVATE_NUMERIC_VALCOM
                 | ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV
                 | ivm::syscalls::SYSCALL_COMMIT_OUTPUT
-                | ivm::syscalls::SYSCALL_PROVE_EXECUTION
+                | ivm::syscalls::SYSCALL_EXECUTION_SUMMARY
                 | ivm::syscalls::SYSCALL_VERIFY_SIGNATURE
                 | ivm::syscalls::SYSCALL_SHA256_HASH
                 | ivm::syscalls::SYSCALL_SHA3_HASH

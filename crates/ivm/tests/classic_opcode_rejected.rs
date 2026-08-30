@@ -37,14 +37,8 @@ fn classic_opcode_runtime_rejected_after_manual_load() {
 }
 
 #[test]
-fn retired_truncated_crypto_opcodes_are_rejected_by_admission_and_runtime() {
-    for opcode in [
-        ivm::instruction::wide::crypto::PUBKGEN,
-        ivm::instruction::wide::crypto::VALCOM,
-        ivm::instruction::wide::crypto::ECADD,
-        ivm::instruction::wide::crypto::ECMUL_VAR,
-        ivm::instruction::wide::crypto::PAIRING,
-    ] {
+fn unassigned_crypto_slots_are_rejected_by_admission_and_runtime() {
+    for opcode in 0x8B..=0x8F {
         let word = encoding::wide::encode_rr(opcode, 3, 1, 2);
         let mut bytes = word.to_le_bytes().to_vec();
         bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -53,7 +47,7 @@ fn retired_truncated_crypto_opcodes_are_rejected_by_admission_and_runtime() {
         assert_eq!(
             admitted.load_program(&program),
             Err(VMError::InvalidOpcode(u16::from(opcode))),
-            "retired opcode 0x{opcode:02x} passed artifact admission"
+            "unassigned opcode 0x{opcode:02x} passed artifact admission"
         );
 
         let mut raw = IVM::new(1_000);
@@ -62,7 +56,7 @@ fn retired_truncated_crypto_opcodes_are_rejected_by_admission_and_runtime() {
         assert_eq!(
             raw.run(),
             Err(VMError::InvalidOpcode(u16::from(opcode))),
-            "retired opcode 0x{opcode:02x} executed after manual loading"
+            "unassigned opcode 0x{opcode:02x} executed after manual loading"
         );
     }
 }

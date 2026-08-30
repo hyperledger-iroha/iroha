@@ -2357,6 +2357,10 @@ pub mod torii {
         pub const RATE_PER_MIN: Option<u32> = Some(30);
         /// Burst budget for auth attempts (tokens).
         pub const BURST: Option<u32> = Some(10);
+        /// Per-kind capacity for expiry-bound challenges, sessions, and lockout identities.
+        pub const EPHEMERAL_STATE_CAPACITY: usize = 4_096;
+        /// Maximum number of persisted operator WebAuthn credentials.
+        pub const CREDENTIAL_CAPACITY: usize = 64;
         /// Failures before applying a temporary lockout.
         pub const LOCKOUT_FAILURES: u32 = 5;
         /// Sliding window for lockout failure counts (seconds).
@@ -3907,9 +3911,10 @@ pub mod sumeragi {
     );
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
     ///
-    /// Seven default per-source quotas leave room for the two configured
-    /// authenticated non-validator lanes and up to five validator lanes.
-    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(231_usize * 1024 * 1024);
+    /// One isolated quota is reserved for every protocol-permitted validator
+    /// and every configured authenticated non-validator lane. This keeps the
+    /// default safe when a signed NPoS election expands to its default ceiling.
+    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(1089_usize * 1024 * 1024);
     /// Per-ingress-source canonical outer-ingress wire-byte partition. The
     /// default contains disjoint maximum ordinary-envelope, certified-fence-escape,
     /// payload-completion, and timeout-vote partitions. The ordinary and completion partitions also

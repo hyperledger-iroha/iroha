@@ -282,6 +282,97 @@ test("native-prepared request bytes are isolated from signer mutation", async ()
   assert.deepEqual(prepared.bytes(), original);
 });
 
+test("bundle admission response is nonterminal and exact", async () => {
+  const request = new AtomicPrivateSettlementPreparedRequestV1(
+    AtomicPrivateSettlementOperationV1.BUNDLE_SUBMIT,
+    '{"transaction":{}}',
+  );
+  const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    sponsorHeaderProvider: sponsorHeaders,
+    async fetchImpl(target) {
+      return response(fixture.responses.bundle_submit, target, { status: 202 });
+    },
+  });
+  const admitted = await client.submitBundle(request);
+  assert.deepEqual(
+    JSON.parse(new TextDecoder().decode(admitted.bytes())),
+    fixture.responses.bundle_submit,
+  );
+  assert.equal("lifecycle" in fixture.responses.bundle_submit, false);
+});
+
+test("bundle admission rejects malformed identifiers, heights, and fields", async () => {
+  const request = new AtomicPrivateSettlementPreparedRequestV1(
+    AtomicPrivateSettlementOperationV1.BUNDLE_SUBMIT,
+    '{"transaction":{}}',
+  );
+  const valid = fixture.responses.bundle_submit;
+  const wrongStatusClient = new AtomicPrivateSettlementToriiClientV1(
+    "https://torii.example",
+    {
+      sponsorHeaderProvider: sponsorHeaders,
+      async fetchImpl(target) {
+        return response(valid, target, { status: 200 });
+      },
+    },
+  );
+  await assert.rejects(
+    () => wrongStatusClient.submitBundle(request),
+    /response status is invalid/u,
+  );
+
+  const malformed = [
+    { ...valid, bundle_id: fixture.identifiers.bundle_hex },
+    { ...valid, bundle_id: 1 },
+    { ...valid, carrier_id: `${fixture.identifiers.payload_json.slice(0, -1)}0` },
+    { ...valid, carrier_id: null },
+    { ...valid, accepted_at_height: true },
+    { ...valid, accepted_at_height: -1 },
+    { ...valid, accepted_at_height: String(valid.accepted_at_height) },
+    { ...valid, accepted_at_height: 1.5 },
+    { ...valid, lifecycle: { status: "finalized", value: null } },
+    { bundle_id: valid.bundle_id, accepted_at_height: valid.accepted_at_height },
+  ];
+  for (const candidate of malformed) {
+    const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+      sponsorHeaderProvider: sponsorHeaders,
+      async fetchImpl(target) {
+        return response(candidate, target, { status: 202 });
+      },
+    });
+    await assert.rejects(
+      () => client.submitBundle(request),
+      /atomic private settlement response is invalid/u,
+    );
+  }
+
+  const maxHeightResponse = jsonBytes({
+    ...valid,
+    accepted_at_height: 0,
+  });
+  const text = new TextDecoder().decode(maxHeightResponse)
+    .replace('"accepted_at_height":0', '"accepted_at_height":18446744073709551615');
+  const maxHeightClient = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    sponsorHeaderProvider: sponsorHeaders,
+    async fetchImpl(target) {
+      return response(new TextEncoder().encode(text), target, { status: 202 });
+    },
+  });
+  await maxHeightClient.submitBundle(request);
+
+  const overflow = text.replace("18446744073709551615", "18446744073709551616");
+  const overflowClient = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    sponsorHeaderProvider: sponsorHeaders,
+    async fetchImpl(target) {
+      return response(new TextEncoder().encode(overflow), target, { status: 202 });
+    },
+  });
+  await assert.rejects(
+    () => overflowClient.submitBundle(request),
+    /atomic private settlement response is invalid/u,
+  );
+});
+
 test("role and public queries use disjoint authentication policies", async () => {
   const payloadPath = fixture.identifiers.payload_hex;
   const bundlePath = fixture.identifiers.bundle_hex;
@@ -311,6 +402,19 @@ test("role and public queries use disjoint authentication policies", async () =>
   assert.equal("x-iroha-account" in seen[1].headers, false);
   assert.equal("x-iroha-operator-signature" in seen[1].headers, false);
   assert.equal("x-iroha-account" in seen[2].headers, false);
+
+  const wrongStatusClient = new AtomicPrivateSettlementToriiClientV1(
+    "https://torii.example",
+    {
+      async fetchImpl(target) {
+        return response(fixture.responses.receipt_pending, target, { status: 201 });
+      },
+    },
+  );
+  await assert.rejects(
+    () => wrongStatusClient.getBundleReceipt(bundlePath),
+    /response status is invalid/u,
+  );
 });
 
 test("client rejects header collisions, redirects, substitutions, and extra fields", async () => {
@@ -371,6 +475,69 @@ test("client rejects header collisions, redirects, substitutions, and extra fiel
     (error) => {
       assert.match(error.message, /response is invalid/u);
       assert.doesNotMatch(error.message, /canary-secret/u);
+      return true;
+    },
+  );
+});
+
+test("HTTP failures redact bodies and untrusted reject codes", async () => {
+  const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    async fetchImpl(target) {
+      return response(
+        { memo: "LEAK_CANARY", amount: 987654 },
+        target,
+        {
+          ok: false,
+          status: 400,
+          headers: { "x-iroha-reject-code": "memo=LEAK_CANARY_987654" },
+        },
+      );
+    },
+  });
+  await assert.rejects(
+    () => client.getBundleStatus(fixture.identifiers.bundle_hex),
+    (error) => {
+      assert.match(error.message, /failed with HTTP 400/u);
+      assert.doesNotMatch(error.message, /LEAK_CANARY/u);
+      assert.doesNotMatch(error.message, /987654/u);
+      return true;
+    },
+  );
+
+  const validCode = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    async fetchImpl(target) {
+      return response(
+        { memo: "LEAK_CANARY" },
+        target,
+        {
+          ok: false,
+          status: 409,
+          headers: { "x-iroha-reject-code": "APS_POLICY_DENIED" },
+        },
+      );
+    },
+  });
+  await assert.rejects(
+    () => validCode.getBundleStatus(fixture.identifiers.bundle_hex),
+    /reject_code=APS_POLICY_DENIED/u,
+  );
+});
+
+test("invalid responses discard secret-bearing parser causes", async () => {
+  const canary = "LEAK_CANARY_ACCOUNT_AMOUNT";
+  const duplicate = textEncoder.encode(`{"${canary}":1,"${canary}":2}`);
+  const client = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
+    async fetchImpl(target) {
+      return response(duplicate, target);
+    },
+  });
+
+  await assert.rejects(
+    () => client.getBundleStatus(fixture.identifiers.bundle_hex),
+    (error) => {
+      assert.equal(error.message, "atomic private settlement response is invalid");
+      assert.equal(error.cause, undefined);
+      assert.doesNotMatch(String(error.stack ?? error), /LEAK_CANARY_ACCOUNT_AMOUNT/u);
       return true;
     },
   );

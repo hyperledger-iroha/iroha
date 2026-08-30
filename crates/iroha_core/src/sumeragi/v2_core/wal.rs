@@ -15,8 +15,13 @@ pub const SAFETY_WAL_FORMAT_VERSION: u16 = 1;
 pub const SAFETY_WAL_HASH_LEN: usize = 32;
 /// Maximum encoded payload accepted in one safety-WAL frame.
 pub const SAFETY_WAL_MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
-const SAFETY_WAL_FILE_HEADER_PREFIX_LEN: usize =
-    SAFETY_WAL_FILE_MAGIC.len() + 2 + 2 + SAFETY_WAL_HASH_LEN + SAFETY_WAL_HASH_LEN;
+const SAFETY_WAL_FILE_HEADER_PREFIX_LEN: usize = SAFETY_WAL_FILE_MAGIC.len()
+    + 2
+    + 2
+    + SAFETY_WAL_HASH_LEN
+    + SAFETY_WAL_HASH_LEN
+    + 8
+    + SAFETY_WAL_HASH_LEN;
 /// Canonical byte width of a complete safety-WAL file header.
 pub const SAFETY_WAL_FILE_HEADER_LEN: usize =
     SAFETY_WAL_FILE_HEADER_PREFIX_LEN + SAFETY_WAL_HASH_LEN;
@@ -41,11 +46,13 @@ where
         self(bytes)
     }
 }
-/// Network, protocol, and local consensus-key identity frozen into a WAL header.
+/// Exact height-context and validator-process identity frozen into a WAL header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WalFileIdentity {
     protocol_version: u16,
     network_id: [u8; SAFETY_WAL_HASH_LEN],
+    context_id: ContextId,
+    height: u64,
     consensus_key_hash: [u8; SAFETY_WAL_HASH_LEN],
 }
 impl WalFileIdentity {
@@ -54,11 +61,15 @@ impl WalFileIdentity {
     pub const fn new(
         protocol_version: u16,
         network_id: [u8; SAFETY_WAL_HASH_LEN],
+        context_id: ContextId,
+        height: u64,
         consensus_key_hash: [u8; SAFETY_WAL_HASH_LEN],
     ) -> Self {
         Self {
             protocol_version,
             network_id,
+            context_id,
+            height,
             consensus_key_hash,
         }
     }
@@ -71,6 +82,16 @@ impl WalFileIdentity {
     #[must_use]
     pub const fn network_id(self) -> [u8; SAFETY_WAL_HASH_LEN] {
         self.network_id
+    }
+    /// Return the exact frozen height-context identifier.
+    #[must_use]
+    pub const fn context_id(self) -> ContextId {
+        self.context_id
+    }
+    /// Return the block height owned by this WAL.
+    #[must_use]
+    pub const fn height(self) -> u64 {
+        self.height
     }
     /// Return the local consensus-public-key digest.
     #[must_use]
@@ -85,6 +106,10 @@ pub enum WalIdentityField {
     ProtocolVersion,
     /// Exact genesis-derived network identifier.
     NetworkId,
+    /// Frozen height-context identifier.
+    ContextId,
+    /// Block height owned by the WAL.
+    Height,
     /// Local consensus-key digest.
     ConsensusKeyHash,
 }
@@ -263,6 +288,10 @@ pub fn encode_wal_file_header(
     offset += 2;
     header[offset..offset + SAFETY_WAL_HASH_LEN].copy_from_slice(&identity.network_id);
     offset += SAFETY_WAL_HASH_LEN;
+    header[offset..offset + SAFETY_WAL_HASH_LEN].copy_from_slice(identity.context_id.as_bytes());
+    offset += SAFETY_WAL_HASH_LEN;
+    header[offset..offset + 8].copy_from_slice(&identity.height.to_le_bytes());
+    offset += 8;
     header[offset..offset + SAFETY_WAL_HASH_LEN].copy_from_slice(&identity.consensus_key_hash);
     let checksum = hasher.hash(&header[..SAFETY_WAL_FILE_HEADER_PREFIX_LEN]);
     header[SAFETY_WAL_FILE_HEADER_PREFIX_LEN..].copy_from_slice(&checksum);
@@ -470,6 +499,18 @@ fn validate_wal_file_header(
         return Err(WalCodecError::IdentityMismatch(WalIdentityField::NetworkId));
     }
     offset += SAFETY_WAL_HASH_LEN;
+    let mut actual_context_id = [0_u8; SAFETY_WAL_HASH_LEN];
+    actual_context_id.copy_from_slice(&bytes[offset..offset + SAFETY_WAL_HASH_LEN]);
+    let actual_context_id = ContextId::new(actual_context_id);
+    if actual_context_id != expected_identity.context_id {
+        return Err(WalCodecError::IdentityMismatch(WalIdentityField::ContextId));
+    }
+    offset += SAFETY_WAL_HASH_LEN;
+    let actual_height = read_wal_u64(&bytes[offset..offset + 8]);
+    if actual_height != expected_identity.height {
+        return Err(WalCodecError::IdentityMismatch(WalIdentityField::Height));
+    }
+    offset += 8;
     let mut actual_key = [0_u8; SAFETY_WAL_HASH_LEN];
     actual_key.copy_from_slice(&bytes[offset..offset + SAFETY_WAL_HASH_LEN]);
     if actual_key != expected_identity.consensus_key_hash {
@@ -491,6 +532,10 @@ fn validate_wal_file_header(
         expected_identity.protocol_version,
         actual_network_id,
         expected_identity.network_id,
+        actual_context_id,
+        expected_identity.context_id,
+        actual_height,
+        expected_identity.height,
         actual_key,
         expected_identity.consensus_key_hash,
         checksum_matches,
@@ -753,6 +798,27 @@ impl WalRetirementAuthorization {
     #[must_use]
     pub const fn certificate(self) -> CertificateRef {
         self.certificate
+    }
+    /// Return whether this durable-finality token owns the exact WAL target.
+    ///
+    /// The subject and certificate establish that the token denotes a
+    /// self-consistent Commit decision. The physical WAL itself is height-local,
+    /// so its immutable target is the exact `(context_id, height)` pair.
+    #[must_use]
+    pub fn authorizes_wal(self, identity: WalFileIdentity) -> bool {
+        let internally_valid = self.matches_durable_decision(
+            self.context_id,
+            self.height,
+            self.subject,
+            self.certificate,
+        );
+        wal_retirement_target_matches_body!(
+            internally_valid,
+            self.context_id,
+            self.height,
+            identity.context_id,
+            identity.height,
+        )
     }
     /// Check this token against the exact finalized-height evidence.
     ///
@@ -1499,7 +1565,8 @@ mod byte_lifecycle_tests {
         VotingMode, VotingPower,
     };
     use super::*;
-    const IDENTITY: WalFileIdentity = WalFileIdentity::new(3, [0x11; 32], [0x22; 32]);
+    const IDENTITY: WalFileIdentity =
+        WalFileIdentity::new(3, [0x51; 32], ContextId::repeat(0x50), 7, [0x22; 32]);
     fn replay_context() -> HeightContext {
         let roster = (1_u8..=4)
             .map(|byte| Validator::new(ValidatorId::repeat(byte), VotingPower::new(1)))
@@ -1824,6 +1891,8 @@ mod byte_lifecycle_tests {
                 WalFileIdentity::new(
                     different_protocol_version,
                     IDENTITY.network_id(),
+                    IDENTITY.context_id(),
+                    IDENTITY.height(),
                     IDENTITY.consensus_key_hash(),
                 ),
                 WalIdentityField::ProtocolVersion,
@@ -1832,6 +1901,8 @@ mod byte_lifecycle_tests {
                 WalFileIdentity::new(
                     IDENTITY.protocol_version(),
                     [0x44; 32],
+                    IDENTITY.context_id(),
+                    IDENTITY.height(),
                     IDENTITY.consensus_key_hash(),
                 ),
                 WalIdentityField::NetworkId,
@@ -1840,6 +1911,28 @@ mod byte_lifecycle_tests {
                 WalFileIdentity::new(
                     IDENTITY.protocol_version(),
                     IDENTITY.network_id(),
+                    ContextId::repeat(0x45),
+                    IDENTITY.height(),
+                    IDENTITY.consensus_key_hash(),
+                ),
+                WalIdentityField::ContextId,
+            ),
+            (
+                WalFileIdentity::new(
+                    IDENTITY.protocol_version(),
+                    IDENTITY.network_id(),
+                    IDENTITY.context_id(),
+                    IDENTITY.height() + 1,
+                    IDENTITY.consensus_key_hash(),
+                ),
+                WalIdentityField::Height,
+            ),
+            (
+                WalFileIdentity::new(
+                    IDENTITY.protocol_version(),
+                    IDENTITY.network_id(),
+                    IDENTITY.context_id(),
+                    IDENTITY.height(),
                     [0x55; 32],
                 ),
                 WalIdentityField::ConsensusKeyHash,

@@ -642,7 +642,7 @@ impl PendingExactOutput {
                     .messages
                     .iter()
                     .zip(&fanout.message_hashes)
-                    .any(|(message, expected)| HashOf::new(message) != *expected)
+                    .any(|(message, expected)| message.exact_output_hash() != *expected)
             {
                 return Err(format!(
                     "Sumeragi v2 {operation} found altered exact-output payload"
@@ -1718,7 +1718,7 @@ impl PendingExactOutput {
             .zip(&fanout.message_hashes)
             .zip(&fanout.message_classes)
             .any(|((message, expected_hash), expected_class)| {
-                HashOf::new(message) != *expected_hash
+                message.exact_output_hash() != *expected_hash
                     || exact_output_class(message).as_ref() != Ok(expected_class)
             })
         {
@@ -2352,7 +2352,7 @@ impl PendingExactOutput {
                     .messages
                     .iter()
                     .zip(&fanout.message_hashes)
-                    .any(|(message, expected_hash)| HashOf::new(message) != *expected_hash)
+                    .any(|(message, expected_hash)| message.exact_output_hash() != *expected_hash)
             {
                 return Err(
                     "Sumeragi v2 retained output changed before finality handoff".to_owned(),
@@ -2421,7 +2421,7 @@ impl PendingExactOutput {
                             "Sumeragi v2 exact-output target has no expected payload identity"
                                 .to_owned()
                         })?;
-                    if HashOf::new(&current.data) != *expected_hash {
+                    if current.data.exact_output_hash() != *expected_hash {
                         return Err(
                             "Sumeragi v2 returned output changed before finality handoff"
                                 .to_owned(),

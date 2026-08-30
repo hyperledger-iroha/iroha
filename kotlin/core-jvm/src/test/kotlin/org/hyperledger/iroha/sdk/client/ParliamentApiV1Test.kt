@@ -50,6 +50,10 @@ class ParliamentApiV1Test {
         assertEquals(ParliamentApiV1.ATTEMPT_CREATE_WIRE_ID, wireIds["attempt_create"])
         assertEquals(ParliamentApiV1.TRANSITION_SUBMIT_WIRE_ID, wireIds["transition_submit"])
         assertEquals(ParliamentApiV1.PROPOSAL_KINDS, fixture["proposal_kinds"])
+        assertEquals(
+            ParliamentApiV1.CONTRACT_LIFECYCLE_ACTIONS,
+            fixture["contract_lifecycle_actions"],
+        )
         val limits = fixture["limits"] as Map<*, *>
         assertEquals(ParliamentApiV1.MAX_STATE_BYTES, (limits["attempt_state_bytes"] as Number).toInt())
         assertEquals(
@@ -254,6 +258,43 @@ class ParliamentApiV1Test {
             ParliamentApiV1.Proposal.fromJson(
                 bytes("""{"proposal_kind":"RuntimeUpgrade","payload":{}}"""),
             )
+        }
+    }
+
+    @Test
+    fun contractLifecycleActionInventoryIsClosed() {
+        ParliamentApiV1.CONTRACT_LIFECYCLE_ACTIONS.forEach { action ->
+            val proposal = validProposal("ContractLifecycleGovernance")
+            @Suppress("UNCHECKED_CAST")
+            val payload = proposal["payload"] as MutableMap<String, Any?>
+            val actionPayload: Any? = when (action) {
+                "Activate" -> linkedMapOf(
+                    "code_hash" to "11".repeat(32),
+                    "abi_hash" to "22".repeat(32),
+                    "abi_version" to 1,
+                    "manifest_provenance" to null,
+                )
+                "Deactivate" -> linkedMapOf("expected_code_hash" to "11".repeat(32))
+                "OfferOwnership" -> linkedMapOf("new_owner" to account(5))
+                "CancelOwnershipOffer", "AcceptParliamentOwnership" -> null
+                "CompleteEmergencyHoldRetrospective" -> linkedMapOf(
+                    "hold_proposal_content_id" to List(32) { 0x51 },
+                    "hold_governance_attempt_id" to List(32) { 0x52 },
+                    "incident_digest" to List(32) { 0x53 },
+                    "retrospective_finding_root" to List(32) { 0x54 },
+                )
+                else -> error("unsupported fixture action $action")
+            }
+            payload["action"] = linkedMapOf("action" to action, "payload" to actionPayload)
+            ParliamentApiV1.Proposal.fromJson(encode(proposal))
+        }
+
+        val proposal = validProposal("ContractLifecycleGovernance")
+        @Suppress("UNCHECKED_CAST")
+        val payload = proposal["payload"] as MutableMap<String, Any?>
+        payload["action"] = linkedMapOf("action" to "Unknown", "payload" to null)
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(proposal))
         }
     }
 
@@ -613,7 +654,7 @@ class ParliamentApiV1Test {
         val root = List(32) { 0x55 }
         val id1 = "01".repeat(32)
         val id2 = "02".repeat(32)
-        val response = linkedMapOf<String, Any?>(
+        val publicOnlyResponse = linkedMapOf<String, Any?>(
             "version" to 1,
             "current_height" to 9,
             "attempt" to mapOf(
@@ -695,11 +736,131 @@ class ParliamentApiV1Test {
             "execution_failure_root" to null,
             "state_payload_hex" to stateFrameHex(),
         )
+
+        fun policyJuryResponse(): MutableMap<String, Any?> {
+            val hidden = LinkedHashMap(publicOnlyResponse)
+            @Suppress("UNCHECKED_CAST")
+            val certificate = LinkedHashMap(
+                publicOnlyResponse["certificate"] as Map<String, Any?>,
+            )
+            @Suppress("UNCHECKED_CAST")
+            val bindings = (certificate["body_bindings"] as List<Map<String, Any?>>)
+                .map { LinkedHashMap(it) }
+            val binding = bindings.single()
+            binding["body_instance_id"] = "06".repeat(32)
+            binding["election_attempt_id"] = "07".repeat(32)
+            binding["sortition_request_id"] = "08".repeat(32)
+            binding["body"] = "policy-jury"
+            binding["beacon_session_id"] = "09".repeat(32)
+            binding["beacon_pulse_id"] = "0a".repeat(32)
+            @Suppress("UNCHECKED_CAST")
+            val request = LinkedHashMap(
+                binding["sortition_request"] as Map<String, Any?>,
+            )
+            request["id"] = "08".repeat(32)
+            request["body_election_attempt_id"] = "07".repeat(32)
+            request["body"] = "policy-jury"
+            request["beacon_session_id"] = "09".repeat(32)
+            binding["sortition_request"] = request
+            binding["public_finding"] = null
+            binding["ballot"] = linkedMapOf(
+                "ballot_attempt_id" to "21".repeat(32),
+                "ballot_attempt_sequence" to 0,
+                "tle_session_id" to "22".repeat(32),
+                "tle_key_session_id" to "23".repeat(32),
+                "registration_root" to root,
+                "dropout_root" to root,
+                "survivor_root" to root,
+                "corpus_root" to root,
+                "no_recovery_root" to root,
+                "timed_commitment_root" to root,
+                "release_beacon_session_id" to "24".repeat(32),
+                "registered_at_height" to 1,
+                "registration_close_height" to 5,
+                "survivor_freeze_height" to 8,
+                "commitment_close_height" to 9,
+                "registration_closed_at_height" to 5,
+                "survivors_frozen_at_height" to 8,
+                "commitment_closed_at_height" to 9,
+                "max_ballot_retries" to 16,
+                "max_corpus_entries" to 3,
+                "release_height" to 10,
+                "opening_deadline_height" to 13,
+                "release_pulse_id" to "25".repeat(32),
+                "opening_height" to 11,
+                "opening_root" to root,
+                "tally" to linkedMapOf(
+                    "original_seats" to 3,
+                    "accepted_ballots" to 3,
+                    "aye" to 2,
+                    "nay" to 1,
+                    "abstain" to 0,
+                ),
+                "outcome" to mapOf("outcome" to "Approved"),
+            )
+            binding["result_height"] = 12
+            certificate["body_bindings"] = bindings
+            certificate["certified_at_height"] = 12
+            certificate["enact_at_height"] = 14
+            hidden["certificate"] = certificate
+            hidden["required_bodies"] = listOf(
+                mapOf(
+                    "body" to "policy-jury",
+                    "decision_mode" to mapOf("mode" to "HiddenBindingBallot"),
+                ),
+            )
+            @Suppress("UNCHECKED_CAST")
+            val hiddenStates = (publicOnlyResponse["body_states"] as List<Map<String, Any?>>)
+                .map { LinkedHashMap(it) }
+            hiddenStates.single()["body"] = "policy-jury"
+            hiddenStates.single()["body_instance_id"] = "06".repeat(32)
+            hiddenStates.single()["public_finding_opened_at_height"] = null
+            hiddenStates.single()["public_finding_phase_blocks"] = null
+            hiddenStates.single()["public_finding_deadline_height"] = null
+            hiddenStates.single()["timed_ovn_progress"] = linkedMapOf(
+                "ballot_attempt_id" to "21".repeat(32),
+                "status" to mapOf("status" to "Finalized"),
+                "frozen_survivor_count" to 3,
+                "accepted_ballot_prefix_count" to 3,
+            )
+            hidden["body_states"] = hiddenStates
+            hidden["current_height"] = 13
+            return hidden
+        }
+
+        fun certifiedResponse(): MutableMap<String, Any?> {
+            val certified = LinkedHashMap(publicOnlyResponse)
+            val policy = policyJuryResponse()
+            @Suppress("UNCHECKED_CAST")
+            certified["required_bodies"] =
+                (publicOnlyResponse["required_bodies"] as List<Map<String, Any?>>) +
+                    (policy["required_bodies"] as List<Map<String, Any?>>)
+            @Suppress("UNCHECKED_CAST")
+            certified["body_states"] =
+                (publicOnlyResponse["body_states"] as List<Map<String, Any?>>) +
+                    (policy["body_states"] as List<Map<String, Any?>>)
+            @Suppress("UNCHECKED_CAST")
+            val certificate = LinkedHashMap(
+                publicOnlyResponse["certificate"] as Map<String, Any?>,
+            )
+            @Suppress("UNCHECKED_CAST")
+            certificate["body_bindings"] =
+                (certificate["body_bindings"] as List<Map<String, Any?>>) +
+                    ((policy["certificate"] as Map<String, Any?>)["body_bindings"]
+                        as List<Map<String, Any?>>)
+            certificate["certified_at_height"] = 12
+            certificate["enact_at_height"] = 14
+            certified["certificate"] = certificate
+            certified["current_height"] = 13
+            return certified
+        }
+
+        val response = certifiedResponse()
         val parsed = ParliamentApiV1.parseAttemptReadResponse(encode(response), attemptId)
-        assertEquals("9", parsed.currentHeight)
-        assertEquals(listOf("rules-committee"), parsed.requiredBodyOrder)
-        assertEquals("rules-committee", parsed.bodyStates.single().body)
-        assertEquals(listOf("rules-committee"), parsed.certificateBodyOrder)
+        assertEquals("13", parsed.currentHeight)
+        assertEquals(listOf("rules-committee", "policy-jury"), parsed.requiredBodyOrder)
+        assertEquals("rules-committee", parsed.bodyStates.first().body)
+        assertEquals(listOf("rules-committee", "policy-jury"), parsed.certificateBodyOrder)
         assertEquals(
             listOf("11".repeat(32), "12".repeat(32)),
             parsed.publicFindingBindings.single().endorsingAssignments,
@@ -857,13 +1018,35 @@ class ParliamentApiV1Test {
             forgedCertificateResponse { _, _, request ->
                 request["request_height"] = 0
             },
-            forgedCertificateResponse { _, _, request ->
-                request["candidate_count"] = 1_001
+            forgedCertificateResponse { _, binding, _ ->
+                binding["election_attempt_sequence"] = 17
+            },
+            forgedCertificateResponse { _, binding, _ ->
+                binding["original_seats"] = 4
             },
         )) {
             assertFailsWith<IllegalArgumentException> {
                 ParliamentApiV1.parseAttemptReadResponse(encode(forged), attemptId)
             }
+        }
+
+        val largeElectorate = forgedCertificateResponse { _, _, request ->
+            request["candidate_count"] = 1_001
+        }
+        ParliamentApiV1.parseAttemptReadResponse(encode(largeElectorate), attemptId)
+
+        val zeroHeadVersion = forgedCertificateResponse { certificate, _, _ ->
+            certificate["expected_head"] = mapOf(
+                "state" to "Present",
+                "head" to mapOf(
+                    "subject_id" to List(32) { 0x55 },
+                    "version" to 0,
+                    "head_root" to List(32) { 0x55 },
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptReadResponse(encode(zeroHeadVersion), attemptId)
         }
 
         val wrongMode = LinkedHashMap(response)
@@ -877,73 +1060,7 @@ class ParliamentApiV1Test {
             ParliamentApiV1.parseAttemptReadResponse(encode(wrongMode), attemptId)
         }
 
-        fun hiddenBallotResponse(): MutableMap<String, Any?> {
-            val hidden = forgedCertificateResponse { certificate, binding, request ->
-                binding["body"] = "policy-jury"
-                request["body"] = "policy-jury"
-                binding["public_finding"] = null
-                binding["ballot"] = linkedMapOf(
-                    "ballot_attempt_id" to "21".repeat(32),
-                    "ballot_attempt_sequence" to 0,
-                    "tle_session_id" to "22".repeat(32),
-                    "tle_key_session_id" to "23".repeat(32),
-                    "registration_root" to root,
-                    "dropout_root" to root,
-                    "survivor_root" to root,
-                    "corpus_root" to root,
-                    "no_recovery_root" to root,
-                    "timed_commitment_root" to root,
-                    "release_beacon_session_id" to "24".repeat(32),
-                    "registered_at_height" to 1,
-                    "registration_close_height" to 5,
-                    "survivor_freeze_height" to 8,
-                    "commitment_close_height" to 9,
-                    "registration_closed_at_height" to 5,
-                    "survivors_frozen_at_height" to 8,
-                    "commitment_closed_at_height" to 9,
-                    "max_ballot_retries" to 16,
-                    "max_corpus_entries" to 3,
-                    "release_height" to 10,
-                    "opening_deadline_height" to 13,
-                    "release_pulse_id" to "25".repeat(32),
-                    "opening_height" to 11,
-                    "opening_root" to root,
-                    "tally" to linkedMapOf(
-                        "original_seats" to 3,
-                        "accepted_ballots" to 3,
-                        "aye" to 2,
-                        "nay" to 1,
-                        "abstain" to 0,
-                    ),
-                    "outcome" to mapOf("outcome" to "Approved"),
-                )
-                binding["result_height"] = 12
-                certificate["certified_at_height"] = 12
-                certificate["enact_at_height"] = 14
-            }
-            hidden["required_bodies"] = listOf(
-                mapOf(
-                    "body" to "policy-jury",
-                    "decision_mode" to mapOf("mode" to "HiddenBindingBallot"),
-                ),
-            )
-            @Suppress("UNCHECKED_CAST")
-            val hiddenStates = (response["body_states"] as List<Map<String, Any?>>)
-                .map { LinkedHashMap(it) }
-            hiddenStates[0]["body"] = "policy-jury"
-            hiddenStates[0]["public_finding_opened_at_height"] = null
-            hiddenStates[0]["public_finding_phase_blocks"] = null
-            hiddenStates[0]["public_finding_deadline_height"] = null
-            hiddenStates[0]["timed_ovn_progress"] = linkedMapOf(
-                "ballot_attempt_id" to "21".repeat(32),
-                "status" to mapOf("status" to "Finalized"),
-                "frozen_survivor_count" to 3,
-                "accepted_ballot_prefix_count" to 3,
-            )
-            hidden["body_states"] = hiddenStates
-            hidden["current_height"] = 13
-            return hidden
-        }
+        fun hiddenBallotResponse(): MutableMap<String, Any?> = policyJuryResponse()
 
         val parsedHidden = ParliamentApiV1.parseAttemptReadResponse(encode(hiddenBallotResponse()), attemptId)
         assertEquals(3, parsedHidden.bodyStates.single().timedOvnProgress?.acceptedBallotPrefixCount)

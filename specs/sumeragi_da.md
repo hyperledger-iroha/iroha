@@ -29,6 +29,14 @@ opens fallback and expands body/chunk service to the whole committee. Timeout
 and NewView traffic is committee-wide, so a withholding leader or proxy tail
 cannot make the recovery path depend on the failed fast-path route.
 
+The producer signs and canonically encodes each immutable chunk once. Initial
+fanout and bounded fallback retain those same shared encoded frames; retry does
+not clone shard bodies or serialize them again. The outer-frame integrity hash
+is cached beside those immutable bytes and invalidated by the sole mutable wire
+accessor, so exact-output retirement and finality checks do not rescan every
+shard. This is an implementation optimization only and does not change the
+manifest, signature preimage, recipient set, or fallback schedule.
+
 For a certified missing body, recovery requests authenticated chunks or the
 canonical body from certificate signers first and then expands to the frozen
 committee. Responses remain bound to the exact height context, proposal round,
@@ -51,6 +59,14 @@ Authenticated partial shards are bounded volatile state. A restart may discard
 them and reacquire them from the frozen committee. The complete canonical body
 is the only DA object that crosses the mandatory durable boundary, so the fast
 path does not pay one fsync per shard while restart safety remains explicit.
+
+When a stripe needs parity, reconstruction borrows present rows and computes
+only missing systematic rows through the deterministic selected RS16 backend.
+It does not materialize replacement parity or copy already-present systematic
+chunks. The recovered body still crosses the complete canonical codeword,
+length, chunk-root, and body-hash validation boundary before durability and
+Prepare authorization; the optimization therefore cannot admit a
+non-canonical shard set.
 
 The authoritative status surface exposes the local transition through
 `SumeragiV2BodyState::{Missing, Reconstructing, Stored, Validated,
@@ -117,12 +133,13 @@ checks resource-cap edges, corrupted chunks, withheld evidence, volatile shard
 reacquisition, restart hydration, and the one durable canonical-body boundary.
 
 The exact authenticated-loss test starts its controller with an empty
-genesis-safe revision, installs Proposal-bound Hold rules for height 2/view 0,
-and submits a 10 MiB payload to four validators. It requires at least three
-receivers to retain chunk indices 57, 58, and 59 under their resolved exact
-manifest selectors, proves the three-of-six RS16 loss prevents premature
-commit, heals through the acknowledged drain fence, and then requires all four
-peers to converge on one committed subject:
+genesis-safe revision, installs Proposal-bound Hold rules for successor height
+3 across carrier views 0 through 3, and submits a 10 MiB payload during the
+height-2/view-0 admission interval. It requires at least three receivers to
+retain chunk indices 57, 58, and 59 under their resolved exact manifest
+selectors, proves the three-of-six RS16 loss prevents premature commit, heals
+through the acknowledged drain fence, and then requires all four peers to
+converge on one committed subject:
 
 ```bash
 scripts/cargo_fast.sh --stable-local-metadata -- test \

@@ -8980,7 +8980,7 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
             M::NameSuffix(" expects (AccountId, string)")
         }
         Builtin::Alloc => M::Static("alloc expects (int bytes)"),
-        Builtin::ProveExecution => M::Static("prove_execution expects no arguments"),
+        Builtin::ExecutionSummary => M::Static("execution_summary expects no arguments"),
         Builtin::GrowHeap => M::Static("grow_heap expects (int bytes)"),
         Builtin::VerifyProof => {
             M::Static("verify_proof expects (bytes) pointer to NoritoBytes OpenVerifyEnvelope")

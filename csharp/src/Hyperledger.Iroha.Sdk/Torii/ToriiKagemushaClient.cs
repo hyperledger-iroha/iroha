@@ -82,7 +82,7 @@ public sealed partial class ToriiClient
         ToriiKagemushaOperationKind expectedKind,
         CancellationToken cancellationToken)
     {
-        EnsureTransactionSubmissionTransportIsOneShot();
+        EnsureOneShotTransportIsVerified();
         using var content = new ByteArrayContent(norito);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/x-norito");
         using var response = await SendAsync(
@@ -193,7 +193,7 @@ public sealed partial class ToriiClient
             "required_bridge_abi_version",
             "max_hops",
             "ready");
-        var capability = root.Deserialize<ToriiOfflineStatus>(serializerOptions)
+        var capability = root.Deserialize<ToriiOfflineStatus>(SerializerOptions)
             ?? throw new JsonException("Offline capability response deserialized to null.");
         if (!string.Equals(
                 capability.CashHandoffCapability,

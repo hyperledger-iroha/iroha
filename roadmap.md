@@ -1,27 +1,114 @@
 # Roadmap
 
-Last updated: 2026-08-30
+Last updated: 2026-08-31
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Python SDK first-release follow-up
+
+- Rebuild `iroha_python_rs` from the settled same-revision candidate, then run
+  the complete high-level Python suite, native cryptography/Connect vectors,
+  clean wheel build/install, typing-consumer smoke test, and four-validator
+  integration corridor. Do not qualify native behavior from the current
+  checkout while unrelated Core overlay/SCCP compilation is broken.
+- Split the remaining monolithic Torii route families into reviewed internal
+  modules, collapse any remaining raw/typed method pairs into one typed public
+  method, and converge the standalone low-level transport package with the
+  high-level client so session ownership, bounds, authentication, and retry
+  rules have one implementation. Generate a public export/signature inventory
+  and reject aliases or response-shape unions instead of preserving them.
+- Benchmark cold import, transaction/key construction, table-driven CRC64, and
+  maximum-size NDJSON/SSE/Norito responses. Set release thresholds for duplicate
+  native derivations, peak response memory, reconnect behavior, and clean-wheel
+  import size, then keep those thresholds in the Python release corridor.
+
+## JavaScript SDK first-release follow-up
+
+- Continue decomposing the 35,000-line Torii implementation into route-family
+  modules with exact constructor and per-method option allowlists. Keep the
+  reviewed eager/deferred/combined budgets hard, benchmark cold import and
+  maximum-response RSS, and remove remaining camel/snake, TTL, asset-definition,
+  and transaction option aliases instead of preserving compatibility paths.
+- Replace process-global native-binding test overrides and mutable curve-policy
+  configuration with explicitly injected, immutable client/runtime contexts.
+  Move the remaining internal-only Norito, SoraFS, and canonical-auth helpers
+  out of public module namespaces, then generate declaration allowlists from
+  the same reviewed runtime export inventory so package conditions cannot drift.
+- Reduce the registry artifact by publishing one source-of-truth runtime tree
+  instead of duplicated `src`/`dist` implementation payloads, move the long
+  protocol inventory out of the SDK README into source-coupled references, and
+  split the serial unit profile into portable and native-qualified lanes. On a
+  same-revision host bridge, run the native SM2/privacy suite and the clean-pack
+  install corridor before release qualification.
+
+## C# SDK release qualification
+
+- Rebuild and stage the same-revision ABI-23 `connect_norito_bridge`, then rerun
+  the 10 native privacy, SoraFS reference, and Hijiri tests that are blocked on
+  the current host. Run formatting with the pinned .NET 8.0.419 SDK and repeat
+  the full build, unit, integration, sample, and package corridor from one
+  settled candidate.
+- Finish the first-release immutable-result pass: stop repeated array and
+  `JsonNode` cloning in hot DTO getters, replace redundant public signed-envelope
+  array constructors with one canonical parse boundary, and benchmark repeated
+  collection access plus large bounded responses before setting allocation
+  thresholds.
+- Establish a reviewed public-API approval baseline after the remaining surface
+  cut, remove the broad `CS1591` suppression, and document every retained public
+  member. Mirror the C# SDK's typed, canonical-only `CurveId` construction API
+  across other SDKs instead of retaining string aliases or compatibility modes.
+
 ## Revision-4 DA/RBC release qualification
 
-- After the independent Kotodama syscall-symbol regression and lifecycle-runner
-  formal source-contract drift are resolved, run the focused Core chunk,
-  transport, worker, lifecycle, and proof-harness suites from one settled
-  candidate, followed by strict all-target Clippy and the workspace test gate.
+- From one settled merged candidate, run the focused Core chunk, transport,
+  worker, lifecycle, and proof-harness suites, followed by strict all-target
+  Clippy and the workspace test gate.
 - Rebuild the Swift native bridge and rerun Swift wire fixtures. Then exercise
   authenticated chunk loss, parity-first reordering, restart recovery, and
   certified-body fallback with exact 4- and 7-validator committees, preserving
   mandatory signed RS16 availability throughout.
-- Profile complete inbound chunk sessions. If repeated manifest validation is
-  material, add a lifecycle-owned authentication seal keyed by the exact height
-  context and manifest, with fail-closed invalidation tests across view and
-  height retirement.
+- Profile complete inbound chunk sessions and qualify the lifecycle-owned
+  validated-manifest session under view changes, height retirement, malformed
+  chunks, and adversarial shard arrival order. Preserve one fail-closed owner
+  for the exact height context and manifest.
+- Benchmark a systematic-only first fanout with parity emitted on explicit
+  repair or bounded same-view fallback. If the four- and seven-validator loss
+  matrix confirms the expected common-path reduction, make that the sole
+  first-release dispersal policy and update exact-output rollover claims,
+  authenticated repair ownership, formal models, and operator evidence
+  together; do not add a compatibility mode for eager parity fanout.
+- Profile maximum-body retry RSS as well as CPU. Replace decoded-plus-encoded
+  outbound retention with a sealed encoded-only frame plus compact routing
+  metadata if steady residency dominates, cache bounded RS16 decode matrices by
+  frozen layout and present-shard mask, and introduce a single-use validated
+  canonical-body handoff so the durable store need not repeat a full RS16
+  encoding while still independently checking body, block, and manifest
+  authority.
+
+## SORA Parliament release qualification
+
+- From one settled fresh-genesis candidate, run the focused Parliament model,
+  reducer, restore, configuration, and Torii route suites followed by strict
+  all-target Clippy and the workspace test gate. Exercise the atomic
+  Policy-to-Confirmation boundary, redraw exhaustion, restart recovery, and
+  malformed snapshot rejection on a four-validator network with mandatory
+  signed RS16 DA/RBC; regenerate and compare public API artifacts and SDK
+  projections before declaring the first release qualified.
+- On that sealed candidate, require the single 17-variant governance event
+  schema, exact negative pins for every retired council/roster,
+  citizen-service, duplicate-event, and unreachable-event symbol, and
+  byte-identical embedded/latest/current OpenAPI documents with matching
+  unsigned manifest and version-index byte counts and digests.
 
 ## Default-on capability follow-up
 
+- Promote compute from the standalone `xtask` harness into a governed Torii/Core
+  runtime before enabling `compute.enabled`: add an authoritative manifest and
+  contract target, stable catalog route, canonical authentication, bounded
+  execution and replay state, real IVM metering, and a live Kiso pricing
+  subscriber. The current configuration bit has no daemon consumer and must not
+  advertise a capability that nodes cannot execute.
 - Upgrade the locked QUIC stack to a qualified `quinn-proto` release, rerun the
   transport security and four-validator loss/recovery matrix, and only then add
   QUIC to the portable daemon aggregate.
@@ -59,12 +146,14 @@ Completed history lives in [`status.md`](./status.md).
 
 - Release-candidate-qualify the implemented prepared-leg, audit, coordination,
   restart-certificate recovery, carrier, status, and receipt APIs in Rust/CLI,
-  Kotlin, mirrored Java, Swift, Python, and JavaScript. The checked OpenAPI now
-  covers all 13 operations with strict V1 DTO/auth/redaction contracts; run its
-  focused Rust test and every complete SDK suite from the settled candidate.
-  Rebuild the missing Swift native bridge from that same commit and preserve
-  opaque witness handles and plaintext redaction through packaging and
-  clean-consumer tests.
+  Kotlin, mirrored Java, Swift, Python, and JavaScript. Carrier admission now
+  uses one exact non-terminal three-field acknowledgement in the Rust DTO and
+  all six maintained non-Rust clients, and the packaged OpenAPI source plus
+  both artifact mirrors agree on that shape. Regenerate and verify their stale
+  publication manifests, run the focused Rust/OpenAPI contract test, and run
+  every complete SDK suite from the settled candidate. Rebuild the missing
+  Swift native bridge from that same commit and preserve opaque witness handles
+  and plaintext redaction through packaging and clean-consumer tests.
 - Run real four-validator processes for every participating dataspace at
   N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
   DA/RBC throughout. Exercise one validator unavailable per committee,
@@ -115,7 +204,10 @@ Completed history lives in [`status.md`](./status.md).
   later-release regression thresholds.
 - Close focused/workspace tests, strict all-target Clippy, formatting, ten
   randomized seeds, two-hour soak, serial privacy-release checks, release
-  inventory, reproducible build, and SBOM from one settled candidate. Qualify
+  inventory, reproducible build, and SBOM from one settled candidate. The
+  fail-closed source-inventory producer and independent verifier are now
+  implemented; run `scripts/private_settlement_source_evidence.py` from the
+  final clean checkout and archive its atomic output with the candidate. Qualify
   the governed `RotatePrivateSettlementPoolPolicyV1` boundary--including
   pre-rotation receipt recovery/idempotence, same-activation-height pool-receipt
   rejection, and fail-closed old-policy in-flight bundles--alongside auditor
@@ -125,9 +217,12 @@ Completed history lives in [`status.md`](./status.md).
   indexed TLC configurations on the settled candidate. After replacing the
   erroneous bundle-global fault budgets with per-committee maps, the N=2
   validator-focused path, four-leg clean path, and three-leg expiry/replay path
-  pass. The earlier combined N=2 result is superseded; focused results do not
-  waive either full fault configuration required by the release-evidence
-  runner.
+  passed against the previously recorded module bytes. A later comment-only
+  clarification changed the current exact module digest; because the release
+  runner authenticates complete input bytes, rerun those tractable rows as well
+  as both full fault configurations. The earlier combined N=2 result is
+  superseded, and no historical focused result waives the frozen-input matrix
+  required by the release-evidence runner.
 - Obtain independent review of the AIR, dummy selectors, asset/capsule and
   reimbursement bindings, hybrid cryptography, auditor/QC domains, and the
   cross-dataspace state machine. Archive the exact commit, manifests, raw
@@ -407,23 +502,9 @@ Completed history lives in [`status.md`](./status.md).
   allowances. Delete or feature-gate every resulting production-only finding,
   and replace trait-check helper functions with compile-time assertions that do
   not need dead-code exemptions.
-- Bound operator-auth sessions, challenges, and lockout identities with one
-  expiry-aware capacity policy. Admission must fail closed at capacity without
-  a full-map scan, and focused tests must cover expiry, concurrency, and many
-  distinct source identities.
-- Retire the explicitly legacy `POST /v1/sorafs/storage/fetch` diagnostic and
-  its JavaScript adapter in favor of authenticated CAR/chunk reads, then
-  regenerate the OpenAPI provenance bundle and update the SoraFS operator
-  runbooks in the same change.
-- Remove duplicate response fields and retain only `/openapi.json` as the
-  OpenAPI discovery endpoint. Duplicate MCP Connect tool aliases and permanent
-  operator bearer-token modes are already removed; preserve the four canonical
-  `iroha.connect.*` tools and the single first-credential operator-token
-  bootstrap flow without reintroducing composite credential-minting helpers.
-- Audit wildcard diagnostic and configuration-alias surfaces (`/status/{*tail}`
-  and one-way parser spellings) against first-release callers, deleting each
-  surface that has no production owner instead of carrying compatibility
-  branches.
+- Audit the remaining one-way configuration parser spellings against
+  first-release deployment owners. Delete aliases with no production owner
+  instead of carrying compatibility branches.
 
 ## Taikai first-release closure
 
@@ -560,15 +641,15 @@ Completed history lives in [`status.md`](./status.md).
 - Qualify the implemented live threshold-beacon partial-share transport,
   per-session runtime custody, threshold aggregation, candidate-effect
   assembly, and authoritative finalized-pulse persistence on at least four
-  peers. Include optional Parliament demand batches, mandatory NPoS boundary
-  slots, missing/invalid shares, selective withholding, repeated-retry bias and
-  domain separation, restart and idempotent retransmission, and key rotation.
-  Measure the remaining selection advantage across the bounded retry sequence;
-  single-round uniformity is not sufficient evidence. The certified lifecycle
+  peers. Include mandatory Parliament demand batches and NPoS boundary slots,
+  missing/invalid shares, selective withholding, domain separation, restart,
+  idempotent retransmission, and key rotation. Prove that a missing threshold
+  share stalls only the exact requested slot and that recovery finalizes that
+  same slot without a redraw. The certified lifecycle
   now compare-and-sets the expected active
   predecessor and makes a block-`H` global key change effective at `H + 1`;
-  qualification must prove that optional and mandatory pulses authorized by
-  the parent state are resolved by the session active at the pulse height and
+  qualification must prove that all requested pulses authorized by the parent
+  state are resolved by the session active at the pulse height and
   cannot be reinterpreted through the post-block successor pointer.
 - Qualify the implemented timed-release operating seams: full-public-transcript
   release-context read, bodyless authenticated local partial request,
@@ -3742,8 +3823,9 @@ scan limited to repository policy text plus intentional guard-test fixtures.
 
 ## SCCP Launch Scope
 
-**Status:** exact V1 implementation and local release-fixture validation
-complete; audited live deployment evidence pending.
+**Status (2026-08-30 audit closeout):** exact V1 source and focused local
+conformance validation complete; regenerated production proof/deployment
+material and audited live evidence pending.
 
 The canonical production release-evidence corridor has exactly four remote
 profiles: Ethereum mainnet, BNB Smart Chain mainnet, TRON mainnet, and TON
@@ -3882,11 +3964,18 @@ or publication state is ambiguous, Kura poisons further canonical mutation and
 the process-wide consensus output guard requires restart recovery. Only
 explicitly classified non-authoritative cleanup diagnostics remain non-fatal.
 
-The remaining SCCP release work is external, independently verifiable evidence:
+The remaining SCCP release work is:
 
-- obtain independently audited, reproducible semantic circuit, witness
-  generator, proving key, verifying key, toolchain, and audit-report artifacts
-  for all four production profiles;
+- regenerate the corrected semantic circuits, witness generators, R1CS,
+  proving/verifying keys, verifiers, and deployment artifacts for all four
+  production profiles from one reproducible toolchain; independently audit the
+  resulting exact material, since the pre-audit artifacts are non-admissible;
+- implement exact Rust-equivalent prepared-transaction authentication before
+  adding authenticated non-Rust SDK write methods, including payload, prehash,
+  authority, creation-time, route, proof, and tamper-rejection parity;
+- rebuild the ABI-23 Swift `NoritoBridge.xcframework` from the settled
+  candidate, then run the full Swift and cross-SDK corridor, contract smokes,
+  focused Rust tests, and workspace qualification from that same source state;
 - deploy the exact contracts and native source-verifier material, obtain
   authenticated finalized verifier/runtime readbacks, and confirm every
   governed runtime/key/policy hash;
@@ -21196,10 +21285,10 @@ digest-bound pending-XSD source probe summaries for reviewed
   Torii-generated IVM proof
   attachments include the checked verifier-key commitment for downstream
   proof-submission binding.
-  The `zk-preverify` block sidecar path records verified trace digests only;
-  the background trace lane revalidates queued traces but no longer emits
-  `zk-trace/mock-proof` artifacts while the real transparent IVM trace prover
-  remains future work.
+  The `zk-preverify` trace lane performs advisory diagnostic checks and emits
+  logs/events only; it persists no trace digest or proof-like artifact in block
+  sidecars. A transparent IVM execution prover remains future work and must
+  authenticate the complete execution relation before producing artifacts.
   Kagemusha is the single mode-free offline-cash protocol. Its current artifact
 	  and readiness contract is exact bridge ABI 23 with authenticated manifest V4
   artifacts: exactly eight external Eq/Ep roles with circuit parameters inline.

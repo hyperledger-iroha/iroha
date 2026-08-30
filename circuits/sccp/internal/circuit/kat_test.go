@@ -158,7 +158,7 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 	if inventory.DefinitionState != "final-v1-wire-identifiers-aligned" {
 		t.Fatalf("unexpected constraint-count definition state %q", inventory.DefinitionState)
 	}
-	artifactState := inventory.ArtifactState
+	state := inventory.ArtifactState
 	expectedInvalidatedRoles := []string{
 		"r1cs",
 		"phase2_transcript",
@@ -180,11 +180,11 @@ func TestCheckedInConstraintCountInventoryCoversEveryProfile(t *testing.T) {
 		"sccp-final-v1-tron-mainnet-epoch-anchor-update",
 		"sccp-final-v1-tron-mainnet-message",
 	}
-	if artifactState.R1CSIdentitiesCurrent || artifactState.Reason == "" ||
-		!reflect.DeepEqual(artifactState.InvalidatedArtifactRoles, expectedInvalidatedRoles) ||
-		!reflect.DeepEqual(artifactState.FreshClosureRequired, expectedFreshClosure) ||
-		!reflect.DeepEqual(artifactState.ProfilesRequiringFreshR1CS, expectedFreshR1CS) {
-		t.Fatalf("wire-alignment invalidation policy drift: %#v", artifactState)
+	if state.R1CSIdentitiesCurrent || state.Reason == "" ||
+		!reflect.DeepEqual(state.InvalidatedArtifactRoles, expectedInvalidatedRoles) ||
+		!reflect.DeepEqual(state.FreshClosureRequired, expectedFreshClosure) ||
+		!reflect.DeepEqual(state.ProfilesRequiringFreshR1CS, expectedFreshR1CS) {
+		t.Fatalf("wire-alignment invalidation policy drift: %#v", state)
 	}
 	for index, cfg := range configs {
 		entry := inventory.Profiles[index]

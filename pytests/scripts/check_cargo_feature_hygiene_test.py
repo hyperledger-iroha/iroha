@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 from pathlib import Path
 
@@ -16,6 +17,130 @@ SPEC.loader.exec_module(FEATURE_HYGIENE)
 
 def test_repository_feature_hygiene() -> None:
     assert FEATURE_HYGIENE.check_repository(ROOT) == []
+
+
+def _guarded_document(package: str) -> dict:
+    manifest = ROOT / "crates" / package / "Cargo.toml"
+    return FEATURE_HYGIENE._load_toml(manifest)
+
+
+def _guarded_errors(package: str, document: dict) -> list[str]:
+    manifest = ROOT / "crates" / package / "Cargo.toml"
+    return FEATURE_HYGIENE._check_expected_features(document, manifest)
+
+
+def test_rejects_unclassified_explicit_feature_omitted_from_default() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["features"]["new-portable-production-capability"] = []
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any(
+        "Cargo feature `new-portable-production-capability` is unclassified" in error
+        for error in errors
+    )
+
+
+def test_rejects_unclassified_implicit_optional_dependency_feature() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["dependencies"]["new_optional_backend"] = {
+        "version": "1",
+        "optional": True,
+    }
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any(
+        "Cargo feature `new_optional_backend` is unclassified" in error
+        for error in errors
+    )
+
+
+def test_rejects_broken_portable_default_closure() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["features"]["default"].remove("simd")
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any(
+        "portable feature `simd` is not reachable from `default`" in error
+        for error in errors
+    )
+
+
+def test_rejects_exact_portable_forwarder_mutation() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["features"]["gost"] = []
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any("feature `gost` must be" in error for error in errors)
+
+
+def test_rejects_unpinned_contextual_shipping_forwarder(monkeypatch) -> None:
+    monkeypatch.delitem(
+        FEATURE_HYGIENE.EXPECTED_FEATURES["iroha_data_model"],
+        "transparent_api",
+    )
+
+    errors = _guarded_errors(
+        "iroha_data_model", _guarded_document("iroha_data_model")
+    )
+
+    assert any(
+        "contextual shipping feature `transparent_api` lacks an exact feature pin"
+        in error
+        for error in errors
+    )
+
+
+def test_rejects_contextual_shipping_forwarder_mutation() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_data_model"))
+    document["features"]["transparent_api"] = []
+
+    errors = _guarded_errors("iroha_data_model", document)
+
+    assert any("feature `transparent_api` must be" in error for error in errors)
+
+
+def test_rejects_contextual_shipping_feature_reachable_from_default() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_data_model"))
+    document["features"]["default"].append("transparent_api")
+
+    errors = _guarded_errors("iroha_data_model", document)
+
+    assert any(
+        "contextual shipping feature `transparent_api` is reachable from local "
+        "`default`" in error
+        for error in errors
+    )
+
+
+def test_rejects_explicit_opt_in_reachable_from_default() -> None:
+    document = copy.deepcopy(_guarded_document("iroha_core"))
+    document["features"]["default"].append("quic")
+
+    errors = _guarded_errors("iroha_core", document)
+
+    assert any(
+        "explicit opt-in feature `quic` is reachable from `default`" in error
+        for error in errors
+    )
+
+
+def test_rejects_stale_explicit_opt_in_name(monkeypatch) -> None:
+    current = FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES["iroha_core"]
+    monkeypatch.setitem(
+        FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES,
+        "iroha_core",
+        tuple(sorted((*current, "retired-opt-in"))),
+    )
+
+    errors = _guarded_errors("iroha_core", _guarded_document("iroha_core"))
+
+    assert any(
+        "stale explicit opt-in feature `retired-opt-in`" in error for error in errors
+    )
 
 
 def _member_rows(*, implicit_norito_defaults: bool = False) -> list[str]:

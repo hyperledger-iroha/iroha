@@ -138,7 +138,7 @@ test("Ed25519 key generation and derivation remain available without the native 
     const generated = generateKeyPair({ seed });
     const expectedPublicKey = Buffer.from(ed25519.getPublicKey(seed));
 
-    assert.deepEqual(supportedCryptoAlgorithms(), SUPPORTED_CRYPTO_ALGORITHMS);
+    assert.deepEqual(supportedCryptoAlgorithms(), ["ed25519"]);
     assert.equal(generated.algorithm, "ed25519");
     assert.deepEqual(generated.privateKey, seed);
     assert.deepEqual(generated.publicKey, expectedPublicKey);

@@ -203,7 +203,7 @@ pub enum ParliamentReducerErrorV1 {
     IncompleteOpening,
     /// A required final body binding is absent or inconsistent.
     IncompleteCertificate,
-    /// Certification or enactment heights violate their strict ordering.
+    /// Certification was not atomic with the final result, or enactment was not later.
     InvalidCertificateHeight,
     /// Persisted reducer state records an action after the restored ledger height.
     FuturePersistedHeight,
@@ -345,9 +345,9 @@ impl fmt::Display for ParliamentReducerErrorV1 {
             Self::InvalidTally => f.write_str("invalid private-ballot aggregate tally"),
             Self::IncompleteOpening => f.write_str("opening does not cover every survivor"),
             Self::IncompleteCertificate => f.write_str("governance certificate is incomplete"),
-            Self::InvalidCertificateHeight => {
-                f.write_str("invalid certification or enactment height")
-            }
+            Self::InvalidCertificateHeight => f.write_str(
+                "certification must equal the final result height and precede enactment",
+            ),
             Self::FuturePersistedHeight => {
                 f.write_str("persisted Parliament action is ahead of the restored ledger height")
             }

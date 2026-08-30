@@ -481,6 +481,13 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             {"action":"CompleteEmergencyHoldRetrospective","payload":{"hold_proposal_content_id":\(fixedBytes(17)),"hold_governance_attempt_id":\(fixedBytes(34)),"incident_digest":\(fixedBytes(51)),"retrospective_finding_root":\(fixedBytes(68))}}
             """,
         ]
+        let actionTags = try actionPayloads.map { payload in
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any]
+            )
+            return try XCTUnwrap(object["action"] as? String)
+        }
+        XCTAssertEqual(actionTags, ToriiParliamentAPIV1.contractLifecycleActions)
         for payload in actionPayloads {
             XCTAssertNoThrow(
                 try JSONDecoder().decode(

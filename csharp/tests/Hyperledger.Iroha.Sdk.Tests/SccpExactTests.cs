@@ -269,18 +269,19 @@ public sealed partial class SccpExactTests
             flags: 0x02));
         var nativeArtifact = Convert.ToBase64String(NoritoCodec.Encode(
             SccpSubmitValidation.NativeInboundProofSchemaName,
-            [1]));
+            [1],
+            flags: 0x02));
         var unrelatedArtifact = Convert.ToBase64String(NoritoCodec.Encode("iroha.test.Unrelated", [1]));
         var transaction = CanonicalTransactionPayload(7, destinationProof: true);
         var signature = Convert.ToBase64String(
-            Ed25519Signer.Sign(IrohaHash.Hash(transaction), pair.PrivateKeySeed));
+            Ed25519Signer.Sign(IrohaHash.Hash(transaction), pair.PrivateKeySeedSpan));
         var gasBoundIntent = FeePaymentIntent.Authority([], gasLimit: 9);
         var gasBoundTransaction = CanonicalTransactionPayload(
             7,
             destinationProof: true,
             feePayment: gasBoundIntent);
         var gasBoundSignature = Convert.ToBase64String(
-            Ed25519Signer.Sign(IrohaHash.Hash(gasBoundTransaction), pair.PrivateKeySeed));
+            Ed25519Signer.Sign(IrohaHash.Hash(gasBoundTransaction), pair.PrivateKeySeedSpan));
         _ = new SccpBridgeProofSubmitRequest(
             authority,
             artifact,
@@ -312,7 +313,7 @@ public sealed partial class SccpExactTests
                 artifact,
                 Convert.ToBase64String(Ed25519Signer.Sign(
                     IrohaHash.Hash(invalidTransaction),
-                    pair.PrivateKeySeed)),
+                    pair.PrivateKeySeedSpan)),
                 Convert.ToBase64String(invalidTransaction),
                 creationTimeMs: 7));
         }
@@ -340,7 +341,7 @@ public sealed partial class SccpExactTests
                 nativeBackendTag: nativeBackendTag);
             var taggedSignature = Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(taggedPayload),
-                pair.PrivateKeySeed));
+                pair.PrivateKeySeedSpan));
             var create = () => BridgeMessageRequest(
                 authority,
                 nativeArtifact,
@@ -412,7 +413,7 @@ public sealed partial class SccpExactTests
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(nativePayload),
-                pair.PrivateKeySeed)),
+                pair.PrivateKeySeedSpan)),
             Convert.ToBase64String(nativePayload),
             creationTimeMs: 7));
         var archivedChainPayload = CanonicalTransactionPayload(
@@ -424,7 +425,7 @@ public sealed partial class SccpExactTests
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(archivedChainPayload),
-                pair.PrivateKeySeed)),
+                pair.PrivateKeySeedSpan)),
             Convert.ToBase64String(archivedChainPayload),
             creationTimeMs: 7));
         var legacyPayload = CanonicalTransactionPayload(
@@ -436,7 +437,7 @@ public sealed partial class SccpExactTests
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(legacyPayload),
-                pair.PrivateKeySeed)),
+                pair.PrivateKeySeedSpan)),
             Convert.ToBase64String(legacyPayload),
             creationTimeMs: 7));
         foreach (var payloadKind in new uint[] { 0, 1, uint.MaxValue })
@@ -450,7 +451,7 @@ public sealed partial class SccpExactTests
                 artifact,
                 Convert.ToBase64String(Ed25519Signer.Sign(
                     IrohaHash.Hash(invalidKindPayload),
-                    pair.PrivateKeySeed)),
+                    pair.PrivateKeySeedSpan)),
                 Convert.ToBase64String(invalidKindPayload),
                 creationTimeMs: 7));
         }
@@ -460,7 +461,7 @@ public sealed partial class SccpExactTests
             artifact,
             Convert.ToBase64String(Ed25519Signer.Sign(
                 IrohaHash.Hash(truncatedPayload),
-                pair.PrivateKeySeed)),
+                pair.PrivateKeySeedSpan)),
             Convert.ToBase64String(truncatedPayload),
             creationTimeMs: 7));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
@@ -1237,8 +1238,8 @@ public sealed partial class SccpExactTests
         Assert.Equal(
             "CDBEC097FED4AD21E44A354FE09A3C43AD489F4AC78CFF8944BA8BB5CC2FD577",
             Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash));
-        Assert.Equal("0x1168372c5c87f384d377a3ffb9140af5ac73cdcd693bcb1b4b89995a8fcad92a", parsed.StatementHash);
-        Assert.Equal("0x3757838d0f35d387dd9467d4d9c4806fc528d45db22060ea4784402a0208cd5f", parsed.RequestHash);
+        Assert.Equal("0xbfe8e664563ccf521090b15bc57a263edea90bf02a354c7ed8d53a06a3793016", parsed.StatementHash);
+        Assert.Equal("0xe94a8865241d461b62ff65bdd3fd7d3c7c762c4ef13a43e82dfaacf267af5278", parsed.RequestHash);
         Assert.Throws<ArgumentException>(() => ProofRequestObject(2));
         Assert.Throws<ArgumentException>(() => ProofRequestObject(3));
         Assert.Throws<ArgumentException>(() => ProofRequestObject(5));
@@ -1560,6 +1561,59 @@ public sealed partial class SccpExactTests
     }
 
     [Fact]
+    public void RecentDiscoveryAcceptsOnlyCanonicalTronAddress21Projection()
+    {
+        var item = RecentItem(9, MessageId);
+        item["target_profile"] = "tron-mainnet";
+        item["target_domain"] = 3;
+        item["route_id"] = "taira_tron_xor";
+        item["payload_projection"] = TransferProjection(3);
+        var parsed = Assert.Single(SccpRecentMessages.Parse(Json(
+            new Dictionary<string, object?> { ["items"] = new[] { item } })).Items);
+        Assert.Equal(SccpNetworkV1.TronMainnet, parsed.Lane.Target);
+
+        foreach (var replacement in new object[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["EvmAddress20"] = new Dictionary<string, object?>
+                {
+                    ["bytes"] = "0x" + new string('1', 40),
+                },
+            },
+            new Dictionary<string, object?>
+            {
+                ["TronAddress21"] = new Dictionary<string, object?>
+                {
+                    ["bytes"] = "0x" + new string('1', 40),
+                },
+            },
+            new Dictionary<string, object?>
+            {
+                ["TronAddress21"] = new Dictionary<string, object?>
+                {
+                    ["bytes"] = "0x41" + new string('0', 40),
+                },
+            },
+            new Dictionary<string, object?>
+            {
+                ["TronAddress21"] = new Dictionary<string, object?>
+                {
+                    ["bytes"] = "0x41" + new string('A', 40),
+                },
+            },
+        })
+        {
+            var malformed = DeepClone(item);
+            var transfer = (Dictionary<string, object?>)
+                ((Dictionary<string, object?>)malformed["payload_projection"]!)["Transfer"]!;
+            transfer["recipient"] = replacement;
+            Assert.Throws<ArgumentException>(() => SccpRecentMessages.Parse(Json(
+                new Dictionary<string, object?> { ["items"] = new[] { malformed } })));
+        }
+    }
+
+    [Fact]
     public void BundleRejectsPayloadCommitmentMerkleAndStrictJsonTampering()
     {
         var valid = BundleObject(MessageId);
@@ -1712,7 +1766,7 @@ public sealed partial class SccpExactTests
         var directPair = Ed25519KeyPair.FromSeed(Enumerable.Repeat((byte)0x57, 32).ToArray());
         var directSignature = Ed25519Signer.Sign(
             IrohaHash.Hash(transaction),
-            directPair.PrivateKeySeed);
+            directPair.PrivateKeySeedSpan);
         var transactionBase64 = Convert.ToBase64String(transaction);
         var signatureBase64 = Convert.ToBase64String(directSignature);
         var expectedTransactionHash = SccpSubmitValidation.RequireCanonicalDirectSubmission(
@@ -2125,7 +2179,7 @@ public sealed partial class SccpExactTests
             [1],
             flags: 0x02);
         var payload = CanonicalTransactionPayload(7);
-        var signature = Ed25519Signer.Sign(IrohaHash.Hash(payload), pair.PrivateKeySeed);
+        var signature = Ed25519Signer.Sign(IrohaHash.Hash(payload), pair.PrivateKeySeedSpan);
         var payloadBase64 = Convert.ToBase64String(payload);
         var signatureBase64 = Convert.ToBase64String(signature);
         var expectedHash = SccpSubmitValidation.RequireCanonicalDirectSubmission(

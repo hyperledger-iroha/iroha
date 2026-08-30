@@ -10,7 +10,6 @@ import hmac
 import json
 import logging
 import math
-import os
 import re
 import secrets
 import time
@@ -19,7 +18,7 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -41,6 +40,9 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 import requests
 from blake3 import blake3
+from iroha_torii_client.canonical_request_v1 import (
+    require_zero_retry_adapter as _require_zero_retry_adapter,
+)
 from iroha_torii_client.canonical_transport import (
     CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
 )
@@ -120,6 +122,9 @@ from iroha_torii_client.client import (
 )
 from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
+)
+from iroha_torii_client.client import (
+    ToriiLocalSigningContext as _BaseLocalSigningContext,
 )
 from iroha_torii_client.client_status_models import (
     TransportConfig,
@@ -403,6 +408,7 @@ _ROUTE_SECRET_HEADER_NAMES = frozenset(
         "x-auth-token",
     }
 )
+_HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 
 def _require_account_onboarding_token(value: Any) -> str:
@@ -415,6 +421,40 @@ def _require_account_onboarding_token(value: Any) -> str:
             "without spaces or normalization"
         )
     return value
+
+
+def _require_route_token(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a string")
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{context} must contain printable ASCII without spaces") from exc
+    if not 1 <= len(encoded) <= 4096 or any(byte < 0x21 or byte > 0x7E for byte in encoded):
+        raise ValueError(
+            f"{context} must contain 1..4096 printable ASCII bytes without spaces"
+        )
+    return value
+
+
+def _copy_http_headers(headers: Mapping[str, Any], context: str) -> Dict[str, str]:
+    if not isinstance(headers, Mapping):
+        raise TypeError(f"{context} must be a mapping")
+    result: Dict[str, str] = {}
+    normalized_names: set[str] = set()
+    for name, value in headers.items():
+        if not isinstance(name, str) or _HTTP_HEADER_NAME_RE.fullmatch(name) is None:
+            raise ValueError(f"{context} contains an invalid HTTP header name")
+        lower_name = name.lower()
+        if lower_name in normalized_names:
+            raise ValueError(f"{context} contains duplicate HTTP header {name!r}")
+        if not isinstance(value, str):
+            raise TypeError(f"{context}[{name!r}] must be a string")
+        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+            raise ValueError(f"{context}[{name!r}] must not contain control characters")
+        normalized_names.add(lower_name)
+        result[name] = value
+    return result
 
 
 def _set_exact_header(headers: MutableMapping[str, str], name: str, value: str) -> None:
@@ -1976,17 +2016,6 @@ def _normalize_exact_any_i105_account_id(value: Any, context: str) -> str:
     return literal
 
 
-def _normalize_string_list(value: Any, context: str) -> List[str]:
-    if not isinstance(value, (list, tuple)):
-        raise TypeError(f"{context} must be an array of strings")
-    normalized: List[str] = []
-    for index, item in enumerate(value):
-        if not isinstance(item, str):
-            raise TypeError(f"{context}[{index}] must be a string")
-        normalized.append(item)
-    return normalized
-
-
 def _bytes_like_to_hex(value: Any, context: str) -> str:
     if isinstance(value, (bytes, bytearray, memoryview)):
         return bytes(value).hex()
@@ -2278,62 +2307,6 @@ def _normalize_space_directory_manifest_payload(
     return _parse_space_directory_manifest(manifest, context=context)
 
 
-def _normalize_authority_credentials(
-    payload: Mapping[str, Any],
-    *,
-    context: str,
-) -> Dict[str, str]:
-    if not isinstance(payload, Mapping):
-        raise TypeError(f"{context} must be an object")
-    _reject_alias_keys(
-        payload,
-        {
-            "account": "authority",
-            "privateKey": "private_key",
-            "privateKeyMultihash": "private_key_multihash",
-            "privateKeyHex": "private_key_hex",
-            "privateKeyBytes": "private_key_bytes",
-            "privateKeySeed": "private_key_seed",
-            "privateKeyAlgorithm": "private_key_algorithm",
-        },
-        context=context,
-    )
-    authority_raw = payload.get("authority")
-    authority = _require_non_empty_string(authority_raw, f"{context}.authority")
-    private_key_literal = payload.get("private_key")
-    if private_key_literal is not None:
-        private_key = _require_non_empty_string(private_key_literal, f"{context}.private_key")
-    else:
-        multihash = payload.get("private_key_multihash")
-        if multihash is not None:
-            private_key = _require_non_empty_string(multihash, f"{context}.private_key_multihash")
-        else:
-            hex_literal = payload.get("private_key_hex")
-            bytes_literal = payload.get("private_key_bytes") or payload.get("private_key_seed")
-            if hex_literal is None and bytes_literal is None:
-                raise TypeError(f"{context}.private_key is required")
-            if hex_literal is not None:
-                hex_value = _normalize_hex_string(
-                    hex_literal,
-                    f"{context}.private_key_hex",
-                    expected_length=64,
-                )
-            else:
-                hex_value = _bytes_like_to_hex(
-                    bytes_literal,
-                    f"{context}.private_key_bytes",
-                )
-                if len(hex_value) != 64:
-                    raise ValueError(f"{context}.private_key_bytes must contain 32 bytes")
-            algorithm = payload.get("private_key_algorithm") or "ed25519"
-            algorithm_literal = _require_non_empty_string(
-                algorithm,
-                f"{context}.private_key_algorithm",
-            )
-            private_key = f"{algorithm_literal}:{hex_value.lower()}"
-    return {"authority": authority, "private_key": private_key}
-
-
 def _normalize_publish_space_directory_manifest_request(
     request: Mapping[str, Any],
 ) -> Dict[str, Any]:
@@ -2477,18 +2450,6 @@ def _normalize_base64_payload(
     if isinstance(source, (bytes, bytearray, memoryview)):
         return base64.b64encode(bytes(source)).decode("ascii")
     raise TypeError(f"{context} must be bytes or a base64 string")
-
-
-_MISSING = object()
-
-
-def _first_present(source: Mapping[str, Any], *keys: str) -> Any:
-    present = [key for key in keys if key in source and source[key] is not None]
-    if len(present) > 1:
-        raise TypeError(f"ambiguous aliases: {', '.join(present)}")
-    if not present:
-        return _MISSING
-    return source[present[0]]
 
 
 def _normalize_sorafs_reputation_snapshot_id_hex(value: Any, context: str) -> str:
@@ -4294,7 +4255,7 @@ _CRYPTO_MODULE: Optional[ModuleType] = None
 _ISO_WEEK_RE = re.compile(r"^\d{4}-W(0[1-9]|[1-4][0-9]|5[0-3])$")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ResolvedToriiClientConfig:
     """Fully merged Torii client configuration."""
 
@@ -4305,10 +4266,62 @@ class ResolvedToriiClientConfig:
     max_backoff: float
     retry_statuses: frozenset[int]
     retry_methods: frozenset[str]
-    default_headers: Dict[str, str]
-    auth_token: Optional[str]
-    api_token: Optional[str]
+    default_headers: Mapping[str, str]
+    auth_token: Optional[str] = field(repr=False, compare=False)
+    api_token: Optional[str] = field(repr=False, compare=False)
     sorafs_alias_policy: SorafsAliasPolicy
+
+    def __post_init__(self) -> None:
+        timeout = _require_positive_finite_float(self.timeout, "timeout")
+        max_retries = _require_retry_count(self.max_retries)
+        backoff_initial = _require_non_negative_finite_float(
+            self.backoff_initial,
+            "backoff_initial",
+        )
+        backoff_multiplier = _require_positive_finite_float(
+            self.backoff_multiplier,
+            "backoff_multiplier",
+        )
+        max_backoff = _require_non_negative_finite_float(
+            self.max_backoff,
+            "max_backoff",
+        )
+        if backoff_multiplier < 1.0:
+            raise ValueError("backoff_multiplier must be at least 1")
+        if max_backoff < backoff_initial:
+            raise ValueError("max_backoff must be greater than or equal to backoff_initial")
+        object.__setattr__(self, "timeout", timeout)
+        object.__setattr__(self, "max_retries", max_retries)
+        object.__setattr__(self, "backoff_initial", backoff_initial)
+        object.__setattr__(self, "backoff_multiplier", backoff_multiplier)
+        object.__setattr__(self, "max_backoff", max_backoff)
+        object.__setattr__(
+            self,
+            "retry_statuses",
+            _normalize_retry_statuses(self.retry_statuses),
+        )
+        object.__setattr__(
+            self,
+            "retry_methods",
+            _normalize_retry_methods(self.retry_methods),
+        )
+        default_headers = _copy_http_headers(self.default_headers, "default_headers")
+        _reject_reserved_default_headers(default_headers, "default_headers")
+        object.__setattr__(self, "default_headers", MappingProxyType(default_headers))
+        if self.auth_token is not None:
+            object.__setattr__(
+                self,
+                "auth_token",
+                _require_route_token(self.auth_token, "auth_token"),
+            )
+        if self.api_token is not None:
+            object.__setattr__(
+                self,
+                "api_token",
+                _require_route_token(self.api_token, "api_token"),
+            )
+        if not isinstance(self.sorafs_alias_policy, SorafsAliasPolicy):
+            raise TypeError("sorafs_alias_policy must be a SorafsAliasPolicy")
 
 
 @dataclass(frozen=True)
@@ -5484,41 +5497,6 @@ def _configuration_update_payload(snapshot: ConfigurationSnapshot) -> Dict[str, 
     payload.pop("public_key", None)
     payload.pop("transport", None)
     payload.pop("confidential_gas", None)
-    return payload
-
-
-def _network_time_snapshot_to_dict(snapshot: NetworkTimeSnapshot) -> Dict[str, int]:
-    return {
-        "now": snapshot.now_ms,
-        "offset_ms": snapshot.offset_ms,
-        "confidence_ms": snapshot.confidence_ms,
-    }
-
-
-def _network_time_status_to_dict(status: NetworkTimeStatus) -> Dict[str, Any]:
-    samples = [
-        {
-            "peer": sample.peer,
-            "last_offset_ms": sample.last_offset_ms,
-            "last_rtt_ms": sample.last_rtt_ms,
-            "count": sample.count,
-        }
-        for sample in status.samples
-    ]
-    rtt: Dict[str, Any] = {
-        "buckets": [
-            {"le": bucket.upper_bound_ms, "count": bucket.count} for bucket in status.rtt_buckets
-        ],
-        "sum_ms": status.rtt_sum_ms,
-        "count": status.rtt_count,
-    }
-    payload: Dict[str, Any] = {
-        "peers": status.peers,
-        "samples": samples,
-        "rtt": rtt,
-    }
-    if status.note is not None:
-        payload["note"] = status.note
     return payload
 
 
@@ -12814,6 +12792,14 @@ def resolve_torii_client_config(
 ) -> ResolvedToriiClientConfig:
     """Merge Torii client settings from config files, environment variables, and overrides."""
 
+    for source_name, source in (
+        ("config", config),
+        ("env", env),
+        ("overrides", overrides),
+    ):
+        if source is not None and not isinstance(source, Mapping):
+            raise TypeError(f"{source_name} must be a mapping")
+
     state: Dict[str, Any] = {
         "timeout": _DEFAULT_RESOLVED_CONFIG.timeout,
         "max_retries": _DEFAULT_RESOLVED_CONFIG.max_retries,
@@ -12851,6 +12837,16 @@ def resolve_torii_client_config(
             },
             context="torii_client config",
         )
+        for milliseconds_key, seconds_key in (
+            ("timeout_ms", "timeout"),
+            ("backoff_initial_ms", "backoff_initial"),
+            ("max_backoff_ms", "max_backoff"),
+        ):
+            if source.get(milliseconds_key) is not None and source.get(seconds_key) is not None:
+                raise TypeError(
+                    f"torii_client config cannot contain both {milliseconds_key} "
+                    f"and {seconds_key}"
+                )
         timeout = _coerce_timeout_seconds(
             source.get("timeout_ms"),
             default_value=source.get("timeout"),
@@ -12876,7 +12872,9 @@ def resolve_torii_client_config(
             allow_zero=False,
         )
         if backoff_multiplier is not None:
-            state["backoff_multiplier"] = max(backoff_multiplier, 1.0)
+            if backoff_multiplier < 1.0:
+                raise ValueError("backoff_multiplier must be at least 1")
+            state["backoff_multiplier"] = backoff_multiplier
         max_backoff = _coerce_duration_seconds(
             source.get("max_backoff_ms"),
             default_value=source.get("max_backoff"),
@@ -12889,15 +12887,18 @@ def resolve_torii_client_config(
         methods = _parse_retry_methods(source.get("retry_methods"))
         if methods is not None:
             state["retry_methods"] = methods
-        headers = _normalize_headers(source.get("default_headers"))
-        if headers:
-            state["default_headers"].update(headers)
+        headers = _copy_http_headers(
+            _normalize_headers(source.get("default_headers")),
+            "default_headers",
+        )
+        for name, value in headers.items():
+            _set_exact_header(state["default_headers"], name, value)
         auth_token = source.get("auth_token")
         if auth_token is not None:
-            state["auth_token"] = str(auth_token)
+            state["auth_token"] = _require_route_token(auth_token, "auth_token")
         api_token = source.get("api_token")
         if api_token is not None:
-            state["api_token"] = str(api_token)
+            state["api_token"] = _require_route_token(api_token, "api_token")
         policy_override = source.get("sorafs_alias_policy")
         if policy_override is not None:
             state["sorafs_alias_policy"] = _coerce_sorafs_policy_value(
@@ -12910,43 +12911,42 @@ def resolve_torii_client_config(
         if "toriiConfig" in config:
             raise TypeError("toriiConfig is not supported; use torii")
         torii_section = config.get("torii")
+        if "torii" in config and not isinstance(torii_section, Mapping):
+            raise TypeError("config['torii'] must be a mapping")
         token = _pick_api_token(torii_section)
         if token and not state["api_token"]:
             state["api_token"] = token
 
-    env_vars = os.environ if env is None else env
-    apply_source(
-        {
-            "timeout_ms": env_vars.get(_TORII_ENV_KEYS["timeout_ms"]),
-            "max_retries": env_vars.get(_TORII_ENV_KEYS["max_retries"]),
-            "backoff_initial_ms": env_vars.get(_TORII_ENV_KEYS["backoff_initial_ms"]),
-            "backoff_multiplier": env_vars.get(_TORII_ENV_KEYS["backoff_multiplier"]),
-            "max_backoff_ms": env_vars.get(_TORII_ENV_KEYS["max_backoff_ms"]),
-            "retry_statuses": env_vars.get(_TORII_ENV_KEYS["retry_statuses"]),
-            "retry_methods": env_vars.get(_TORII_ENV_KEYS["retry_methods"]),
-            "api_token": env_vars.get(_TORII_ENV_KEYS["api_token"]),
-            "auth_token": env_vars.get(_TORII_ENV_KEYS["auth_token"]),
-        }
-    )
+    if env is not None:
+        apply_source(
+            {
+                "timeout_ms": env.get(_TORII_ENV_KEYS["timeout_ms"]),
+                "max_retries": env.get(_TORII_ENV_KEYS["max_retries"]),
+                "backoff_initial_ms": env.get(_TORII_ENV_KEYS["backoff_initial_ms"]),
+                "backoff_multiplier": env.get(_TORII_ENV_KEYS["backoff_multiplier"]),
+                "max_backoff_ms": env.get(_TORII_ENV_KEYS["max_backoff_ms"]),
+                "retry_statuses": env.get(_TORII_ENV_KEYS["retry_statuses"]),
+                "retry_methods": env.get(_TORII_ENV_KEYS["retry_methods"]),
+                "api_token": env.get(_TORII_ENV_KEYS["api_token"]),
+                "auth_token": env.get(_TORII_ENV_KEYS["auth_token"]),
+            }
+        )
 
     apply_source(overrides)
 
     headers = dict(state["default_headers"])
     if not any(key.lower() == "accept" for key in headers):
         headers["Accept"] = "application/json"
-
-    max_backoff = state["max_backoff"]
-    if max_backoff <= 0:
-        max_backoff = math.inf
+    _reject_reserved_default_headers(headers, "default_headers")
 
     return ResolvedToriiClientConfig(
-        timeout=max(state["timeout"], 0.0),
-        max_retries=max(0, int(state["max_retries"])),
-        backoff_initial=max(state["backoff_initial"], 0.0),
-        backoff_multiplier=max(state["backoff_multiplier"], 1.0),
-        max_backoff=max_backoff,
-        retry_statuses=frozenset(int(code) for code in state["retry_statuses"]),
-        retry_methods=frozenset(method.upper() for method in state["retry_methods"]),
+        timeout=state["timeout"],
+        max_retries=state["max_retries"],
+        backoff_initial=state["backoff_initial"],
+        backoff_multiplier=state["backoff_multiplier"],
+        max_backoff=state["max_backoff"],
+        retry_statuses=frozenset(state["retry_statuses"]),
+        retry_methods=frozenset(state["retry_methods"]),
         default_headers=headers,
         auth_token=state["auth_token"],
         api_token=state["api_token"],
@@ -12957,12 +12957,15 @@ def resolve_torii_client_config(
 def _extract_torii_client_section(config: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:
     if not config:
         return {}
-    if isinstance(config, Mapping):
-        if "toriiClient" in config:
-            raise TypeError("toriiClient is not supported; use torii_client")
-        nested = config.get("torii_client")
-        if isinstance(nested, Mapping):
-            return nested
+    if not isinstance(config, Mapping):
+        raise TypeError("config must be a mapping")
+    if "toriiClient" in config:
+        raise TypeError("toriiClient is not supported; use torii_client")
+    if "torii_client" in config:
+        nested = config["torii_client"]
+        if not isinstance(nested, Mapping):
+            raise TypeError("config['torii_client'] must be a mapping")
+        return nested
     return config
 
 
@@ -13067,10 +13070,16 @@ def _pick_api_token(torii_section: Optional[Mapping[str, Any]]) -> Optional[str]
     if "apiTokens" in torii_section:
         raise TypeError("apiTokens is not supported; use api_tokens")
     tokens = torii_section.get("api_tokens")
-    if isinstance(tokens, (list, tuple)) and tokens:
-        return str(tokens[0])
+    if isinstance(tokens, (list, tuple)):
+        normalized = [
+            _require_route_token(token, f"torii.api_tokens[{index}]")
+            for index, token in enumerate(tokens)
+        ]
+        return normalized[0] if normalized else None
     if isinstance(tokens, str):
-        return tokens
+        return _require_route_token(tokens, "torii.api_tokens")
+    if tokens is not None and not isinstance(tokens, (list, tuple)):
+        raise TypeError("torii.api_tokens must be a string or sequence of strings")
     return None
 
 
@@ -13384,8 +13393,9 @@ __all__ = [
 _PIPELINE_STATUS_KINDS = frozenset(
     {"Queued", "Approved", "Committed", "Applied", "Rejected", "Expired"}
 )
-_DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
+_DEFAULT_RETRY_STATUSES = frozenset({429, 502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_HTTP_METHODS = frozenset({"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"})
 _ZK_X509_PRIVACY_PROTOCOL_ID_V1 = "iroha-zk-x509-stark-p256-v1"
 _CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1 = b"iroha:contract-call-batch-binding:v1\0"
 _CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1 = b"iroha:contract-call-batch-arguments:v1\0"
@@ -13397,6 +13407,110 @@ _CONTRACT_CALL_RESERVED_METADATA_PREFIXES = ("contract_", "validation_fee_")
 _CONTRACT_CALL_RESERVED_METADATA_KEYS = frozenset(
     {"fee_sponsor", "fee_sponsor_account", "gas_asset_id", "gas_limit"}
 )
+
+
+def _normalize_torii_base_url(value: Any) -> str:
+    """Return an origin-only HTTP(S) URL suitable for Torii requests."""
+
+    if not isinstance(value, str):
+        raise TypeError("base_url must be a string")
+    if not value or value != value.strip():
+        raise ValueError("base_url must be a non-empty URL without surrounding whitespace")
+    if "\\" in value or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
+        raise ValueError("base_url must not contain backslashes, spaces, or control characters")
+    parsed = urlparse(value)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("base_url must use http or https")
+    if not parsed.netloc or parsed.hostname is None:
+        raise ValueError("base_url must include a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("base_url must not include credentials")
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("base_url must contain only an origin, without a path, query, or fragment")
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("base_url contains an invalid port") from exc
+    return urlunparse((parsed.scheme.lower(), parsed.netloc, "", "", "", ""))
+
+
+def _normalize_request_path(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TypeError("path must be a string")
+    if not value.startswith("/") or value.startswith("//"):
+        raise ValueError("path must be an origin-relative path beginning with one slash")
+    if "\\" in value or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
+        raise ValueError("path must not contain backslashes, spaces, or control characters")
+    parsed = urlparse(value)
+    if parsed.scheme or parsed.netloc or parsed.fragment:
+        raise ValueError("path must not contain an origin or fragment")
+    return value
+
+
+def _normalize_http_method(value: Any) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise TypeError("method must be a non-empty HTTP method string")
+    normalized = value.upper()
+    if normalized not in _HTTP_METHODS:
+        raise ValueError(f"unsupported HTTP method {value!r}")
+    return normalized
+
+
+def _require_positive_finite_float(value: Any, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{context} must be a finite positive number")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized <= 0.0:
+        raise ValueError(f"{context} must be a finite positive number")
+    return normalized
+
+
+def _require_non_negative_finite_float(value: Any, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{context} must be a finite non-negative number")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"{context} must be a finite non-negative number")
+    return normalized
+
+
+def _require_retry_count(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("max_retries must be a non-negative integer")
+    if value < 0:
+        raise ValueError("max_retries must be a non-negative integer")
+    return value
+
+
+def _normalize_retry_statuses(value: Optional[Iterable[Any]]) -> frozenset[int]:
+    if value is None:
+        return _DEFAULT_RETRY_STATUSES
+    if isinstance(value, (str, bytes, bytearray)):
+        raise TypeError("retry_on_status must be an iterable of HTTP status integers")
+    result: set[int] = set()
+    for status in value:
+        if isinstance(status, bool) or not isinstance(status, int):
+            raise TypeError("retry_on_status entries must be HTTP status integers")
+        if not 400 <= status <= 599:
+            raise ValueError("retry_on_status entries must be HTTP error statuses (400..599)")
+        result.add(status)
+    return frozenset(result)
+
+
+def _normalize_retry_methods(value: Optional[Iterable[Any]]) -> frozenset[str]:
+    if value is None:
+        return _DEFAULT_RETRY_METHODS
+    if isinstance(value, (str, bytes, bytearray)):
+        raise TypeError("retry_on_methods must be an iterable of HTTP method strings")
+    result: set[str] = set()
+    for method in value:
+        if not isinstance(method, str) or not method or method != method.strip():
+            raise TypeError("retry_on_methods entries must be non-empty HTTP method strings")
+        normalized = method.upper()
+        if normalized not in _HTTP_METHODS:
+            raise ValueError(f"retry_on_methods contains unsupported HTTP method {method!r}")
+        result.add(normalized)
+    return frozenset(result)
 
 
 def _transaction_wait_seconds(value: Any, *, context: str) -> float:
@@ -13541,15 +13655,8 @@ class ToriiClient(
     _ToriiClientStreamingQueryMixin,
     _BaseToriiClient,
 ):
-    """Convenience wrapper that exposes Torii attachment/prover APIs under `iroha_python`.
+    """Typed, fail-closed HTTP client for Torii's first-release API."""
 
-    The implementation delegates to :class:`iroha_torii_client.client.ToriiClient`
-    so existing behaviour stays intact while we grow a richer, higher-level SDK.
-    """
-
-    # NOTE: `iroha_torii_client.client.ToriiClient` already implements the full
-    # API surface. This subclass only exists to document the export location and
-    # to leave room for SDK-specific conveniences (e.g., auth interceptors).
     def __init__(
         self,
         base_url: str,
@@ -13561,12 +13668,11 @@ class ToriiClient(
         auth_token: Optional[str] = None,
         api_token: Optional[str] = None,
         default_headers: Optional[Mapping[str, str]] = None,
-        timeout: Optional[float] = 30.0,
+        timeout: float = 30.0,
         max_retries: int = 3,
-        backoff_factor: float = 0.5,
-        backoff_initial_ms: Optional[int] = None,
-        max_backoff_ms: Optional[int] = None,
-        backoff_multiplier: Optional[float] = None,
+        backoff_initial: float = 0.5,
+        backoff_max: float = 5.0,
+        backoff_multiplier: float = 2.0,
         retry_on_status: Optional[Sequence[int]] = None,
         retry_on_methods: Optional[Sequence[str]] = None,
         chain_discriminant: Optional[int] = None,
@@ -13574,69 +13680,116 @@ class ToriiClient(
         sorafs_alias_warning: Optional[Callable[[SorafsAliasWarning], None]] = None,
         sorafs_alias_logger: Optional[logging.Logger] = None,
     ) -> None:
-        super().__init__(base_url, session=session)
-        _reject_session_route_secrets(self._session)
+        if session is not None and not isinstance(session, requests.Session):
+            raise TypeError("session must be a requests.Session")
         if (
             local_signing_context is not None
             and not isinstance(local_signing_context, LocalSigningContext)
         ):
             raise TypeError("local_signing_context must be a LocalSigningContext")
-        self.__local_signing_context = local_signing_context
-        self._install_operator_signing_context(operator_signing_context)
-        if canonical_request_auth is not None:
-            canonical_request_auth = self._require_canonical_auth(
-                canonical_request_auth, "canonical_request_auth"
+        base_local_signing_context = (
+            None
+            if local_signing_context is None
+            else _BaseLocalSigningContext(
+                network_id=local_signing_context.network_id.literal,
             )
-            self._require_exact_i105_account_id(
+        )
+        normalized_base_url = _normalize_torii_base_url(base_url)
+        if operator_signing_context is not None and not isinstance(
+            operator_signing_context,
+            OperatorSigningContext,
+        ):
+            raise TypeError(
+                "operator_signing_context must be an OperatorSigningContext"
+            )
+        if canonical_request_auth is not None:
+            if not isinstance(canonical_request_auth, ToriiCanonicalRequestAuth):
+                raise TypeError(
+                    "canonical_request_auth must be a ToriiCanonicalRequestAuth"
+                )
+            _BaseToriiClient._require_exact_i105_account_id(
                 canonical_request_auth.account_id,
                 "canonical_request_auth.account_id",
             )
-        self._canonical_request_auth = canonical_request_auth
-        self._chain_discriminant = normalize_i105_discriminant(
+        normalized_chain_discriminant = normalize_i105_discriminant(
             DEFAULT_I105_DISCRIMINANT if chain_discriminant is None else chain_discriminant,
             "chain_discriminant",
         )
-        self._timeout = timeout
-        self._max_retries = max(0, int(max_retries))
-        self._retry_statuses = (
-            set(retry_on_status) if retry_on_status is not None else set(_DEFAULT_RETRY_STATUSES)
+        normalized_timeout = _require_positive_finite_float(timeout, "timeout")
+        normalized_max_retries = _require_retry_count(max_retries)
+        normalized_retry_statuses = _normalize_retry_statuses(retry_on_status)
+        normalized_retry_methods = _normalize_retry_methods(retry_on_methods)
+        normalized_headers: Dict[str, str] = {"Accept": "application/json"}
+        if default_headers is not None:
+            copied_headers = _copy_http_headers(default_headers, "default_headers")
+            _reject_reserved_default_headers(copied_headers, "default_headers")
+            for name, value in copied_headers.items():
+                _set_exact_header(normalized_headers, name, value)
+        normalized_auth_token = (
+            None
+            if auth_token is None
+            else _require_route_token(auth_token, "auth_token")
         )
-        self._retry_methods = {
-            method.upper()
-            for method in (
-                retry_on_methods if retry_on_methods is not None else _DEFAULT_RETRY_METHODS
-            )
-        }
-        self._default_headers: Dict[str, str] = {"Accept": "application/json"}
-        if default_headers:
-            _reject_reserved_default_headers(default_headers, "default_headers")
-            self._default_headers.update(default_headers)
-        self._auth_token: Optional[str] = None
-        self._api_token: Optional[str] = None
-        self._status_state = _ToriiStatusState()
-        if auth_token:
-            self.set_auth_token(auth_token)
-        if api_token:
-            self.set_api_token(api_token)
-        if (
-            backoff_initial_ms is not None
-            or max_backoff_ms is not None
-            or backoff_multiplier is not None
-        ):
-            self._backoff_initial = max(0.0, (backoff_initial_ms or 0) / 1000.0)
+        normalized_api_token = (
+            None
+            if api_token is None
+            else _require_route_token(api_token, "api_token")
+        )
+        normalized_backoff_initial = _require_non_negative_finite_float(
+            backoff_initial,
+            "backoff_initial",
+        )
+        normalized_backoff_max = _require_non_negative_finite_float(
+            backoff_max,
+            "backoff_max",
+        )
+        normalized_backoff_multiplier = _require_positive_finite_float(
+            backoff_multiplier,
+            "backoff_multiplier",
+        )
+        if normalized_backoff_multiplier < 1.0:
+            raise ValueError("backoff_multiplier must be at least 1")
+        if normalized_backoff_max < normalized_backoff_initial:
+            raise ValueError("backoff_max must be greater than or equal to backoff_initial")
+        normalized_sorafs_alias_policy = _normalize_sorafs_policy_config(
+            sorafs_alias_policy
+        )
 
-            self._backoff_multiplier = max(
-                1.0, backoff_multiplier if backoff_multiplier is not None else 2.0
+        self._owns_session = session is None
+        effective_session = session if session is not None else requests.Session()
+        if self._owns_session:
+            effective_session.trust_env = False
+        try:
+            super().__init__(
+                normalized_base_url,
+                session=effective_session,
+                local_signing_context=base_local_signing_context,
             )
-            if max_backoff_ms is None or max_backoff_ms <= 0:
-                self._backoff_cap = math.inf
-            else:
-                self._backoff_cap = max(0.0, max_backoff_ms / 1000.0)
-        else:
-            self._backoff_initial = max(0.0, float(backoff_factor))
-            self._backoff_multiplier = 2.0
-            self._backoff_cap = math.inf
-        self._sorafs_alias_policy = _normalize_sorafs_policy_config(sorafs_alias_policy)
+            _reject_session_route_secrets(self._session)
+        except BaseException:
+            if self._owns_session:
+                effective_session.close()
+            raise
+        self.__local_signing_context = local_signing_context
+        self._install_operator_signing_context(operator_signing_context)
+        self._canonical_request_auth = canonical_request_auth
+        self._chain_discriminant = normalized_chain_discriminant
+        self._timeout = normalized_timeout
+        self._max_retries = normalized_max_retries
+        self._retry_statuses = normalized_retry_statuses
+        self._retry_methods = normalized_retry_methods
+        self._default_headers = normalized_headers
+        self._auth_token = normalized_auth_token
+        self._api_token = normalized_api_token
+        self._status_state = _ToriiStatusState()
+        if normalized_auth_token is not None:
+            self._default_headers["Authorization"] = f"Bearer {normalized_auth_token}"
+        if normalized_api_token is not None:
+            self._default_headers["X-API-Token"] = normalized_api_token
+        self._backoff_initial = normalized_backoff_initial
+        self._backoff_cap = normalized_backoff_max
+        self._backoff_multiplier = normalized_backoff_multiplier
+        self._sorafs_alias_policy = normalized_sorafs_alias_policy
         self._sorafs_alias_warning_hook = sorafs_alias_warning
         self._sorafs_alias_logger = sorafs_alias_logger or logging.getLogger(
             "iroha_python.sorafs.client"
@@ -13645,6 +13798,21 @@ class ToriiClient(
         self._last_sorafs_alias_evaluation: Optional[SorafsAliasEvaluation] = None
         self._data_model_validation = "unknown"
         self._data_model_actual: Optional[int] = None
+
+    def close(self) -> None:
+        """Close the internally created HTTP session.
+
+        A caller-supplied session remains owned by the caller and is not closed.
+        """
+
+        if self._owns_session:
+            self._session.close()
+
+    def __enter__(self) -> "ToriiClient":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
+        self.close()
 
     @property
     def local_signing_context(self) -> Optional[LocalSigningContext]:
@@ -14007,13 +14175,19 @@ class ToriiClient(
         if (private_key is None) == (private_key_hex is None):
             raise ValueError("provide exactly one of private_key or private_key_hex")
         if private_key_hex is not None:
-            try:
-                return bytes.fromhex(private_key_hex)
-            except ValueError as error:
-                raise ValueError("private_key_hex must be valid hexadecimal") from error
-        if not isinstance(private_key, (bytes, bytearray, memoryview)):
-            raise TypeError("private_key must be bytes-like")
-        return bytes(private_key)
+            if (
+                type(private_key_hex) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", private_key_hex) is None
+            ):
+                raise ValueError(
+                    "private_key_hex must contain exactly 64 lowercase hexadecimal characters"
+                )
+            return bytes.fromhex(private_key_hex)
+        if type(private_key) is not bytes:
+            raise TypeError("private_key must be exact immutable bytes")
+        if len(private_key) != 32:
+            raise ValueError("private_key must contain exactly 32 bytes")
+        return private_key
 
     @staticmethod
     def _native_query_response_bytes(
@@ -14349,14 +14523,12 @@ class ToriiClient(
         *,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
-        instructions: Optional[Iterable["Instruction"]] = None,
-        **sign_overrides: Any,
     ) -> tuple["SignedTransactionEnvelope", Optional[Any]]:
         """Sign a :class:`TransactionDraft` and submit it to Torii.
 
-        Exactly one of ``private_key`` or ``private_key_hex`` must be provided. Additional
-        keyword arguments are forwarded to :meth:`TransactionDraft.sign`, allowing callers to
-        override fields such as ``creation_time_ms`` or ``ttl_ms``.
+        Exactly one of ``private_key`` or ``private_key_hex`` must be provided.
+        The signed payload is exactly the immutable config and staged entries on
+        ``draft``; submission-time transaction overrides are not accepted.
         """
 
         if (private_key is None) and (private_key_hex is None):
@@ -14368,8 +14540,6 @@ class ToriiClient(
             draft,
             private_key=private_key,
             private_key_hex=private_key_hex,
-            instructions=instructions,
-            **sign_overrides,
         )
         status = self.submit_transaction_envelope(envelope)
         return envelope, status
@@ -14386,12 +14556,10 @@ class ToriiClient(
         *,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
-        instructions: Optional[Iterable["Instruction"]] = None,
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
-        **sign_overrides: Any,
     ) -> Any:
         """Sign a draft, submit it, and wait for the transaction to reach a terminal status."""
 
@@ -14399,8 +14567,6 @@ class ToriiClient(
             draft,
             private_key=private_key,
             private_key_hex=private_key_hex,
-            instructions=instructions,
-            **sign_overrides,
         )
         return self.submit_transaction_envelope_and_wait(
             envelope,
@@ -14416,8 +14582,6 @@ class ToriiClient(
         *,
         private_key: Optional[bytes],
         private_key_hex: Optional[str],
-        instructions: Optional[Iterable["Instruction"]],
-        **sign_overrides: Any,
     ) -> "SignedTransactionEnvelope":
         if private_key is None and private_key_hex is None:
             raise ValueError("provide either `private_key` or `private_key_hex`")
@@ -14425,17 +14589,9 @@ class ToriiClient(
             raise ValueError("provide only one of `private_key` or `private_key_hex`")
 
         if private_key_hex is not None:
-            return draft.sign_hex_private_key(
-                private_key_hex,
-                instructions=instructions,
-                **sign_overrides,
-            )
+            return draft.sign_hex_private_key(private_key_hex)
         assert private_key is not None
-        return draft.sign(
-            private_key,
-            instructions=instructions,
-            **sign_overrides,
-        )
+        return draft.sign(private_key)
 
     def submit_transaction_json_and_wait(
         self,
@@ -14485,28 +14641,32 @@ class ToriiClient(
     def set_auth_token(self, token: Optional[str]) -> None:
         """Configure (or clear) the Authorization bearer token."""
 
-        if token:
-            self._auth_token = token
-            self._default_headers["Authorization"] = f"Bearer {token}"
-        else:
+        if token is None:
             self._auth_token = None
             self._default_headers.pop("Authorization", None)
+            return
+        normalized = _require_route_token(token, "auth_token")
+        self._auth_token = normalized
+        self._default_headers["Authorization"] = f"Bearer {normalized}"
 
     def set_api_token(self, token: Optional[str]) -> None:
         """Configure (or clear) the Torii `X-API-Token` header."""
 
-        if token:
-            self._api_token = token
-            self._default_headers["X-API-Token"] = token
-        else:
+        if token is None:
             self._api_token = None
             self._default_headers.pop("X-API-Token", None)
+            return
+        normalized = _require_route_token(token, "api_token")
+        self._api_token = normalized
+        self._default_headers["X-API-Token"] = normalized
 
     def update_default_headers(self, headers: Mapping[str, str]) -> None:
         """Merge `headers` into the default header set applied to every request."""
 
-        _reject_reserved_default_headers(headers, "headers")
-        self._default_headers.update(headers)
+        copied_headers = _copy_http_headers(headers, "headers")
+        _reject_reserved_default_headers(copied_headers, "headers")
+        for name, value in copied_headers.items():
+            _set_exact_header(self._default_headers, name, value)
 
     def request_json(
         self,
@@ -14679,7 +14839,7 @@ class ToriiClient(
             params=params,
             headers=headers,
             allow_retry=canonical_auth is None,
-            allow_redirects=canonical_auth is None,
+            allow_redirects=False,
         )
 
     def _get_explorer_response(
@@ -15895,8 +16055,6 @@ class ToriiClient(
             max_retries=0,
             decode_json=True,
             allow_resume=False,
-            allow_redirects=False,
-            strict_utf8=True,
             maximum_event_bytes=_SORAFS_REPUTATION_SSE_MAX_EVENT_BYTES,
             json_loader=_decode_sorafs_reputation_sse_json,
             expected_content_type="text/event-stream",
@@ -16969,14 +17127,8 @@ class ToriiClient(
 
         return self.request_json("GET", "/v1/health", expected_status=(200,))
 
-    def get_configuration(self) -> Mapping[str, Any]:
-        """Return the current node configuration as a JSON mapping."""
-
-        snapshot = self.get_configuration_typed()
-        return _configuration_snapshot_to_dict(snapshot)
-
-    def get_configuration_typed(self) -> ConfigurationSnapshot:
-        """Typed operator-authenticated node configuration snapshot."""
+    def get_configuration(self) -> ConfigurationSnapshot:
+        """Return the validated operator-authenticated node configuration."""
 
         response = self._operator_get(
             "/v1/configuration",
@@ -16989,18 +17141,10 @@ class ToriiClient(
             raise TypeError("configuration response must be a JSON object")
         return ConfigurationSnapshot.from_payload(payload)
 
-    def get_confidential_gas_schedule(self) -> Optional[Mapping[str, int]]:
-        """Return the read-only confidential gas schedule as a mapping, when available."""
+    def get_confidential_gas_schedule(self) -> Optional[ConfidentialGasSchedule]:
+        """Return the validated confidential verification gas schedule, when available."""
 
-        schedule = self.get_confidential_gas_schedule_typed()
-        if schedule is None:
-            return None
-        return schedule.to_payload()
-
-    def get_confidential_gas_schedule_typed(self) -> Optional[ConfidentialGasSchedule]:
-        """Typed read-only confidential verification gas schedule."""
-
-        snapshot = self.get_configuration_typed()
+        snapshot = self.get_configuration()
         return snapshot.confidential_gas
 
     def set_network_gossip_config(
@@ -17017,7 +17161,7 @@ class ToriiClient(
         and posts the updated `network` payload so PY6 admin-surface evidence can remain deterministic.
         """
 
-        snapshot = self.get_configuration_typed()
+        snapshot = self.get_configuration()
         payload = _configuration_update_payload(snapshot)
         payload["network"] = {
             "block_gossip_size": _normalize_positive_int(
@@ -17044,7 +17188,7 @@ class ToriiClient(
         mirrors the node's existing state. Confidential gas is startup-only and is omitted.
         """
 
-        snapshot = self.get_configuration_typed()
+        snapshot = self.get_configuration()
         payload = _configuration_update_payload(snapshot)
         payload["queue"] = {
             "capacity": _normalize_positive_int(capacity, "queue.capacity", allow_zero=False)
@@ -17213,25 +17357,13 @@ class ToriiClient(
             raise TypeError("kaigi relays health response must be an object")
         return KaigiRelayHealthSnapshot.from_payload(payload)
 
-    def get_time_now(self) -> Mapping[str, int]:
-        """Return the Network Time Service snapshot as a mapping."""
-
-        snapshot = self.get_time_now_typed()
-        return _network_time_snapshot_to_dict(snapshot)
-
-    def get_time_now_typed(self) -> NetworkTimeSnapshot:
-        """Typed Network Time Service snapshot."""
+    def get_time_now(self) -> NetworkTimeSnapshot:
+        """Return the validated Network Time Service snapshot."""
 
         return super().get_time_now()
 
-    def get_time_status(self) -> Mapping[str, Any]:
-        """Return Network Time Service diagnostics as a mapping."""
-
-        status = self.get_time_status_typed()
-        return _network_time_status_to_dict(status)
-
-    def get_time_status_typed(self) -> NetworkTimeStatus:
-        """Typed operator-authenticated node-local Network Time Service diagnostics."""
+    def get_time_status(self) -> NetworkTimeStatus:
+        """Return validated operator-authenticated Network Time Service diagnostics."""
 
         response = self._operator_get(
             "/v1/time/status",
@@ -17873,26 +18005,42 @@ class ToriiClient(
         json_body: Optional[Mapping[str, Any]] = None,
         timeout: Optional[float] = None,
         allow_retry: bool = True,
-        allow_redirects: bool = True,
+        allow_redirects: bool = False,
         stream: bool = False,
     ) -> requests.Response:
         if json_body is not None and data is not None:
             raise ValueError("provide either `json_body` or `data`, not both")
+        if params is not None and not isinstance(params, Mapping):
+            raise TypeError("params must be a mapping")
+        if json_body is not None and not isinstance(json_body, Mapping):
+            raise TypeError("json_body must be a mapping")
+        if data is not None and type(data) is not bytes:
+            raise TypeError("data must be exact immutable bytes")
+
+        normalized_path = _normalize_request_path(path)
 
         final_headers: Dict[str, str] = dict(self._default_headers)
-        if headers:
-            for name, value in headers.items():
-                _set_exact_header(final_headers, str(name), str(value))
+        if headers is not None:
+            for name, value in _copy_http_headers(headers, "headers").items():
+                _set_exact_header(final_headers, name, value)
 
         payload: Optional[bytes]
         if json_body is not None:
-            payload = json.dumps(json_body).encode("utf-8")
+            payload = json.dumps(
+                json_body,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
             final_headers.setdefault("Content-Type", "application/json")
         else:
             payload = data
 
-        method_upper = method.upper()
-        request_timeout = timeout if timeout is not None else self._timeout
+        method_upper = _normalize_http_method(method)
+        request_timeout = (
+            self._timeout
+            if timeout is None
+            else _require_positive_finite_float(timeout, "timeout")
+        )
         if isinstance(headers, _CanonicalRequestHeaderPlan):
             signed_headers: Mapping[str, str] = _CanonicalRequestHeaderPlan(
                 final_headers,
@@ -17910,7 +18058,7 @@ class ToriiClient(
             response = _BaseToriiClient._request(
                 self,
                 method_upper,
-                path,
+                normalized_path,
                 params=params,
                 headers=signed_headers,
                 data=payload,
@@ -17924,7 +18072,8 @@ class ToriiClient(
 
         retry_enabled = allow_retry and method_upper in self._retry_methods
         max_attempts = 1 + (self._max_retries if retry_enabled else 0)
-        url = f"{self._base_url}{path}"
+        url = f"{self._base_url}{normalized_path}"
+        _require_zero_retry_adapter(self._session, url)
 
         delay = self._backoff_initial
         for attempt in range(max_attempts):
@@ -17950,6 +18099,7 @@ class ToriiClient(
                 and response.status_code in self._retry_statuses
                 and attempt < max_attempts - 1
             ):
+                response.close()
                 delay = self._apply_backoff(delay)
                 continue
 
@@ -17967,9 +18117,7 @@ class ToriiClient(
         if delay <= 0.0:
             return 0.0
         next_delay = delay * self._backoff_multiplier
-        if self._backoff_cap != math.inf:
-            next_delay = min(self._backoff_cap, next_delay)
-        return next_delay
+        return min(self._backoff_cap, next_delay)
 
     def build_and_submit_transaction(
         self,
@@ -18349,14 +18497,11 @@ class ToriiClient(
         timeout: Optional[float] = 30.0,
         max_attempts: Optional[int] = None,
         on_status: Optional[Callable[[Optional[str], Any, int], None]] = None,
-        **sign_overrides: Any,
     ) -> Mapping[str, Any]:
         envelope = self._sign_transaction_draft(
             draft,
             private_key=private_key,
             private_key_hex=private_key_hex,
-            instructions=None,
-            **sign_overrides,
         )
         hash_hex = self._envelope_hash_hex(envelope)
         try:
@@ -22746,7 +22891,6 @@ class ToriiClient(
             timeout=timeout,
             max_retries=0,
             backoff_base=backoff_base,
-            allow_redirects=False,
             decode_json=decode_json,
             on_event=_handle if on_event is not None else None,
         )
@@ -23233,23 +23377,38 @@ def create_torii_client(
     session: Optional[requests.Session] = None,
     local_signing_context: Optional[LocalSigningContext] = None,
     operator_signing_context: Optional[OperatorSigningContext] = None,
+    canonical_request_auth: Optional[ToriiCanonicalRequestAuth] = None,
     auth_token: Optional[str] = None,
     api_token: Optional[str] = None,
     default_headers: Optional[Mapping[str, str]] = None,
-    timeout: Optional[float] = 30.0,
-    max_retries: int = 3,
-    backoff_factor: float = 0.5,
+    timeout: Optional[float] = None,
+    max_retries: Optional[int] = None,
+    backoff_initial: Optional[float] = None,
+    backoff_max: Optional[float] = None,
+    backoff_multiplier: Optional[float] = None,
     retry_on_status: Optional[Sequence[int]] = None,
     retry_on_methods: Optional[Sequence[str]] = None,
     config: Optional[Mapping[str, Any]] = None,
     env: Optional[Mapping[str, str]] = None,
     overrides: Optional[Mapping[str, Any]] = None,
     resolved_config: Optional[ResolvedToriiClientConfig] = None,
+    chain_discriminant: Optional[int] = None,
     sorafs_alias_policy: Optional[Union[SorafsAliasPolicy, Mapping[str, Any]]] = None,
     sorafs_alias_warning: Optional[Callable[[SorafsAliasWarning], None]] = None,
     sorafs_alias_logger: Optional[logging.Logger] = None,
 ) -> ToriiClient:
-    """Return a :class:`ToriiClient` instance with the given base URL."""
+    """Create a client with deterministic config, then explicit keyword overrides."""
+
+    if resolved_config is not None and not isinstance(
+        resolved_config, ResolvedToriiClientConfig
+    ):
+        raise TypeError("resolved_config must be a ResolvedToriiClientConfig")
+    if resolved_config is not None and any(
+        source is not None for source in (config, env, overrides)
+    ):
+        raise ValueError(
+            "resolved_config cannot be combined with config, env, or overrides"
+        )
     resolved = resolved_config
     if resolved is None and (config is not None or overrides is not None or env is not None):
         resolved = resolve_torii_client_config(config=config, env=env, overrides=overrides)
@@ -23257,8 +23416,12 @@ def create_torii_client(
     header_merge: Dict[str, str] = (
         dict(resolved.default_headers) if resolved is not None else {"Accept": "application/json"}
     )
-    if default_headers:
-        header_merge.update(default_headers)
+    if default_headers is not None:
+        for name, value in _copy_http_headers(
+            default_headers,
+            "default_headers",
+        ).items():
+            _set_exact_header(header_merge, name, value)
 
     auth_value = (
         auth_token if auth_token is not None else (resolved.auth_token if resolved else None)
@@ -23267,6 +23430,21 @@ def create_torii_client(
     timeout_value = timeout if timeout is not None else (resolved.timeout if resolved else 30.0)
     max_retries_value = (
         max_retries if max_retries is not None else (resolved.max_retries if resolved else 3)
+    )
+    backoff_initial_value = (
+        backoff_initial
+        if backoff_initial is not None
+        else (resolved.backoff_initial if resolved else 0.5)
+    )
+    backoff_max_value = (
+        backoff_max
+        if backoff_max is not None
+        else (resolved.max_backoff if resolved else 5.0)
+    )
+    backoff_multiplier_value = (
+        backoff_multiplier
+        if backoff_multiplier is not None
+        else (resolved.backoff_multiplier if resolved else 2.0)
     )
     retry_statuses = (
         retry_on_status
@@ -23278,17 +23456,6 @@ def create_torii_client(
         if retry_on_methods is not None
         else (list(resolved.retry_methods) if resolved else None)
     )
-    if resolved is not None:
-        backoff_initial_ms = int(resolved.backoff_initial * 1000)
-        max_backoff_ms = (
-            None if math.isinf(resolved.max_backoff) else int(resolved.max_backoff * 1000)
-        )
-        backoff_mult = resolved.backoff_multiplier
-    else:
-        backoff_initial_ms = None
-        max_backoff_ms = None
-        backoff_mult = None
-
     policy_value: Optional[Union[SorafsAliasPolicy, Mapping[str, Any]]] = sorafs_alias_policy
     if policy_value is None and resolved is not None:
         policy_value = resolved.sorafs_alias_policy
@@ -23298,17 +23465,18 @@ def create_torii_client(
         session=session,
         local_signing_context=local_signing_context,
         operator_signing_context=operator_signing_context,
+        canonical_request_auth=canonical_request_auth,
         auth_token=auth_value,
         api_token=api_value,
         default_headers=header_merge,
         timeout=timeout_value,
         max_retries=max_retries_value,
-        backoff_factor=backoff_factor,
-        backoff_initial_ms=backoff_initial_ms,
-        max_backoff_ms=max_backoff_ms,
-        backoff_multiplier=backoff_mult,
+        backoff_initial=backoff_initial_value,
+        backoff_max=backoff_max_value,
+        backoff_multiplier=backoff_multiplier_value,
         retry_on_status=retry_statuses,
         retry_on_methods=retry_methods,
+        chain_discriminant=chain_discriminant,
         sorafs_alias_policy=policy_value,
         sorafs_alias_warning=sorafs_alias_warning,
         sorafs_alias_logger=sorafs_alias_logger,

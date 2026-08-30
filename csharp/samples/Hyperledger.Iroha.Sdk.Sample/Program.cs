@@ -1,4 +1,5 @@
-﻿using Hyperledger.Iroha;
+﻿using System.Security.Cryptography;
+using Hyperledger.Iroha;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
@@ -19,17 +20,18 @@ if (string.IsNullOrWhiteSpace(seedHex)
 
 var privateKeySeed = Convert.FromHexString(seedHex);
 var exactNetworkId = NetworkId.Parse(networkId);
+using var canonicalCredentials = new CanonicalRequestCredentials(
+    canonicalAccountId,
+    privateKeySeed);
 var toriiOptions = new ToriiClientOptions
 {
-    LocalSigningContext = new ToriiLocalSigningContext(exactNetworkId),
-    CanonicalRequestCredentials = new CanonicalRequestCredentials(
-        canonicalAccountId,
-        privateKeySeed),
+    NetworkId = exactNetworkId,
+    CanonicalRequestCredentials = canonicalCredentials,
 };
 
 using var client = new IrohaClient(
     new Uri(baseUrl, UriKind.Absolute),
-    toriiOptions: toriiOptions);
+    toriiOptions);
 try
 {
     var capabilities = await client.Torii.GetNodeCapabilitiesAsync();
@@ -71,4 +73,8 @@ catch (ToriiApiException exception)
 catch (Exception exception)
 {
     Console.WriteLine($"Torii call failed: {exception.Message}");
+}
+finally
+{
+    CryptographicOperations.ZeroMemory(privateKeySeed);
 }

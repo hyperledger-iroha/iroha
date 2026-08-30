@@ -450,6 +450,10 @@ pub mod uri {
     pub const NEXUS_LANE_LIFECYCLE: &str = "/v1/nexus/lifecycle";
     /// URI to report status for administration
     pub const STATUS: &str = "/status";
+    /// Canonical committed block-height diagnostic.
+    pub const STATUS_BLOCKS: &str = crate::route_catalog::diagnostic::STATUS_BLOCKS.path();
+    /// Current online-peer-count diagnostic.
+    pub const STATUS_PEERS: &str = crate::route_catalog::diagnostic::STATUS_PEERS.path();
     ///  Metrics URI is used to export metrics according to [Prometheus
     ///  Guidance](https://prometheus.io/docs/instrumenting/writing_exporters/).
     pub const METRICS: &str = "/metrics";
@@ -493,12 +497,6 @@ pub mod uri {
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
     /// Node: latest persisted query projection checkpoint descriptor
     pub const NODE_QUERY_PROJECTION_CHECKPOINT: &str = "/v1/node/query/projection/checkpoint";
-    /// Node: validate uploaded shard refs and preview a rebuilt projection checkpoint
-    pub const NODE_QUERY_PROJECTION_CHECKPOINT_PLAN: &str =
-        "/v1/node/query/projection/checkpoint/plan";
-    /// Node: rebuild uploaded shard refs and persist the resulting projection checkpoint
-    pub const NODE_QUERY_PROJECTION_CHECKPOINT_PUBLISH: &str =
-        "/v1/node/query/projection/checkpoint/publish";
     /// Node: enumerate the canonical live query projection shard catalog for one resource family
     pub const NODE_QUERY_PROJECTION_SHARD_CATALOG: &str =
         "/v1/node/query/projection/catalog/{resource}";

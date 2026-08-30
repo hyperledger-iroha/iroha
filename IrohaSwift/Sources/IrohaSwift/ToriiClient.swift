@@ -18249,11 +18249,14 @@ public struct ToriiGovernanceInstruction: Decodable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         wireId = try container.decode(String.self, forKey: .wireId)
         guard !wireId.isEmpty,
-              wireId == wireId.trimmingCharacters(in: .whitespacesAndNewlines) else {
+              wireId.unicodeScalars.allSatisfy({ scalar in
+                  !CharacterSet.whitespacesAndNewlines.contains(scalar)
+                      && !CharacterSet.controlCharacters.contains(scalar)
+              }) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .wireId,
                 in: container,
-                debugDescription: "wire_id must be exact non-empty text"
+                debugDescription: "wire_id must be exact non-empty text without whitespace or control characters"
             )
         }
         payloadHex = try container.decode(String.self, forKey: .payloadHex)
@@ -22607,28 +22610,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                             idempotencyKey: String?,
                                             completion: @escaping (Result<ToriiSubmitTransactionResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.submitTransactionEntrypoint(data: data, idempotencyKey: idempotencyKey) }
-    }
-
-    @discardableResult
-    public func submitBridgeProof(
-        _ requestBody: ToriiBridgeProofSubmitRequest,
-        expectation: SccpBridgeResponseExpectation? = nil,
-        completion: @escaping (Result<SccpBridgeSubmitResponse, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.submitBridgeProof(requestBody, expectation: expectation)
-        }
-    }
-
-    @discardableResult
-    public func submitBridgeMessage(
-        _ requestBody: ToriiBridgeMessageSubmitRequest,
-        expectation: SccpBridgeResponseExpectation? = nil,
-        completion: @escaping (Result<SccpBridgeSubmitResponse, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.submitBridgeMessage(requestBody, expectation: expectation)
-        }
     }
 
     @discardableResult
@@ -27411,30 +27392,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                            exactSuccessStatus: 202)
     }
 
-    /// Submit one closed destination-proof artifact derived from authoritative route state.
-    public func submitBridgeProof(
-        _ requestBody: ToriiBridgeProofSubmitRequest,
-        expectation: SccpBridgeResponseExpectation? = nil
-    ) async throws -> SccpBridgeSubmitResponse {
-        try await postSccpBridgeSubmit(
-            path: "/v1/bridge/proofs/submit",
-            body: JSONEncoder().encode(requestBody),
-            expectation: expectation
-        )
-    }
-
-    /// Submit one protocol-native inbound SCCP proof.
-    public func submitBridgeMessage(
-        _ requestBody: ToriiBridgeMessageSubmitRequest,
-        expectation: SccpBridgeResponseExpectation? = nil
-    ) async throws -> SccpBridgeSubmitResponse {
-        try await postSccpBridgeSubmit(
-            path: "/v1/bridge/messages",
-            body: JSONEncoder().encode(requestBody),
-            expectation: expectation
-        )
-    }
-
     /// Request one bounded, account-authenticated, native-Norito Hijiri validation-fee quote.
     public func postValidationFeeHijiriQuote(
         _ quoteRequest: ValidationFeeHijiriQuoteRequestV1,
@@ -27829,25 +27786,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 maximumBytes: Self.sccpRecentMessagesResponseMaximumBytes
             )
         )
-    }
-
-    private func postSccpBridgeSubmit(
-        path: String,
-        body: Data,
-        expectation: SccpBridgeResponseExpectation?
-    ) async throws -> SccpBridgeSubmitResponse {
-        let request = try makeRequest(
-            path: path,
-            method: .post,
-            body: body,
-            headers: ["Content-Type": "application/json", "Accept": "application/json"]
-        )
-        let data = try await exactSccpJSONResponse(
-            request,
-            context: "SCCP bridge submit",
-            maximumBytes: Self.sccpDiscoveryResponseMaximumBytes
-        )
-        return try SccpBridgeSubmitResponse.parse(data, expectation: expectation)
     }
 
     private func sendBoundedSccpResponse(

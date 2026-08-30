@@ -770,8 +770,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_health_tool());
     tools.push(iroha_parameters_get_tool());
     tools.push(iroha_node_capabilities_tool());
-    tools.push(iroha_node_query_projection_checkpoint_plan_tool());
-    tools.push(iroha_node_query_projection_checkpoint_publish_tool());
     tools.push(iroha_node_query_projection_shard_catalog_tool());
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_da_ingest_tool());
@@ -1968,30 +1966,6 @@ async fn handle_named_tool_call(
         }
         "iroha.node.capabilities" => {
             match dispatch_iroha_node_capabilities(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.node.query_projection_checkpoint_plan" => {
-            match dispatch_iroha_node_query_projection_checkpoint_plan(
-                &app,
-                inbound_headers,
-                arguments,
-            )
-            .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.node.query_projection_checkpoint_publish" => {
-            match dispatch_iroha_node_query_projection_checkpoint_publish(
-                &app,
-                inbound_headers,
-                arguments,
-            )
-            .await
-            {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -5454,93 +5428,6 @@ async fn dispatch_iroha_vpn_receipts_list(
             .map(str::to_owned),
     )
     .await
-}
-async fn dispatch_iroha_node_query_projection_checkpoint_plan(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_iroha_node_query_projection_checkpoint_body(arguments)?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/node/query/projection/checkpoint/plan",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_node_query_projection_checkpoint_publish(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_iroha_node_query_projection_checkpoint_body(arguments)?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/node/query/projection/checkpoint/publish",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-fn build_iroha_node_query_projection_checkpoint_body(
-    arguments: &Map,
-) -> Result<BorrowedMcpJson<'_>, String> {
-    let body = match arguments.get("body") {
-        Some(body) => Some(
-            body.as_object()
-                .ok_or_else(|| "`body` must be an object".to_owned())?,
-        ),
-        None => None,
-    };
-    let fallback_emitted_at = if body.is_none_or(|body| !body.contains_key("emitted_at_unix")) {
-        arguments.get("emitted_at_unix")
-    } else {
-        None
-    };
-    let fallback_shards = if body.is_none_or(|body| !body.contains_key("shards")) {
-        arguments.get("shards")
-    } else {
-        None
-    };
-    let field_count = body
-        .map_or(0, Map::len)
-        .checked_add(usize::from(fallback_emitted_at.is_some()))
-        .and_then(|count| count.checked_add(usize::from(fallback_shards.is_some())))
-        .ok_or_else(|| "checkpoint body field count overflow".to_owned())?;
-    let mut payload =
-        BorrowedMcpJsonObject::try_with_capacity(field_count, "borrowed checkpoint body fields")?;
-    if let Some(body) = body {
-        for (key, value) in body {
-            payload.insert_value(key, value);
-        }
-    }
-    if let Some(emitted_at_unix) = fallback_emitted_at {
-        payload.insert_value("emitted_at_unix", emitted_at_unix);
-    }
-    if let Some(shards) = fallback_shards {
-        payload.insert_value("shards", shards);
-    }
-    if !payload.contains_key("shards") {
-        return Err("`shards` is required".to_owned());
-    }
-    Ok(BorrowedMcpJson::Object(payload.sorted()))
 }
 async fn dispatch_iroha_node_query_projection_shard_catalog(
     app: &SharedAppState,
@@ -9046,13 +8933,13 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
-const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 62;
-const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 112_201;
+const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 60;
+const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 107_288;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET_BLAKE3: [u8; 32] = [
-    0xa2, 0xac, 0x7a, 0x48, 0xd9, 0xff, 0x12, 0x8c, 0x4c, 0x36, 0xc8, 0x1c, 0x81, 0x2a, 0x68, 0xea,
-    0xb2, 0x9e, 0x53, 0x2f, 0x0a, 0xff, 0xe2, 0x3b, 0xc5, 0x41, 0x2a, 0xd5, 0xc0, 0x80, 0xdd, 0x31,
+    0xf9, 0x08, 0xda, 0x8b, 0x71, 0x82, 0xe5, 0xd3, 0xfe, 0x09, 0xf8, 0xb8, 0x49, 0xec, 0xe1, 0x47,
+    0xe8, 0x97, 0xa7, 0xb2, 0x7f, 0xc9, 0x81, 0x00, 0x36, 0x95, 0xa2, 0x58, 0x4c, 0x34, 0x79, 0x8d,
 ];
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
 
@@ -9276,8 +9163,6 @@ manual_tool! {
     iroha_connect_ws_ticket_tool => "iroha.connect.ws.ticket";
     iroha_connect_session_create_tool => "iroha.connect.session.create";
     iroha_connect_session_delete_tool => "iroha.connect.session.delete";
-    iroha_node_query_projection_checkpoint_plan_tool => "iroha.node.query_projection_checkpoint_plan";
-    iroha_node_query_projection_checkpoint_publish_tool => "iroha.node.query_projection_checkpoint_publish";
     iroha_node_query_projection_shard_catalog_tool => "iroha.node.query_projection_shard_catalog";
     iroha_da_manifests_get_tool => "iroha.da.manifests.get";
     iroha_runtime_upgrades_activate_tool => "iroha.runtime.upgrades.activate";

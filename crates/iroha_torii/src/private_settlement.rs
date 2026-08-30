@@ -1627,7 +1627,7 @@ impl ExactPrivateSettlementCarrierV1<'_> {
         }
     }
 
-    fn is_structurally_admissible(&self, current_height: u64, max_participants: u8) -> bool {
+    fn is_structurally_admissible(&self, current_height: u64, max_participants: u16) -> bool {
         let manifest = self.manifest();
         if manifest.validate().is_err() || manifest.legs.len() > usize::from(max_participants) {
             return false;
@@ -1863,6 +1863,72 @@ pub(crate) async fn handler_bundle_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_data_model::{
+        NetworkId,
+        account::AccountId,
+        block::BlockHeader,
+        nexus::{
+            AtomicPrivateSettlementV1, DataSpaceId, LaneId, PrivateSettlementLegCommitmentV1,
+            PrivateSettlementRouteV1,
+        },
+        privacy::PrivacyPoolIdV1,
+        transaction::FeePaymentIntent,
+    };
+
+    fn abort_carrier_manifest_fixture() -> AtomicPrivateSettlementV1 {
+        let sponsor = KeyPair::from_seed(vec![0xD4; 32], Algorithm::Ed25519);
+        let mut manifest = AtomicPrivateSettlementV1 {
+            version: AtomicPrivateSettlementV1::VERSION,
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"carrier bound network")),
+            ),
+            bundle_id: Hash::new(b"carrier bound bundle"),
+            authority_context_height: 10,
+            expiry_height: 20,
+            sponsor: AccountId::new(sponsor.public_key().clone()),
+            public_fee_intent: FeePaymentIntent::authority(Vec::new(), None),
+            fee_intent_digest: Hash::new(b"carrier bound fee intent"),
+            reimbursement_terms_commitment: Hash::new(b"carrier bound reimbursement"),
+            reimbursement_leg_ordinal: 0,
+            legs: (0_u8..2)
+                .map(|ordinal| PrivateSettlementLegCommitmentV1 {
+                    ordinal,
+                    route: PrivateSettlementRouteV1 {
+                        dataspace_id: DataSpaceId::new(u64::from(ordinal) + 1),
+                        lane_id: LaneId::new(u32::from(ordinal) + 1),
+                        lane_incarnation: Hash::new([ordinal, 0x11]),
+                    },
+                    pool_id: PrivacyPoolIdV1::new([ordinal + 1; 32]),
+                    asset_binding_commitment: Hash::new([ordinal, 0x22]),
+                    audit_policy_digest: Hash::new([ordinal, 0x33]),
+                    payload_digest: Hash::new([ordinal, 0x44]),
+                    availability_certificate_digest: Hash::new([ordinal, 0x55]),
+                    delta_digest: Hash::new([ordinal, 0x66]),
+                })
+                .collect(),
+        };
+        manifest.fee_intent_digest = manifest
+            .computed_fee_intent_digest()
+            .expect("fixture fee intent hashes");
+        manifest.bundle_id = manifest
+            .computed_bundle_id()
+            .expect("fixture bundle hashes");
+        manifest
+    }
+
+    #[test]
+    fn structural_carrier_applies_governed_u16_participant_boundary() {
+        let carrier = AbortAtomicPrivateSettlementV1::new(
+            abort_carrier_manifest_fixture(),
+            PrivateSettlementAbortReasonV1::ParticipantRejected,
+        );
+        let carrier = ExactPrivateSettlementCarrierV1::Abort(&carrier);
+        let exact_participant_bound: u16 = 2;
+
+        assert!(carrier.is_structurally_admissible(10, exact_participant_bound));
+        assert!(!carrier.is_structurally_admissible(10, exact_participant_bound - 1));
+    }
 
     #[test]
     fn phase_certificate_acknowledgement_is_monotonic() {

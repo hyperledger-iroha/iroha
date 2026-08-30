@@ -9318,6 +9318,14 @@ def test_offline_acceptance_cross_checks_reference_and_location() -> None:
         ),
         (_offline_operation_reference(), f"/v1/offline/operations/{'44' * 32}"),
         (_offline_operation_reference(), None),
+        (_offline_operation_reference(unexpected=True), OFFLINE_STATUS_URI),
+        (_offline_operation_reference(kind={"kind": "top_up"}), OFFLINE_STATUS_URI),
+        (
+            _offline_operation_reference(
+                state={"state": "pending", "value": None, "unexpected": True}
+            ),
+            OFFLINE_STATUS_URI,
+        ),
     ]
     for payload, location in cases:
         session = RecordingSession()
@@ -9852,6 +9860,20 @@ def test_offline_top_up_anchor_preserves_full_width_amounts_and_heights() -> Non
 
 
 def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() -> None:
+    last_valid_session = RecordingSession()
+    last_valid_session.queue(
+        StubResponse(
+            payload=_offline_applied_top_up_status(
+                _offline_top_up_anchor(shield_leaf_index=65_462)
+            )
+        )
+    )
+    last_valid = ToriiClient(
+        "http://node.test", session=last_valid_session
+    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+    assert isinstance(last_valid, OfflineAppliedOperation)
+    assert last_valid.result.result.anchor.shield_leaf_index == 65_462
+
     missing_digest = _offline_top_up_anchor()
     missing_digest.pop("anchor_digest")
     invalid = [
@@ -9863,6 +9885,7 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         _offline_top_up_anchor(asset_scale=3),
         _offline_top_up_anchor(finalized_root=_offline_fixed_bytes(0x10)),
         _offline_top_up_anchor(shield_leaf_index=-1),
+        _offline_top_up_anchor(shield_leaf_index=65_463),
         _offline_top_up_anchor(shield_leaf_index=1 << 16),
         _offline_top_up_anchor(topup_operation_id=_offline_fixed_bytes(0x12)),
         _offline_top_up_anchor(finalized_height=11),
@@ -10191,12 +10214,37 @@ def test_offline_status_rejects_noncanonical_paths_and_adversarial_envelopes() -
             client.get_kagemusha_operation_status(operation_id)
     assert session.calls == []
 
+    status_with_extra_root = _offline_rejected_status(
+        {"code": "offline_operation_rejected", "message": "rejected"}
+    )
+    status_with_extra_root["unexpected"] = True
+    status_with_extra_variant_field = copy.deepcopy(status_with_extra_root)
+    status_with_extra_variant_field.pop("unexpected")
+    status_with_extra_variant_field["value"]["unexpected"] = True
+    status_with_extra_result_envelope = _offline_applied_top_up_status()
+    status_with_extra_result_envelope["value"]["result"]["unexpected"] = True
+    status_with_extra_result_payload = _offline_applied_top_up_status()
+    status_with_extra_result_payload["value"]["result"]["result"]["unexpected"] = True
+
     invalid_statuses = [
+        status_with_extra_root,
+        status_with_extra_variant_field,
+        status_with_extra_result_envelope,
+        status_with_extra_result_payload,
         {"state": "unknown", "value": {"operation_id": OFFLINE_OPERATION_ID}},
         {
             "state": "pending",
             "value": {
                 "operation_id": "33" * 32,
+                "kind": {"kind": "top_up", "value": None},
+                "transaction_hash": OFFLINE_TRANSACTION_HASH,
+                "submitted_at_ms": 1,
+            },
+        },
+        {
+            "state": "pending",
+            "value": {
+                "operation_id": OFFLINE_OPERATION_ID,
                 "kind": {"kind": "top_up"},
                 "transaction_hash": OFFLINE_TRANSACTION_HASH,
                 "submitted_at_ms": 1,

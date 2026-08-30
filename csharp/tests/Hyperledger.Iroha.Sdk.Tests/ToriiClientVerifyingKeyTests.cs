@@ -427,7 +427,28 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task VerifyingKeyWritesRequireImmutableLocalSigningContextBeforeDispatch()
+    public async Task VerifyingKeyWriteResponsesRejectDeclaredBodiesAboveLimit()
+    {
+        using var handler = new RecordingHandler(_ =>
+        {
+            var content = new ByteArrayContent("{}"u8.ToArray());
+            content.Headers.ContentType = new("application/json");
+            content.Headers.ContentLength = 24 * 1024 * 1024 + 1;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+        using var client = CreateVerifyingKeyClient(handler);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.RegisterVerifyingKeyAsync(
+                ValidVerifyingKeyRegisterRequest(),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("25165824-byte limit", error.Message, StringComparison.Ordinal);
+        Assert.Equal("/v1/zk/vk/register", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task VerifyingKeyWritesRequireExactNetworkIdBeforeDispatch()
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("request must not be sent"));
@@ -440,11 +461,10 @@ public sealed partial class ToriiClientTests
                 ValidVerifyingKeyRegisterRequest(),
                 cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("ToriiLocalSigningContext", error.Message);
+        Assert.Contains(nameof(ToriiClientOptions.NetworkId), error.Message);
         Assert.Null(handler.LastRequest);
         Assert.Throws<FormatException>(() => NetworkId.Parse(""));
         Assert.Throws<FormatException>(() => NetworkId.Parse("chain/other"));
-        Assert.Throws<ArgumentNullException>(() => new ToriiLocalSigningContext(null!));
     }
 
     [Fact]

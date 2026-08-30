@@ -227,6 +227,35 @@ pub const MAX_LANE_DRAIN_VOTE_WIRE_BYTES: usize = lane_consensus::MAX_LANE_DRAIN
 /// frames without exposing the general network decoder to an attacker-sized
 /// signature allocation.
 pub const MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES: usize = 32 * 1024;
+// Every live v2 message is nested inside `BlockMessageWire`, `NetworkMessage`,
+// and the authenticated P2P relay/data envelopes. Keep one explicit allowance
+// for those schema-bound layers while deriving attacker-controlled collection
+// sizes from the consensus protocol constants below.
+const SUMERAGI_V2_NETWORK_FRAME_OVERHEAD_BYTES: usize = 64 * 1024;
+const SUMERAGI_V2_HASH_SEQUENCE_MAX_WIRE_BYTES: usize = core::mem::size_of::<u64>()
+    + (iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_COUNT as usize + 1)
+        * core::mem::size_of::<u64>()
+    + iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_COUNT as usize
+        * iroha_crypto::Hash::LENGTH;
+const MAX_SUMERAGI_V2_CHUNK_NETWORK_FRAME_BYTES: usize =
+    iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_SIZE_BYTES as usize
+        + iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES
+        + 2 * core::mem::size_of::<u64>()
+        + SUMERAGI_V2_NETWORK_FRAME_OVERHEAD_BYTES;
+const MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES: usize =
+    iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get();
+const MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES: usize =
+    iroha_config::parameters::defaults::network::MAX_PLAINTEXT_FRAME_BYTES.get();
+const MAX_SUMERAGI_V2_DECODE_DEPTH: usize = 64;
+const _: () = assert!(
+    MAX_SUMERAGI_V2_CHUNK_NETWORK_FRAME_BYTES < MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES
+);
+const _: () = assert!(
+    iroha_data_model::block::consensus_v2::MAX_DA_PAYLOAD_SIZE_BYTES as usize
+        + SUMERAGI_V2_HASH_SEQUENCE_MAX_WIRE_BYTES
+        + SUMERAGI_V2_NETWORK_FRAME_OVERHEAD_BYTES
+        <= MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES
+);
 const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 3;
 const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 13;
 const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 14;
@@ -349,30 +378,336 @@ fn inbound_two_field_struct(
             .ok_or(Error::LengthMismatch)?,
     ))
 }
+#[derive(Clone, Copy)]
+enum InboundStructField {
+    Fixed(usize),
+    Sized,
+    ByteSequence,
+    Sequence,
+}
+fn inbound_sequence_count(bytes: &[u8]) -> Result<(u64, usize), norito::core::Error> {
+    let prefix = bytes
+        .get(..core::mem::size_of::<u64>())
+        .ok_or(norito::core::Error::LengthMismatch)?;
+    let prefix: [u8; core::mem::size_of::<u64>()] = prefix
+        .try_into()
+        .map_err(|_| norito::core::Error::LengthMismatch)?;
+    Ok((u64::from_le_bytes(prefix), core::mem::size_of::<u64>()))
+}
+fn inbound_byte_sequence_wire_len(bytes: &[u8]) -> Result<usize, norito::core::Error> {
+    let (count, prefix_len) = inbound_sequence_count(bytes)?;
+    let count = usize::try_from(count).map_err(|_| norito::core::Error::LengthMismatch)?;
+    prefix_len
+        .checked_add(count)
+        .filter(|len| *len <= bytes.len())
+        .ok_or(norito::core::Error::LengthMismatch)
+}
+fn inbound_struct_field<'a>(
+    payload: &'a [u8],
+    flags: u8,
+    fields: &[InboundStructField],
+    target: usize,
+) -> Result<&'a [u8], norito::core::Error> {
+    use norito::core::{Error, header_flags};
+    if target >= fields.len() || fields.len() > u8::BITS as usize {
+        return Err(Error::LengthMismatch);
+    }
+    if flags & header_flags::PACKED_STRUCT == 0 {
+        let mut remaining = payload;
+        let mut selected = None;
+        for index in 0..fields.len() {
+            let (field_len, prefix_len) =
+                norito::core::read_len_from_slice_with_flags(remaining, flags)?;
+            let field_end = prefix_len
+                .checked_add(field_len)
+                .ok_or(Error::LengthMismatch)?;
+            let field = remaining
+                .get(prefix_len..field_end)
+                .ok_or(Error::LengthMismatch)?;
+            if index == target {
+                selected = Some(field);
+            }
+            remaining = remaining.get(field_end..).ok_or(Error::LengthMismatch)?;
+        }
+        if !remaining.is_empty() {
+            return Err(Error::LengthMismatch);
+        }
+        return selected.ok_or(Error::LengthMismatch);
+    }
+    if flags & header_flags::FIELD_BITSET == 0 {
+        let table_entries = fields.len().checked_add(1).ok_or(Error::LengthMismatch)?;
+        let table_len = table_entries
+            .checked_mul(core::mem::size_of::<u64>())
+            .ok_or(Error::LengthMismatch)?;
+        let (offsets, data) = payload
+            .split_at_checked(table_len)
+            .ok_or(Error::LengthMismatch)?;
+        let read_offset = |index: usize| -> Result<usize, Error> {
+            let start = index
+                .checked_mul(core::mem::size_of::<u64>())
+                .ok_or(Error::LengthMismatch)?;
+            let end = start
+                .checked_add(core::mem::size_of::<u64>())
+                .ok_or(Error::LengthMismatch)?;
+            let encoded: [u8; core::mem::size_of::<u64>()] = offsets
+                .get(start..end)
+                .ok_or(Error::LengthMismatch)?
+                .try_into()
+                .map_err(|_| Error::LengthMismatch)?;
+            usize::try_from(u64::from_le_bytes(encoded)).map_err(|_| Error::LengthMismatch)
+        };
+        let mut previous = 0;
+        for index in 0..table_entries {
+            let offset = read_offset(index)?;
+            if (index == 0 && offset != 0) || offset < previous || offset > data.len() {
+                return Err(Error::LengthMismatch);
+            }
+            previous = offset;
+        }
+        if previous != data.len() {
+            return Err(Error::LengthMismatch);
+        }
+        let start = read_offset(target)?;
+        let end = read_offset(target + 1)?;
+        return data.get(start..end).ok_or(Error::LengthMismatch);
+    }
+
+    let (&bitset, mut size_headers) = payload.split_first().ok_or(Error::LengthMismatch)?;
+    let expected_bitset = fields
+        .iter()
+        .enumerate()
+        .fold(0_u8, |bits, (index, field)| {
+            if matches!(field, InboundStructField::Sized) {
+                bits | (1_u8 << index)
+            } else {
+                bits
+            }
+        });
+    if bitset != expected_bitset {
+        return Err(Error::LengthMismatch);
+    }
+    let mut sized_lengths = [0_usize; u8::BITS as usize];
+    for (index, field) in fields.iter().enumerate() {
+        if matches!(field, InboundStructField::Sized) {
+            let (field_len, prefix_len) =
+                norito::core::read_len_from_slice_with_flags(size_headers, flags)?;
+            sized_lengths[index] = field_len;
+            size_headers = size_headers
+                .get(prefix_len..)
+                .ok_or(Error::LengthMismatch)?;
+        }
+    }
+    let data = size_headers;
+    let mut offset = 0_usize;
+    for (index, field) in fields.iter().enumerate() {
+        if index == target && matches!(field, InboundStructField::Sequence) {
+            return data.get(offset..).ok_or(Error::LengthMismatch);
+        }
+        let field_len = match field {
+            InboundStructField::Fixed(width) => *width,
+            InboundStructField::Sized => sized_lengths[index],
+            InboundStructField::ByteSequence => {
+                inbound_byte_sequence_wire_len(data.get(offset..).ok_or(Error::LengthMismatch)?)?
+            }
+            InboundStructField::Sequence => return Err(Error::LengthMismatch),
+        };
+        let end = offset.checked_add(field_len).ok_or(Error::LengthMismatch)?;
+        let field = data.get(offset..end).ok_or(Error::LengthMismatch)?;
+        if index == target {
+            return Ok(field);
+        }
+        offset = end;
+    }
+    Err(Error::LengthMismatch)
+}
+fn enforce_inbound_sequence_limit(field: &[u8], limit: usize) -> Result<(), norito::core::Error> {
+    let (length, _) = inbound_sequence_count(field)?;
+    let limit = u64::try_from(limit).unwrap_or(u64::MAX);
+    if length > limit {
+        return Err(norito::core::Error::SequenceLengthExceeded { length, limit });
+    }
+    Ok(())
+}
+fn enforce_inbound_byte_sequence_limit(
+    field: &[u8],
+    limit: usize,
+) -> Result<(), norito::core::Error> {
+    enforce_inbound_sequence_limit(field, limit)?;
+    let exact_len = inbound_byte_sequence_wire_len(field)?;
+    if exact_len != field.len() {
+        return Err(norito::core::Error::LengthMismatch);
+    }
+    Ok(())
+}
+fn enforce_inbound_manifest_limits(manifest: &[u8], flags: u8) -> Result<(), norito::core::Error> {
+    const FIELDS: [InboundStructField; 6] = [
+        InboundStructField::Sized,
+        InboundStructField::Sized,
+        InboundStructField::Fixed(core::mem::size_of::<u64>()),
+        InboundStructField::Sized,
+        InboundStructField::Sequence,
+        InboundStructField::Sized,
+    ];
+    let hashes = inbound_struct_field(manifest, flags, &FIELDS, 4)?;
+    enforce_inbound_sequence_limit(
+        hashes,
+        iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_COUNT as usize,
+    )
+}
+fn enforce_inbound_consensus_v2_payload_limits(
+    tag: u32,
+    payload: &[u8],
+    flags: u8,
+) -> Result<(), norito::core::Error> {
+    use iroha_data_model::block::consensus_v2::{
+        MAX_CONSENSUS_SIGNATURE_BYTES, MAX_DA_CHUNK_SIZE_BYTES, MAX_DA_PAYLOAD_SIZE_BYTES,
+    };
+    const PROPOSAL_FIELDS: [InboundStructField; 6] = [
+        InboundStructField::Sized,
+        // `ValidatorIndex` is a type alias, but the derive deliberately treats
+        // arbitrary named field types as length-delimited in hybrid layouts.
+        InboundStructField::Sized,
+        InboundStructField::Sized,
+        InboundStructField::Sized,
+        InboundStructField::Sized,
+        InboundStructField::ByteSequence,
+    ];
+    const CHUNK_FIELDS: [InboundStructField; 5] = [
+        InboundStructField::Sized,
+        InboundStructField::Fixed(core::mem::size_of::<u32>()),
+        InboundStructField::ByteSequence,
+        InboundStructField::Sized,
+        InboundStructField::ByteSequence,
+    ];
+    const CERTIFIED_RESPONSE_FIELDS: [InboundStructField; 5] = [
+        InboundStructField::Sized,
+        InboundStructField::Sized,
+        InboundStructField::ByteSequence,
+        InboundStructField::Sized,
+        InboundStructField::ByteSequence,
+    ];
+    match tag {
+        0 => {
+            enforce_inbound_manifest_limits(
+                inbound_struct_field(payload, flags, &PROPOSAL_FIELDS, 3)?,
+                flags,
+            )?;
+            enforce_inbound_byte_sequence_limit(
+                inbound_struct_field(payload, flags, &PROPOSAL_FIELDS, 5)?,
+                MAX_CONSENSUS_SIGNATURE_BYTES,
+            )
+        }
+        5 => {
+            enforce_inbound_byte_sequence_limit(
+                inbound_struct_field(payload, flags, &CHUNK_FIELDS, 2)?,
+                MAX_DA_CHUNK_SIZE_BYTES as usize,
+            )?;
+            enforce_inbound_byte_sequence_limit(
+                inbound_struct_field(payload, flags, &CHUNK_FIELDS, 4)?,
+                MAX_CONSENSUS_SIGNATURE_BYTES,
+            )
+        }
+        7 => {
+            enforce_inbound_manifest_limits(
+                inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 1)?,
+                flags,
+            )?;
+            enforce_inbound_byte_sequence_limit(
+                inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 2)?,
+                MAX_DA_PAYLOAD_SIZE_BYTES as usize,
+            )?;
+            enforce_inbound_byte_sequence_limit(
+                inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 4)?,
+                MAX_CONSENSUS_SIGNATURE_BYTES,
+            )
+        }
+        _ => Ok(()),
+    }
+}
+fn inbound_consensus_v2_parts(
+    payload: &[u8],
+    flags: u8,
+) -> Result<(u16, u32, &[u8]), norito::core::Error> {
+    let (version, message) = inbound_two_field_struct(payload, flags, core::mem::size_of::<u16>())?;
+    let version: [u8; core::mem::size_of::<u16>()] = version
+        .try_into()
+        .map_err(|_| norito::core::Error::LengthMismatch)?;
+    let (tag, remaining) = inbound_enum_parts(message)?;
+    let field = inbound_enum_field(remaining, flags)?;
+    Ok((u16::from_le_bytes(version), tag, field))
+}
 fn inbound_consensus_v2_topic(
     payload: &[u8],
     flags: u8,
 ) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
     use iroha_data_model::block::consensus_v2::PROTOCOL_VERSION;
     use iroha_p2p::network::message::Topic;
-    let (version, message) = inbound_two_field_struct(payload, flags, core::mem::size_of::<u16>())?;
-    let version: [u8; core::mem::size_of::<u16>()] = version
-        .try_into()
-        .map_err(|_| norito::core::Error::LengthMismatch)?;
-    let (tag, remaining) = inbound_enum_parts(message)?;
-    inbound_enum_field(remaining, flags)?;
-    if u16::from_le_bytes(version) != PROTOCOL_VERSION {
+    let (version, tag, _) = inbound_consensus_v2_parts(payload, flags)?;
+    if version != PROTOCOL_VERSION {
         return Ok(Topic::Other);
     }
     match tag {
-        0..=4 | 10..=12 => Ok(Topic::ConsensusSafety),
-        5 | 8 => Ok(Topic::ConsensusPayload),
-        6 => Ok(Topic::ConsensusChunk),
-        7 | 9 => Ok(Topic::Consensus),
+        0..=4 | 9..=10 => Ok(Topic::ConsensusSafety),
+        7 => Ok(Topic::ConsensusPayload),
+        5 => Ok(Topic::ConsensusChunk),
+        6 | 8 => Ok(Topic::Consensus),
         _ => Err(norito::core::Error::Message(
             "unknown Sumeragi v2 payload discriminant".to_owned(),
         )),
     }
+}
+fn inbound_consensus_v2_decode_limits(
+    payload: &[u8],
+    framed_len: usize,
+    flags: u8,
+) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
+    use iroha_data_model::block::consensus_v2::{
+        MAX_CONSENSUS_SIGNATURE_BYTES, MAX_DA_CHUNK_COUNT, MAX_DA_CHUNK_SIZE_BYTES,
+        MAX_DA_PAYLOAD_SIZE_BYTES, PROTOCOL_VERSION,
+    };
+    let (version, tag, payload_field) = inbound_consensus_v2_parts(payload, flags)?;
+    if version != PROTOCOL_VERSION {
+        // The raw topic classifier routes another protocol revision through
+        // the much smaller `Other` cap before this hook is reached.
+        return Ok(None);
+    }
+    let default_sequence_limit = usize::try_from(MAX_DA_CHUNK_COUNT)
+        .unwrap_or(usize::MAX)
+        .max(MAX_CONSENSUS_SIGNATURE_BYTES);
+    let (frame_limit, sequence_limit) = match tag {
+        5 => (
+            MAX_SUMERAGI_V2_CHUNK_NETWORK_FRAME_BYTES,
+            usize::try_from(MAX_DA_CHUNK_SIZE_BYTES).unwrap_or(usize::MAX),
+        ),
+        7 => (
+            MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES,
+            usize::try_from(MAX_DA_PAYLOAD_SIZE_BYTES).unwrap_or(usize::MAX),
+        ),
+        0..=4 | 6 | 8..=10 => (
+            MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES,
+            default_sequence_limit,
+        ),
+        _ => {
+            return Err(norito::core::Error::Message(
+                "unknown Sumeragi v2 payload discriminant".to_owned(),
+            ));
+        }
+    };
+    if framed_len > frame_limit {
+        return Err(norito::core::Error::ArchiveLengthExceeded {
+            length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+            limit: u64::try_from(frame_limit).unwrap_or(u64::MAX),
+        });
+    }
+    enforce_inbound_consensus_v2_payload_limits(tag, payload_field, flags)?;
+    let canonical = norito::canonical_decode_limits(frame_limit);
+    Ok(Some(norito::DecodeLimits::new(
+        sequence_limit,
+        frame_limit,
+        canonical.max_total_elements(),
+        canonical.max_total_allocated_bytes(),
+        MAX_SUMERAGI_V2_DECODE_DEPTH,
+    )))
 }
 fn inbound_sumeragi_enum_field(framed: &[u8]) -> Result<(u32, &[u8], u8), norito::core::Error> {
     let view = norito::core::from_bytes_view(framed)?;
@@ -716,24 +1051,27 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             0 => {
                 let (_, remaining) = inbound_enum_parts(payload)?;
                 let framed = inbound_owned_enum_field(remaining, flags)?;
-                let (block_tag, _, _) = inbound_sumeragi_enum_field(framed)?;
-                if block_tag != 0 {
-                    return Ok(None);
+                let (block_tag, block, block_flags) = inbound_sumeragi_enum_field(framed)?;
+                if block_tag == 10 {
+                    return inbound_consensus_v2_decode_limits(block, framed_len, block_flags);
                 }
-                if framed_len > MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES {
-                    return Err(norito::core::Error::ArchiveLengthExceeded {
-                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                        limit: u64::try_from(MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES)
-                            .unwrap_or(u64::MAX),
-                    });
+                if block_tag == 0 {
+                    if framed_len > MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES {
+                        return Err(norito::core::Error::ArchiveLengthExceeded {
+                            length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                            limit: u64::try_from(MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES)
+                                .unwrap_or(u64::MAX),
+                        });
+                    }
+                    return Ok(Some(norito::DecodeLimits::new(
+                        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
+                        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
+                        MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
+                        4 * MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
+                        64,
+                    )));
                 }
-                Ok(Some(norito::DecodeLimits::new(
-                    MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                    MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                    MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                    4 * MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES,
-                    64,
-                )))
+                Ok(None)
             }
             NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG => {
                 if framed_len > MAX_LANE_DRAIN_VOTE_WIRE_BYTES {
@@ -1983,6 +2321,7 @@ mod tests {
         }
     }
     include!("tests/queue_plan_admission_handoff.rs");
+    include!("tests/sumeragi_v2_decode_limits.rs");
     #[test]
     fn torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps() {
         #[derive(Encode)]

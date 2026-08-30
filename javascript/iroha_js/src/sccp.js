@@ -3,7 +3,7 @@ import { sha256 } from "@noble/hashes/sha2";
 
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
-import { validateNoritoFrame } from "./norito.js";
+import { _canonicalAccountIdNoritoValue, validateNoritoFrame } from "./norito.js";
 import { normalizeAssetDefinitionId } from "./normalizers.js";
 import { NumericV1 } from "./numericV1.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
@@ -554,6 +554,19 @@ function replayPrincipalV1(value, label) {
   }
   if (bytes.length === 0 || bytes.length > 0xffff) {
     throw new TypeError(`${label} has an invalid canonical length`);
+  }
+  if (kind === 0) {
+    let canonicalBytes;
+    try {
+      canonicalBytes = _canonicalAccountIdNoritoValue(bytes, `${label}.canonicalBytes`);
+    } catch (error) {
+      throw new TypeError(`${label}.canonicalBytes must be an exact canonical SORA AccountId`, {
+        cause: error,
+      });
+    }
+    if (!equalBytes(bytes, canonicalBytes)) {
+      throw new TypeError(`${label}.canonicalBytes must be an exact canonical SORA AccountId`);
+    }
   }
   return Object.freeze({ kind, bytes });
 }

@@ -1408,9 +1408,11 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         };
     let queued_wire = wire::ConsensusMessageV2::new(payload(1));
     let transport = wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
-        manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"coalesced capacity manifest")),
+        manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"coalesced capacity orphan chunk",
+        )),
         index: 0,
-        bytes: vec![0, 1],
+        bytes: Vec::new(),
         sender: 0,
         signature: vec![1],
     });

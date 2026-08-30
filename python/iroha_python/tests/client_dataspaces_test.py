@@ -24,8 +24,9 @@ SETTLEMENT_ACCOUNT_ID = AccountAddress.from_account(public_key=bytes([0xA5]) * 3
 SETTLEMENT_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 
 
-class FakeSession:
+class FakeSession(requests.Session):
     def __init__(self, responses: list[requests.Response]):
+        super().__init__()
         self.responses = responses
         self.calls: list[dict[str, object]] = []
 

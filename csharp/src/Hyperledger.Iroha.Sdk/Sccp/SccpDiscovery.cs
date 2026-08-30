@@ -2356,7 +2356,7 @@ internal static class SccpExactParser
         var tag = destinationDomain switch
         {
             4 => "TonAccount36",
-            5 => "TronAddress21",
+            3 => "TronAddress21",
             _ => "EvmAddress20",
         };
         SccpJson.ExactFields(tagged, [tag], $"{label}.Transfer.{field}");

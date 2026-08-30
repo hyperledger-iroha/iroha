@@ -330,7 +330,7 @@ public static partial class CanonicalRequest
         }
 
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
-        var expectedAccount = AccountAddress.FromPublicKey(publicKey, "ed25519");
+        var expectedAccount = AccountAddress.FromPublicKey(publicKey);
         if (!account!.ControllerBytes().AsSpan().SequenceEqual(expectedAccount.ControllerBytes()))
         {
             var expectedAccountId = expectedAccount.ToI105(AccountAddress.DefaultChainDiscriminant);

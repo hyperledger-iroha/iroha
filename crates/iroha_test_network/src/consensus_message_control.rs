@@ -71,6 +71,8 @@ pub enum ConsensusMessageControlKind {
     CommitCertificateRequest,
     /// Commit-certificate response.
     CommitCertificateResponse,
+    /// Global threshold-beacon partial signature.
+    GlobalBeaconPartialSignature,
 }
 impl ConsensusMessageControlKind {
     const fn as_str(self) -> &'static str {
@@ -87,6 +89,7 @@ impl ConsensusMessageControlKind {
             Self::CertifiedBodyResponse => "certified_body_response",
             Self::CommitCertificateRequest => "commit_certificate_request",
             Self::CommitCertificateResponse => "commit_certificate_response",
+            Self::GlobalBeaconPartialSignature => "global_beacon_partial_signature",
         }
     }
     fn parse(value: &str) -> Result<Self> {
@@ -103,11 +106,9 @@ impl ConsensusMessageControlKind {
             "certified_body_response" => Ok(Self::CertifiedBodyResponse),
             "commit_certificate_request" => Ok(Self::CommitCertificateRequest),
             "commit_certificate_response" => Ok(Self::CommitCertificateResponse),
+            "global_beacon_partial_signature" => Ok(Self::GlobalBeaconPartialSignature),
             _ => Err(eyre!("unknown consensus message-control kind `{value}`")),
         }
-    }
-    const fn has_exact_round(self) -> bool {
-        !matches!(self, Self::PayloadChunk | Self::CommitCertificateRequest)
     }
 }
 /// Action taken when a rule matches.
@@ -480,6 +481,35 @@ impl ConsensusMessageControlRule {
             action,
         }
     }
+    /// Construct a direct height-only commit-certificate request rule.
+    pub fn commit_certificate_request(
+        sender: PeerId,
+        height: u64,
+        action: ConsensusMessageControlAction,
+    ) -> Self {
+        Self::relayed_commit_certificate_request(sender.clone(), sender, height, action)
+    }
+    /// Construct a relayed height-only commit-certificate request rule.
+    pub fn relayed_commit_certificate_request(
+        sender: PeerId,
+        authenticated_via: PeerId,
+        height: u64,
+        action: ConsensusMessageControlAction,
+    ) -> Self {
+        Self {
+            sender,
+            authenticated_via,
+            kind: ConsensusMessageControlKind::CommitCertificateRequest,
+            height,
+            view: 0,
+            block_hash: None,
+            manifest_hash: None,
+            chunk_index: None,
+            proposal_height: None,
+            proposal_view: None,
+            action,
+        }
+    }
     /// Further restrict this rule to one exact proposal block hash.
     #[must_use]
     pub fn with_block_hash(mut self, block_hash: HashOf<BlockHeader>) -> Self {
@@ -502,9 +532,16 @@ impl ConsensusMessageControlRule {
                 && (self.manifest_hash.is_some() || self.proposal_height.is_some())
                 && (self.manifest_hash.is_some()
                     || self.action == ConsensusMessageControlAction::Hold)
+        } else if self.kind == ConsensusMessageControlKind::CommitCertificateRequest {
+            self.height > 0
+                && self.view == 0
+                && self.block_hash.is_none()
+                && self.manifest_hash.is_none()
+                && self.chunk_index.is_none()
+                && self.proposal_height.is_none()
+                && self.proposal_view.is_none()
         } else {
-            self.kind.has_exact_round()
-                && self.height > 0
+            self.height > 0
                 && self.manifest_hash.is_none()
                 && self.chunk_index.is_none()
                 && self.proposal_height.is_none()
@@ -1199,7 +1236,7 @@ impl ConsensusMessageControl {
         }
         if rules.iter().any(|rule| !rule.has_valid_coordinates()) {
             return Err(eyre!(
-                "message-control rules require either a positive directly encoded round or valid exact/Proposal-bound payload-chunk coordinates"
+                "message-control rules require an exact round, an exact commit-certificate height, or valid exact/Proposal-bound payload-chunk coordinates"
             ));
         }
         if rules.iter().any(|rule| {
@@ -1295,6 +1332,7 @@ fn ack_matches_expected_release_in_progress(
 }
 fn rule_value(rule: &ConsensusMessageControlRule) -> Value {
     let is_chunk = rule.kind == ConsensusMessageControlKind::PayloadChunk;
+    let is_height_only = rule.kind == ConsensusMessageControlKind::CommitCertificateRequest;
     object_value([
         ("action", Value::from(rule.action.as_str())),
         (
@@ -1337,7 +1375,7 @@ fn rule_value(rule: &ConsensusMessageControlRule) -> Value {
         ("sender", Value::from(rule.sender.to_string())),
         (
             "view",
-            if is_chunk {
+            if is_chunk || is_height_only {
                 Value::Null
             } else {
                 Value::from(rule.view)
@@ -1833,6 +1871,7 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
             | ConsensusMessageControlKind::CommitVote
             | ConsensusMessageControlKind::TimeoutVote
             | ConsensusMessageControlKind::PayloadChunk
+            | ConsensusMessageControlKind::GlobalBeaconPartialSignature
     );
     if requires_single_signer != signer.is_some() {
         return Err(eyre!(
@@ -1911,6 +1950,13 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         }
         ConsensusMessageControlKind::CommitCertificateRequest => {
             has_no_subject_or_execution && !has_single_signer && !has_certificate_signers
+        }
+        ConsensusMessageControlKind::GlobalBeaconPartialSignature => {
+            has_no_subject_or_execution
+                && has_single_signer
+                && !has_certificate_signers
+                && !has_manifest_hash
+                && !has_chunk_index
         }
     };
     if !matches!(
@@ -2009,10 +2055,12 @@ fn parse_ack_rules(object: &Map) -> Result<Vec<ConsensusMessageControlRule>> {
             proposal_view,
             action,
         };
-        let schema_coordinates_match = if kind == ConsensusMessageControlKind::PayloadChunk {
-            height.is_none() && view.is_none()
-        } else {
-            height.is_some() && view.is_some()
+        let schema_coordinates_match = match kind {
+            ConsensusMessageControlKind::PayloadChunk => height.is_none() && view.is_none(),
+            ConsensusMessageControlKind::CommitCertificateRequest => {
+                height.is_some() && view.is_none()
+            }
+            _ => height.is_some() && view.is_some(),
         };
         if !schema_coordinates_match || !rule.has_valid_coordinates() {
             return Err(eyre!(
@@ -2467,6 +2515,14 @@ mod tests {
                 Value::Null,
                 Vec::new(),
             ),
+            ConsensusMessageControlKind::GlobalBeaconPartialSignature => (
+                Value::from(9_u64),
+                Value::from(2_u64),
+                Value::Null,
+                Value::Null,
+                Value::from(0_u64),
+                Vec::new(),
+            ),
         };
         object_value([
             ("authenticated_via", Value::from(peer.clone())),
@@ -2533,6 +2589,18 @@ mod tests {
             encoded_chunk.get("manifest_hash").and_then(Value::as_str),
             Some(manifest_literal.as_str())
         );
+        let commit_request = ConsensusMessageControlRule::commit_certificate_request(
+            chunk.sender.clone(),
+            9,
+            ConsensusMessageControlAction::Hold,
+        );
+        assert!(commit_request.has_valid_coordinates());
+        let encoded_commit_request = rule_value(&commit_request);
+        assert_eq!(
+            encoded_commit_request.get("height"),
+            Some(&Value::from(9_u64))
+        );
+        assert_eq!(encoded_commit_request.get("view"), Some(&Value::Null));
         let deferred = ConsensusMessageControlRule::payload_chunk_from_proposal(
             chunk.sender.clone(),
             9,
@@ -2732,6 +2800,18 @@ mod tests {
         )
         .expect("parse exact chunk-rule ack");
         assert_eq!(parsed.rules, vec![rule.clone()]);
+
+        let commit_request = ConsensusMessageControlRule::commit_certificate_request(
+            rule.sender.clone(),
+            9,
+            ConsensusMessageControlAction::Hold,
+        );
+        let parsed = parse_ack(
+            &canonical_json(&ack(rule_value(&commit_request)))
+                .expect("canonical height-only request-rule ack"),
+        )
+        .expect("parse height-only request-rule ack");
+        assert_eq!(parsed.rules, vec![commit_request]);
 
         let deferred = ConsensusMessageControlRule::payload_chunk_from_proposal(
             rule.sender.clone(),
@@ -3620,6 +3700,7 @@ mod tests {
             ConsensusMessageControlKind::CertifiedBodyResponse,
             ConsensusMessageControlKind::CommitCertificateRequest,
             ConsensusMessageControlKind::CommitCertificateResponse,
+            ConsensusMessageControlKind::GlobalBeaconPartialSignature,
         ] {
             let parsed = parse_held(&held_descriptor(kind))
                 .unwrap_or_else(|error| panic!("daemon {kind:?} descriptor failed: {error:#}"));

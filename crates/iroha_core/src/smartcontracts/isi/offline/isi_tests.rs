@@ -422,6 +422,27 @@ mod tests {
         }
     }
     #[test]
+    fn kagemusha_topup_capacity_reserves_the_successor_initialization_leaf() {
+        assert_eq!(
+            kagemusha_v4_topup_leaf_index(0, 8).expect("empty tree accepts a top-up"),
+            0
+        );
+        assert_eq!(
+            kagemusha_v4_topup_leaf_index(6, 8).expect("penultimate insertion remains valid"),
+            6
+        );
+        for (commitment_count, tree_capacity) in [(0, 0), (0, 1), (7, 8), (8, 8)] {
+            let error = kagemusha_v4_topup_leaf_index(commitment_count, tree_capacity)
+                .expect_err("a top-up without a successor empty leaf must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("{OFFLINE_REJECTION_REASON_PREFIX}topup_tree_full:")),
+                "unexpected capacity rejection: {error}"
+            );
+        }
+    }
+    #[test]
     fn kagemusha_redemption_state_freshness_rejects_all_namespace_collisions() {
         const EXISTING_COMMITMENT: [u8; 32] = [0x61; 32];
         const SPENT_NULLIFIER: [u8; 32] = [0x62; 32];

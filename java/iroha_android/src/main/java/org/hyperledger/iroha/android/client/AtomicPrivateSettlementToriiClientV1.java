@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
@@ -16,6 +17,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.BiFunction;
+import java.util.regex.Pattern;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
@@ -25,6 +27,12 @@ public final class AtomicPrivateSettlementToriiClientV1 {
   private static final int RESPONSE_SMALL_MAX_BYTES = 1024 * 1024;
   private static final int RESPONSE_PUBLIC_BUNDLE_MAX_BYTES = 8 * 1024 * 1024;
   private static final int RESPONSE_RESTRICTED_MAX_BYTES = 32 * 1024 * 1024;
+  private static final String INVALID_RESPONSE_MESSAGE =
+      "atomic private settlement response is invalid";
+  private static final BigInteger U64_MAX =
+      BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+  private static final Pattern REJECT_CODE =
+      Pattern.compile("^[A-Za-z0-9_.:-]{1,128}$");
 
   private static final Set<String> FORBIDDEN_DEFAULT_HEADERS =
       Set.of(
@@ -113,7 +121,7 @@ public final class AtomicPrivateSettlementToriiClientV1 {
         request, AtomicPrivateSettlementOperationV1.LEG_UPLOAD, sponsorAuth);
   }
 
-  /** Submit one sponsor-signed exact global carrier. */
+  /** Submit one sponsor-signed exact global finalization or abort carrier. */
   public CompletableFuture<AtomicPrivateSettlementJsonResponseV1> submitBundle(
       final AtomicPrivateSettlementPreparedRequestV1 request,
       final ToriiCanonicalRequestAuth sponsorAuth) {
@@ -329,9 +337,9 @@ public final class AtomicPrivateSettlementToriiClientV1 {
           } catch (final RuntimeException error) {
             final AtomicPrivateSettlementToriiExceptionV1 wrapped =
                 error instanceof AtomicPrivateSettlementToriiExceptionV1 exact
+                        && exact.getCause() == null
                     ? exact
-                    : new AtomicPrivateSettlementToriiExceptionV1(
-                        "atomic private settlement response is invalid", error);
+                    : new AtomicPrivateSettlementToriiExceptionV1(INVALID_RESPONSE_MESSAGE);
             throw new CompletionException(wrapped);
           }
         });
@@ -353,8 +361,9 @@ public final class AtomicPrivateSettlementToriiClientV1 {
     }
     if (response.statusCode() < 200 || response.statusCode() >= 300) {
       final String rejectCode =
-          HttpErrorMessageExtractor.extractRejectCode(
-              response.headers(), "x-iroha-reject-code");
+          sanitizedRejectCode(
+              HttpErrorMessageExtractor.extractRejectCode(
+                  response.headers(), "x-iroha-reject-code"));
       final String suffix =
           rejectCode == null || rejectCode.isBlank() ? "" : "; reject_code=" + rejectCode;
       throw new AtomicPrivateSettlementToriiExceptionV1(
@@ -362,16 +371,29 @@ public final class AtomicPrivateSettlementToriiClientV1 {
               + response.statusCode()
               + suffix);
     }
-    final byte[] body = response.body();
-    if (body.length == 0 || body.length > maximumResponseBytes) {
+    final int expectedStatus = route.endsWith("/bundles") ? 202 : 200;
+    if (response.statusCode() != expectedStatus) {
       throw new AtomicPrivateSettlementToriiExceptionV1(
-          "atomic private settlement response is empty or exceeds its route limit");
+          "atomic private settlement response status is invalid");
     }
-    requireExactJsonContentType(response.headers());
-    final Map<String, Object> parsed = parseExactJsonObject(body);
-    validateRouteShape(route, parsed, expectedIdentifier, expectedIdentifierField);
-    final byte[] canonical = JsonEncoder.encode(parsed).getBytes(StandardCharsets.UTF_8);
-    return new AtomicPrivateSettlementJsonResponseV1(route, canonical);
+    try {
+      final byte[] body = response.body();
+      if (body.length == 0 || body.length > maximumResponseBytes) {
+        throw new AtomicPrivateSettlementToriiExceptionV1(
+            "atomic private settlement response is empty or exceeds its route limit");
+      }
+      requireExactJsonContentType(response.headers());
+      final Map<String, Object> parsed = parseExactJsonObject(body);
+      validateRouteShape(route, parsed, expectedIdentifier, expectedIdentifierField);
+      final byte[] canonical = JsonEncoder.encode(parsed).getBytes(StandardCharsets.UTF_8);
+      return new AtomicPrivateSettlementJsonResponseV1(route, canonical);
+    } catch (final RuntimeException ignored) {
+      throw new AtomicPrivateSettlementToriiExceptionV1(INVALID_RESPONSE_MESSAGE);
+    }
+  }
+
+  private static String sanitizedRejectCode(final String value) {
+    return value != null && REJECT_CODE.matcher(value).matches() ? value : null;
   }
 
   private static void validateRouteShape(
@@ -398,10 +420,54 @@ public final class AtomicPrivateSettlementToriiClientV1 {
             "settlement phase certificates must be null or opaque objects");
       }
     }
-    if (route.endsWith("/receipt")) {
+    if (route.endsWith("/bundles")) {
+      validateBundleAdmission(parsed);
+    } else if (route.endsWith("/receipt")) {
       validateReceiptIdentity(parsed, Objects.requireNonNull(expectedIdentifier));
-    } else if (route.contains("/bundles/") && !route.endsWith("/receipt")) {
+    } else if (route.contains("/bundles/")) {
       validateBundleStatusIdentity(parsed, Objects.requireNonNull(expectedIdentifier));
+    }
+  }
+
+  private static void validateBundleAdmission(final Map<String, Object> parsed) {
+    requireCanonicalHashLiteral(
+        parsed.get("bundle_id"), "settlement bundle admission.bundle_id");
+    requireCanonicalHashLiteral(
+        parsed.get("carrier_id"), "settlement bundle admission.carrier_id");
+    final Object rawHeight = parsed.get("accepted_at_height");
+    final BigInteger acceptedAtHeight;
+    if (rawHeight instanceof BigInteger integer) {
+      acceptedAtHeight = integer;
+    } else if (rawHeight instanceof Byte
+        || rawHeight instanceof Short
+        || rawHeight instanceof Integer
+        || rawHeight instanceof Long) {
+      acceptedAtHeight = BigInteger.valueOf(((Number) rawHeight).longValue());
+    } else {
+      throw new AtomicPrivateSettlementToriiExceptionV1(
+          "settlement bundle admission.accepted_at_height must be an integer");
+    }
+    if (acceptedAtHeight.signum() < 0 || acceptedAtHeight.compareTo(U64_MAX) > 0) {
+      throw new AtomicPrivateSettlementToriiExceptionV1(
+          "settlement bundle admission.accepted_at_height must fit in unsigned 64-bit range");
+    }
+  }
+
+  private static void requireCanonicalHashLiteral(final Object value, final String field) {
+    if (!(value instanceof String literal)) {
+      throw new AtomicPrivateSettlementToriiExceptionV1(
+          field + " must be a canonical Iroha hash literal");
+    }
+    final AtomicPrivateSettlementIdentifierV1 parsed;
+    try {
+      parsed = AtomicPrivateSettlementIdentifierV1.parse(literal);
+    } catch (final IllegalArgumentException error) {
+      throw new AtomicPrivateSettlementToriiExceptionV1(
+          field + " must be a canonical Iroha hash literal", error);
+    }
+    if (!parsed.jsonLiteral().equals(literal)) {
+      throw new AtomicPrivateSettlementToriiExceptionV1(
+          field + " must be a canonical Iroha hash literal");
     }
   }
 

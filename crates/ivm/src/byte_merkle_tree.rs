@@ -157,8 +157,7 @@ impl ByteMerkleTree {
     }
     fn hash_chunk_padded(&self, data: &[u8]) -> [u8; 32] {
         let mut buf = [0u8; 32];
-        let len = data.len().min(self.chunk);
-        buf[..len].copy_from_slice(&data[..len]);
+        buf[..data.len()].copy_from_slice(data);
         if buf[..self.chunk].iter().all(|&b| b == 0) {
             return self.zero_hash;
         }
@@ -511,8 +510,12 @@ impl ByteMerkleTree {
     /// Update leaf at `index` with new chunk bytes.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when `index` is not an exact leaf index.
+    /// Returns [`VMError::MemoryOutOfBounds`] when `index` is not an exact leaf index or `data`
+    /// is larger than the configured leaf width.
     pub fn update_leaf(&self, index: usize, data: &[u8]) -> Result<(), VMError> {
+        if data.len() > self.chunk {
+            return Err(VMError::MemoryOutOfBounds);
+        }
         self.checked_leaf_index(index)?;
         // Compute the new digest for this chunk.
         let digest = self.hash_chunk_padded(data);
@@ -537,7 +540,7 @@ impl ByteMerkleTree {
     ///
     /// Ordering: returns siblings from leaf → root. Each entry is the sibling
     /// hash at the corresponding tree level (missing siblings encoded as all‑zero).
-    /// Keep this convention in sync with the mock circuits and tests.
+    /// Keep this convention in sync with canonical proof consumers and tests.
     ///
     /// # Errors
     /// Returns [`VMError::MemoryOutOfBounds`] when `index` is not an exact leaf index or cannot be

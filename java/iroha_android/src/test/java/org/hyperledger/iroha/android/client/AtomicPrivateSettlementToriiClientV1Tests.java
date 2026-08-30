@@ -1,5 +1,9 @@
 package org.hyperledger.iroha.android.client;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -37,8 +41,11 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
     sharedFixturePinsEveryPreparedRouteAndShape();
     sponsorLegStatusIsNetworkBoundAndIdentityChecked();
     sponsorPhaseCertificateRecoveryIsBoundAndStrictlyAllowlisted();
+    bundleAdmissionUsesTheSharedExactNonterminalResponse();
+    bundleAdmissionRejectsNoncanonicalHashesInvalidHeightsAndFieldDrift();
     auditorApprovalUsesPurposeSeparatedRoleHeaders();
     publicBundleQueriesAreUnsignedAndBindReceiptIdentity();
+    rejectCodesAreAllowlistedBeforeEnteringPublicStatusErrors();
     malformedOrSubstitutedMaterialFailsWithoutLeakingErrorBodies();
     System.out.println("[IrohaAndroid] Atomic private settlement Torii tests passed.");
   }
@@ -163,6 +170,115 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
         : "rejected recovery field leaked through error";
   }
 
+  private static void bundleAdmissionUsesTheSharedExactNonterminalResponse() {
+    final Map<String, Object> response =
+        objectField(objectField(FIXTURE, "responses"), "bundle_submit");
+    final CapturingExecutor executor = new CapturingExecutor(jsonResponse(response, 202));
+
+    final AtomicPrivateSettlementJsonResponseV1 received =
+        client(executor).submitBundle(bundleRequest(), sponsorAuth()).join();
+
+    assert response.equals(
+            asObject(
+                JsonParser.parse(new String(received.bytes(), StandardCharsets.UTF_8)),
+                "bundle admission response"))
+        : "bundle admission response drift";
+    assert "/api/v1/nexus/private-settlements/bundles".equals(
+            executor.request.uri().getPath())
+        : "bundle admission path drift";
+    assert "POST".equals(executor.request.method()) : "bundle admission must use POST";
+    assert executor.request.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        : "bundle admission must be one-shot";
+    assert executor.request.headers().containsKey(CanonicalRequestSigner.HEADER_SIGNATURE)
+        : "bundle admission sponsor signature missing";
+    assert !executor.request.headers().containsKey(OperatorRequestSigner.HEADER_SIGNATURE)
+        : "bundle admission must not carry role identity";
+    assert !response.containsKey("lifecycle")
+        : "carrier admission must not claim terminal lifecycle";
+  }
+
+  private static void bundleAdmissionRejectsNoncanonicalHashesInvalidHeightsAndFieldDrift() {
+    final Map<String, Object> response =
+        objectField(objectField(FIXTURE, "responses"), "bundle_submit");
+    final List<Map<String, Object>> invalidResponses = new ArrayList<>();
+
+    final Map<String, Object> maximumHeight = new LinkedHashMap<>(response);
+    maximumHeight.put("accepted_at_height", new BigInteger("18446744073709551615"));
+    client(new CapturingExecutor(jsonResponse(maximumHeight, 202)))
+        .submitBundle(bundleRequest(), sponsorAuth())
+        .join();
+
+    final CompletionException wrongCarrierStatus =
+        assertThrows(
+            CompletionException.class,
+            () ->
+                client(new CapturingExecutor(jsonResponse(response, 200)))
+                    .submitBundle(bundleRequest(), sponsorAuth())
+                    .join());
+    assert wrongCarrierStatus.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
+        : "carrier admission must require HTTP 202";
+
+    final Map<String, Object> missing = new LinkedHashMap<>(response);
+    missing.remove("carrier_id");
+    invalidResponses.add(missing);
+
+    final Map<String, Object> extra = new LinkedHashMap<>(response);
+    extra.put("unexpected", Boolean.TRUE);
+    invalidResponses.add(extra);
+
+    final Map<String, Object> lifecycle = new LinkedHashMap<>(response);
+    lifecycle.put("lifecycle", Map.of("status", "aborted"));
+    invalidResponses.add(lifecycle);
+
+    final Map<String, Object> wrongBundleType = new LinkedHashMap<>(response);
+    wrongBundleType.put("bundle_id", List.of());
+    invalidResponses.add(wrongBundleType);
+
+    final Map<String, Object> wrongCarrierType = new LinkedHashMap<>(response);
+    wrongCarrierType.put("carrier_id", Long.valueOf(42L));
+    invalidResponses.add(wrongCarrierType);
+
+    final Map<String, Object> rawBundleHash = new LinkedHashMap<>(response);
+    rawBundleHash.put("bundle_id", stringField(IDENTIFIERS, "bundle_hex"));
+    invalidResponses.add(rawBundleHash);
+
+    final Map<String, Object> noncanonicalCase = new LinkedHashMap<>(response);
+    noncanonicalCase.put(
+        "bundle_id",
+        AtomicPrivateSettlementIdentifierV1.parse("ab".repeat(32))
+            .jsonLiteral()
+            .toLowerCase(java.util.Locale.ROOT));
+    invalidResponses.add(noncanonicalCase);
+
+    final Map<String, Object> rawCarrierHash = new LinkedHashMap<>(response);
+    rawCarrierHash.put("carrier_id", stringField(IDENTIFIERS, "payload_hex"));
+    invalidResponses.add(rawCarrierHash);
+
+    for (final Object invalidHeight :
+        List.of(
+            "105",
+            new BigDecimal("105.0"),
+            Long.valueOf(-1L),
+            new BigInteger("18446744073709551616"))) {
+      final Map<String, Object> candidate = new LinkedHashMap<>(response);
+      candidate.put("accepted_at_height", invalidHeight);
+      invalidResponses.add(candidate);
+    }
+
+    for (int index = 0; index < invalidResponses.size(); index++) {
+      final Map<String, Object> candidate = invalidResponses.get(index);
+      final CompletionException error =
+          assertThrows(
+              CompletionException.class,
+              () ->
+                  client(new CapturingExecutor(jsonResponse(candidate, 202)))
+                      .submitBundle(bundleRequest(), sponsorAuth())
+                      .join());
+      assert error.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
+          : "bundle admission case " + index + " must fail as a redacted settlement error";
+    }
+  }
+
   private static void auditorApprovalUsesPurposeSeparatedRoleHeaders() {
     final Map<String, Object> response =
         objectField(objectField(FIXTURE, "responses"), "audit_approval");
@@ -214,6 +330,18 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
                 + "/receipt")
         : "receipt path drift";
 
+    final CompletionException wrongReceiptStatus =
+        assertThrows(
+            CompletionException.class,
+            () ->
+                client(
+                        new CapturingExecutor(
+                            jsonResponse(objectField(responses, "receipt_pending"), 201)))
+                    .getBundleReceipt(BUNDLE)
+                    .join());
+    assert wrongReceiptStatus.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
+        : "public receipt must require HTTP 200";
+
     final Map<String, Object> substituted =
         new LinkedHashMap<>(objectField(responses, "receipt_pending"));
     final Map<String, Object> value =
@@ -228,6 +356,46 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
                 .join());
     assert error.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
         : "receipt substitution must fail as a redacted settlement error";
+  }
+
+  private static void rejectCodesAreAllowlistedBeforeEnteringPublicStatusErrors() {
+    assert (
+            "atomic private settlement request failed with HTTP 403; "
+                    + "reject_code=APS_POLICY_DENIED")
+        .equals(rejectionMessage("APS_POLICY_DENIED"))
+        : "valid reject code must survive in the public status message";
+
+    final String oversized = "A".repeat(129);
+    final String oversizedMessage = rejectionMessage(oversized);
+    assert "atomic private settlement request failed with HTTP 403".equals(oversizedMessage)
+        : "oversized reject code must be omitted";
+    assert !oversizedMessage.contains(oversized)
+        : "oversized reject code leaked through the public status message";
+
+    final String secretShaped = "memo=LEAK_CANARY_987654";
+    final String secretShapedMessage = rejectionMessage(secretShaped);
+    assert "atomic private settlement request failed with HTTP 403".equals(secretShapedMessage)
+        : "secret-shaped reject code must be omitted";
+    assert !secretShapedMessage.contains(secretShaped)
+        : "secret-shaped reject code leaked through the public status message";
+  }
+
+  private static String rejectionMessage(final String rejectCode) {
+    final TransportResponse rejection =
+        TransportResponse.builder()
+            .setStatusCode(403)
+            .addHeader("X-Iroha-Reject-Code", rejectCode)
+            .build();
+    final CompletionException error =
+        assertThrows(
+            CompletionException.class,
+            () ->
+                client(new CapturingExecutor(rejection))
+                    .getBundleStatus(BUNDLE)
+                    .join());
+    assert error.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
+        : "HTTP rejection must fail as a settlement error";
+    return String.valueOf(error.getCause().getMessage());
   }
 
   private static void malformedOrSubstitutedMaterialFailsWithoutLeakingErrorBodies() {
@@ -247,6 +415,7 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
             .setStatusCode(400)
             .setBody("memo=LEAK_CANARY amount=987654".getBytes(StandardCharsets.UTF_8))
             .addHeader("Content-Type", "text/plain")
+            .addHeader("X-Iroha-Reject-Code", "memo=LEAK_CANARY_987654")
             .build();
     final AtomicPrivateSettlementToriiClientV1 client =
         client(new CapturingExecutor(rejection));
@@ -278,6 +447,41 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
     assert !String.valueOf(error.getCause().getMessage()).contains("987654")
         : "server amount leaked through error";
 
+    final String responseCanary = "APS_PRIVATE_KEY_RESPONSE_CANARY_9F48A3";
+    final String secretKey = "private_key_" + responseCanary;
+    final TransportResponse malformedResponse =
+        TransportResponse.builder()
+            .setStatusCode(200)
+            .setBody(
+                ("{\""
+                        + secretKey
+                        + "\":\"first\",\""
+                        + secretKey
+                        + "\":\"second\"}")
+                    .getBytes(StandardCharsets.UTF_8))
+            .addHeader("Content-Type", "application/json")
+            .build();
+    final CompletionException malformedError =
+        assertThrows(
+            CompletionException.class,
+            () ->
+                client(new CapturingExecutor(malformedResponse))
+                    .getBundleReceipt(BUNDLE)
+                    .join());
+    final Throwable responseFailure = malformedError.getCause();
+    assert responseFailure instanceof AtomicPrivateSettlementToriiExceptionV1
+        : "malformed response must fail as a settlement error";
+    assert "atomic private settlement response is invalid".equals(responseFailure.getMessage())
+        : "malformed response must use the fixed redacted message";
+    assert responseFailure.getCause() == null
+        : "malformed response parser cause must be discarded";
+    assert !malformedError.toString().contains(responseCanary)
+        : "malformed response canary leaked through the throwable";
+    assert !responseFailure.toString().contains(responseCanary)
+        : "malformed response canary leaked through the cause";
+    assert !renderThrowable(malformedError).contains(responseCanary)
+        : "malformed response canary leaked through the stack rendering";
+
     final TransportResponse redirected =
         new TransportResponse(
             200,
@@ -303,9 +507,31 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
         .build();
   }
 
+  private static AtomicPrivateSettlementPreparedRequestV1 bundleRequest() {
+    return AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
+        AtomicPrivateSettlementOperationV1.BUNDLE_SUBMIT,
+        "{\"transaction\":{}}".getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static ToriiCanonicalRequestAuth sponsorAuth() {
+    return new ToriiCanonicalRequestAuth(
+        "alice@universal", AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature);
+  }
+
+  private static String renderThrowable(final Throwable error) {
+    final StringWriter output = new StringWriter();
+    error.printStackTrace(new PrintWriter(output));
+    return output.toString();
+  }
+
   private static TransportResponse jsonResponse(final Map<String, Object> value) {
+    return jsonResponse(value, 200);
+  }
+
+  private static TransportResponse jsonResponse(
+      final Map<String, Object> value, final int statusCode) {
     return TransportResponse.builder()
-        .setStatusCode(200)
+        .setStatusCode(statusCode)
         .setBody(JsonEncoder.encode(value).getBytes(StandardCharsets.UTF_8))
         .addHeader("Content-Type", "application/json")
         .build();

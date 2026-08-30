@@ -28,12 +28,15 @@ public sealed partial class ToriiClient : IDisposable
     public const string AccountOnboardingTokenHeaderName = "X-Iroha-Onboarding-Token";
 
     private const int AccountOnboardingCurrentStateResponseMaxBytesV1 = 4 * 1024;
+    private const int DefaultJsonResponseMaxBytes = 8 * 1024 * 1024;
+    private const int DefaultTextResponseMaxBytes = 1024 * 1024;
+    private const int ErrorResponseMaxBytes = 64 * 1024;
     private const int FeeSponsorProgramResponseMaxBytes = 64 * 1024;
     private const int FeeQuoteResponseMaxBytes = 64 * 1024;
+    private const int SoraFsBufferedContentMaxBytes = 16 * 1024 * 1024;
     private const int SoraFsAliasTextMaxChars = 128;
     private const string InvalidUtf8ResponseBody = "<response body is not valid UTF-8>";
-    private static readonly JsonSerializerOptions ExactFeeResponseSerializerOptions =
-        CreateExactFeeResponseSerializerOptions();
+    private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
     private static readonly byte[] FaucetClaimHashDomainV1 =
         "iroha:accounts:faucet:claim:v1\0"u8.ToArray();
     private static readonly byte[] MultisigInstructionBoxSchemaHash =
@@ -41,30 +44,81 @@ public sealed partial class ToriiClient : IDisposable
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     private readonly bool ownsHttpClient;
-    private readonly bool injectedTransactionSubmissionTransportIsOneShot;
-    private readonly JsonSerializerOptions serializerOptions;
+    private readonly bool injectedTransportIsOneShot;
 
-    /// <summary>Creates a client for one Torii endpoint.</summary>
+    /// <summary>Creates a client for one Torii endpoint with the SDK-managed transport.</summary>
+    /// <param name="baseUri">The exact Torii base URI.</param>
+    /// <param name="options">Optional client behavior and validation settings.</param>
+    public ToriiClient(Uri baseUri, ToriiClientOptions? options = null)
+        : this(
+            baseUri,
+            httpClient: null,
+            options,
+            ownsHttpClient: true,
+            injectedTransportIsOneShot: false)
+    {
+    }
+
+    /// <summary>Creates an anonymous client for one Torii endpoint over a caller-owned transport.</summary>
     /// <param name="baseUri">The exact Torii base URI.</param>
     /// <param name="httpClient">
-    /// An optional caller-owned HTTP client. Transaction submission and other routes whose
-    /// contracts require a transport guarantee reject an injected client because
-    /// <see cref="ToriiClient"/> cannot inspect its complete handler chain.
+    /// The caller-owned HTTP client. It must not carry an onboarding token in its default headers.
+    /// Signed, bearer-authenticated, and one-shot routes reject an injected client because
+    /// <see cref="ToriiClient"/> cannot inspect its complete redirect and retry chain.
     /// </param>
-    /// <param name="options">Optional client behavior and validation settings.</param>
-    public ToriiClient(Uri baseUri, HttpClient? httpClient = null, ToriiClientOptions? options = null)
+    /// <param name="options">
+    /// Optional non-authentication behavior and validation settings. Authentication credentials
+    /// require the SDK-managed transport constructor.
+    /// </param>
+    public ToriiClient(Uri baseUri, HttpClient httpClient, ToriiClientOptions? options = null)
+        : this(
+            baseUri,
+            httpClient,
+            options,
+            ownsHttpClient: false,
+            injectedTransportIsOneShot: false)
+    {
+    }
+
+    private ToriiClient(
+        Uri baseUri,
+        HttpClient? httpClient,
+        ToriiClientOptions? options,
+        bool ownsHttpClient,
+        bool injectedTransportIsOneShot)
     {
         ArgumentNullException.ThrowIfNull(baseUri);
+        if (!ownsHttpClient)
+        {
+            ArgumentNullException.ThrowIfNull(httpClient);
+        }
+
+        if (!ownsHttpClient
+            && !injectedTransportIsOneShot
+            && (options?.CanonicalRequestCredentials is not null
+                || options?.BearerToken is not null))
+        {
+            throw new ArgumentException(
+                "Authentication credentials require the SDK-managed one-shot transport. "
+                + "Use the ToriiClient(Uri, ToriiClientOptions?) constructor.",
+                nameof(options));
+        }
+
+        if (httpClient?.DefaultRequestHeaders.Contains(AccountOnboardingTokenHeaderName) == true)
+        {
+            throw new ArgumentException(
+                $"The caller-owned HttpClient must not define the per-request {AccountOnboardingTokenHeaderName} header.",
+                nameof(httpClient));
+        }
 
         BaseUri = NormalizeBaseUri(baseUri);
         HttpClient = httpClient ?? new HttpClient(new HttpClientHandler
         {
             AllowAutoRedirect = false,
         });
-        HttpClient.DefaultRequestHeaders.Remove(AccountOnboardingTokenHeaderName);
-        ownsHttpClient = httpClient is null;
-        Options = options?.Snapshot() ?? new ToriiClientOptions();
-        serializerOptions = CreateSerializerOptions(Options.JsonSerializerOptions);
+        this.ownsHttpClient = ownsHttpClient;
+        this.injectedTransportIsOneShot = injectedTransportIsOneShot;
+        Options = options ?? new ToriiClientOptions();
     }
 
     internal ToriiClient(
@@ -72,21 +126,25 @@ public sealed partial class ToriiClient : IDisposable
         HttpClient httpClient,
         ToriiClientOptions? options,
         TransactionSubmissionTransportAssurance transportAssurance)
-        : this(baseUri, httpClient, options)
+        : this(
+            baseUri,
+            httpClient,
+            options,
+            ownsHttpClient: false,
+            injectedTransportIsOneShot: true)
     {
         if (transportAssurance
             != TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries)
         {
             throw new ArgumentOutOfRangeException(nameof(transportAssurance));
         }
-        injectedTransactionSubmissionTransportIsOneShot = true;
     }
 
     public Uri BaseUri { get; }
 
-    public HttpClient HttpClient { get; }
+    private HttpClient HttpClient { get; }
 
-    public ToriiClientOptions Options { get; }
+    internal ToriiClientOptions Options { get; }
 
     public void Dispose()
     {
@@ -96,23 +154,22 @@ public sealed partial class ToriiClient : IDisposable
         }
     }
 
-    public async Task<JsonDocument> GetJsonDocumentAsync(string path, string? query = null, CancellationToken cancellationToken = default)
+    internal async Task<JsonDocument> GetJsonDocumentAsync(string path, string? query = null, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(HttpMethod.Get, path, query, content: null, cancellationToken: cancellationToken);
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
-            stream,
+        return await ParseBoundedJsonContentRejectingDuplicatePropertiesAsync(
+            response.Content,
             $"Torii JSON response for `{response.RequestMessage?.RequestUri}`",
             cancellationToken);
     }
 
-    public async Task<TResponse> GetAsync<TResponse>(string path, string? query = null, CancellationToken cancellationToken = default)
+    internal async Task<TResponse> GetAsync<TResponse>(string path, string? query = null, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(HttpMethod.Get, path, query, content: null, cancellationToken: cancellationToken);
         return await DeserializeAsync<TResponse>(response, cancellationToken);
     }
 
-    public async Task<TResponse> PostAsync<TRequest, TResponse>(
+    internal async Task<TResponse> PostAsync<TRequest, TResponse>(
         string path,
         TRequest request,
         string? query = null,
@@ -154,7 +211,7 @@ public sealed partial class ToriiClient : IDisposable
             httpRequest,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
-        var body = await ReadBoundedExactJsonResponseBodyAsync(
+        var body = await ReadBoundedResponseBodyAsync(
             response.Content,
             maximumResponseBytes,
             responseContext,
@@ -171,7 +228,7 @@ public sealed partial class ToriiClient : IDisposable
             $"Torii response for `{response.RequestMessage?.RequestUri}`",
             cancellationToken);
         validateJson?.Invoke(document.RootElement);
-        return document.RootElement.Deserialize<TResponse>(ExactFeeResponseSerializerOptions)
+        return document.RootElement.Deserialize<TResponse>(SerializerOptions)
             ?? throw new JsonException(
                 $"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
     }
@@ -197,15 +254,29 @@ public sealed partial class ToriiClient : IDisposable
         }
     }
 
-    private static async Task<byte[]> ReadBoundedExactJsonResponseBodyAsync(
+    private static async Task<byte[]> ReadBoundedResponseBodyAsync(
         HttpContent content,
         int maximumBytes,
         string context,
         CancellationToken cancellationToken)
     {
+        if (maximumBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+        }
+        var declaredLength = content.Headers.ContentLength;
+        if (declaredLength.HasValue && declaredLength.Value > maximumBytes)
+        {
+            throw new InvalidDataException(
+                $"{context} exceeds the {maximumBytes}-byte limit.");
+        }
+
         await using var stream = await content.ReadAsStreamAsync(cancellationToken);
-        using var output = new MemoryStream(maximumBytes);
-        var buffer = ArrayPool<byte>.Shared.Rent(81_920);
+        var initialCapacity = declaredLength is >= 0 && declaredLength <= maximumBytes
+            ? checked((int)declaredLength.Value)
+            : Math.Min(maximumBytes, 4 * 1024);
+        using var output = new MemoryStream(initialCapacity);
+        var buffer = ArrayPool<byte>.Shared.Rent(Math.Min(81_920, maximumBytes + 1));
         try
         {
             while (true)
@@ -217,6 +288,10 @@ public sealed partial class ToriiClient : IDisposable
                     cancellationToken);
                 if (count == 0)
                 {
+                    if (declaredLength == output.Length && output.Capacity == output.Length)
+                    {
+                        return output.GetBuffer();
+                    }
                     return output.ToArray();
                 }
                 if (count > remaining)
@@ -348,7 +423,7 @@ public sealed partial class ToriiClient : IDisposable
             bodyStream,
             "account onboarding current-state response",
             cancellationToken);
-        return document.RootElement.Deserialize<ToriiAccountOnboardingCurrentStateResponseV1>(serializerOptions)
+        return document.RootElement.Deserialize<ToriiAccountOnboardingCurrentStateResponseV1>(SerializerOptions)
             ?? throw new JsonException("Account onboarding current-state response deserialized to null.");
     }
 
@@ -384,7 +459,7 @@ public sealed partial class ToriiClient : IDisposable
             ToriiIdentifierJson.RejectDuplicateProperties(
                 redactedDocument.RootElement,
                 DuplicatePropertyContext<TResponse>(response));
-            var value = redactedDocument.RootElement.Deserialize<TResponse>(serializerOptions);
+            var value = redactedDocument.RootElement.Deserialize<TResponse>(SerializerOptions);
             return value
                 ?? throw new JsonException(
                     $"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
@@ -1024,7 +1099,7 @@ public sealed partial class ToriiClient : IDisposable
                 ToriiAccountOnboardingPreparedTransactionV1.SchemaV1,
                 StringComparison.Ordinal))
         {
-            var prepared = response.Deserialize<ToriiAccountOnboardingPreparedTransactionV1>(serializerOptions)
+            var prepared = response.Deserialize<ToriiAccountOnboardingPreparedTransactionV1>(SerializerOptions)
                 ?? throw new JsonException("account onboarding prepared response deserialized to null.");
             ValidatePreparedAccountOnboarding(
                 prepared,
@@ -1042,7 +1117,7 @@ public sealed partial class ToriiClient : IDisposable
                 ToriiAccountOnboardingProofRequiredPrepareResponseV1.SchemaV1,
                 StringComparison.Ordinal))
         {
-            var proofRequired = response.Deserialize<ToriiAccountOnboardingProofRequiredPrepareResponseV1>(serializerOptions)
+            var proofRequired = response.Deserialize<ToriiAccountOnboardingProofRequiredPrepareResponseV1>(SerializerOptions)
                 ?? throw new JsonException("account onboarding proof-required response deserialized to null.");
             ValidateProofRequiredAccountOnboarding(
                 proofRequired,
@@ -1750,11 +1825,14 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
+    /// <summary>Submits one signed SoraFS pin-manifest transaction without replay.</summary>
+    /// <remarks>Public callers must use the SDK-managed one-shot transport.</remarks>
     public async Task<ToriiSoraFsPinRegisterResponse> RegisterSoraFsPinManifestAsync(
         SignedTransactionEnvelope transaction,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(transaction);
+        EnsureOneShotTransportIsVerified();
         using var content = CreateBinaryContent(
             NormalizeVersionedSignedTransactionPayload(
                 transaction.VersionedNoritoBytes,
@@ -1772,9 +1850,8 @@ public sealed partial class ToriiClient : IDisposable
                 $"SoraFS pin registration must return HTTP 202, got {(int)response.StatusCode}.");
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
-            stream,
+        using var document = await ParseBoundedJsonContentRejectingDuplicatePropertiesAsync(
+            response.Content,
             "SoraFS pin registration response",
             cancellationToken);
         var root = document.RootElement;
@@ -1833,25 +1910,36 @@ public sealed partial class ToriiClient : IDisposable
     public async Task<ToriiSoraFsContentResponse> GetSoraFsCidContentAsync(
         string cid,
         string? relativePath = null,
+        int maximumBytes = 16 * 1024 * 1024,
         CancellationToken cancellationToken = default)
     {
-        using var response = await OpenSoraFsCidContentAsync(cid, relativePath, cancellationToken);
-        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        var contentCid = ReadSoraFsContentCidHeader(response);
-        return new ToriiSoraFsContentResponse
+        if (maximumBytes <= 0 || maximumBytes > SoraFsBufferedContentMaxBytes)
         {
-            Bytes = bytes,
-            ContentType = response.Content.Headers.ContentType?.ToString(),
-            ContentLength = response.Content.Headers.ContentLength,
-            ContentCid = contentCid,
-        };
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumBytes),
+                $"Buffered SoraFS reads must be between 1 and {SoraFsBufferedContentMaxBytes} bytes. "
+                + "Use OpenSoraFsCidContentAsync for larger streaming reads.");
+        }
+
+        using var response = await OpenSoraFsCidContentAsync(cid, relativePath, cancellationToken);
+        var bytes = await ReadBoundedResponseBodyAsync(
+            response.Content,
+            maximumBytes,
+            "SoraFS buffered content response",
+            cancellationToken);
+        var contentCid = ReadSoraFsContentCidHeader(response);
+        return ToriiSoraFsContentResponse.FromOwnedBuffer(
+            bytes,
+            response.Content.Headers.ContentType?.ToString(),
+            response.Content.Headers.ContentLength,
+            contentCid);
     }
 
     /// <summary>Submits one canonical, versioned signed-query envelope.</summary>
     /// <remarks>
     /// The signed body is dispatched once. Redirect responses, non-success responses,
     /// and transport failures are surfaced to the caller without replaying the body.
-    /// An injected <see cref="HttpClient"/> must provide the same one-shot behavior.
+    /// Public callers must use the SDK-managed one-shot transport.
     /// </remarks>
     public async Task<JsonDocument> SubmitSignedQueryAsync(
         ReadOnlyMemory<byte> noritoVersionedBytes,
@@ -1859,19 +1947,19 @@ public sealed partial class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         var normalizedBytes = NormalizeNonEmptyBinaryPayload(noritoVersionedBytes, nameof(noritoVersionedBytes));
+        EnsureOneShotTransportIsVerified();
         using var content = CreateBinaryContent(normalizedBytes, "application/x-norito");
         using var response = await SendAsync(HttpMethod.Post, "/v1/query", query, content, cancellationToken: cancellationToken);
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
-            stream,
+        return await ParseBoundedJsonContentRejectingDuplicatePropertiesAsync(
+            response.Content,
             $"signed query response for `{response.RequestMessage?.RequestUri}`",
             cancellationToken);
     }
 
     /// <summary>Submits one managed canonical signed-query envelope.</summary>
     /// <remarks>
-    /// The envelope is dispatched once. An injected <see cref="HttpClient"/> must
-    /// disable automatic redirects and retries for this nonce-bearing request.
+    /// The envelope is dispatched once. Public callers must use the SDK-managed one-shot
+    /// transport for this nonce-bearing request.
     /// </remarks>
     public Task<JsonDocument> SubmitSignedQueryAsync(
         SignedQueryEnvelope signedQuery,
@@ -1889,8 +1977,8 @@ public sealed partial class ToriiClient : IDisposable
     /// <see cref="SignedIterableQueryBuilder.FindTransactionDetails(string)"/> and the exact
     /// genesis-derived <c>NetworkId</c>. Torii verifies the network, signature, freshness, and
     /// one-shot nonce before ledger access, then authorizes only an involved account or an
-    /// operator. The nonce-bearing request is dispatched once; redirects, retries, and replay
-    /// are forbidden for both this SDK and injected transports.
+    /// operator. The SDK-managed transport dispatches the nonce-bearing request once; public
+    /// caller-owned transports are rejected because redirects, retries, and replay are forbidden.
     /// </remarks>
     public async Task<JsonDocument> GetPipelineTransactionDetailsAsync(
         SignedQueryEnvelope signedQuery,
@@ -1899,15 +1987,15 @@ public sealed partial class ToriiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(signedQuery);
         var normalizedHash = NormalizeTransactionHashHex(transactionHashHex);
+        EnsureOneShotTransportIsVerified();
         using var content = CreateBinaryContent(signedQuery.VersionedNoritoBytes, "application/x-norito");
         using var response = await SendAsync(
             HttpMethod.Post,
             "/v1/pipeline/transactions/details",
             content: content,
             cancellationToken: cancellationToken);
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
-            stream,
+        var document = await ParseBoundedJsonContentRejectingDuplicatePropertiesAsync(
+            response.Content,
             $"pipeline transaction details response for `{response.RequestMessage?.RequestUri}`",
             cancellationToken);
         try
@@ -1922,7 +2010,7 @@ public sealed partial class ToriiClient : IDisposable
         }
     }
 
-    public Task<HttpResponseMessage> OpenEventSseAsync(
+    internal Task<HttpResponseMessage> OpenEventSseAsync(
         string? query = null,
         CancellationToken cancellationToken = default)
     {
@@ -2028,7 +2116,7 @@ public sealed partial class ToriiClient : IDisposable
         }
     }
 
-    public Task<HttpResponseMessage> OpenExplorerBlocksSseAsync(
+    internal Task<HttpResponseMessage> OpenExplorerBlocksSseAsync(
         string? lastEventId = null,
         CancellationToken cancellationToken = default)
     {
@@ -2039,7 +2127,7 @@ public sealed partial class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
-    public Task<HttpResponseMessage> OpenExplorerTransactionsSseAsync(
+    internal Task<HttpResponseMessage> OpenExplorerTransactionsSseAsync(
         string? lastEventId = null,
         CancellationToken cancellationToken = default)
     {
@@ -2050,7 +2138,7 @@ public sealed partial class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
-    public Task<HttpResponseMessage> OpenExplorerInstructionsSseAsync(
+    internal Task<HttpResponseMessage> OpenExplorerInstructionsSseAsync(
         string? lastEventId = null,
         CancellationToken cancellationToken = default)
     {
@@ -2129,7 +2217,7 @@ public sealed partial class ToriiClient : IDisposable
             versionedNoritoBytes,
             nameof(versionedNoritoBytes));
         RequireCanonicalRequestCredentials("/v1/node/capabilities");
-        EnsureTransactionSubmissionTransportIsOneShot();
+        EnsureOneShotTransportIsVerified();
         await EnsureCanonicalTransactionContractAsync(cancellationToken);
         using var content = CreateBinaryContent(normalizedBytes, "application/x-norito");
         using var response = await SendExpectingStatusAsync(
@@ -2142,12 +2230,12 @@ public sealed partial class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
-    private void EnsureTransactionSubmissionTransportIsOneShot()
+    private void EnsureOneShotTransportIsVerified()
     {
-        if (!ownsHttpClient && !injectedTransactionSubmissionTransportIsOneShot)
+        if (!ownsHttpClient && !injectedTransportIsOneShot)
         {
             throw new InvalidOperationException(
-                "Transaction submission requires ToriiClient's internally managed one-shot, no-redirect transport.");
+                "Signed and one-shot Torii requests require ToriiClient's internally managed one-shot, no-redirect transport.");
         }
     }
 
@@ -2188,30 +2276,14 @@ public sealed partial class ToriiClient : IDisposable
                 "pipeline transaction status response must use the application/json media type.");
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
-            stream,
+        using var document = await ParseBoundedJsonContentRejectingDuplicatePropertiesAsync(
+            response.Content,
             $"pipeline transaction status response for `{response.RequestMessage?.RequestUri}`",
             cancellationToken);
         return ParsePipelineTransactionStatus(document.RootElement, normalizedHash, normalizedScope);
     }
 
-    public async Task<JsonDocument> PostJsonDocumentAsync<TRequest>(
-        string path,
-        TRequest request,
-        string? query = null,
-        CancellationToken cancellationToken = default)
-    {
-        using var content = CreateJsonContent(request);
-        using var response = await SendAsync(HttpMethod.Post, path, query, content, cancellationToken: cancellationToken);
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
-            stream,
-            $"Torii JSON response for `{response.RequestMessage?.RequestUri}`",
-            cancellationToken);
-    }
-
-    public async Task<HttpResponseMessage> SendAsync(
+    internal async Task<HttpResponseMessage> SendAsync(
         HttpMethod method,
         string path,
         string? query = null,
@@ -2409,12 +2481,17 @@ public sealed partial class ToriiClient : IDisposable
 
         if (canonicalCredentials is not null && !IsAnonymousPublicRoute(exactPath))
         {
+            // Canonical account proofs bind method, path, query, body, time, and nonce, but not
+            // the destination authority. An opaque injected handler could therefore forward the
+            // proof on redirect or replay the same nonce on retry. Only the internally managed
+            // handler (or the internal test-only one-shot assurance) may dispatch signed requests.
+            EnsureOneShotTransportIsVerified();
             var bodyBytes = content is null ? Array.Empty<byte>() : await content.ReadAsByteArrayAsync(cancellationToken);
             var headers = CanonicalRequest.BuildHeaders(
-                Options.LocalSigningContext?.NetworkId
-                    ?? throw new InvalidOperationException("Canonical request authentication requires ToriiClientOptions.LocalSigningContext."),
+                Options.NetworkId
+                    ?? throw new InvalidOperationException("Canonical request authentication requires ToriiClientOptions.NetworkId."),
                 canonicalCredentials.AccountId,
-                canonicalCredentials.PrivateKeySeed,
+                canonicalCredentials.PrivateKeySeedSpan,
                 exactMethod,
                 requestUri.AbsolutePath,
                 requestUri.Query,
@@ -3169,9 +3246,8 @@ public sealed partial class ToriiClient : IDisposable
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
-            stream,
+        using var document = await ParseBoundedJsonContentRejectingDuplicatePropertiesAsync(
+            response.Content,
             DuplicatePropertyContext<TResponse>(response),
             cancellationToken);
         if (typeof(TResponse) == typeof(ToriiContractCallResponse))
@@ -3183,7 +3259,7 @@ public sealed partial class ToriiClient : IDisposable
         TResponse? value;
         try
         {
-            value = document.RootElement.Deserialize<TResponse>(serializerOptions);
+            value = document.RootElement.Deserialize<TResponse>(SerializerOptions);
         }
         catch (ArgumentException error)
             when (typeof(TResponse) == typeof(ToriiContractCallResponse)
@@ -3225,6 +3301,24 @@ public sealed partial class ToriiClient : IDisposable
             document.Dispose();
             throw;
         }
+    }
+
+    private static async Task<JsonDocument> ParseBoundedJsonContentRejectingDuplicatePropertiesAsync(
+        HttpContent content,
+        string context,
+        CancellationToken cancellationToken,
+        int maximumBytes = DefaultJsonResponseMaxBytes)
+    {
+        var body = await ReadBoundedResponseBodyAsync(
+            content,
+            maximumBytes,
+            context,
+            cancellationToken);
+        using var stream = new MemoryStream(body, writable: false);
+        return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            stream,
+            context,
+            cancellationToken);
     }
 
     private static JsonException RewriteIdentifierPoliciesJsonException(JsonException exception)
@@ -3525,9 +3619,9 @@ public sealed partial class ToriiClient : IDisposable
         {
             return;
         }
-        var expectedNetworkId = Options.LocalSigningContext?.NetworkId
+        var expectedNetworkId = Options.NetworkId
             ?? throw new JsonException(
-                $"{context} cannot trust an unsigned transaction without ToriiClientOptions.LocalSigningContext.");
+                $"{context} cannot trust an unsigned transaction without ToriiClientOptions.NetworkId.");
         if (responseCreationTimeMilliseconds is null or 0)
         {
             throw new JsonException(
@@ -5876,9 +5970,9 @@ public sealed partial class ToriiClient : IDisposable
         var draftIntent = request.DraftIntent
             ?? throw new JsonException(
                 $"{context} requires an exact caller-trusted DraftIntent before its unsigned draft can be trusted.");
-        var expectedNetworkId = Options.LocalSigningContext?.NetworkId
+        var expectedNetworkId = Options.NetworkId
             ?? throw new JsonException(
-                $"{context} cannot trust an unsigned transaction without ToriiClientOptions.LocalSigningContext.");
+                $"{context} cannot trust an unsigned transaction without ToriiClientOptions.NetworkId.");
         var expectedCodeHashHex = Convert
             .ToHexString(draftIntent.Invocation.ExpectedCodeHash)
             .ToLowerInvariant();
@@ -7684,11 +7778,14 @@ public sealed partial class ToriiClient : IDisposable
                 responseBody = await ReadStrictUtf8TextContentAsync(
                     response.Content,
                     "Torii error response body",
-                    cancellationToken);
+                    cancellationToken,
+                    ErrorResponseMaxBytes);
             }
-            catch (InvalidDataException)
+            catch (InvalidDataException error)
             {
-                responseBody = InvalidUtf8ResponseBody;
+                responseBody = error.InnerException is DecoderFallbackException
+                    ? InvalidUtf8ResponseBody
+                    : $"<response body exceeds the {ErrorResponseMaxBytes}-byte limit>";
             }
         }
 
@@ -7723,9 +7820,14 @@ public sealed partial class ToriiClient : IDisposable
     private static async Task<string> ReadStrictUtf8TextContentAsync(
         HttpContent content,
         string context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int maximumBytes = DefaultTextResponseMaxBytes)
     {
-        var bytes = await content.ReadAsByteArrayAsync(cancellationToken);
+        var bytes = await ReadBoundedResponseBodyAsync(
+            content,
+            maximumBytes,
+            context,
+            cancellationToken);
         try
         {
             return StrictUtf8.GetString(bytes);
@@ -8445,27 +8547,9 @@ public sealed partial class ToriiClient : IDisposable
         ]);
     }
 
-    private static JsonSerializerOptions CreateSerializerOptions(JsonSerializerOptions baseOptions)
+    private static JsonSerializerOptions CreateSerializerOptions()
     {
-        ArgumentNullException.ThrowIfNull(baseOptions);
-
-        var options = new JsonSerializerOptions(baseOptions);
-        if (options.MaxDepth == 0)
-        {
-            options.MaxDepth = 128;
-        }
-        IList<IJsonTypeInfoResolver> resolverChain = options.TypeInfoResolverChain;
-        if (!resolverChain.Contains(ToriiJsonSerializerContext.Default))
-        {
-            resolverChain.Insert(0, ToriiJsonSerializerContext.Default);
-        }
-
-        return options;
-    }
-
-    private static JsonSerializerOptions CreateExactFeeResponseSerializerOptions()
-    {
-        var options = new JsonSerializerOptions(ToriiJsonSerializerContext.Default.Options)
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             AllowTrailingCommas = false,
             MaxDepth = 128,
@@ -8474,12 +8558,14 @@ public sealed partial class ToriiClient : IDisposable
             ReadCommentHandling = JsonCommentHandling.Disallow,
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         };
+        options.TypeInfoResolverChain.Insert(0, ToriiJsonSerializerContext.Default);
+        options.MakeReadOnly();
         return options;
     }
 
     private StringContent CreateJsonContent<TRequest>(TRequest request)
     {
-        var json = JsonSerializer.Serialize(request, serializerOptions);
+        var json = JsonSerializer.Serialize(request, SerializerOptions);
         return new StringContent(json, Encoding.UTF8, "application/json");
     }
 

@@ -230,7 +230,7 @@ mod tests {
         NetworkId, account::AccountId, block::BlockHeader, nexus::AtomicPrivateSettlementV1,
         transaction::TransactionBuilder,
     };
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU32, NonZeroU64};
 
     #[test]
     fn one_shot_binding_rejects_substitution_and_replay() {
@@ -379,6 +379,45 @@ mod tests {
         .sign(sponsor_key.private_key());
         assert!(matches!(
             signed_private_settlement_carrier_binding_v1(&transaction),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+    }
+
+    #[test]
+    fn abort_carrier_rejects_substituted_sponsor_and_fee_intent() {
+        use iroha_data_model::{
+            nexus::PrivateSettlementAbortReasonV1, transaction::FeePaymentIntent,
+        };
+
+        let (bundle, sponsor_key) = certified_commit_bundle_fixture();
+        let manifest = bundle.manifest;
+        let instruction = AbortAtomicPrivateSettlementV1::new(
+            manifest.clone(),
+            PrivateSettlementAbortReasonV1::ParticipantRejected,
+        );
+        let outsider_key = KeyPair::from_seed(vec![0xA9; 32], Algorithm::Ed25519);
+        let outsider = AccountId::new(outsider_key.public_key().clone());
+        let wrong_sponsor = TransactionBuilder::new(
+            manifest.network_id,
+            outsider,
+            manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([instruction.clone()])
+        .sign(outsider_key.private_key());
+        assert!(matches!(
+            signed_private_settlement_carrier_binding_v1(&wrong_sponsor),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+
+        let wrong_fee = TransactionBuilder::new(
+            manifest.network_id,
+            manifest.sponsor,
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1)),
+        )
+        .with_instructions([instruction])
+        .sign(sponsor_key.private_key());
+        assert!(matches!(
+            signed_private_settlement_carrier_binding_v1(&wrong_fee),
             Err(ValidationFail::NotPermitted(_))
         ));
     }

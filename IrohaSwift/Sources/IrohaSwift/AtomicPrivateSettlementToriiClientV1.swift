@@ -305,6 +305,23 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
     private static let bundleResponseMaximumBytes = 8 * 1024 * 1024
     private static let restrictedResponseMaximumBytes = 32 * 1024 * 1024
 
+    private static func sanitizedRejectCode(_ value: String?) -> String? {
+        guard let value,
+              (1 ... 128).contains(value.utf8.count),
+              value.utf8.allSatisfy({ byte in
+                  (48 ... 57).contains(byte)
+                      || (65 ... 90).contains(byte)
+                      || (97 ... 122).contains(byte)
+                      || byte == 45
+                      || byte == 46
+                      || byte == 58
+                      || byte == 95
+              }) else {
+            return nil
+        }
+        return value
+    }
+
     public let baseURL: URL
     public let localSigningContext: ToriiLocalSigningContext
     public let defaultHeaders: [String: String]
@@ -373,6 +390,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         try await sponsorMutation(.legUpload, request: request, auth: sponsorAuth)
     }
 
+    /// Submit one exact sponsor-signed global finalization or abort carrier.
     public func submitBundle(
         _ request: AtomicPrivateSettlementPreparedRequestV1,
         sponsorAuth: ToriiCanonicalRequestAuth
@@ -595,8 +613,15 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
             bytes.task.cancel()
             throw AtomicPrivateSettlementClientErrorV1.httpStatus(
                 http.statusCode,
-                http.value(forHTTPHeaderField: "x-iroha-reject-code")
+                Self.sanitizedRejectCode(
+                    http.value(forHTTPHeaderField: "x-iroha-reject-code")
+                )
             )
+        }
+        let expectedStatus = route.hasSuffix("/bundles") ? 202 : 200
+        guard http.statusCode == expectedStatus else {
+            bytes.task.cancel()
+            throw AtomicPrivateSettlementClientErrorV1.invalidResponse
         }
         guard http.value(forHTTPHeaderField: "Content-Type") == "application/json" else {
             bytes.task.cancel()
@@ -673,7 +698,10 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
     private static func strictObject(_ data: Data) throws -> [String: Any] {
         guard !data.isEmpty else { throw AtomicPrivateSettlementClientErrorV1.invalidResponse }
         do {
-            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
+                in: data,
+                integerKeys: ["accepted_at_height"]
+            )
             let object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
             guard let fields = object as? [String: Any] else {
                 throw AtomicPrivateSettlementClientErrorV1.invalidResponse
@@ -698,6 +726,21 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         if let expectedIdentifier, let expectedIdentifierField,
            object[expectedIdentifierField] as? String != expectedIdentifier.jsonLiteral {
             throw AtomicPrivateSettlementClientErrorV1.responseSubstitution
+        }
+        if route.hasSuffix("/bundles") {
+            for field in ["bundle_id", "carrier_id"] {
+                guard let literal = object[field] as? String,
+                      let identifier = try? AtomicPrivateSettlementIdentifierV1(literal),
+                      identifier.jsonLiteral == literal else {
+                    throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+                }
+            }
+            guard let height = object["accepted_at_height"] as? NSNumber,
+                  CFGetTypeID(height) != CFBooleanGetTypeID(),
+                  !CFNumberIsFloatType(height),
+                  StrictJSONNumber.uint64(from: height) != nil else {
+                throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+            }
         }
         if route.hasSuffix("/phase-certificates") {
             for field in ["prepare_certificate", "commit_certificate"] {

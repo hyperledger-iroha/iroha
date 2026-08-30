@@ -32,9 +32,6 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 /// Current Parliament draft/read API layout.
 pub const PARLIAMENT_API_VERSION_V1: u16 = 1;
 
-/// Backward-compatible Torii name for the authoritative Parliament attempt-state bound.
-pub use iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1 as PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1;
-
 /// Strict request for one locally signed governance-attempt creation.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -105,23 +102,8 @@ impl ParliamentTransitionDraftRequestV1 {
         if self.version != PARLIAMENT_API_VERSION_V1 {
             return Err("unsupported Parliament transition draft version");
         }
-        if self
-            .governance_attempt_id
-            .as_bytes()
-            .iter()
-            .all(|byte| *byte == 0)
-        {
-            return Err("governance attempt id must be non-zero");
-        }
-        if let ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) = &self.transition
-            && payload
-                .requests
-                .iter()
-                .any(|entry| entry.request.governance_attempt_id != self.governance_attempt_id)
-        {
-            return Err("sortition request governance attempt id does not match the draft");
-        }
-        self.transition.validate_static()
+        self.transition
+            .validate_static_for_attempt(self.governance_attempt_id)
     }
 }
 
@@ -1886,7 +1868,10 @@ mod tests {
 
     #[test]
     fn full_state_payload_bound_is_not_smaller_than_private_corpus_bound() {
-        assert!(PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1 >= 1_000 * (3_624 + 2_858));
+        assert!(
+            iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1
+                >= 1_000 * (3_624 + 2_858)
+        );
     }
 
     #[test]

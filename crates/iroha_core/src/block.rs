@@ -65,6 +65,7 @@ use iroha_data_model::{
         consensus::{
             LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
             NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            ValidatorIndex,
         },
         *,
     },
@@ -6714,7 +6715,7 @@ pub(crate) mod valid {
         }
         fn verify_signer_set(
             topology: &Topology,
-            signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+            signers: &BTreeSet<ValidatorIndex>,
             allow_quorum_bypass: bool,
         ) -> Result<(), SignatureVerificationError> {
             let roster_len = topology.as_ref().len();
@@ -8494,9 +8495,9 @@ pub(crate) mod valid {
             });
             let pulse_requested = pulse_required_for_successor || parliament_requested;
             let Some(pulse) = pulse else {
-                return if pulse_required_for_successor {
+                return if pulse_requested {
                     Err(Self::npos_effects_error(
-                        "NPoS pre-boundary block is missing its finalized global beacon pulse",
+                        "block is missing a finalized global beacon pulse requested by committed pre-state",
                     ))
                 } else {
                     Ok(())
@@ -13449,21 +13450,8 @@ pub(crate) mod valid {
                         key_count: count,
                     },
                 );
-                let mut sidecar =
+                let sidecar =
                     PipelineRecoverySidecar::new(height, block_hash, dag_snapshot, txs_sidecar);
-                #[cfg(feature = "zk-preverify")]
-                {
-                    let trace_digests = crate::zk::collect_trace_digests_for_height(height);
-                    if !trace_digests.is_empty() {
-                        iroha_logger::debug!(
-                            height,
-                            count = trace_digests.len(),
-                            "attaching {} trace digests to pipeline sidecar",
-                            trace_digests.len()
-                        );
-                        sidecar.proofs = trace_digests;
-                    }
-                }
                 match state_block.kura().enqueue_pipeline_metadata(sidecar) {
                     PipelineSidecarEnqueueResult::Enqueued { .. } => {}
                     PipelineSidecarEnqueueResult::RejectedQueueFull { cap } => {
@@ -15927,7 +15915,7 @@ pub(crate) mod valid {
         pub fn commit_with_signers(
             self,
             topology: &Topology,
-            signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+            signers: &BTreeSet<ValidatorIndex>,
             allow_quorum_bypass: bool,
         ) -> WithCommittedBlockEvents {
             let validation = (|| -> Result<(), SignatureVerificationError> {
@@ -19101,6 +19089,42 @@ pub(crate) mod valid {
                 None,
             )
             .expect("permissioned validation must not derive NPoS-only penalties");
+        }
+        #[test]
+        fn committed_parliament_request_rejects_candidate_without_pulse() {
+            setup_stateless_cache_state!(kura, state, leader_private, topology, validator_keys);
+            let mut context = authenticated_permissioned_successor_context(&state, &validator_keys);
+            context.height = 12;
+            let roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>();
+            let (attempt_id, _request_ids, attempt) =
+                crate::beacon::tests::pending_batched_sortition_attempt(
+                    &context.network_id,
+                    &roster,
+                    context.height,
+                );
+            {
+                let mut block = state.world.block();
+                block.parliament_attempts.insert(attempt_id, attempt);
+                block.commit();
+            }
+            let candidate = npos_effects_block(&leader_private, context.height, None);
+            let error = ValidBlock::validate_npos_effects_with_state(
+                &candidate,
+                &state,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+                Some(&context),
+            )
+            .expect_err("a committed Parliament pulse request must reject omission");
+            assert!(matches!(
+                error,
+                BlockValidationError::NposEffectsInvalid(message)
+                    if message.contains("requested by committed pre-state")
+            ));
+            drop((kura, topology));
         }
         #[test]
         fn consensus_mode_effects_npos_still_requires_signed_parameters() {

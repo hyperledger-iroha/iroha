@@ -25,7 +25,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     );
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_BYTES.get(),
-        231 * 1024 * 1024
+        1089 * 1024 * 1024
     );
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
@@ -58,7 +58,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
         2
     );
     assert_eq!(cfg.sumeragi.queues.bodies.get(), 161);
-    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 231 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 1089 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),
         33 * 1024 * 1024

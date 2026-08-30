@@ -9749,6 +9749,8 @@ impl SumeragiV2Adapter {
                     wal_name,
                     wire::PROTOCOL_VERSION,
                     network_id,
+                    context.id(),
+                    context.height(),
                     consensus_key_hash,
                 )?;
                 (wal_path, wal)
@@ -9759,6 +9761,8 @@ impl SumeragiV2Adapter {
                     wal_path.clone(),
                     wire::PROTOCOL_VERSION,
                     network_id,
+                    context.id(),
+                    context.height(),
                     consensus_key_hash,
                 )?;
                 (wal_path, wal)

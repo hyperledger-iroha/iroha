@@ -41,7 +41,7 @@ use super::{
         AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadStoreInstanceIdentity,
         CertifiedServePayloadStoreV1, CertifiedServeRetirementAuthenticationErrorV1,
     },
-    v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession},
+    v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask,
         CompletionDisposition, ConsensusBroadcastDisposition, ConsensusSignTask,

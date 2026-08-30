@@ -36,6 +36,10 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             ToriiParliamentAPIV1.proposalKinds
         )
         XCTAssertEqual(
+            fixture["contract_lifecycle_actions"] as? [String],
+            ToriiParliamentAPIV1.contractLifecycleActions
+        )
+        XCTAssertEqual(
             limits["timed_ovn_ballot_chunk_max_records"],
             ToriiParliamentAPIV1.maximumTimedOvnBallotChunkRecords
         )
@@ -618,10 +622,10 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             valid,
             expectedGovernanceAttemptId: attemptID
         )
-        XCTAssertEqual(parsed.bodyStates.count, 1)
-        XCTAssertEqual(parsed.requiredBodyOrder, ["rules-committee"])
+        XCTAssertEqual(parsed.bodyStates.count, 2)
+        XCTAssertEqual(parsed.requiredBodyOrder, ["rules-committee", "policy-jury"])
         XCTAssertEqual(parsed.bodyStates[0].body, "rules-committee")
-        XCTAssertEqual(parsed.certificateBodyOrder, ["rules-committee"])
+        XCTAssertEqual(parsed.certificateBodyOrder, ["rules-committee", "policy-jury"])
         XCTAssertEqual(parsed.bodyStates[0].publicFindingDeadlineHeight, 8)
         XCTAssertEqual(
             parsed.publicFindingBindings[0].endorsingAssignments,
@@ -741,14 +745,20 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             mutateCertificate(makeReadResponse()) { certificate, _, _ in
                 certificate["enact_at_height"] = 8
             },
+            mutateCertificate(makeReadResponse()) { certificate, _, _ in
+                certificate["certified_at_height"] = 13
+            },
             mutateCertificate(makeReadResponse()) { _, _, request in
                 request["beacon_session_id"] = identifier(0xee)
             },
             mutateCertificate(makeReadResponse()) { _, _, request in
                 request["request_height"] = 0
             },
-            mutateCertificate(makeReadResponse()) { _, _, request in
-                request["candidate_count"] = 1_001
+            mutateCertificate(makeReadResponse()) { _, binding, _ in
+                binding["election_attempt_sequence"] = 17
+            },
+            mutateCertificate(makeReadResponse()) { _, binding, _ in
+                binding["original_seats"] = 4
             },
         ]
         for forged in forgedResponses {
@@ -759,6 +769,75 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
                 )
             )
         }
+
+        let largeElectorate = mutateCertificate(makeReadResponse()) { _, _, request in
+            request["candidate_count"] = 1_001
+        }
+        XCTAssertNoThrow(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(largeElectorate),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        let maximumElectorate = mutateCertificate(makeReadResponse()) { _, _, request in
+            request["candidate_count"] = 4_294_967_295
+        }
+        XCTAssertNoThrow(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(maximumElectorate),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+        let overflowingElectorate = mutateCertificate(makeReadResponse()) { _, _, request in
+            request["candidate_count"] = 4_294_967_296
+        }
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(overflowingElectorate),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        let zeroHeadVersion = mutateCertificate(makeReadResponse()) { certificate, _, _ in
+            certificate["expected_head"] = [
+                "state": "Present",
+                "head": ["subject_id": root, "version": 0, "head_root": root],
+            ]
+        }
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(zeroHeadVersion),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(makePublicOnlyReadResponse()),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        var wrongProjectionPolicy = makeReadResponse()
+        wrongProjectionPolicy["policy_version"] = 2
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(wrongProjectionPolicy),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        var excessiveAttemptRetry = makeReadResponse()
+        var retryAttempt = try XCTUnwrap(excessiveAttemptRetry["attempt"] as? [String: Any])
+        retryAttempt["sequence"] = 17
+        excessiveAttemptRetry["attempt"] = retryAttempt
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(excessiveAttemptRetry),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
 
         var wrongMode = makeReadResponse()
         wrongMode["required_bodies"] = [[
@@ -803,6 +882,70 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
                     expectedGovernanceAttemptId: attemptID
                 )
             )
+        }
+
+        XCTAssertNoThrow(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(makeConfirmationBallotReadResponse()),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+        XCTAssertNoThrow(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(
+                    makeConfirmationBallotReadResponse(
+                        electionAttemptSequence: 1,
+                        requestHeight: 49,
+                        pulseHeight: 50
+                    )
+                ),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+        assertConfirmationMutationRejected { policy, confirmation in
+            confirmation["beacon_pulse_id"] = policy["beacon_pulse_id"]
+        }
+        assertConfirmationMutationRejected { _, confirmation in
+            confirmation["election_attempt_sequence"] = 0
+            var request = confirmation["sortition_request"] as! [String: Any]
+            request["request_height"] = 49
+            request["pulse_height"] = 50
+            confirmation["sortition_request"] = request
+        }
+        assertConfirmationMutationRejected { _, confirmation in
+            confirmation["election_attempt_sequence"] = 1
+            var request = confirmation["sortition_request"] as! [String: Any]
+            request["request_height"] = 48
+            request["pulse_height"] = 49
+            confirmation["sortition_request"] = request
+        }
+        var missingConfirmation = makeConfirmationBallotReadResponse()
+        var missingCertificate = missingConfirmation["certificate"] as! [String: Any]
+        let missingBindings = missingCertificate["body_bindings"] as! [[String: Any]]
+        missingCertificate["body_bindings"] = [missingBindings[0]]
+        missingCertificate["certified_at_height"] = 48
+        missingCertificate["enact_at_height"] = 50
+        missingConfirmation["certificate"] = missingCertificate
+        missingConfirmation["required_bodies"] = [
+            (missingConfirmation["required_bodies"] as! [[String: Any]])[0],
+        ]
+        missingConfirmation["body_states"] = [
+            (missingConfirmation["body_states"] as! [[String: Any]])[0],
+        ]
+        missingConfirmation["current_height"] = 49
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(missingConfirmation),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+        assertConfirmationMutationRejected { policy, _ in
+            var ballot = policy["ballot"] as! [String: Any]
+            var tally = ballot["tally"] as! [String: Any]
+            tally["aye"] = 15
+            tally["nay"] = 6
+            ballot["tally"] = tally
+            policy["ballot"] = ballot
         }
     }
 
@@ -1013,6 +1156,29 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
     private func makeReadResponse(
         supporters: [String]? = nil
     ) -> [String: Any] {
+        var response = makePublicOnlyReadResponse(supporters: supporters)
+        let policyResponse = makeHiddenBallotReadResponse()
+        var requiredBodies = response["required_bodies"] as! [[String: Any]]
+        requiredBodies.append(contentsOf: policyResponse["required_bodies"] as! [[String: Any]])
+        response["required_bodies"] = requiredBodies
+        var bodyStates = response["body_states"] as! [[String: Any]]
+        bodyStates.append(contentsOf: policyResponse["body_states"] as! [[String: Any]])
+        response["body_states"] = bodyStates
+        var certificate = response["certificate"] as! [String: Any]
+        var bindings = certificate["body_bindings"] as! [[String: Any]]
+        let policyCertificate = policyResponse["certificate"] as! [String: Any]
+        bindings.append(contentsOf: policyCertificate["body_bindings"] as! [[String: Any]])
+        certificate["body_bindings"] = bindings
+        certificate["certified_at_height"] = 12
+        certificate["enact_at_height"] = 14
+        response["certificate"] = certificate
+        response["current_height"] = 13
+        return response
+    }
+
+    private func makePublicOnlyReadResponse(
+        supporters: [String]? = nil
+    ) -> [String: Any] {
         let exactSupporters = supporters ?? [identifier(0x11), identifier(0x12)]
         return [
             "version": 1,
@@ -1092,10 +1258,138 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         ]
     }
 
+    private func assertConfirmationMutationRejected(
+        _ mutation: (inout [String: Any], inout [String: Any]) -> Void
+    ) {
+        var response = makeConfirmationBallotReadResponse()
+        var certificate = response["certificate"] as! [String: Any]
+        var bindings = certificate["body_bindings"] as! [[String: Any]]
+        var policy = bindings[0]
+        var confirmation = bindings[1]
+        mutation(&policy, &confirmation)
+        bindings[0] = policy
+        bindings[1] = confirmation
+        certificate["body_bindings"] = bindings
+        response["certificate"] = certificate
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(response),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+    }
+
+    private func makeConfirmationBallotReadResponse(
+        electionAttemptSequence: Int = 0,
+        requestHeight: Int = 48,
+        pulseHeight: Int = 49
+    ) -> [String: Any] {
+        var response = makeHiddenBallotReadResponse()
+        var policyState = (response["body_states"] as! [[String: Any]])[0]
+        policyState["timed_ovn_progress"] = [
+            "ballot_attempt_id": identifier(0x21),
+            "status": ["status": "Finalized"],
+            "frozen_survivor_count": 21,
+            "accepted_ballot_prefix_count": 21,
+        ]
+
+        var certificate = response["certificate"] as! [String: Any]
+        var policy = (certificate["body_bindings"] as! [[String: Any]])[0]
+        policy["original_seats"] = 21
+        policy["result_height"] = 48
+        var policyRequest = policy["sortition_request"] as! [String: Any]
+        policyRequest["candidate_count"] = 21
+        policyRequest["target_seats"] = 21
+        policy["sortition_request"] = policyRequest
+        var policyBallot = policy["ballot"] as! [String: Any]
+        policyBallot["max_corpus_entries"] = 21
+        policyBallot["registration_close_height"] = 23
+        policyBallot["survivor_freeze_height"] = 44
+        policyBallot["commitment_close_height"] = 45
+        policyBallot["registration_closed_at_height"] = 23
+        policyBallot["survivors_frozen_at_height"] = 44
+        policyBallot["commitment_closed_at_height"] = 45
+        policyBallot["release_height"] = 46
+        policyBallot["opening_deadline_height"] = 50
+        policyBallot["opening_height"] = 47
+        policyBallot["tally"] = [
+            "original_seats": 21,
+            "accepted_ballots": 21,
+            "aye": 11,
+            "nay": 10,
+            "abstain": 0,
+        ]
+        policy["ballot"] = policyBallot
+
+        var confirmation = policy
+        confirmation["body_instance_id"] = identifier(0x31)
+        confirmation["election_attempt_id"] = identifier(0x32)
+        confirmation["election_attempt_sequence"] = electionAttemptSequence
+        confirmation["sortition_request_id"] = identifier(0x33)
+        confirmation["body"] = "confirmation-jury"
+        confirmation["beacon_session_id"] = identifier(0x34)
+        confirmation["beacon_pulse_id"] = identifier(0x35)
+        confirmation["result_height"] = 98
+        var confirmationRequest = policyRequest
+        confirmationRequest["id"] = identifier(0x33)
+        confirmationRequest["body_election_attempt_id"] = identifier(0x32)
+        confirmationRequest["body"] = "confirmation-jury"
+        confirmationRequest["request_height"] = requestHeight
+        confirmationRequest["pulse_height"] = pulseHeight
+        confirmationRequest["beacon_session_id"] = identifier(0x34)
+        confirmation["sortition_request"] = confirmationRequest
+        var confirmationBallot = policyBallot
+        confirmationBallot["ballot_attempt_id"] = identifier(0x36)
+        confirmationBallot["tle_session_id"] = identifier(0x37)
+        confirmationBallot["tle_key_session_id"] = identifier(0x38)
+        confirmationBallot["release_beacon_session_id"] = identifier(0x39)
+        confirmationBallot["registered_at_height"] = 50
+        confirmationBallot["registration_close_height"] = 72
+        confirmationBallot["survivor_freeze_height"] = 93
+        confirmationBallot["commitment_close_height"] = 94
+        confirmationBallot["registration_closed_at_height"] = 72
+        confirmationBallot["survivors_frozen_at_height"] = 93
+        confirmationBallot["commitment_closed_at_height"] = 94
+        confirmationBallot["release_height"] = 95
+        confirmationBallot["opening_deadline_height"] = 99
+        confirmationBallot["release_pulse_id"] = identifier(0x3a)
+        confirmationBallot["opening_height"] = 96
+        confirmation["ballot"] = confirmationBallot
+
+        var confirmationState = policyState
+        confirmationState["body"] = "confirmation-jury"
+        confirmationState["body_instance_id"] = identifier(0x31)
+        confirmationState["timed_ovn_progress"] = [
+            "ballot_attempt_id": identifier(0x36),
+            "status": ["status": "Finalized"],
+            "frozen_survivor_count": 21,
+            "accepted_ballot_prefix_count": 21,
+        ]
+        response["required_bodies"] = [
+            ["body": "policy-jury", "decision_mode": ["mode": "HiddenBindingBallot"]],
+            ["body": "confirmation-jury", "decision_mode": ["mode": "HiddenBindingBallot"]],
+        ]
+        response["body_states"] = [policyState, confirmationState]
+        certificate["body_bindings"] = [policy, confirmation]
+        certificate["certified_at_height"] = 98
+        certificate["enact_at_height"] = 100
+        response["certificate"] = certificate
+        response["current_height"] = 99
+        return response
+    }
+
     private func makeHiddenBallotReadResponse() -> [String: Any] {
-        var response = mutateCertificate(makeReadResponse()) { _, binding, request in
+        var response = mutateCertificate(makePublicOnlyReadResponse()) { certificate, binding, request in
             binding["body"] = "policy-jury"
+            binding["body_instance_id"] = identifier(0x06)
+            binding["election_attempt_id"] = identifier(0x07)
+            binding["sortition_request_id"] = identifier(0x08)
+            binding["beacon_session_id"] = identifier(0x09)
+            binding["beacon_pulse_id"] = identifier(0x0a)
+            request["id"] = identifier(0x08)
+            request["body_election_attempt_id"] = identifier(0x07)
             request["body"] = "policy-jury"
+            request["beacon_session_id"] = identifier(0x09)
             binding["public_finding"] = NSNull()
             binding["ballot"] = [
                 "ballot_attempt_id": identifier(0x21),
@@ -1110,18 +1404,18 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
                 "timed_commitment_root": root,
                 "release_beacon_session_id": identifier(0x24),
                 "registered_at_height": 1,
-                "registration_close_height": 3,
-                "survivor_freeze_height": 4,
-                "commitment_close_height": 5,
-                "registration_closed_at_height": 3,
-                "survivors_frozen_at_height": 4,
-                "commitment_closed_at_height": 5,
+                "registration_close_height": 5,
+                "survivor_freeze_height": 8,
+                "commitment_close_height": 9,
+                "registration_closed_at_height": 5,
+                "survivors_frozen_at_height": 8,
+                "commitment_closed_at_height": 9,
                 "max_ballot_retries": 16,
                 "max_corpus_entries": 3,
-                "release_height": 6,
-                "opening_deadline_height": 9,
+                "release_height": 10,
+                "opening_deadline_height": 13,
                 "release_pulse_id": identifier(0x25),
-                "opening_height": 7,
+                "opening_height": 11,
                 "opening_root": root,
                 "tally": [
                     "original_seats": 3,
@@ -1132,6 +1426,9 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
                 ],
                 "outcome": ["outcome": "Approved"],
             ]
+            binding["result_height"] = 12
+            certificate["certified_at_height"] = 12
+            certificate["enact_at_height"] = 14
         }
         response["required_bodies"] = [[
             "body": "policy-jury",
@@ -1139,6 +1436,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         ]]
         var states = response["body_states"] as! [[String: Any]]
         states[0]["body"] = "policy-jury"
+        states[0]["body_instance_id"] = identifier(0x06)
         states[0]["public_finding_opened_at_height"] = NSNull()
         states[0]["public_finding_phase_blocks"] = NSNull()
         states[0]["public_finding_deadline_height"] = NSNull()
@@ -1149,6 +1447,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
             "accepted_ballot_prefix_count": 3,
         ]
         response["body_states"] = states
+        response["current_height"] = 13
         return response
     }
 

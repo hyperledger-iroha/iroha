@@ -16,9 +16,11 @@ content-and-executable-mode identity.
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from contextlib import contextmanager
 import hashlib
 import json
+import ntpath
 import os
 from pathlib import Path
 import posixpath
@@ -26,7 +28,7 @@ import stat
 import struct
 import subprocess
 import sys
-from typing import BinaryIO, Iterable, Iterator
+from typing import BinaryIO, Iterable, Iterator, Mapping
 
 
 _DOMAIN = b"iroha-workspace-source-manifest-v2\0"
@@ -730,6 +732,8 @@ def _validate_symlink_target(member: bytes, target: bytes) -> None:
         or len(target) > _MAX_SYMLINK_TARGET_BYTES
         or b"\0" in target
         or target.startswith(b"/")
+        or b"\\" in target
+        or bool(ntpath.splitdrive(target)[0])
     ):
         raise SourceSealError("source seal contains an unsafe symlink target")
     parent = member.rpartition(b"/")[0]
@@ -742,6 +746,39 @@ def _validate_symlink_target(member: bytes, target: bytes) -> None:
         or resolved.startswith(b"/")
     ):
         raise SourceSealError("source seal contains an out-of-root symlink")
+
+
+def _validate_symlink_graph(symlinks: Mapping[bytes, bytes]) -> None:
+    """Reject chained links that can escape the extracted source root."""
+
+    for member, target in symlinks.items():
+        _validate_symlink_target(member, target)
+        current = member.split(b"/")[:-1]
+        pending = deque(target.split(b"/"))
+        followed: set[bytes] = set()
+        while pending:
+            component = pending.popleft()
+            if component in (b"", b"."):
+                continue
+            if component == b"..":
+                if not current:
+                    raise SourceSealError(
+                        "source seal contains a chained out-of-root symlink"
+                    )
+                current.pop()
+                continue
+            current.append(component)
+            candidate = b"/".join(current)
+            if candidate == b".git" or candidate.startswith(b".git/"):
+                raise SourceSealError("source seal symlink resolves into .git")
+            replacement = symlinks.get(candidate)
+            if replacement is None:
+                continue
+            if candidate in followed:
+                raise SourceSealError("source seal contains a cyclic symlink chain")
+            followed.add(candidate)
+            current = candidate.split(b"/")[:-1]
+            pending.extendleft(reversed(replacement.split(b"/")))
 
 
 def _open_root_directory(path: Path, label: str) -> tuple[int, os.stat_result]:
@@ -928,6 +965,13 @@ def _inspect_source_members(
                 )
             finally:
                 os.close(parent_descriptor)
+        _validate_symlink_graph(
+            {
+                member: payload
+                for member, kind, _, payload, _ in records
+                if kind == b"L" and isinstance(payload, bytes)
+            }
+        )
         root_after = os.fstat(root_descriptor)
         try:
             root_path_after = root.lstat()
@@ -1355,6 +1399,8 @@ def _scan_source_seal(
     expected_paths = [os.fsencode(path) for path in paths]
     manifest = hashlib.sha256(_DOMAIN)
     kinds: dict[bytes, bytes] = {}
+    symlinks: dict[bytes, bytes] = {}
+    pending_symlinks: list[tuple[bytes, bytes]] = []
     for index, expected_member in enumerate(expected_paths):
         path_size = reader.take_u64()
         if path_size == 0 or path_size > _MAX_PATH_BYTES:
@@ -1434,11 +1480,15 @@ def _scan_source_seal(
                 target = reader.read_exact(payload_size)
                 _validate_symlink_target(member, target)
                 _frame(manifest, target)
-                if extractor is not None:
-                    extractor.create_symlink(member, target)
+                symlinks[member] = target
+                pending_symlinks.append((member, target))
             elif extractor is not None:
                 extractor.create_directory(member, mode)
         kinds[member] = kind
+    _validate_symlink_graph(symlinks)
+    if extractor is not None:
+        for member, target in pending_symlinks:
+            extractor.create_symlink(member, target)
     return manifest.hexdigest(), reader.finish(), kinds
 
 

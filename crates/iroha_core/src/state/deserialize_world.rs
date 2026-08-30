@@ -7961,7 +7961,9 @@ fn parse_world(
                             .to_owned(),
                 });
                 }
-                if attempt.policy_version() != 1 {
+                if attempt.policy_version()
+                    != crate::governance::parliament::PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1
+                {
                     return Err(json::Error::InvalidField {
                         field: "parliament_attempts".into(),
                         message: "governance Parliament attempt has a non-V1 policy version"
@@ -9842,6 +9844,22 @@ mod decode_tests {
             error.to_string().contains("account_aliases"),
             "unexpected missing-field diagnostic: {error}"
         );
+
+        let encoded_prefix = encoded
+            .strip_suffix('}')
+            .expect("canonical World snapshot is a JSON object");
+        for retired_field in ["council", "parliament_bodies"] {
+            let injected = format!("{encoded_prefix},\"{retired_field}\":[]}}");
+            let error = SnapshotJsonMap::parse(&injected, "world")
+                .and_then(|map| parse_world(map, &seed))
+                .err()
+                .expect("retired caller-selected council state must fail closed");
+            assert!(
+                error.to_string().contains(retired_field)
+                    && error.to_string().contains("unknown field"),
+                "unexpected retired-field diagnostic: {error}"
+            );
+        }
     }
     #[test]
     fn canonical_state_snapshot_persists_manifest_aliases_and_rebuilds_account_indexes() {

@@ -54,6 +54,28 @@ fn kagemusha_topup_shield_v2_builder_rejects_zero_amount_bad_path_and_key_substi
         key_error.contains("Kagemusha top-up shield v2 verifier key"),
         "unexpected key-substitution error: {key_error}"
     );
+    let final_leaf =
+        iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2;
+    let capacity_error = super::build_kagemusha_topup_shield_proof_v2(
+        &network_id,
+        "pkr#sbp",
+        "payer@sbp",
+        [0x64; 32],
+        1,
+        9,
+        &[0x62; 32],
+        [0x63; 32],
+        super::derive_confidential_diversifier_v2(b"negative-topup"),
+        final_leaf,
+        &zero_path,
+        super::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
+        &vk_box,
+    )
+    .expect_err("the complete recursive lifecycle must remain available");
+    assert!(
+        capacity_error.contains("complete recursive lifecycle"),
+        "unexpected top-up capacity error: {capacity_error}"
+    );
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]

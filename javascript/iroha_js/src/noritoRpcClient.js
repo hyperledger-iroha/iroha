@@ -87,7 +87,7 @@ export class NoritoRpcClient {
       typeof options.insecureTransportTelemetryHook === "function"
         ? options.insecureTransportTelemetryHook
         : null;
-    this._fetch = options.fetchImpl ?? options.fetch ?? globalThis.fetch;
+    this._fetch = options.fetchImpl ?? globalThis.fetch;
     if (typeof this._fetch !== "function") {
       throw new Error("fetch implementation is required");
     }

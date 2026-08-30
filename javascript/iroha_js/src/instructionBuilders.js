@@ -1,6 +1,6 @@
 import { Buffer } from "buffer";
-import { createHash } from "./cryptoHash.js";
 import { blake2b256 } from "./blake2b.js";
+import { KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
 import {
   noritoEncodeInstruction,
   validateSorafsReplicationOrderPayloadV1,
@@ -10,7 +10,6 @@ import {
   ensureCanonicalAccountId,
   normalizeAccountAliasLiteral,
   normalizeAccountId,
-  normalizeAccountIdOrAliasLiteral,
   normalizeAssetDefinitionId,
   normalizeAssetId,
   normalizeAssetHoldingId,
@@ -57,7 +56,6 @@ import {
   assertAllowedFields,
   assertExactNonBlankString,
   assertExactFields,
-  assertNonBlankString,
   assertString,
   assertWellFormedUtf16,
   canonicalHashLiteral,
@@ -65,7 +63,6 @@ import {
   normalizeGovernanceSelectorV1,
   parseHashLiteral,
   parseHashLiteralToBuffer,
-  requireExactLowerHex32String,
 } from "./instructionBuilderPrimitives.js";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
@@ -100,7 +97,7 @@ export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
 /** Maximum UTF-8 bytes accepted for an asset-transfer availability reason. */
 export const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 /** Maximum concurrent participants excluding the host in a first-release Kaigi call. */
-export const KAIGI_MAX_PARTICIPANTS_V1 = 4_096;
+export { KAIGI_MAX_PARTICIPANTS_V1 };
 /** Maximum relay hops accepted by a first-release Kaigi manifest. */
 export const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1 = 8;
 /** Maximum decoded bytes accepted for a first-release Kaigi HPKE public key. */
@@ -2599,7 +2596,7 @@ function normalizeManifestSignatureLiteral(value, name) {
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
     body = Buffer.from(value).toString("hex");
   } else if (Array.isArray(value)) {
-    body = normalizeBytesLikeToBuffer(value, name).toString("hex");
+    body = Buffer.from(normalizeByteArray(value, name)).toString("hex");
   } else {
     const literal = assertString(value, name).trim();
     body =
@@ -3326,18 +3323,6 @@ function normalizeDirection(value, name) {
     ValidationErrorCode.INVALID_STRING,
     `${name} must be 0, 1, 2 or a recognized direction string`,
     name,
-  );
-}
-
-function normalizeAccountIds(values, name, { allowEmpty = false } = {}) {
-  if (!Array.isArray(values) || (values.length === 0 && !allowEmpty)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a non-empty array`, name);
-  }
-  if (values.length === 0) {
-    return [];
-  }
-  return values.map((account, index) =>
-    normalizeAccountId(account, `${name}[${index}]`),
   );
 }
 

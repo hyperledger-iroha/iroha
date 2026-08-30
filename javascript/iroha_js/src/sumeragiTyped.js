@@ -2475,7 +2475,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
   const checkedPartialQuorum = (
     raw,
     itemContext,
-    { timeout = false, phase = null } = {},
+    { timeout = false } = {},
   ) => {
     const expectedFields = timeout
       ? [
@@ -2572,7 +2572,6 @@ function parseSumeragiLivenessStatus(value, context, active) {
       (item, index) => checkedPartialQuorum(
         item,
         `${context}.${field}[${index}]`,
-        { phase },
       ),
     ),
   );

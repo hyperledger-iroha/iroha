@@ -12,7 +12,7 @@
     },
     "./address": {
       "import": "./dist/address.js",
-      "types": "./index.d.ts"
+      "types": "./address.d.ts"
     },
     "./browser": {
       "browser": "./dist/browser.js",
@@ -52,12 +52,12 @@
     "./normalizers": {
       "browser": "./dist/normalizers.js",
       "import": "./dist/normalizers.js",
-      "types": "./index.d.ts"
+      "types": "./normalizers.d.ts"
     },
     "./blake2b": {
       "browser": "./dist/blake2b.js",
       "import": "./dist/blake2b.js",
-      "types": "./index.d.ts"
+      "types": "./blake2b.d.ts"
     },
     "./ivm-artifact": {
       "browser": "./dist/ivmArtifact.js",
@@ -66,17 +66,16 @@
     },
     "./instruction-builders": {
       "import": "./dist/instructionBuilders.js",
-      "types": "./index.d.ts"
+      "types": "./instruction-builders.d.ts"
     },
     "./torii": {
-      "browser": "./dist/toriiBrowserClient.js",
       "import": "./dist/toriiClient.js",
-      "types": "./index.d.ts"
+      "types": "./torii.d.ts"
     },
     "./torii-browser": {
       "import": "./dist/toriiBrowserClient.js",
       "browser": "./dist/toriiBrowserClient.js",
-      "types": "./index.d.ts"
+      "types": "./torii-browser.d.ts"
     },
     "./sumeragi-typed": {
       "browser": "./dist/sumeragiTyped.js",
@@ -85,7 +84,7 @@
     },
     "./norito": {
       "import": "./dist/norito.js",
-      "types": "./index.d.ts"
+      "types": "./norito.d.ts"
     },
     "./canonical-request": {
       "browser": "./dist/canonicalRequest.js",
@@ -94,16 +93,16 @@
     },
     "./sccp": {
       "import": "./dist/sccp.js",
-      "types": "./index.d.ts"
+      "types": "./sccp.d.ts"
     },
     "./sorafs": {
       "import": "./dist/sorafs.js",
-      "types": "./index.d.ts"
+      "types": "./sorafs.d.ts"
     },
     "./crypto": {
       "browser": "./dist/crypto.browser.js",
       "import": "./dist/crypto.js",
-      "types": "./index.d.ts"
+      "types": "./crypto.d.ts"
     },
     "./connect-browser": {
       "import": "./dist/connect.browser.js",
@@ -123,7 +122,7 @@
   "typesVersions": {
     "*": {
       "address": [
-        "./index.d.ts"
+        "./address.d.ts"
       ],
       "browser": [
         "./browser.d.ts"
@@ -147,40 +146,40 @@
         "./smart-contract-deployment.d.ts"
       ],
       "normalizers": [
-        "./index.d.ts"
+        "./normalizers.d.ts"
       ],
       "blake2b": [
-        "./index.d.ts"
+        "./blake2b.d.ts"
       ],
       "ivm-artifact": [
         "./ivm-artifact.d.ts"
       ],
       "instruction-builders": [
-        "./index.d.ts"
+        "./instruction-builders.d.ts"
       ],
       "torii": [
-        "./index.d.ts"
+        "./torii.d.ts"
       ],
       "torii-browser": [
-        "./index.d.ts"
+        "./torii-browser.d.ts"
       ],
       "sumeragi-typed": [
         "./sumeragi-typed.d.ts"
       ],
       "norito": [
-        "./index.d.ts"
+        "./norito.d.ts"
       ],
       "canonical-request": [
         "./canonical-request.d.ts"
       ],
       "sccp": [
-        "./index.d.ts"
+        "./sccp.d.ts"
       ],
       "sorafs": [
-        "./index.d.ts"
+        "./sorafs.d.ts"
       ],
       "crypto": [
-        "./index.d.ts"
+        "./crypto.d.ts"
       ],
       "connect-browser": [
         "./connect.browser.d.ts"
@@ -240,6 +239,16 @@
     "README.md",
     "LICENSE",
     "browser.d.ts",
+    "address.d.ts",
+    "normalizers.d.ts",
+    "blake2b.d.ts",
+    "instruction-builders.d.ts",
+    "torii.d.ts",
+    "torii-browser.d.ts",
+    "norito.d.ts",
+    "sccp.d.ts",
+    "sorafs.d.ts",
+    "crypto.d.ts",
     "index.d.ts",
     "repo-agreement.d.ts",
     "privacy-capabilities.d.ts",

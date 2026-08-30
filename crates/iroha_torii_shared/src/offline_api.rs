@@ -119,7 +119,9 @@ pub struct OfflineRecipientLineageSelectorV2 {
 ///
 /// The height is not itself a trust anchor. Native verification also requires
 /// the checkpoint context id from release-pinned or previously verified local
-/// state and rejects a response whose first proof does not match both values.
+/// state. A freshly fetched response starts at this height; verification of a
+/// cached response may instead start at a newer caller-trusted proof within the
+/// same consecutive chain.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
@@ -166,8 +168,9 @@ impl OfflineRecipientRegistrationLineage {
     /// Verify every portable binding in this proof-bearing response.
     ///
     /// This is the maintained SDK/native-bridge verification boundary. The
-    /// caller supplies an externally trusted checkpoint height/context; the
-    /// response is never allowed to choose its own trust root.
+    /// caller supplies an externally trusted checkpoint height/context. That
+    /// checkpoint may be the first proof or a newer proof in a cached chain;
+    /// the response is never allowed to choose its own trust root.
     ///
     /// # Errors
     ///

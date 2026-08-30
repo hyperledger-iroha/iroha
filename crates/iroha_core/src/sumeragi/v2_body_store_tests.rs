@@ -5,8 +5,9 @@ mod tests {
         DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT, QuarantinedValidationOutcome,
         RecoveredTerminalValidateOutcomeCatalogError, RevalidatedRejectedBody, STORE_MAGIC,
         STORE_VERSION, V2BodyStore, V2BodyStoreCapacity, V2BodyStoreError, VALIDATED_MAGIC,
-        VALIDATION_OUTCOME_MARKER_VERSION, ValidatedBodyReceipt, ValidationOutcomeMarker,
-        ValidationOutcomeMarkerKind, write_validation_outcome_marker,
+        VALIDATION_OUTCOME_MARKER_FRAME_MAX_BYTES, VALIDATION_OUTCOME_MARKER_VERSION,
+        ValidatedBodyReceipt, ValidationOutcomeMarker, ValidationOutcomeMarkerKind,
+        write_validation_outcome_marker,
     };
     use crate::sumeragi::{
         v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
@@ -393,6 +394,37 @@ mod tests {
                 .get(&(receipt.round(), receipt.subject()))
                 .map(ValidatedBodyReceipt::execution_commitment),
             Some(execution_commitment),
+        );
+    }
+    #[test]
+    fn body_store_rejects_a_structurally_valid_noncanonical_manifest() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, canonical_manifest) = body_and_manifest(&context, &keys, None);
+        let chunk_size = usize::try_from(context.da_layout.chunk_size_bytes)
+            .expect("fixture chunk size fits usize");
+        let noncanonical_chunks = (0..canonical_manifest.chunk_hashes.len())
+            .map(|index| vec![u8::try_from(index + 1).expect("bounded chunk index"); chunk_size])
+            .collect::<Vec<_>>();
+        let noncanonical_manifest = wire::PayloadManifest::derive(
+            &context,
+            canonical_manifest.round,
+            canonical_manifest.subject,
+            canonical_manifest.payload_size_bytes,
+            &noncanonical_chunks,
+        )
+        .expect("derive a structurally valid manifest for noncanonical chunks");
+        assert_ne!(noncanonical_manifest, canonical_manifest);
+
+        let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
+        let final_path = store.path_for(noncanonical_manifest.round, noncanonical_manifest.subject);
+        assert!(matches!(
+            store.store(noncanonical_manifest, body),
+            Err(V2BodyStoreError::NonCanonicalPayloadManifest)
+        ));
+        assert!(
+            !final_path.exists(),
+            "a noncanonical manifest must be rejected before durable publication"
         );
     }
     #[test]
@@ -1653,6 +1685,25 @@ mod tests {
             V2BodyStore::open(directory.path(), context),
             Err(V2BodyStoreError::UnsupportedValidationOutcomeMarkerVersion(version))
                 if version == VALIDATION_OUTCOME_MARKER_VERSION.saturating_add(1)
+        ));
+    }
+    #[test]
+    fn oversized_validation_marker_is_rejected_from_startup_metadata() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let marker_path = store.validated_path_for(receipt.round(), receipt.subject());
+        drop(store);
+
+        fs::File::create(&marker_path)
+            .expect("create sparse oversized marker")
+            .set_len(VALIDATION_OUTCOME_MARKER_FRAME_MAX_BYTES + 1)
+            .expect("size sparse oversized marker");
+        assert!(matches!(
+            V2BodyStore::open(directory.path(), context),
+            Err(V2BodyStoreError::ValidationMarkerTooLarge)
         ));
     }
     #[test]

@@ -16,7 +16,7 @@ DEFAULT_PUBLIC_HOST = "taira.sora.org"
 DEFAULT_EXPLORER_HOST = "taira-explorer.sora.org"
 DEFAULT_TLS_LINEAGE = "taira.sora.org"
 DEFAULT_CERTBOT_ROOT = "/var/www/certbot"
-DEFAULT_EXPLORER_ROOT = "/var/www/iroha2-block-explorer-web/dist"
+DEFAULT_EXPLORER_ROOT = "/Users/administrator/dev/iroha2-block-explorer-web/dist"
 DEFAULT_CID_HOST_SUFFIX = "sorafs.taira.sora.org"
 DEFAULT_MON_HOST_SUFFIX = "mon.taira.sora.net"
 DEFAULT_CLIENT_MAX_BODY_SIZE = "1g"
@@ -44,6 +44,7 @@ ROSTER_ALIAS_ROUTE_KEYS = frozenset({"alias", "edge_upstream"})
 PUBLIC_TORII_CORS_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:3000",
+    "https://taira-explorer.sora.org",
     "https://test.soraswap.org",
     "https://dweb.link",
     "https://ipfs.io",
@@ -1014,7 +1015,6 @@ def render_edge_nginx_conf(
             "  listen [::]:443 ssl;",
             "  http2 on;",
             f"  server_name {explorer_host};",
-            f"  client_max_body_size {client_max_body_size};",
             "",
             f"  ssl_certificate /etc/letsencrypt/live/{tls_lineage}/fullchain.pem;",
             f"  ssl_certificate_key /etc/letsencrypt/live/{tls_lineage}/privkey.pem;",
@@ -1027,41 +1027,10 @@ def render_edge_nginx_conf(
             "  location / {",
             "    try_files $uri $uri/ /index.html;",
             "  }",
-            "",
-            "  location = /status {",
-            "    proxy_pass http://taira_public_edge_upstream/status;",
-            "    proxy_http_version 1.1;",
-            f"    proxy_set_header Host {public_upstream_host};",
-            "    proxy_set_header X-Real-IP $remote_addr;",
-            "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-            f"    proxy_set_header X-Forwarded-Host {public_host};",
-            "    proxy_set_header X-Forwarded-Proto $scheme;",
-            "    proxy_next_upstream error timeout http_502 http_503 http_504 invalid_header non_idempotent;",
-            "    proxy_next_upstream_tries 4;",
-            "    proxy_read_timeout 3600;",
-            "    proxy_send_timeout 3600;",
-            "    proxy_buffering off;",
-            "  }",
+            "}",
             "",
         ]
     )
-    lines.extend(
-        _render_connect_stateful_locations(
-            public_validator_upstream,
-            host_expr=public_upstream_host,
-            forwarded_host_expr=public_host,
-        )
-    )
-    lines.extend(
-        _render_prefix_proxy_location(
-            "/v1/",
-            "taira_public_edge_upstream",
-            host_expr=public_upstream_host,
-            retry_non_idempotent=True,
-            forwarded_host_expr=public_host,
-        )
-    )
-    lines.extend(["}", ""])
 
     return "\n".join(lines)
 

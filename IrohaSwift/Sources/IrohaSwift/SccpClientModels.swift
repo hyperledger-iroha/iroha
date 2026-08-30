@@ -7,7 +7,7 @@ public enum SccpPayloadKindV1: String, CaseIterable, Sendable {
 }
 
 /// Request payload for `POST /v1/bridge/proofs/submit`.
-public struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
+struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
     public let authority: String
     public let feePayment: FeePaymentIntent
     public let signatureB64: String?
@@ -71,7 +71,7 @@ public struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
 }
 
 /// Native-proof-only request for `POST /v1/bridge/messages`.
-public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
+struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
     public let authority: String
     public let feePayment: FeePaymentIntent
     public let signatureB64: String?
@@ -148,7 +148,7 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
 }
 
 /// Request-bound fields that can be checked against a bridge submit response.
-public struct SccpBridgeResponseExpectation: Equatable, Sendable {
+struct SccpBridgeResponseExpectation: Equatable, Sendable {
     public let payloadKind: SccpPayloadKindV1?
     public let messageIdHex: String?
     public let counterpartyDomain: UInt32?
@@ -187,7 +187,7 @@ public struct SccpBridgeResponseExpectation: Equatable, Sendable {
 }
 
 /// Exact unified two-phase response returned by both SCCP submit endpoints.
-public struct SccpBridgeSubmitResponse: Equatable, Sendable {
+struct SccpBridgeSubmitResponse: Equatable, Sendable {
     public let submitted: Bool
     public let payloadKind: SccpPayloadKindV1
     public let messageIdHex: String
@@ -203,7 +203,7 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
     public let signingMessageB64: String?
 
     /// Strictly parse the exact response, rejecting duplicate, unknown, retired, or missing fields.
-    public static func parse(
+    static func parse(
         _ data: Data,
         expectation: SccpBridgeResponseExpectation? = nil
     ) throws -> Self {

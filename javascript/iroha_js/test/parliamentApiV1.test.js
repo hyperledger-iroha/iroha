@@ -22,6 +22,7 @@ import {
   PARLIAMENT_CANONICAL_BODY_ORDER_V1,
   PARLIAMENT_BODY_STATE_FIELDS_V1,
   PARLIAMENT_CERTIFICATE_BODY_BINDING_FIELDS_V1,
+  PARLIAMENT_CONTRACT_LIFECYCLE_ACTIONS_V1,
   PARLIAMENT_NO_RESULT_KINDS_V1,
   PARLIAMENT_PROPOSAL_KINDS_V1,
   PARLIAMENT_PUBLIC_FINDING_CERTIFICATE_FIELDS_V1,
@@ -117,6 +118,10 @@ test("shared Parliament fixture pins routes, all transition inventories, and cer
     transition_submit: PARLIAMENT_TRANSITION_SUBMIT_WIRE_ID_V1,
   });
   assert.deepEqual(fixture.proposal_kinds, PARLIAMENT_PROPOSAL_KINDS_V1);
+  assert.deepEqual(
+    fixture.contract_lifecycle_actions,
+    PARLIAMENT_CONTRACT_LIFECYCLE_ACTIONS_V1,
+  );
   assert.equal(fixture.limits.attempt_state_bytes, PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1);
   assert.equal(
     fixture.limits.governance_attempt_sequence_max,
@@ -413,6 +418,43 @@ test("contract lifecycle unit actions retain their explicit null wire payload", 
   }
 });
 
+test("contract lifecycle action inventory admits exactly six wire tags", () => {
+  const actionPayloads = new Map([
+    ["Activate", {
+      code_hash: "11".repeat(32),
+      abi_hash: "22".repeat(32),
+      abi_version: 1,
+      manifest_provenance: null,
+    }],
+    ["Deactivate", { expected_code_hash: "33".repeat(32) }],
+    ["OfferOwnership", { new_owner: ACCOUNTS[0] }],
+    ["CancelOwnershipOffer", null],
+    ["AcceptParliamentOwnership", null],
+    ["CompleteEmergencyHoldRetrospective", {
+      hold_proposal_content_id: Array(32).fill(0x42),
+      hold_governance_attempt_id: Array(32).fill(0x43),
+      incident_digest: Array(32).fill(0x44),
+      retrospective_finding_root: Array(32).fill(0x45),
+    }],
+  ]);
+  assert.deepEqual([...actionPayloads.keys()], PARLIAMENT_CONTRACT_LIFECYCLE_ACTIONS_V1);
+  for (const [action, payload] of actionPayloads) {
+    const proposal = structuredClone(parliamentProposalFixtures()[7]);
+    proposal.payload.action = { action, payload };
+    assert.equal(
+      buildParliamentAttemptDraftRequestV1(proposal, 0).proposal.payload.action.action,
+      action,
+    );
+  }
+
+  const unknown = structuredClone(parliamentProposalFixtures()[7]);
+  unknown.payload.action = { action: "Unknown", payload: null };
+  assert.throws(
+    () => buildParliamentAttemptDraftRequestV1(unknown, 0),
+    /unsupported lifecycle action/u,
+  );
+});
+
 test("attempt drafts reject malformed nested fields and open proposal shapes", () => {
   const mutations = [
     (proposal) => { proposal.payload.future = null; },
@@ -506,10 +548,13 @@ test("draft responses bind exact IDs, public kind, digest, and wire IDs", () => 
 test("attempt read validates NRT0 and the exact canonical public-finding supporter list", () => {
   const response = readResponse();
   const parsed = normalizeParliamentAttemptReadResponseV1(response, ATTEMPT_ID);
-  assert.deepEqual(parsed.required_bodies.map(({ body }) => body), ["rules-committee"]);
+  assert.deepEqual(
+    parsed.required_bodies.map(({ body }) => body),
+    ["rules-committee", "policy-jury"],
+  );
   assert.deepEqual(
     parsed.certificate.body_bindings.map(({ body }) => body),
-    ["rules-committee"],
+    ["rules-committee", "policy-jury"],
   );
   assert.deepEqual(
     parsed.certificate.body_bindings[0].public_finding.endorsing_assignments,
@@ -671,7 +716,7 @@ test("attempt read rejects forged certificate cross-bindings and lifecycle field
     ],
     [
       (response) => { response.certificate.policy_version = 2; },
-      /policy_version differs/u,
+      /policy_version must equal/u,
     ],
     [
       (response) => { response.certificate.enact_at_height = 8; },
@@ -691,12 +736,6 @@ test("attempt read rejects forged certificate cross-bindings and lifecycle field
     ],
     [
       (response) => {
-        response.certificate.body_bindings[0].sortition_request.candidate_count = 1_001;
-      },
-      /candidate_count/u,
-    ],
-    [
-      (response) => {
         response.certificate.body_bindings[0].body = "agenda-council";
         response.certificate.body_bindings[0].sortition_request.body = "agenda-council";
       },
@@ -712,6 +751,19 @@ test("attempt read rejects forged certificate cross-bindings and lifecycle field
     );
   }
 
+  const largeElectorate = readResponse();
+  largeElectorate.certificate.body_bindings[0].sortition_request.candidate_count = 1_001;
+  assert.doesNotThrow(
+    () => normalizeParliamentAttemptReadResponseV1(largeElectorate, ATTEMPT_ID),
+  );
+
+  const impossibleSeats = readResponse();
+  impossibleSeats.certificate.body_bindings[0].original_seats = 4;
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(impossibleSeats, ATTEMPT_ID),
+    /original_seats exceeds its sortition bounds/u,
+  );
+
   const reorderedRequired = readResponse();
   reorderedRequired.required_bodies = [
     { body: "policy-jury", decision_mode: { mode: "HiddenBindingBallot" } },
@@ -723,20 +775,93 @@ test("attempt read rejects forged certificate cross-bindings and lifecycle field
   );
 
   const duplicateBinding = readResponse();
-  duplicateBinding.required_bodies.push({
+  duplicateBinding.required_bodies.splice(1, 0, {
     body: "agenda-council",
     decision_mode: { mode: "PublicFinding" },
   });
   const secondState = structuredClone(duplicateBinding.body_states[0]);
   secondState.body = "agenda-council";
-  duplicateBinding.body_states.push(secondState);
+  duplicateBinding.body_states.splice(1, 0, secondState);
   const secondBinding = structuredClone(duplicateBinding.certificate.body_bindings[0]);
   secondBinding.body = "agenda-council";
   secondBinding.sortition_request.body = "agenda-council";
-  duplicateBinding.certificate.body_bindings.push(secondBinding);
+  duplicateBinding.certificate.body_bindings.splice(1, 0, secondBinding);
   assert.throws(
     () => normalizeParliamentAttemptReadResponseV1(duplicateBinding, ATTEMPT_ID),
     /reuse bodyInstanceId/u,
+  );
+});
+
+test("certificate admission pins policy V1, retry ceilings, and nonzero present heads", () => {
+  const unsupportedProjection = readResponse();
+  unsupportedProjection.certificate = null;
+  unsupportedProjection.policy_version = 2;
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(unsupportedProjection, ATTEMPT_ID),
+    /policy_version must equal/u,
+  );
+
+  const zeroHeadVersion = readResponse();
+  zeroHeadVersion.certificate.expected_head = {
+    state: "Present",
+    head: { subject_id: ROOT, version: 0, head_root: ROOT },
+  };
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(zeroHeadVersion, ATTEMPT_ID),
+    /must be within 1/u,
+  );
+
+  const overLimitAttempt = readResponse();
+  overLimitAttempt.attempt.sequence = PARLIAMENT_GOVERNANCE_ATTEMPT_SEQUENCE_MAX_V1 + 1;
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(overLimitAttempt, ATTEMPT_ID),
+    /attempt.sequence/u,
+  );
+
+  const overLimitElection = readResponse();
+  overLimitElection.certificate.body_bindings[0].election_attempt_sequence = 17;
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(overLimitElection, ATTEMPT_ID),
+    /election_attempt_sequence/u,
+  );
+});
+
+test("narrow policy certificates enforce atomic initial and delayed retry confirmation heights", () => {
+  assert.doesNotThrow(() => normalizeParliamentAttemptReadResponseV1(
+    narrowPolicyReadResponse(),
+    ATTEMPT_ID,
+  ));
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(
+      narrowPolicyReadResponse({ confirmationRequestHeight: 53 }),
+      ATTEMPT_ID,
+    ),
+    /atomic initial request/u,
+  );
+  assert.doesNotThrow(() => normalizeParliamentAttemptReadResponseV1(
+    narrowPolicyReadResponse({ confirmationSequence: 1, confirmationRequestHeight: 53 }),
+    ATTEMPT_ID,
+  ));
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(
+      narrowPolicyReadResponse({ confirmationSequence: 1 }),
+      ATTEMPT_ID,
+    ),
+    /follow it on retry/u,
+  );
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(
+      narrowPolicyReadResponse({ includeConfirmation: false }),
+      ATTEMPT_ID,
+    ),
+    /confirmation-jury presence/u,
+  );
+  const reusedPulse = narrowPolicyReadResponse();
+  reusedPulse.certificate.body_bindings[1].beacon_pulse_id =
+    reusedPulse.certificate.body_bindings[0].beacon_pulse_id;
+  assert.throws(
+    () => normalizeParliamentAttemptReadResponseV1(reusedPulse, ATTEMPT_ID),
+    /fresh pulse/u,
   );
 });
 
@@ -1248,9 +1373,9 @@ function transitionFixture(tag) {
 }
 
 function readResponse() {
-  return {
+  const response = {
     version: 1,
-    current_height: 9,
+    current_height: 20,
     attempt: {
       id: ATTEMPT_ID,
       proposal_content_id: PROPOSAL_ID,
@@ -1316,28 +1441,29 @@ function readResponse() {
       policy_version: 1,
       effect_preimage_hash: ROOT,
       expected_head: { state: "Absent", head: { subject_id: ROOT } },
-      certified_at_height: 8,
-      enact_at_height: 10,
+      certified_at_height: 18,
+      enact_at_height: 30,
     },
     terminal_height: null,
     execution_failure_root: null,
     superseding_head: null,
     state_payload_hex: stateFrame().toString("hex"),
   };
+  const policy = policyJuryCertificateComponents(10);
+  response.required_bodies.push(policy.requiredBody);
+  response.body_states.push(policy.bodyState);
+  response.certificate.body_bindings.push(policy.binding);
+  return response;
 }
 
-function hiddenBallotReadResponse(commitmentClosedAtHeight) {
-  const response = readResponse();
-  response.current_height = 20;
-  response.attempt.stage = { stage: "PolicyJury" };
-  response.attempt.status = { status: "Certified" };
-  response.required_bodies = [{
+function policyJuryCertificateComponents(commitmentClosedAtHeight) {
+  const requiredBody = {
     body: "policy-jury",
     decision_mode: { mode: "HiddenBindingBallot" },
-  }];
-  response.body_states = [{
+  };
+  const bodyState = {
     body: "policy-jury",
-    body_instance_id: ID(1),
+    body_instance_id: ID(0x21),
     status: { status: "Approved" },
     public_finding_opened_at_height: null,
     public_finding_phase_blocks: null,
@@ -1345,29 +1471,50 @@ function hiddenBallotReadResponse(commitmentClosedAtHeight) {
     no_result_kind: null,
     no_result_height: null,
     timed_ovn_progress: {
-      ballot_attempt_id: ID(6),
+      ballot_attempt_id: ID(0x26),
       status: { status: "Finalized" },
       frozen_survivor_count: 3,
       accepted_ballot_prefix_count: 3,
     },
-  }];
-  const binding = response.certificate.body_bindings[0];
-  binding.body = "policy-jury";
-  binding.sortition_request.body = "policy-jury";
-  binding.result_height = 18;
-  binding.public_finding = null;
-  binding.ballot = {
-    ballot_attempt_id: ID(6),
+  };
+  const binding = {
+    body_instance_id: ID(0x21),
+    election_attempt_id: ID(0x22),
+    election_attempt_sequence: 0,
+    sortition_request_id: ID(0x23),
+    sortition_request: {
+      id: ID(0x23),
+      governance_attempt_id: ATTEMPT_ID,
+      body_election_attempt_id: ID(0x22),
+      body: "policy-jury",
+      candidate_root: ROOT,
+      candidate_count: 3,
+      target_seats: 3,
+      request_height: 1,
+      pulse_height: 2,
+      beacon_session_id: ID(0x24),
+    },
+    body: "policy-jury",
+    original_seats: 3,
+    beacon_session_id: ID(0x24),
+    beacon_pulse_id: ID(0x25),
+    roster_root: ROOT,
+    assignment_root: ROOT,
+    result_root: ROOT,
+    result_height: 18,
+    public_finding: null,
+    ballot: {
+    ballot_attempt_id: ID(0x26),
     ballot_attempt_sequence: 0,
-    tle_session_id: ID(7),
-    tle_key_session_id: ID(8),
+    tle_session_id: ID(0x27),
+    tle_key_session_id: ID(0x28),
     registration_root: Array(32).fill(0x41),
     dropout_root: Array(32).fill(0x42),
     survivor_root: Array(32).fill(0x43),
     corpus_root: Array(32).fill(0x44),
     no_recovery_root: Array(32).fill(0x45),
     timed_commitment_root: Array(32).fill(0x46),
-    release_beacon_session_id: ID(9),
+    release_beacon_session_id: ID(0x29),
     registered_at_height: 1,
     registration_close_height: 5,
     survivor_freeze_height: 8,
@@ -1379,7 +1526,7 @@ function hiddenBallotReadResponse(commitmentClosedAtHeight) {
     max_corpus_entries: 3,
     release_height: 15,
     opening_deadline_height: 21,
-    release_pulse_id: ID(10),
+    release_pulse_id: ID(0x2a),
     opening_height: 16,
     opening_root: Array(32).fill(0x47),
     tally: {
@@ -1390,9 +1537,112 @@ function hiddenBallotReadResponse(commitmentClosedAtHeight) {
       abstain: 0,
     },
     outcome: { outcome: "Approved" },
+    },
   };
-  response.certificate.certified_at_height = 20;
+  return { binding, bodyState, requiredBody };
+}
+
+function hiddenBallotReadResponse(commitmentClosedAtHeight) {
+  const response = readResponse();
+  response.attempt.stage = { stage: "PolicyJury" };
+  response.attempt.status = { status: "Certified" };
+  response.required_bodies = [response.required_bodies.at(-1)];
+  response.body_states = [response.body_states.at(-1)];
+  response.certificate.body_bindings = [response.certificate.body_bindings.at(-1)];
+  response.certificate.body_bindings[0].ballot.commitment_closed_at_height =
+    commitmentClosedAtHeight;
+  response.certificate.certified_at_height = 18;
   response.certificate.enact_at_height = 30;
+  return response;
+}
+
+function narrowPolicyReadResponse({
+  confirmationSequence = 0,
+  confirmationRequestHeight = 52,
+  includeConfirmation = true,
+} = {}) {
+  const response = hiddenBallotReadResponse(47);
+  const policy = response.certificate.body_bindings[0];
+  policy.original_seats = 21;
+  policy.sortition_request.candidate_count = 21;
+  policy.sortition_request.target_seats = 21;
+  policy.result_height = 52;
+  Object.assign(policy.ballot, {
+    registered_at_height: 3,
+    registration_close_height: 25,
+    survivor_freeze_height: 46,
+    commitment_close_height: 47,
+    registration_closed_at_height: 25,
+    survivors_frozen_at_height: 46,
+    commitment_closed_at_height: 47,
+    max_corpus_entries: 21,
+    release_height: 49,
+    opening_deadline_height: 55,
+    opening_height: 50,
+    tally: {
+      original_seats: 21,
+      accepted_ballots: 21,
+      aye: 11,
+      nay: 10,
+      abstain: 0,
+    },
+  });
+  response.body_states[0].timed_ovn_progress.frozen_survivor_count = 21;
+  response.body_states[0].timed_ovn_progress.accepted_ballot_prefix_count = 21;
+  response.current_height = 110;
+  response.certificate.certified_at_height = 52;
+  response.certificate.enact_at_height = 120;
+  if (!includeConfirmation) return response;
+
+  const confirmation = structuredClone(policy);
+  confirmation.body = "confirmation-jury";
+  confirmation.body_instance_id = ID(0x31);
+  confirmation.election_attempt_id = ID(0x32);
+  confirmation.election_attempt_sequence = confirmationSequence;
+  confirmation.sortition_request_id = ID(0x33);
+  Object.assign(confirmation.sortition_request, {
+    id: ID(0x33),
+    body_election_attempt_id: ID(0x32),
+    body: "confirmation-jury",
+    request_height: confirmationRequestHeight,
+    pulse_height: confirmationRequestHeight + 1,
+    beacon_session_id: ID(0x34),
+  });
+  confirmation.beacon_session_id = ID(0x34);
+  confirmation.beacon_pulse_id = ID(0x35);
+  confirmation.result_height = 103;
+  Object.assign(confirmation.ballot, {
+    ballot_attempt_id: ID(0x36),
+    tle_session_id: ID(0x37),
+    tle_key_session_id: ID(0x38),
+    release_beacon_session_id: ID(0x39),
+    registered_at_height: 55,
+    registration_close_height: 77,
+    survivor_freeze_height: 98,
+    commitment_close_height: 99,
+    registration_closed_at_height: 77,
+    survivors_frozen_at_height: 98,
+    commitment_closed_at_height: 99,
+    release_height: 101,
+    opening_deadline_height: 106,
+    release_pulse_id: ID(0x3a),
+    opening_height: 102,
+  });
+  response.required_bodies.push({
+    body: "confirmation-jury",
+    decision_mode: { mode: "HiddenBindingBallot" },
+  });
+  response.body_states.push({
+    ...structuredClone(response.body_states[0]),
+    body: "confirmation-jury",
+    body_instance_id: confirmation.body_instance_id,
+    timed_ovn_progress: {
+      ...structuredClone(response.body_states[0].timed_ovn_progress),
+      ballot_attempt_id: confirmation.ballot.ballot_attempt_id,
+    },
+  });
+  response.certificate.body_bindings.push(confirmation);
+  response.certificate.certified_at_height = confirmation.result_height;
   return response;
 }
 

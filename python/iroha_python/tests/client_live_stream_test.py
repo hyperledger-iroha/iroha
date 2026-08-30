@@ -12,6 +12,7 @@ from requests.structures import CaseInsensitiveDict
 import iroha_python
 import iroha_python.client as client_module
 from iroha_python import (
+    EventCursor,
     NetworkId,
     OperatorSigningContext,
     SseStreamError,
@@ -31,7 +32,12 @@ class SequencedSession(requests.Session):
         self._responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 
-    def get(self, url: str | bytes, **kwargs: Any) -> requests.Response:
+    def request(
+        self,
+        method: str | bytes,
+        url: str | bytes,
+        **kwargs: Any,
+    ) -> requests.Response:
         self.calls.append(
             {
                 "url": url,
@@ -43,7 +49,12 @@ class SequencedSession(requests.Session):
         )
         if not self._responses:
             raise AssertionError("unexpected SSE request")
-        return self._responses.pop(0)
+        response = self._responses.pop(0)
+        response.url = str(url)
+        return response
+
+    def get(self, url: str | bytes, **kwargs: Any) -> requests.Response:
+        return self.request("GET", url, **kwargs)
 
     def send(
         self,
@@ -75,10 +86,28 @@ class SseStubResponse(StubResponse):
         self.headers = CaseInsensitiveDict({"Content-Type": "text/event-stream"})
         self._lines = lines
 
-    def iter_lines(self, decode_unicode: bool = False, **kwargs: Any):
-        del kwargs
+    def iter_content(self, chunk_size: int = 1, decode_unicode: bool = False):
+        del chunk_size
+        assert decode_unicode is False
         for line in self._lines:
-            yield line if decode_unicode else line.encode("utf-8")
+            yield line.encode("utf-8") + b"\n"
+
+
+class ChunkSseStubResponse(StubResponse):
+    """SSE response that can emit a newline-free hostile chunk."""
+
+    def __init__(self, chunks: list[bytes | Exception]) -> None:
+        super().__init__(200, None)
+        self.headers = CaseInsensitiveDict({"Content-Type": "text/event-stream"})
+        self._chunks = chunks
+
+    def iter_content(self, chunk_size: int = 1, decode_unicode: bool = False):
+        del chunk_size
+        assert decode_unicode is False
+        for chunk in self._chunks:
+            if isinstance(chunk, Exception):
+                raise chunk
+            yield chunk
 
 
 class StubOperatorKeyPair:
@@ -134,6 +163,131 @@ def test_live_stream_signatures_expose_no_replay_controls() -> None:
         client.stream_events(last_event_id="stale")  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="unexpected keyword argument 'resume'"):
         client.stream_pipeline_transactions(resume=True)  # type: ignore[call-arg]
+
+
+def test_sse_stream_has_a_mandatory_event_bound_and_never_redirects() -> None:
+    session = SequencedSession([SseStubResponse(["data: 123456", ""])])
+    client = ToriiClient("https://torii.example", session=session, max_retries=0)
+
+    stream = client._stream_sse(
+        "/v1/events/sse",
+        maximum_event_bytes=8,
+        max_retries=0,
+        decode_json=False,
+    )
+    with pytest.raises(ValueError, match="8-byte size bound"):
+        next(stream)
+    assert session.calls[0]["allow_redirects"] is False
+
+    with pytest.raises(ValueError, match="positive integer"):
+        client._stream_sse(
+            "/v1/events/sse",
+            maximum_event_bytes=0,
+            max_retries=0,
+        )
+
+
+def test_sse_stream_bounds_newline_free_chunks_and_normalizes_accept_header() -> None:
+    session = SequencedSession([ChunkSseStubResponse([b"x" * 9])])
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        default_headers={"accept": "application/json"},
+        max_retries=0,
+    )
+
+    stream = client._stream_sse(
+        "/v1/events/sse",
+        maximum_event_bytes=8,
+        max_retries=0,
+    )
+    with pytest.raises(ValueError, match="8-byte size bound"):
+        next(stream)
+
+    headers = session.calls[0]["headers"]
+    assert sum(name.lower() == "accept" for name in headers) == 1
+    assert next(value for name, value in headers.items() if name.lower() == "accept") == (
+        "text/event-stream"
+    )
+
+
+def test_sse_mid_body_failures_exhaust_the_retry_budget() -> None:
+    session = SequencedSession(
+        [
+            ChunkSseStubResponse([requests.ConnectionError("first")]),
+            ChunkSseStubResponse([requests.ConnectionError("second")]),
+            SseStubResponse(["data: should-not-be-read", ""]),
+        ]
+    )
+    client = ToriiClient("https://torii.example", session=session, max_retries=0)
+    stream = client._stream_sse(
+        "/v1/events/sse",
+        max_retries=1,
+        backoff_base=0,
+    )
+
+    with pytest.raises(requests.ConnectionError, match="second"):
+        next(stream)
+    assert len(session.calls) == 2
+
+
+def test_sse_event_bound_counts_crlf_wire_bytes() -> None:
+    session = SequencedSession([ChunkSseStubResponse([b":\r\n:\r\n\r\n"])])
+    client = ToriiClient("https://torii.example", session=session, max_retries=0)
+    stream = client._stream_sse(
+        "/v1/events/sse",
+        maximum_event_bytes=7,
+        max_retries=0,
+    )
+
+    with pytest.raises(ValueError, match="7-byte size bound"):
+        next(stream)
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [b"data: cr-only\r\r"],
+        [b"data: cr-only\r", b"\r"],
+        [b"data: crlf\r", b"\n\r", b"\n"],
+    ],
+)
+def test_sse_stream_accepts_all_standard_line_endings(chunks: list[bytes]) -> None:
+    session = SequencedSession([ChunkSseStubResponse(chunks)])
+    client = ToriiClient("https://torii.example", session=session, max_retries=0)
+
+    event = next(client._stream_sse("/v1/events/sse", max_retries=0))
+
+    assert event.data in {"cr-only", "crlf"}
+    assert len(session.calls) == 1
+
+
+def test_sse_callback_request_errors_are_not_retried_or_checkpointed() -> None:
+    session = SequencedSession(
+        [
+            SseStubResponse(["id: event-1", "data: payload", ""]),
+            SseStubResponse(["data: duplicate", ""]),
+        ]
+    )
+    client = ToriiClient("https://torii.example", session=session, max_retries=0)
+    cursor = EventCursor()
+
+    def fail_callback(_event: object) -> None:
+        raise requests.ConnectionError("application callback failed")
+
+    stream = client._stream_sse(
+        "/v1/events/sse",
+        allow_resume=True,
+        cursor=cursor,
+        max_retries=3,
+        backoff_base=0,
+        on_event=fail_callback,
+    )
+
+    with pytest.raises(requests.ConnectionError, match="application callback failed"):
+        next(stream)
+    assert len(session.calls) == 1
+    assert cursor.last_event_id is None
 
 
 def test_retired_sumeragi_new_view_surface_is_absent() -> None:

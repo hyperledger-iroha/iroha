@@ -458,6 +458,7 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
         "trailing_byte",
         "retired_zero_prepare_tag",
         "unknown_payload_tag",
+        "retired_payload_manifest",
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
         "commit_request_invalid_network_id",

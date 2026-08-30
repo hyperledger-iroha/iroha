@@ -14,9 +14,7 @@ const VERIFYING_KEY_STATUS_VALUES = new Set([
   "Active",
   "Withdrawn",
 ]);
-const VERIFYING_KEY_STATUS_ALIASES = new Map(
-  [...VERIFYING_KEY_STATUS_VALUES].map((value) => [value.toLowerCase(), value]),
-);
+const VERIFYING_KEY_ENGINE_LABELS_V1 = new Set(["halo2-ipa-pasta", "stark"]);
 const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "halo2/ipa",
   "halo2/pasta/kaigi-roster-v1",
@@ -52,10 +50,8 @@ export function createVerifyingKeyClient(
   normalizeSignalOption,
   normalizeUnsignedInteger,
   rejectPrivateKeyFields,
-  requireBooleanLike,
   requireExactBoolean,
   requireExactNonEmptyString,
-  requireHexString,
   requireNonEmptyString,
 ) {
 
@@ -64,18 +60,17 @@ export function createVerifyingKeyClient(
     context,
     { optional = false } = {},
   ) {
-    if (value === undefined || value === null || value === "") {
+    if (value === undefined || value === null) {
       if (optional) return undefined;
       throw new TypeError(`${context} must be a verifying key status`);
     }
-    const normalized = requireNonEmptyString(String(value), context).toLowerCase();
-    const canonical = VERIFYING_KEY_STATUS_ALIASES.get(normalized);
-    if (!canonical) {
+    const status = requireExactNonEmptyString(value, context);
+    if (!VERIFYING_KEY_STATUS_VALUES.has(status)) {
       throw new TypeError(
         `${context} must be one of ${[...VERIFYING_KEY_STATUS_VALUES].join(", ")}`,
       );
     }
-    return canonical;
+    return status;
   }
 
   function assertProductionVerifyBackendLabel(value, context) {
@@ -126,11 +121,11 @@ export function createVerifyingKeyClient(
       activationHeight !== null &&
       withdrawHeight !== undefined &&
       withdrawHeight !== null &&
-      withdrawHeight < activationHeight
+      withdrawHeight <= activationHeight
     ) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        `${context}.withdraw_height must be >= activation_height`,
+        `${context}.withdraw_height must be > activation_height`,
         `${context}.withdrawHeight`,
       );
     }
@@ -144,22 +139,20 @@ export function createVerifyingKeyClient(
       "listVerifyingKeys options",
     );
     const params = {};
-    const backendValue = options.backend ?? options.backend_filter;
+    const backendValue = options.backend;
     if (backendValue !== undefined && backendValue !== null) {
       params.backend = assertProductionVerifyBackendLabel(
         backendValue,
         "listVerifyingKeys.backend",
       );
     }
-    const statusValue =
-      options.status ?? options.statusFilter ?? options.verifyingKeyStatus;
     const normalizedStatus = normalizeVerifyingKeyStatusValue(
-      statusValue,
+      options.status,
       "listVerifyingKeys.status",
       { optional: true },
     );
     if (normalizedStatus) params.status = normalizedStatus;
-    const nameContains = options.nameContains ?? options.name_contains;
+    const nameContains = options.nameContains;
     if (nameContains !== undefined && nameContains !== null) {
       params.name_contains = requireNonEmptyString(
         nameContains,
@@ -180,21 +173,20 @@ export function createVerifyingKeyClient(
         { allowZero: true },
       );
     }
-    const orderValue = options.order ?? options.sort ?? options.sortOrder;
+    const orderValue = options.order;
     if (orderValue !== undefined && orderValue !== null) {
       const normalizedOrder = requireNonEmptyString(
         orderValue,
         "listVerifyingKeys.order",
       );
-      const lower = normalizedOrder.toLowerCase();
-      if (lower !== "asc" && lower !== "desc") {
+      if (normalizedOrder !== "asc" && normalizedOrder !== "desc") {
         throw new TypeError('listVerifyingKeys.order must be "asc" or "desc"');
       }
-      params.order = lower;
+      params.order = normalizedOrder;
     }
-    const idsOnlyValue = options.idsOnly ?? options.ids_only;
+    const idsOnlyValue = options.idsOnly;
     if (idsOnlyValue !== undefined && idsOnlyValue !== null) {
-      params.ids_only = requireBooleanLike(
+      params.ids_only = requireExactBoolean(
         idsOnlyValue,
         "listVerifyingKeys.idsOnly",
       );
@@ -209,37 +201,28 @@ export function createVerifyingKeyClient(
     payload,
     context = "verifying key list response",
   ) {
-    if (payload === undefined || payload === null) return [];
-    if (Array.isArray(payload)) {
-      return payload.map((entry, index) =>
-        normalizeVerifyingKeyListItem(entry, `${context}[${index}]`),
-      );
+    if (!Array.isArray(payload)) {
+      throw new TypeError(`${context} must be an array`);
     }
-    const record = ensureRecord(payload, context);
-    if (!Array.isArray(record.items)) {
-      throw new TypeError(`${context} must be an array or { items: [] } object`);
-    }
-    return record.items.map((entry, index) =>
-      normalizeVerifyingKeyListItem(entry, `${context}.items[${index}]`),
+    return payload.map((entry, index) =>
+      normalizeVerifyingKeyListItem(entry, `${context}[${index}]`),
     );
   }
 
   function normalizeVerifyingKeyListItem(payload, context) {
     const record = ensureRecord(payload, context);
-    let idPayload = record.id;
-    if (!idPayload && record.backend && record.name) {
-      idPayload = { backend: record.backend, name: record.name };
+    if (record.id !== undefined) {
+      assertSupportedOptionKeys(record, new Set(["id", "record"]), context);
+      return {
+        id: normalizeVerifyingKeyId(record.id, `${context}.id`),
+        record: normalizeVerifyingKeyRecord(record.record, `${context}.record`),
+      };
     }
-    if (!idPayload) throw new TypeError(`${context} must include an id`);
-    const id = normalizeVerifyingKeyId(idPayload, `${context}.id`);
-    let normalizedRecord = null;
-    if (record.record !== undefined && record.record !== null) {
-      normalizedRecord = normalizeVerifyingKeyRecord(
-        record.record,
-        `${context}.record`,
-      );
-    }
-    return { id, record: normalizedRecord };
+    assertSupportedOptionKeys(record, new Set(["backend", "name"]), context);
+    return {
+      id: normalizeVerifyingKeyId(record, `${context}.id`),
+      record: null,
+    };
   }
 
   function normalizeVerifyingKeyDetail(
@@ -247,15 +230,25 @@ export function createVerifyingKeyClient(
     context = "verifying key detail response",
   ) {
     const record = ensureRecord(payload, context);
+    assertSupportedOptionKeys(
+      record,
+      new Set(["id", "record", "record_norito_base64"]),
+      context,
+    );
     const id = normalizeVerifyingKeyId(record.id, `${context}.id`);
     return {
       id,
       record: normalizeVerifyingKeyRecord(record.record, `${context}.record`),
+      record_norito_base64: normalizeRequiredBase64Payload(
+        record.record_norito_base64,
+        `${context}.record_norito_base64`,
+      ),
     };
   }
 
   function normalizeVerifyingKeyId(payload, context) {
     const record = ensureRecord(payload, context);
+    assertSupportedOptionKeys(record, new Set(["backend", "name"]), context);
     return {
       backend: assertProductionVerifyBackendLabel(
         record.backend,
@@ -267,6 +260,29 @@ export function createVerifyingKeyClient(
 
   function normalizeVerifyingKeyRecord(payload, context) {
     const record = ensureRecord(payload, context);
+    assertSupportedOptionKeys(
+      record,
+      new Set([
+        "version",
+        "circuit_id",
+        "owner_manifest_id",
+        "namespace",
+        "backend",
+        "curve",
+        "public_inputs_schema_hash",
+        "commitment",
+        "vk_len",
+        "max_proof_bytes",
+        "gas_schedule_id",
+        "metadata_uri_cid",
+        "vk_bytes_cid",
+        "activation_height",
+        "withdraw_height",
+        "status",
+        "key",
+      ]),
+      context,
+    );
     const gasSchedule = record.gas_schedule_id ?? null;
     const metadataCid = record.metadata_uri_cid ?? null;
     const vkBytesCid = record.vk_bytes_cid ?? null;
@@ -296,33 +312,38 @@ export function createVerifyingKeyClient(
         record.circuit_id,
         `${context}.circuit_id`,
       ),
-      backend: assertProductionVerifyBackendLabel(
+      owner_manifest_id:
+        record.owner_manifest_id === null
+          ? null
+          : requireExactNonEmptyString(
+              record.owner_manifest_id,
+              `${context}.owner_manifest_id`,
+            ),
+      namespace: requireExactNonEmptyString(
+        record.namespace,
+        `${context}.namespace`,
+      ),
+      backend: normalizeVerifyingKeyEngineLabel(
         record.backend,
         `${context}.backend`,
       ),
-      curve:
-        record.curve === undefined || record.curve === null
-          ? null
-          : requireNonEmptyString(record.curve, `${context}.curve`),
-      public_inputs_schema_hash: requireNonEmptyString(
+      curve: requireExactNonEmptyString(record.curve, `${context}.curve`),
+      public_inputs_schema_hash: normalizeResponseHex32(
         record.public_inputs_schema_hash,
         `${context}.public_inputs_schema_hash`,
       ),
-      commitment_hex: requireHexString(
+      commitment_hex: normalizeResponseHex32(
         record.commitment,
         `${context}.commitment_hex`,
       ),
       vk_len: normalizeUnsignedInteger(record.vk_len, `${context}.vk_len`, {
-        allowZero: false,
+        allowZero: true,
       }),
-      max_proof_bytes:
-        record.max_proof_bytes === undefined || record.max_proof_bytes === null
-          ? null
-          : normalizeUnsignedInteger(
-              record.max_proof_bytes,
-              `${context}.max_proof_bytes`,
-              { allowZero: false },
-            ),
+      max_proof_bytes: normalizeUnsignedInteger(
+        record.max_proof_bytes,
+        `${context}.max_proof_bytes`,
+        { allowZero: true },
+      ),
       gas_schedule_id:
         gasSchedule === null
           ? null
@@ -357,6 +378,7 @@ export function createVerifyingKeyClient(
   function normalizeVerifyingKeyInline(value, context) {
     if (value === undefined || value === null) return null;
     const record = ensureRecord(value, context);
+    assertSupportedOptionKeys(record, new Set(["backend", "bytes_b64"]), context);
     return {
       backend: assertProductionVerifyBackendLabel(
         record.backend,
@@ -367,6 +389,22 @@ export function createVerifyingKeyClient(
         `${context}.bytes_b64`,
       ),
     };
+  }
+
+  function normalizeVerifyingKeyEngineLabel(value, context) {
+    const backend = requireExactNonEmptyString(value, context);
+    if (!VERIFYING_KEY_ENGINE_LABELS_V1.has(backend)) {
+      throw new TypeError(`${context} must be halo2-ipa-pasta or stark`);
+    }
+    return backend;
+  }
+
+  function normalizeResponseHex32(value, context) {
+    const literal = requireExactNonEmptyString(value, context);
+    if (!/^[0-9a-f]{64}$/u.test(literal)) {
+      throw new TypeError(`${context} must be exactly 32 lowercase hex bytes`);
+    }
+    return literal;
   }
 
   function requireVerifyingKeySigningContext(value, context) {
@@ -644,11 +682,7 @@ export function createVerifyingKeyClient(
       { optional: true },
     );
     if (statusValue) payload.status = statusValue;
-    const bytesValue =
-      record.vk_bytes ??
-      record.verifyingKeyBytes ??
-      record.bytes ??
-      record.inlineKeyBytes;
+    const bytesValue = record.vk_bytes;
     const lenValue = record.vk_len;
     if (bytesValue !== undefined && bytesValue !== null) {
       const base64 = normalizeRequiredBase64Payload(

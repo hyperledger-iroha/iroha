@@ -45,6 +45,8 @@ import {
 
 const DEFAULT_SUCCESS_STATUSES = [200];
 const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
+const DEFAULT_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+const DEFAULT_BINARY_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const KAGEMUSHA_JSON_RESPONSE_MAX_BYTES = 256 * 1024;
 const KAIGI_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
@@ -197,6 +199,19 @@ function requireObject(value, context) {
     throw new TypeError(`${context} must be an object`);
   }
   return value;
+}
+
+function headersContainCredentials(headers) {
+  const headerNames = Object.keys(headers).map((name) => name.toLowerCase());
+  return [
+    "authorization",
+    "x-api-token",
+    "x-iroha-account",
+    "x-iroha-signature",
+    "x-iroha-timestamp-ms",
+    "x-iroha-nonce",
+    "x-iroha-witness",
+  ].some((name) => headerNames.includes(name));
 }
 
 function normalizeTransactionStatusScope(value, context) {
@@ -1319,29 +1334,44 @@ async function responseText(response) {
 }
 
 function requestSignal(options, timeoutMs) {
-  let timeoutId;
-  let signal = options.signal;
-  if (
-    signal === undefined &&
-    timeoutMs !== null &&
-    timeoutMs !== undefined &&
-    Number(timeoutMs) > 0
-  ) {
-    const controller = new AbortController();
-    timeoutId = setTimeout(() => controller.abort(), Number(timeoutMs));
-    signal = controller.signal;
+  const callerSignal = options.signal;
+  const normalizedTimeout = Number(timeoutMs);
+  if (!(normalizedTimeout > 0) || typeof AbortController !== "function") {
+    return { signal: callerSignal, cleanup() {} };
   }
-  return { signal, timeoutId };
+  const controller = new AbortController();
+  const onCallerAbort = () => controller.abort(callerSignal.reason);
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      onCallerAbort();
+    } else {
+      callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+    }
+  }
+  const timeoutId = controller.signal.aborted
+    ? undefined
+    : setTimeout(
+        () => controller.abort(new Error(`Torii request timed out after ${normalizedTimeout} ms`)),
+        normalizedTimeout,
+      );
+  let cleaned = false;
+  return {
+    signal: controller.signal,
+    cleanup() {
+      if (cleaned) return;
+      cleaned = true;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+    },
+  };
 }
 
-async function fetchToriiResponse(client, url, init, options, timeoutId) {
+async function fetchToriiResponse(client, url, init, options, cleanupSignal) {
   let response;
   try {
     response = await client.fetchImpl(url, init);
   } finally {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
+    cleanupSignal();
   }
   if (init.redirect === "error" && response?.redirected === true) {
     throw new TypeError("Torii one-shot request must not accept a redirected response");
@@ -1888,6 +1918,21 @@ export class ToriiBrowserClient {
       ...(normalizedOptions.defaultHeaders ?? {}),
     };
     rejectPrecomputedCanonicalHeaders(this.defaultHeaders);
+    const allowInsecure = normalizedOptions.allowInsecure ?? false;
+    if (typeof allowInsecure !== "boolean") {
+      throw new TypeError("ToriiBrowserClient options.allowInsecure must be a boolean");
+    }
+    this.allowInsecure = allowInsecure;
+    const protocol = new URL(this.baseUrl).protocol.toLowerCase();
+    if (
+      headersContainCredentials(this.defaultHeaders) &&
+      protocol !== "https:" &&
+      !this.allowInsecure
+    ) {
+      throw new Error(
+        "ToriiBrowserClient: credential headers require an https base URL; pass allowInsecure: true for local/dev use only.",
+      );
+    }
     this.timeoutMs =
       normalizedOptions.config?.toriiClient?.timeoutMs ?? normalizedOptions.timeoutMs ?? null;
     const networkId = normalizedOptions.networkId ?? null;
@@ -2046,7 +2091,7 @@ export class ToriiBrowserClient {
       ...this.defaultHeaders,
       ...(normalizedOptions.headers ?? {}),
     };
-    const { signal, timeoutId } = requestSignal(normalizedOptions, this.timeoutMs);
+    const { signal, cleanup } = requestSignal(normalizedOptions, this.timeoutMs);
     const init = {
       method,
       cache: "no-store",
@@ -2096,7 +2141,7 @@ export class ToriiBrowserClient {
       url,
       init,
       normalizedOptions,
-      timeoutId,
+      cleanup,
     );
     if (normalizedOptions.responseObserver !== undefined) {
       if (typeof normalizedOptions.responseObserver !== "function") {
@@ -2112,19 +2157,11 @@ export class ToriiBrowserClient {
     if (typeof jsonParser !== "function") {
       throw new TypeError(`${method} ${path} jsonParser must be a function`);
     }
-    if (typeof response.text !== "function" && typeof response.json === "function") {
-      if (normalizedOptions.jsonParser !== undefined) {
-        throw new TypeError(`${method} ${path} requires a text-capable response`);
-      }
-      return response.json();
-    }
-    const text = normalizedOptions.maximumBodyBytes === undefined
-      ? await response.text()
-      : await readBoundedResponseText(
-        response,
-        normalizedOptions.maximumBodyBytes,
-        `${method} ${path}`,
-      );
+    const text = await readBoundedResponseText(
+      response,
+      normalizedOptions.maximumBodyBytes ?? DEFAULT_JSON_RESPONSE_MAX_BYTES,
+      `${method} ${path}`,
+    );
     if (text === "" && normalizedOptions.jsonParser === undefined) return null;
     return jsonParser(text);
   }
@@ -2136,7 +2173,7 @@ export class ToriiBrowserClient {
       ...(normalizedOptions.headers ?? {}),
       Accept: "application/x-norito",
     };
-    const { signal, timeoutId } = requestSignal(normalizedOptions, this.timeoutMs);
+    const { signal, cleanup } = requestSignal(normalizedOptions, this.timeoutMs);
     const { response } = await fetchToriiResponse(
       this,
       this._url(path, normalizedOptions.params),
@@ -2147,25 +2184,19 @@ export class ToriiBrowserClient {
         signal,
       },
       normalizedOptions,
-      timeoutId,
+      cleanup,
     );
     const contentType = response.headers?.get?.("content-type") ?? "";
     if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
       throw new TypeError(`${method} ${path} must return application/x-norito`);
     }
-    if (normalizedOptions.maximumBodyBytes !== undefined) {
-      return Buffer.from(
-        await readBoundedResponseBytes(
-          response,
-          normalizedOptions.maximumBodyBytes,
-          `${method} ${path}`,
-        ),
-      );
-    }
-    if (typeof response.arrayBuffer !== "function") {
-      throw new TypeError(`${method} ${path} requires an arrayBuffer-capable response`);
-    }
-    return Buffer.from(await response.arrayBuffer());
+    return Buffer.from(
+      await readBoundedResponseBytes(
+        response,
+        normalizedOptions.maximumBodyBytes ?? DEFAULT_BINARY_RESPONSE_MAX_BYTES,
+        `${method} ${path}`,
+      ),
+    );
   }
 
   async _canonicalJson(method, path, body, options, successStatuses = [200], responseOptions = {}) {

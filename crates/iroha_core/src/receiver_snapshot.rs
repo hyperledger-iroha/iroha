@@ -1,9 +1,7 @@
 //! Witness-side proof construction for active-receiver snapshots.
-use crate::sumeragi::{
-    consensus::ExecWitness,
-    smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KvPair},
-};
+use crate::sumeragi::smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KvPair};
 use iroha_crypto::Hash;
+use iroha_data_model::block::consensus::ExecWitness;
 use iroha_data_model::offline::{
     KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1, KagemushaActiveReceiverWitnessProofV1,
 };
@@ -261,7 +259,7 @@ fn mask_tail_bits(bytes: &mut [u8], len_bits: u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sumeragi::consensus::ExecKv;
+    use iroha_data_model::block::consensus::ExecKv;
     use iroha_data_model::offline::{
         KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1, KagemushaActiveReceiverSnapshotCommitmentV1,
         KagemushaActiveReceiverSnapshotStatusV1,

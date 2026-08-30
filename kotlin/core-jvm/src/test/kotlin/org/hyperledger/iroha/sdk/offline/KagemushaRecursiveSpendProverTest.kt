@@ -817,7 +817,10 @@ class KagemushaRecursiveSpendProverTest {
                 "prepareRecipientPaymentRequest",
                 "prepareRequestAuthorization",
                 "prepareTopUp",
+                "projectOperationReference",
                 "projectOperationStatus",
+                "projectRedeemRequestOperationId",
+                "projectTopUpRequestOperationId",
                 "projectPeerPayment",
                 "projectInitResultV4",
                 "projectRedeemBuildResultV4",
@@ -1317,6 +1320,28 @@ class KagemushaRecursiveSpendProverTest {
                 ByteArray(32) { 1 },
             )
         }
+        val lastValidLeaf = KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY - 1
+        val lastValidDirections = ByteArray(16) { level ->
+            ((lastValidLeaf ushr level) and 1).toByte()
+        }
+        assertEquals(
+            lastValidLeaf,
+            KagemushaRecursiveSpendProver.TopUpZeroPath(
+                lastValidLeaf,
+                List(16) { ByteArray(32) },
+                lastValidDirections,
+                ByteArray(32) { 1 },
+            ).leafIndex,
+        )
+        val reservedLeaf = KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.TopUpZeroPath(
+                reservedLeaf,
+                List(16) { ByteArray(32) },
+                ByteArray(16) { level -> ((reservedLeaf ushr level) and 1).toByte() },
+                ByteArray(32) { 1 },
+            )
+        }
     }
 
     @Test
@@ -1749,11 +1774,40 @@ class KagemushaRecursiveSpendProverTest {
             )
         }
         val requestTimeout = Duration.ofSeconds(37)
-        val client = KagemushaRecursiveSpendProver.newToriiClient(
+        val projectedOperationId = ByteArray(32) { 0x11 }
+        val client = KagemushaRecursiveSpendProver.ToriiClient(
             toriiBaseUri,
             transport,
             localSigningContext,
             requestTimeout,
+            topUpRequestOperationIdProjector = { projectedOperationId },
+            redeemRequestOperationIdProjector = { projectedOperationId },
+            operationReferenceProjector = {
+                KagemushaRecursiveSpendProver.OperationReferenceProjection(
+                    if (captured.get().uri.path.endsWith("/redeem")) {
+                        KagemushaRecursiveSpendProver.OperationKind.REDEEM
+                    } else {
+                        KagemushaRecursiveSpendProver.OperationKind.TOP_UP
+                    },
+                    projectedOperationId,
+                    projectedOperationId,
+                    "/v1/offline/operations/${"11".repeat(32)}",
+                    1,
+                )
+            },
+            operationStatusProjector = {
+                KagemushaRecursiveSpendProver.OperationStatusProjection(
+                    KagemushaRecursiveSpendProver.OperationState.PENDING,
+                    KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                    projectedOperationId,
+                    projectedOperationId,
+                    1,
+                    null,
+                    null,
+                    null,
+                    null,
+                )
+            },
         )
 
         val status = client.getOfflineCapability().join()
@@ -1857,6 +1911,7 @@ class KagemushaRecursiveSpendProverTest {
         fun projection(
             state: KagemushaRecursiveSpendProver.OperationState,
             kind: KagemushaRecursiveSpendProver.OperationKind,
+            transactionHash: ByteArray = digest,
             submittedAt: Long? = null,
             finalizedHeight: Long? = null,
             serverTime: Long? = null,
@@ -1865,7 +1920,7 @@ class KagemushaRecursiveSpendProverTest {
             state,
             kind,
             digest,
-            digest,
+            transactionHash,
             submittedAt,
             finalizedHeight,
             serverTime,
@@ -1886,6 +1941,14 @@ class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.OperationState.PENDING,
                 KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
                 submittedAt = 0,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            projection(
+                KagemushaRecursiveSpendProver.OperationState.PENDING,
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+                transactionHash = digest.copyOf().also { it[it.lastIndex] = 2 },
+                submittedAt = 1,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -1950,7 +2013,7 @@ class KagemushaRecursiveSpendProverTest {
             locations: List<String>,
             retryAfter: List<String>,
         ): KagemushaRecursiveSpendProver.ToriiClient =
-            KagemushaRecursiveSpendProver.newToriiClient(
+            KagemushaRecursiveSpendProver.ToriiClient(
                 URI.create("https://torii.example"),
                 object : TransportExecutor {
                     override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
@@ -1964,6 +2027,8 @@ class KagemushaRecursiveSpendProverTest {
                     }
                 },
                 LocalSigningContext(networkId),
+                null,
+                topUpRequestOperationIdProjector = { ByteArray(32) { 0x11 } },
             )
 
         val invalidHeaders = listOf(
@@ -1980,6 +2045,84 @@ class KagemushaRecursiveSpendProverTest {
                 client(locations, retryAfter).submitTopUp(request, operationId).join()
             }
         }
+    }
+
+    @Test
+    fun toriiOperationIdentityBindingsRejectSubstitutionBeforeCompletion() {
+        val operationId = ByteArray(32) { 0x11 }
+        val otherOperationId = ByteArray(32) { 0x13 }
+        val operationIdHex = operationId.toHex()
+        val reference = KagemushaRecursiveSpendProver.OperationReferenceProjection(
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            operationId,
+            "/v1/offline/operations/$operationIdHex",
+            1,
+        )
+        KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+            reference,
+            operationIdHex,
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+        )
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+                reference,
+                otherOperationId.toHex(),
+                KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.ToriiClient.requireOperationReferenceMatches(
+                reference,
+                operationIdHex,
+                KagemushaRecursiveSpendProver.OperationKind.REDEEM,
+            )
+        }
+        val status = KagemushaRecursiveSpendProver.OperationStatusProjection(
+            KagemushaRecursiveSpendProver.OperationState.PENDING,
+            KagemushaRecursiveSpendProver.OperationKind.TOP_UP,
+            operationId,
+            operationId,
+            1,
+            null,
+            null,
+            null,
+            null,
+        )
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.ToriiClient.requireOperationStatusMatches(
+                status,
+                otherOperationId.toHex(),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.ToriiClient.requireSubmittedOperationIdMatches(
+                operationId,
+                otherOperationId.toHex(),
+            )
+        }
+
+        val dispatched = AtomicReference<TransportRequest?>()
+        val networkId = org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        )
+        val client = KagemushaRecursiveSpendProver.ToriiClient(
+            URI.create("https://torii.example"),
+            object : TransportExecutor {
+                override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+                    dispatched.set(request)
+                    throw AssertionError("mismatched request must fail before transport")
+                }
+            },
+            LocalSigningContext(networkId),
+            null,
+            topUpRequestOperationIdProjector = { otherOperationId },
+        )
+        val request = KagemushaRecursiveSpendProver.TopUpRequest(
+            archive("iroha.torii.v1.offline.top_up.request"),
+        )
+        assertFailsWith<IllegalStateException> { client.submitTopUp(request, operationIdHex) }
+        assertEquals(null, dispatched.get())
     }
 
     @Test

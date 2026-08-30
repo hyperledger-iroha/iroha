@@ -111,6 +111,8 @@ def test_governance_plain_ballot_uses_exact_network_auth_and_one_shot_transport(
         {"ok": True, "accepted": True, "reason": None, "tx_instructions": []},
         {"drafted": False, "tx_instructions": [{"wire_id": "CastPlainBallot", "payload_hex": "00"}]},
         {"drafted": True, "tx_instructions": []},
+        {"drafted": True, "tx_instructions": [{"wire_id": "Cast PlainBallot", "payload_hex": "00"}]},
+        {"drafted": True, "tx_instructions": [{"wire_id": "CastPlainBallot", "payload_hex": "AA"}]},
     ],
 )
 def test_governance_ballot_rejects_non_draft_response_contract(payload: Any) -> None:

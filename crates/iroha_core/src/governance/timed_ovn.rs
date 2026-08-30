@@ -184,9 +184,9 @@ impl TimedOvnReleaseIdentityPublicV1 {
             self.body_instance_id,
             self.ballot_attempt_id,
             self.survivor_corpus_root,
-            // `TleReleaseIdentityV1` retains a generic compatibility slot for
-            // protocols that have a recovery corpus. Timed OVN has none: the
-            // only value admitted here is the replay-derived no-recovery sentinel.
+            // `TleReleaseIdentityV1` reserves this slot for protocols with a
+            // recovery corpus. Timed OVN has none: the only value admitted here
+            // is the replay-derived no-recovery sentinel.
             self.no_recovery_root,
             self.target_finalized_height,
             self.parameter_hash,

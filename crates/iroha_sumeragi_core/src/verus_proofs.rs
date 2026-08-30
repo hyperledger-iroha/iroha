@@ -934,6 +934,10 @@ pub struct WalHeaderProjection {
     pub protocol: int,
     /// Persisted chain identity.
     pub chain: int,
+    /// Persisted frozen height-context identity.
+    pub context: int,
+    /// Persisted block height owned by the WAL.
+    pub height: int,
     /// Persisted local consensus-key identity.
     pub consensus_key: int,
     /// Recomputed checksum equals the stored checksum.
@@ -945,6 +949,10 @@ pub struct WalExpectedIdentityProjection {
     pub protocol: int,
     /// Configured chain hash.
     pub chain: int,
+    /// Expected frozen height-context identity.
+    pub context: int,
+    /// Expected block height.
+    pub height: int,
     /// Configured local consensus-key hash.
     pub consensus_key: int,
 }
@@ -962,13 +970,18 @@ pub open spec fn wal_header_accepted(
         expected.protocol,
         header.chain,
         expected.chain,
+        header.context,
+        expected.context,
+        header.height,
+        expected.height,
         header.consensus_key,
         expected.consensus_key,
         header.checksum_matches,
     )
 }
-/// Accepted header bytes are bound to the exact protocol, chain, and local
-/// consensus key; a mismatch cannot be interpreted as an empty WAL.
+/// Accepted header bytes are bound to the exact protocol, chain, height
+/// context, block height, and local consensus key; a mismatch cannot be
+/// interpreted as an empty WAL.
 pub proof fn accepted_wal_header_has_exact_identity(
     header: WalHeaderProjection,
     expected: WalExpectedIdentityProjection,
@@ -981,12 +994,14 @@ pub proof fn accepted_wal_header_has_exact_identity(
         header.format_matches,
         header.protocol == expected.protocol,
         header.chain == expected.chain,
+        header.context == expected.context,
+        header.height == expected.height,
         header.consensus_key == expected.consensus_key,
         header.checksum_matches,
 {
 }
-/// A malformed header or any protocol/chain/key/checksum mismatch cannot be
-/// accepted as an empty log.
+/// A malformed header or any protocol/chain/context/height/key/checksum
+/// mismatch cannot be accepted as an empty log.
 pub proof fn invalid_or_foreign_wal_header_is_rejected(
     header: WalHeaderProjection,
     expected: WalExpectedIdentityProjection,
@@ -997,6 +1012,8 @@ pub proof fn invalid_or_foreign_wal_header_is_rejected(
             || !header.format_matches
             || header.protocol != expected.protocol
             || header.chain != expected.chain
+            || header.context != expected.context
+            || header.height != expected.height
             || header.consensus_key != expected.consensus_key
             || !header.checksum_matches,
     ensures

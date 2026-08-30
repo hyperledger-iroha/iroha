@@ -90,7 +90,7 @@ enum class AtomicPrivateSettlementOperationV1(
         2 * 1024 * 1024,
     ),
 
-    /** Submit one sponsor-signed exact global finalization carrier. */
+    /** Submit one sponsor-signed exact global finalization or abort carrier. */
     BUNDLE_SUBMIT(
         "/v1/nexus/private-settlements/bundles",
         AtomicPrivateSettlementAuthV1.SPONSOR,
@@ -321,7 +321,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         )
     }
 
-    /** Submit one sponsor-signed global carrier exactly once. */
+    /** Submit one sponsor-signed finalization or abort carrier exactly once. */
     fun submitBundle(
         request: AtomicPrivateSettlementPreparedRequestV1,
         sponsorAuth: ToriiCanonicalRequestAuth,
@@ -516,12 +516,11 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                 )
             } catch (error: RuntimeException) {
                 result.completeExceptionally(
-                    if (error is AtomicPrivateSettlementToriiExceptionV1) {
+                    if (error is AtomicPrivateSettlementToriiExceptionV1 && error.cause == null) {
                         error
                     } else {
                         AtomicPrivateSettlementToriiExceptionV1(
-                            "atomic private settlement response is invalid",
-                            error,
+                            INVALID_RESPONSE_MESSAGE,
                         )
                     },
                 )
@@ -538,33 +537,45 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         expectedIdentifier: AtomicPrivateSettlementIdentifierV1?,
         expectedIdentifierField: String?,
     ): AtomicPrivateSettlementJsonResponseV1 {
-        require(
-            !response.redirected &&
-                response.finalUri?.toASCIIString() == request.uri.toASCIIString(),
+        if (
+            response.redirected ||
+            response.finalUri?.toASCIIString() != request.uri.toASCIIString()
         ) {
-            "atomic private settlement response must come from the exact request URL without redirects"
+            throw AtomicPrivateSettlementToriiExceptionV1(
+                "atomic private settlement response must come from the exact request URL without redirects",
+            )
         }
         if (response.statusCode !in 200..299) {
             val rejectCode = HttpErrorMessageExtractor.extractRejectCode(
                 response.headers,
                 "x-iroha-reject-code",
                 ByteArray(0),
-            )
+            )?.takeIf { REJECT_CODE.matches(it) }
             val suffix = if (rejectCode.isNullOrBlank()) "" else "; reject_code=$rejectCode"
             throw AtomicPrivateSettlementToriiExceptionV1(
                 "atomic private settlement request failed with HTTP ${response.statusCode}$suffix",
             )
         }
-        val body = response.body
-        require(body.isNotEmpty()) { "atomic private settlement response must not be empty" }
-        require(body.size <= maximumResponseBytes) {
-            "atomic private settlement response exceeds $maximumResponseBytes bytes"
+        val expectedStatus = if (route.endsWith("/bundles")) 202 else 200
+        if (response.statusCode != expectedStatus) {
+            throw AtomicPrivateSettlementToriiExceptionV1(
+                "atomic private settlement response status is invalid",
+            )
         }
-        requireExactJsonContentType(response.headers)
-        val parsed = parseExactJsonObject(body, "atomic private settlement response")
-        validateRouteShape(route, parsed, expectedIdentifier, expectedIdentifierField)
-        val canonical = JsonEncoder.encode(parsed).toByteArray(StandardCharsets.UTF_8)
-        return AtomicPrivateSettlementJsonResponseV1(route, canonical)
+        try {
+            val body = response.body
+            require(body.isNotEmpty()) { "atomic private settlement response must not be empty" }
+            require(body.size <= maximumResponseBytes) {
+                "atomic private settlement response exceeds $maximumResponseBytes bytes"
+            }
+            requireExactJsonContentType(response.headers)
+            val parsed = parseExactJsonObject(body, "atomic private settlement response")
+            validateRouteShape(route, parsed, expectedIdentifier, expectedIdentifierField)
+            val canonical = JsonEncoder.encode(parsed).toByteArray(StandardCharsets.UTF_8)
+            return AtomicPrivateSettlementJsonResponseV1(route, canonical)
+        } catch (_: RuntimeException) {
+            throw AtomicPrivateSettlementToriiExceptionV1(INVALID_RESPONSE_MESSAGE)
+        }
     }
 
     private fun validateRouteShape(
@@ -592,11 +603,37 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                     parsed["commit_certificate"] is Map<*, *>,
             ) { "settlement Commit certificate must be null or an opaque object" }
         }
-        if (route.endsWith("/receipt")) {
-            validateReceiptIdentity(parsed, checkNotNull(expectedIdentifier))
-        } else if (route.contains("/bundles/") && !route.endsWith("/receipt")) {
-            validateBundleStatusIdentity(parsed, checkNotNull(expectedIdentifier))
+        when {
+            route.endsWith("/bundles") -> validateBundleAdmission(parsed)
+            route.endsWith("/receipt") ->
+                validateReceiptIdentity(parsed, checkNotNull(expectedIdentifier))
+            route.contains("/bundles/") ->
+                validateBundleStatusIdentity(parsed, checkNotNull(expectedIdentifier))
         }
+    }
+
+    private fun validateBundleAdmission(parsed: Map<String, Any?>) {
+        requireCanonicalHashLiteral(parsed["bundle_id"], "settlement bundle admission.bundle_id")
+        requireCanonicalHashLiteral(parsed["carrier_id"], "settlement bundle admission.carrier_id")
+        val acceptedAtHeight = when (val value = parsed["accepted_at_height"]) {
+            is BigInteger -> value
+            is Byte -> BigInteger.valueOf(value.toLong())
+            is Short -> BigInteger.valueOf(value.toLong())
+            is Int -> BigInteger.valueOf(value.toLong())
+            is Long -> BigInteger.valueOf(value)
+            else -> throw IllegalArgumentException(
+                "settlement bundle admission.accepted_at_height must be an integer",
+            )
+        }
+        require(acceptedAtHeight.signum() >= 0 && acceptedAtHeight <= U64_MAX) {
+            "settlement bundle admission.accepted_at_height must fit in unsigned 64-bit range"
+        }
+    }
+
+    private fun requireCanonicalHashLiteral(value: Any?, field: String) {
+        require(value is String) { "$field must be a canonical Iroha hash literal" }
+        val parsed = AtomicPrivateSettlementIdentifierV1.parse(value)
+        require(parsed.jsonLiteral() == value) { "$field must be a canonical Iroha hash literal" }
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -742,6 +779,10 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         private const val RESPONSE_SMALL_MAX_BYTES = 1024 * 1024
         private const val RESPONSE_PUBLIC_BUNDLE_MAX_BYTES = 8 * 1024 * 1024
         private const val RESPONSE_RESTRICTED_MAX_BYTES = 32 * 1024 * 1024
+        private const val INVALID_RESPONSE_MESSAGE =
+            "atomic private settlement response is invalid"
+        private val U64_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+        private val REJECT_CODE = Regex("^[A-Za-z0-9_.:-]{1,128}$")
 
         private val FORBIDDEN_DEFAULT_HEADERS = setOf(
             "authorization",

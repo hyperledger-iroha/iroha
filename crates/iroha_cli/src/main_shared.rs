@@ -1790,7 +1790,7 @@ mod events {
             let timeout: Option<Duration> = self.timeout.map(Into::into);
             match self.command {
                 State => listen(DataEventFilter::Any, context, timeout),
-                Governance(args) => listen(args.into_filter(), context, timeout),
+                Governance(args) => listen(args.into_filter()?, context, timeout),
                 Transaction => listen(TransactionEventFilter::default(), context, timeout),
                 Block => listen(BlockEventFilter::default(), context, timeout),
                 TriggerExecute => listen(ExecuteTriggerEventFilter::new(), context, timeout),
@@ -1800,30 +1800,55 @@ mod events {
     }
     #[derive(clap::Args, Debug)]
     pub struct GovernanceArgs {
-        /// Filter by proposal id (hex)
-        #[arg(long, value_name = "ID_HEX")]
+        /// Filter by an exact 32-byte proposal id (hex; optional `0x` prefix)
+        #[arg(long, value_name = "ID_HEX", conflicts_with = "referendum_id")]
         proposal_id: Option<String>,
         /// Filter by referendum id
         #[arg(long, value_name = "RID")]
         referendum_id: Option<String>,
     }
     impl GovernanceArgs {
-        fn into_filter(self) -> DataEventFilter {
+        fn into_filter(self) -> Result<DataEventFilter> {
             let mut f = GovernanceEventFilter::new();
-            if let Some(h) = self.proposal_id
-                && let Ok(bytes) = hex::decode(h.trim_start_matches("0x"))
-                && bytes.len() == 32
-            {
-                let mut id = [0u8; 32];
-                id.copy_from_slice(&bytes);
+            if let Some(encoded_id) = self.proposal_id {
+                let hex_value = encoded_id
+                    .strip_prefix("0x")
+                    .or_else(|| encoded_id.strip_prefix("0X"))
+                    .unwrap_or(&encoded_id);
+                let bytes = hex::decode(hex_value)
+                    .map_err(|_| eyre!("--proposal-id must be exactly 32 bytes of hexadecimal"))?;
+                let id = <[u8; 32]>::try_from(bytes)
+                    .map_err(|_| eyre!("--proposal-id must be exactly 32 bytes of hexadecimal"))?;
                 f = f.for_proposal(id);
             }
             if let Some(rid) = self.referendum_id {
                 f = f.for_referendum(rid);
             }
-            DataEventFilter::Governance(f)
+            Ok(DataEventFilter::Governance(f))
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn malformed_proposal_id_never_degrades_to_an_unfiltered_subscription() {
+            for proposal_id in ["not-hex".to_owned(), "00".repeat(31), "00".repeat(33)] {
+                let error = GovernanceArgs {
+                    proposal_id: Some(proposal_id),
+                    referendum_id: None,
+                }
+                .into_filter()
+                .expect_err("malformed proposal id must fail before opening the event stream");
+                assert_eq!(
+                    error.to_string(),
+                    "--proposal-id must be exactly 32 bytes of hexadecimal"
+                );
+            }
+        }
+    }
+
     fn listen(
         filter: impl Into<EventFilterBox>,
         context: &mut impl RunContext,

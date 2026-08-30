@@ -789,9 +789,8 @@ impl CoreHost {
             VMError::UnknownSyscall(number)
         }
     }
-    fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
-        let address = u64::try_from(src).ok()?;
-        vm.is_validated_literal_pointer(address).then_some(src)
+    fn resolve_literal_pointer(vm: &IVM, address: u64) -> Option<u64> {
+        vm.is_validated_literal_pointer(address).then_some(address)
     }
     fn expect_tlv(vm: &IVM, reg: usize, ty: PointerType) -> Result<(), VMError> {
         let addr = Self::resolve_code_tlv_addr(vm, vm.register(reg));
@@ -829,9 +828,7 @@ impl CoreHost {
         if addr >= input_lo && addr < input_hi {
             return addr;
         }
-        Self::resolve_literal_pointer(vm, addr as usize)
-            .map(|resolved| resolved as u64)
-            .unwrap_or(addr)
+        Self::resolve_literal_pointer(vm, addr).unwrap_or(addr)
     }
     fn decode_tlv<'a>(
         &self,
@@ -2188,8 +2185,8 @@ impl IVMHost for CoreHost {
                     let envelope_len = 7usize.saturating_add(tlv.payload.len()).saturating_add(32);
                     return Ok(Self::input_publish_gas(envelope_len));
                 }
-                let resolved = Self::resolve_literal_pointer(vm, original as usize)
-                    .ok_or(VMError::NoritoInvalid)? as u64;
+                let resolved =
+                    Self::resolve_literal_pointer(vm, original).ok_or(VMError::NoritoInvalid)?;
                 let bytes_vec = vm.clone_tlv(resolved)?;
                 let total = bytes_vec.len();
                 let dst = vm.alloc_host_tlv(&bytes_vec)?;
@@ -3739,6 +3736,26 @@ mod tests {
                 "literal preparation for syscall {number:#x} mutated guest memory"
             );
         }
+    }
+    #[test]
+    fn code_literal_resolution_preserves_full_width_guest_addresses() {
+        let literal = make_pointer_tlv(PointerType::Blob, b"literal");
+        let (program, literal_pointers) = assemble_program_with_literals(&[&literal]);
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program).expect("load literal fixture");
+        let literal_pointer = literal_pointers[0];
+        assert_eq!(
+            CoreHost::resolve_code_tlv_addr(&vm, literal_pointer),
+            literal_pointer
+        );
+
+        // A 32-bit host must not truncate the high half and alias this forged
+        // address to the authenticated literal at `literal_pointer`.
+        let forged_pointer = (u64::from(u32::MAX) + 1) | literal_pointer;
+        assert_eq!(
+            CoreHost::resolve_code_tlv_addr(&vm, forged_pointer),
+            forged_pointer
+        );
     }
     #[test]
     fn near_codec_input_cap_quote_covers_successful_execution() {

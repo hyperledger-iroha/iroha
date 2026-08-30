@@ -426,6 +426,8 @@ mod tests {
             &seed_wal,
             wire::PROTOCOL_VERSION,
             NETWORK,
+            super::super::v2_core::ContextId::new(*context.id().0.as_ref()),
+            context.height,
             KEY,
         )
         .expect("open seed safety WAL");
@@ -452,6 +454,8 @@ mod tests {
             &target_wal,
             wire::PROTOCOL_VERSION,
             NETWORK,
+            super::super::v2_core::ContextId::new(*context.id().0.as_ref()),
+            context.height,
             KEY,
         )
         .expect("open target safety WAL");
@@ -571,6 +575,8 @@ mod tests {
             &wal_path,
             wire::PROTOCOL_VERSION,
             [0x61; 32],
+            super::super::v2_core::ContextId::new(*context.id().0.as_ref()),
+            context.height,
             [0x62; 32],
         )
         .expect("open leader-wire safety WAL");

@@ -1012,8 +1012,10 @@ fn productive_chunk_at_view(
     )
     .payload()
     .to_vec();
+    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+        .expect("validate chunk manifest once");
     let mut chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks.into_iter().next().expect("fixture data chunk"),
         sender: proposer,
@@ -1022,8 +1024,9 @@ fn productive_chunk_at_view(
     chunk.signature = Signature::new(
         keys[proposer_index].private_key(),
         &chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("chunk signature preimage"),
+            .signature_payload(&validated)
+            .expect("chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
@@ -1578,8 +1581,10 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     );
     let (manifest, chunks) = payload.into_parts();
     assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
+    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+        .expect("validate chunk manifest once");
     let mut completing_chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks.into_iter().next().expect("one fixture chunk"),
         sender: 0,
@@ -1588,8 +1593,9 @@ fn session_changed_terminal_failure_still_retires_productive_orphan_tail() {
     completing_chunk.signature = Signature::new(
         keys[0].private_key(),
         &completing_chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("canonical chunk signature preimage"),
+            .signature_payload(&validated)
+            .expect("canonical chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
@@ -1722,8 +1728,10 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     let (canonical_wire, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
     let (manifest, chunks) = payload.into_parts();
     assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
+    let validated = wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())
+        .expect("validate chunk manifest once");
     let mut payload_chunk = wire::PayloadChunk {
-        manifest_hash: HashOf::new(&manifest),
+        manifest_hash: validated.manifest_hash(),
         index: 0,
         bytes: chunks.into_iter().next().expect("one fixture chunk"),
         sender: 0,
@@ -1732,8 +1740,9 @@ fn owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors() {
     payload_chunk.signature = Signature::new(
         keys[0].private_key(),
         &payload_chunk
-            .signature_preimage(&service.context, &manifest)
-            .expect("canonical chunk signature preimage"),
+            .signature_payload(&validated)
+            .expect("canonical chunk signature payload")
+            .signature_preimage(),
     )
     .payload()
     .to_vec();
@@ -2124,6 +2133,19 @@ fn outbound_payload_registration_is_exactly_idempotent_and_signed() {
             .expect("first registration"),
         expected_manifest
     );
+    let first_frames = service
+        .outbound_chunks
+        .get(&HashOf::new(&expected_manifest))
+        .expect("first registration retains chunks")
+        .messages
+        .iter()
+        .map(|message| {
+            let NetworkMessage::SumeragiBlock(envelope) = message else {
+                panic!("retained payload chunk changed network lane")
+            };
+            Arc::clone(envelope)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         service
             .register_outbound_payload(service.active_tag, encoded)
@@ -2138,10 +2160,31 @@ fn outbound_payload_registration_is_exactly_idempotent_and_signed() {
         messages.messages.len(),
         expected_manifest.chunk_hashes.len()
     );
-    assert!(messages.messages.iter().all(|message| matches!(
-        &message.payload,
-        wire::ConsensusMessageV2Payload::PayloadChunk(chunk) if !chunk.signature.is_empty()
-    )));
+    assert!(
+        messages
+            .messages
+            .iter()
+            .zip(first_frames)
+            .all(|(message, first)| matches!(
+                message,
+                NetworkMessage::SumeragiBlock(envelope) if Arc::ptr_eq(envelope, &first)
+            ))
+    );
+    assert!(messages.messages.iter().all(|message| {
+        let NetworkMessage::SumeragiBlock(envelope) = message else {
+            return false;
+        };
+        envelope.as_ref().encoded_len().is_some()
+            && matches!(
+                envelope.as_message(),
+                BlockMessage::V2(message)
+                    if matches!(
+                        &message.payload,
+                        wire::ConsensusMessageV2Payload::PayloadChunk(chunk)
+                            if !chunk.signature.is_empty()
+                    )
+            )
+    }));
 }
 #[test]
 fn decision_retires_candidate_and_outbound_work_but_keeps_exact_sidecar_deferral() {
@@ -2439,9 +2482,17 @@ fn outbound_payload_retention_is_constant_across_many_view_changes() {
             .outbound_chunks
             .values()
             .flat_map(|retained| retained.messages.iter())
-            .map(|message| match &message.payload {
-                wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => chunk.bytes.len(),
-                _ => 0,
+            .map(|message| {
+                let NetworkMessage::SumeragiBlock(envelope) = message else {
+                    return 0;
+                };
+                let BlockMessage::V2(message) = envelope.as_message() else {
+                    return 0;
+                };
+                match &message.payload {
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => chunk.bytes.len(),
+                    _ => 0,
+                }
             })
             .sum::<usize>();
         max_manifests = max_manifests.max(service.outbound_chunks.len());

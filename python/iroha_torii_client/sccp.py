@@ -1,8 +1,7 @@
-"""Closed first-release SCCP discovery, artifact, and submission helpers."""
+"""Closed first-release SCCP discovery and artifact helpers."""
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import re
@@ -10,7 +9,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Dict, Mapping, NoReturn, Optional, Sequence, Tuple, Union
 
-from .norito_frame import validate_norito_frame
+from ._account_id import decode_canonical_i105_account_id
 
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
@@ -58,21 +57,6 @@ _SORA_TAIRA_CHAIN_ID_HASH = bytes.fromhex(
 )
 _SORA_TAIRA_CHAIN_ID = bytes.fromhex("fc56984b2be7431d840e21514d1883f0")
 _MAX_WIRE_BYTES = 16 * 1024 * 1024
-_MAX_DESTINATION_ARTIFACT_BYTES = _MAX_WIRE_BYTES + 128 * 1024
-_MAX_DESTINATION_ARTIFACT_BASE64_BYTES = (
-    4 * ((_MAX_DESTINATION_ARTIFACT_BYTES + 2) // 3)
-)
-_MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024
-_DESTINATION_ARTIFACT_TYPE_NAME = (
-    "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
-)
-_NATIVE_INBOUND_PROOF_TYPE_NAME = (
-    "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
-)
-_REPLAY_WITNESS_TYPE_NAME = (
-    "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
-)
-_MAX_REPLAY_WITNESS_BYTES = 16 * 1024
 _MAX_U64 = (1 << 64) - 1
 _MAX_U128 = (1 << 128) - 1
 _MAX_TON_COINS = (1 << 120) - 1
@@ -171,44 +155,6 @@ _CAPABILITY_PATHS = MappingProxyType(
         "sora_outbound_material_path": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         "proof_submit_path": "/v1/bridge/proofs/submit",
         "native_message_submit_path": "/v1/bridge/messages",
-    }
-)
-
-_BRIDGE_RESPONSE_BACKENDS = MappingProxyType(
-    {
-        "ethereum-mainnet": frozenset(
-            {"evm-groth16-bn254-v1", "bridge/sccp/native/ethereum-beacon-v1"}
-        ),
-        "bsc-mainnet": frozenset(
-            {"evm-groth16-bn254-v1", "bridge/sccp/native/bsc-parlia-v1"}
-        ),
-        "ton-mainnet": frozenset(
-            {
-                "ton-groth16-bls12381-v1",
-                "bridge/sccp/native/ton-masterchain-v1",
-            }
-        ),
-        "tron-mainnet": frozenset(
-            {"tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1"}
-        ),
-    }
-)
-
-_BRIDGE_RESPONSE_FIELDS = frozenset(
-    {
-        "submitted",
-        "payload_kind",
-        "message_id_hex",
-        "backend",
-        "counterparty_domain",
-        "counterparty_chain",
-        "route_configuration_hash_hex",
-        "range_start_height",
-        "range_end_height",
-        "creation_time_ms",
-        "tx_hash_hex",
-        "transaction_payload_b64",
-        "signing_message_b64",
     }
 )
 
@@ -358,25 +304,6 @@ class SccpRecentMessages:
 
 
 @dataclass(frozen=True)
-class SccpBridgeSubmitResponse:
-    """Unified prepared-or-submitted SCCP transaction response."""
-
-    submitted: bool
-    payload_kind: str
-    message_id_hex: str
-    backend: str
-    counterparty_domain: int
-    counterparty_chain: str
-    route_configuration_hash_hex: str
-    range_start_height: int
-    range_end_height: int
-    creation_time_ms: int
-    tx_hash_hex: Optional[str]
-    transaction_payload_b64: Optional[str]
-    signing_message_b64: Optional[str]
-
-
-@dataclass(frozen=True)
 class _SccpDestinationDeployment:
     """Parsed destination roles and their exact first-release commitments."""
 
@@ -520,32 +447,6 @@ def _variable_hex(value: Any, label: str, *, maximum_bytes: int = _MAX_WIRE_BYTE
     ):
         raise ValueError(f"{label} must be canonical nonempty lowercase 0x-prefixed hex")
     return value
-
-
-def _canonical_base64(
-    value: Any, label: str, *, maximum_bytes: int = _MAX_WIRE_BYTES
-) -> bytes:
-    if (
-        not isinstance(value, str)
-        or not value
-        or len(value) > 4 * ((maximum_bytes + 2) // 3)
-        or len(value) % 4
-        or re.fullmatch(
-            r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?",
-            value,
-        )
-        is None
-    ):
-        raise ValueError(f"{label} must be canonical padded base64")
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except (ValueError, TypeError) as exc:
-        raise ValueError(f"{label} must be canonical padded base64") from exc
-    if base64.b64encode(decoded).decode("ascii") != value:
-        raise ValueError(f"{label} must be canonical padded base64")
-    if not decoded or len(decoded) > maximum_bytes:
-        raise ValueError(f"{label} is outside its byte-size bound")
-    return decoded
 
 
 def _path(value: Any, label: str) -> str:
@@ -1049,10 +950,8 @@ def normalize_sccp_codec_value(
         text = _text(value, "canonical_text", 256)
         encoded = text.encode("utf-8")
         if re.fullmatch(r"[\x21-\x7e]+", text) is None:
-            from .client import _decode_canonical_i105_string
-
             try:
-                _decode_canonical_i105_string(text)
+                decode_canonical_i105_account_id(text)
             except ValueError as exc:
                 raise ValueError(
                     "canonical_text must contain printable ASCII or an exact canonical I105 account address"
@@ -2506,11 +2405,15 @@ def _validate_codec_value(
         record[value_field], f"SCCP transfer.{value_field}", maximum_bytes=256
     )
     value = bytes.fromhex(encoded[2:])
-    valid = (
-        codec == SCCP_CODEC_CANONICAL_TEXT
-        and len(value) <= 256
-        and all(0x21 <= byte <= 0x7E for byte in value)
-    ) or (
+    if codec == SCCP_CODEC_CANONICAL_TEXT:
+        try:
+            text = value.decode("utf-8")
+            valid = normalize_sccp_codec_value(codec, text) == value
+        except (UnicodeDecodeError, TypeError, ValueError):
+            valid = False
+    else:
+        valid = False
+    valid = valid or (
         codec == SCCP_CODEC_EVM_ADDRESS20 and len(value) == 20 and any(value)
     ) or (
         codec == SCCP_CODEC_TRON_ADDRESS21
@@ -2525,6 +2428,17 @@ def _validate_codec_value(
     )
     if not valid:
         raise ValueError(f"SCCP transfer.{value_field} does not match its codec")
+
+
+def _validate_sora_sender(value: Any) -> None:
+    encoded = _variable_hex(value, "SCCP transfer.sender", maximum_bytes=256)
+    try:
+        sender = bytes.fromhex(encoded[2:]).decode("utf-8")
+        decode_canonical_i105_account_id(sender)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(
+            "SCCP transfer.sender must contain an exact canonical I105 account"
+        ) from exc
 
 
 def _validate_transfer(
@@ -2562,6 +2476,7 @@ def _validate_transfer(
     _validate_codec_value(record, "asset_id_codec", "asset_id")
     _unsigned_decimal(record["amount"], "SCCP transfer.amount", _MAX_U128, positive=True)
     _validate_codec_value(record, "sender_codec", "sender", source_domain)
+    _validate_sora_sender(record["sender"])
     _validate_codec_value(record, "recipient_codec", "recipient", destination_domain)
     _validate_codec_value(record, "route_id_codec", "route_id")
 
@@ -2830,246 +2745,6 @@ def normalize_sccp_proof_request(value: Any) -> Mapping[str, Any]:
     return _deep_freeze(record)
 
 
-def _authority(value: Any, label: str) -> str:
-    authority = _text(value, label, 512)
-    from .client import _decode_canonical_i105_string
-
-    _decode_canonical_i105_string(authority)
-    return authority
-
-
-def _fee_payment(value: Any, label: str) -> Dict[str, Any]:
-    # Import lazily because the public client owns the shared typed fee-intent
-    # normalizer and imports this SCCP module for its route codecs.
-    from .client import ToriiClient
-
-    return ToriiClient._normalize_fee_payment_intent(value, context=label)
-
-
-def normalize_bridge_proof_submit_payload(value: Any) -> Dict[str, Any]:
-    """Build the sole supported destination-proof submission body."""
-
-    record = _exact_fields(
-        value,
-        frozenset(
-            {
-                "authority",
-                "fee_payment",
-                "signature_b64",
-                "transaction_payload_b64",
-                "destination_proof_b64",
-                "creation_time_ms",
-            }
-        ),
-        "bridge proof submit",
-        frozenset({"authority", "fee_payment", "destination_proof_b64"}),
-    )
-    destination_proof = _canonical_base64(
-        record["destination_proof_b64"],
-        "bridge proof submit.destination_proof_b64",
-        maximum_bytes=_MAX_DESTINATION_ARTIFACT_BYTES,
-    )
-    validate_norito_frame(
-        destination_proof,
-        context="bridge proof submit.destination_proof_b64",
-        expected_type_name=_DESTINATION_ARTIFACT_TYPE_NAME,
-        expected_padding_length=0,
-    )
-    creation_time = (
-        None
-        if "creation_time_ms" not in record
-        else _integer(record["creation_time_ms"], "bridge proof submit.creation_time_ms", 1)
-    )
-    result: Dict[str, Any] = {
-        "authority": _authority(record["authority"], "bridge proof submit.authority"),
-        "fee_payment": _fee_payment(
-            record["fee_payment"], "bridge proof submit.fee_payment"
-        ),
-        **_detached_signing_state(record, "bridge proof submit", creation_time),
-        "destination_proof_b64": record["destination_proof_b64"],
-    }
-    if creation_time is not None:
-        result["creation_time_ms"] = creation_time
-    return result
-
-
-def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
-    """Build the sole supported native inbound message submission body."""
-
-    record = _exact_fields(
-        value,
-        frozenset(
-            {
-                "authority",
-                "fee_payment",
-                "signature_b64",
-                "transaction_payload_b64",
-                "native_proof_b64",
-                "replay_witness_b64",
-                "creation_time_ms",
-            }
-        ),
-        "bridge message submit",
-        frozenset(
-            {"authority", "fee_payment", "native_proof_b64", "replay_witness_b64"}
-        ),
-    )
-    native_proof = _canonical_base64(
-        record["native_proof_b64"], "bridge message submit.native_proof_b64"
-    )
-    validate_norito_frame(
-        native_proof,
-        context="bridge message submit.native_proof_b64",
-        expected_type_name=_NATIVE_INBOUND_PROOF_TYPE_NAME,
-        expected_padding_length=0,
-    )
-    replay_witness = _canonical_base64(
-        record["replay_witness_b64"],
-        "bridge message submit.replay_witness_b64",
-        maximum_bytes=_MAX_REPLAY_WITNESS_BYTES,
-    )
-    validate_norito_frame(
-        replay_witness,
-        context="bridge message submit.replay_witness_b64",
-        expected_type_name=_REPLAY_WITNESS_TYPE_NAME,
-        expected_padding_length=0,
-    )
-    creation_time = (
-        None
-        if "creation_time_ms" not in record
-        else _integer(record["creation_time_ms"], "bridge message submit.creation_time_ms", 1)
-    )
-    result: Dict[str, Any] = {
-        "authority": _authority(record["authority"], "bridge message submit.authority"),
-        "fee_payment": _fee_payment(
-            record["fee_payment"], "bridge message submit.fee_payment"
-        ),
-        **_detached_signing_state(record, "bridge message submit", creation_time),
-        "native_proof_b64": record["native_proof_b64"],
-        "replay_witness_b64": record["replay_witness_b64"],
-    }
-    if creation_time is not None:
-        result["creation_time_ms"] = creation_time
-    return result
-
-
-def _detached_signing_state(
-    record: Mapping[str, Any], label: str, creation_time: Optional[int]
-) -> Dict[str, str]:
-    has_signature = "signature_b64" in record
-    has_transaction_payload = "transaction_payload_b64" in record
-    if has_signature != has_transaction_payload:
-        raise ValueError(
-            f"{label} must omit both signature_b64 and transaction_payload_b64 for preparation "
-            "or provide both for signed submission"
-        )
-    if not has_signature:
-        return {}
-    if creation_time is None:
-        raise ValueError(f"{label}.creation_time_ms is required for signed submission")
-    _canonical_base64(
-        record["signature_b64"],
-        f"{label}.signature_b64",
-        maximum_bytes=_MAX_DETACHED_SIGNATURE_BYTES,
-    )
-    _canonical_base64(
-        record["transaction_payload_b64"], f"{label}.transaction_payload_b64"
-    )
-    return {
-        "signature_b64": record["signature_b64"],
-        "transaction_payload_b64": record["transaction_payload_b64"],
-    }
-
-
-def _iroha_prehash(payload: bytes) -> bytes:
-    digest = bytearray(hashlib.blake2b(payload, digest_size=32).digest())
-    digest[-1] |= 1
-    return bytes(digest)
-
-
-def normalize_sccp_bridge_submit_response(
-    value: Any, expectations: Optional[Mapping[str, Any]] = None
-) -> SccpBridgeSubmitResponse:
-    """Validate the unified exact prepared-or-submitted bridge response."""
-
-    record = _exact_fields(value, _BRIDGE_RESPONSE_FIELDS, "bridge submit response")
-    submitted = _boolean(record["submitted"], "bridge submit response.submitted")
-    if record["payload_kind"] != "transfer":
-        raise ValueError("bridge submit response.payload_kind must be transfer")
-    counterparty = _profile(record["counterparty_chain"], "counterparty_chain")
-    domain = _protocol_domain(record["counterparty_domain"], "counterparty_domain")
-    if counterparty[3] or counterparty[2] != domain:
-        raise ValueError("bridge submit response counterparty profile/domain disagree")
-    backend = _text(record["backend"], "backend", 128)
-    if backend not in _BRIDGE_RESPONSE_BACKENDS[counterparty[0]]:
-        raise ValueError("bridge submit response.backend does not match the counterparty")
-    range_start = _integer(record["range_start_height"], "range_start_height", 1)
-    range_end = _integer(record["range_end_height"], "range_end_height", range_start)
-    creation_time = _integer(record["creation_time_ms"], "creation_time_ms", 1)
-    tx_hash = (
-        None
-        if record["tx_hash_hex"] is None
-        else _lower_hex(record["tx_hash_hex"], "tx_hash_hex", 32)
-    )
-    transaction = (
-        None
-        if record["transaction_payload_b64"] is None
-        else _canonical_base64(record["transaction_payload_b64"], "transaction_payload_b64")
-    )
-    signing = (
-        None
-        if record["signing_message_b64"] is None
-        else _canonical_base64(
-            record["signing_message_b64"], "signing_message_b64", maximum_bytes=32
-        )
-    )
-    if signing is not None and len(signing) != 32:
-        raise ValueError("signing_message_b64 must contain exactly 32 bytes")
-    if submitted:
-        if tx_hash is None or transaction is not None or signing is not None:
-            raise ValueError("submitted response must contain only tx_hash_hex signing state")
-    elif tx_hash is not None or transaction is None or signing is None:
-        raise ValueError("prepared response requires transaction payload and signing message")
-    elif _iroha_prehash(transaction) != signing:
-        raise ValueError("signing_message_b64 is not the transaction-payload prehash")
-    response = SccpBridgeSubmitResponse(
-        submitted=submitted,
-        payload_kind="transfer",
-        message_id_hex=_lower_hex(record["message_id_hex"], "message_id_hex", 32),
-        backend=backend,
-        counterparty_domain=domain,
-        counterparty_chain=counterparty[0],
-        route_configuration_hash_hex=_lower_hex(
-            record["route_configuration_hash_hex"], "route_configuration_hash_hex", 32
-        ),
-        range_start_height=range_start,
-        range_end_height=range_end,
-        creation_time_ms=creation_time,
-        tx_hash_hex=tx_hash,
-        transaction_payload_b64=record["transaction_payload_b64"],
-        signing_message_b64=record["signing_message_b64"],
-    )
-    expected = {} if expectations is None else dict(_mapping(expectations, "bridge expectations"))
-    _exact_fields(
-        expected,
-        frozenset({"submitted", "creation_time_ms"}),
-        "bridge expectations",
-        frozenset(),
-    )
-    if (
-        expected.get("creation_time_ms") is not None
-        and expected["creation_time_ms"] != creation_time
-    ):
-        raise ValueError("bridge submit response.creation_time_ms does not match the request")
-    if "submitted" in expected:
-        expected_submitted = _boolean(expected["submitted"], "bridge expectations.submitted")
-        if expected_submitted != submitted:
-            raise ValueError(
-                "bridge submit response.submitted does not match the request signing state"
-            )
-    return response
-
-
 def parse_sccp_json_object(
     payload: Union[str, bytes, bytearray, memoryview], label: str = "SCCP response"
 ) -> Mapping[str, Any]:
@@ -3114,17 +2789,6 @@ def parse_sccp_json_object(
     return _mapping(value, label)
 
 
-def parse_sccp_bridge_submit_response_json(
-    payload: Union[str, bytes, bytearray, memoryview],
-    expectations: Optional[Mapping[str, Any]] = None,
-) -> SccpBridgeSubmitResponse:
-    """Parse and validate a strict SCCP bridge response."""
-
-    return normalize_sccp_bridge_submit_response(
-        parse_sccp_json_object(payload, "bridge submit response"), expectations
-    )
-
-
 __all__ = [
     "SCCP_DOMAIN_SORA",
     "SCCP_DOMAIN_ETH",
@@ -3148,7 +2812,6 @@ __all__ = [
     "SccpSoraOutboundExecutionPolicy",
     "SccpRecentMessages",
     "SccpRecentCursor",
-    "SccpBridgeSubmitResponse",
     "normalize_sccp_codec_value",
     "sccp_source_event_digest",
     "normalize_sccp_capabilities",
@@ -3156,9 +2819,5 @@ __all__ = [
     "normalize_sccp_recent_messages",
     "normalize_sccp_message_bundle",
     "normalize_sccp_proof_request",
-    "normalize_bridge_proof_submit_payload",
-    "normalize_bridge_message_submit_payload",
-    "normalize_sccp_bridge_submit_response",
     "parse_sccp_json_object",
-    "parse_sccp_bridge_submit_response_json",
 ]

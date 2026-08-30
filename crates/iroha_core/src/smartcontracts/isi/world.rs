@@ -113,8 +113,8 @@ pub mod isi {
             ContractEmergencyHoldProposalV1, ContractLifecycleGovernanceActionV1,
             ContractLifecycleGovernanceProposalV1, DeployContractProposal,
             GlobalDataTriggerPermissionGovernanceActionV1,
-            GlobalDataTriggerPermissionGovernanceProposalV1, GovernanceAttemptStatusV1,
-            GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
+            GlobalDataTriggerPermissionGovernanceProposalV1, GovernanceAttemptId,
+            GovernanceAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
             GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
             MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentAggregateOutcomeV1,
             ParliamentAggregateTallyV1, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
@@ -8821,31 +8821,29 @@ pub mod isi {
                 ));
             }
             let proposal_content_id = self.proposal_content_id();
-            let previous = state_transaction
-                .world
-                .parliament_attempts
-                .iter()
-                .filter(|(_, state)| state.proposal_content_id() == proposal_content_id)
-                .map(|(_, state)| state)
-                .max_by_key(|state| state.attempt().sequence);
-            let expected_sequence = previous
-                .map(|state| {
-                    state.attempt().sequence.checked_add(1).ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "Parliament attempt sequence exhausted the u32 domain".into(),
-                        )
-                    })
+            let previous = self
+                .attempt_sequence
+                .checked_sub(1)
+                .map(|previous_sequence| {
+                    let previous_id = GovernanceAttemptId::derive_v1(
+                        proposal_content_id,
+                        previous_sequence,
+                    );
+                    state_transaction
+                        .world
+                        .parliament_attempts
+                        .get(&previous_id)
+                        .ok_or_else(|| {
+                            Error::from(InstructionExecutionError::InvariantViolation(
+                                format!(
+                                    "Parliament attempt sequence {} requires exact predecessor {previous_sequence}",
+                                    self.attempt_sequence
+                                )
+                                .into(),
+                            ))
+                        })
                 })
-                .transpose()?
-                .unwrap_or(0);
-            if self.attempt_sequence != expected_sequence {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "Parliament attempt sequence must be the exact next sequence {expected_sequence}"
-                    )
-                    .into(),
-                ));
-            }
+                .transpose()?;
             if previous.is_some_and(|state| {
                 !matches!(
                     state.attempt().status,
@@ -11116,14 +11114,19 @@ pub mod isi {
                         || record.session.session_id != certificate.session_id
                         || record.session.transcript_hash != certificate.transcript_hash
                         || record.session.network_id != certificate.network_id
-                        || record.session.roster_hash != certificate.roster_hash
-                        || record.session.committee_size != certificate.committee_size
                     {
                         return Err(threshold_key_lifecycle_error_v1(
                             "global-beacon lifecycle binding is invalid",
                         )
                         .into());
                     }
+                    // The certificate roster is the exact block-H authorization
+                    // roster. Its signed canonical public-state hash independently
+                    // commits the installed DKG target roster and committee size;
+                    // the H+1 producer checks that target against its authenticated
+                    // HeightContext before producing any pulse. Keeping these two
+                    // bindings distinct permits an epoch-boundary successor roster
+                    // without weakening either exact-roster check.
                     if state_transaction
                         .world
                         .global_beacon_key_sessions()
@@ -20664,12 +20667,12 @@ pub mod isi {
             governance::types::{
                 BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
                 BodyElectionAttemptStatusV1, ContractAbiHash, ContractCodeHash,
-                GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceAttemptV1,
-                GovernanceCertificateId, GovernanceCertificateV1, GovernanceExpectedHeadV1,
-                GovernanceStageV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
-                ParliamentBody, ProposalContentId, ProposalKind, SortitionRequestV1,
-                TleKeySessionId, TleSessionId, parliament_candidate_root_v1,
-                parliament_execution_failure_root_v1,
+                DeactivateContractGovernanceActionV1, GovernanceAttemptId,
+                GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceCertificateId,
+                GovernanceCertificateV1, GovernanceExpectedHeadV1, GovernanceStageV1,
+                ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, ParliamentBody,
+                ProposalContentId, ProposalKind, SortitionRequestV1, TleKeySessionId, TleSessionId,
+                parliament_candidate_root_v1, parliament_execution_failure_root_v1,
             },
             isi::{
                 Grant, Revoke, consensus_keys, error::AssetTransferAdmissionError,
@@ -21206,6 +21209,16 @@ pub mod isi {
                     .get(&attempt_id)
                     .is_some()
             );
+            let skipped_predecessor_error = gov::CreateParliamentGovernanceAttemptV1 {
+                proposal: canonical.clone(),
+                attempt_sequence: 2,
+            }
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a retry must resolve its exact canonical predecessor directly");
+            assert!(
+                format!("{skipped_predecessor_error:?}").contains("requires exact predecessor 1"),
+                "unexpected missing-predecessor rejection: {skipped_predecessor_error:?}"
+            );
             let retry_limit_error = gov::CreateParliamentGovernanceAttemptV1 {
                 proposal: canonical,
                 attempt_sequence: MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 + 1,
@@ -21406,7 +21419,7 @@ pub mod isi {
                 (
                     "wrong-width record",
                     vec![malformed],
-                    "noncanonical wire width",
+                    "timed-OVN ballot chunk violates its count or record-width bound",
                 ),
                 (
                     "out-of-order proof-valid record",
@@ -22705,7 +22718,7 @@ pub mod isi {
             requirement: RequiredParliamentBodyV1,
             election_attempt_id: BodyElectionAttemptId,
             result_tag: u8,
-        ) {
+        ) -> u64 {
             let governance_attempt_id = attempt.attempt().id;
             attempt
                 .begin_invitation_acceptance(governance_attempt_id, election_attempt_id, 20, 1)
@@ -22875,6 +22888,10 @@ pub mod isi {
                     assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);
                 }
             }
+            attempt
+                .body(&body_instance_id)
+                .and_then(|body| body.result_height())
+                .expect("completed due-certificate body result height")
         }
 
         fn seed_due_parliament_certificate(
@@ -22961,8 +22978,9 @@ pub mod isi {
                 )
                 .expect("consume deterministic simultaneous Parliament draw");
 
+            let mut certified_at_height = 0;
             for (index, requirement) in requirements.iter().copied().enumerate() {
-                complete_parliament_body_for_due_certificate(
+                let result_height = complete_parliament_body_for_due_certificate(
                     &mut attempt,
                     requirement,
                     BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0),
@@ -22970,12 +22988,13 @@ pub mod isi {
                         .checked_add(u8::try_from(index).expect("fixture body index fits u8"))
                         .expect("fixture result tag does not overflow"),
                 );
+                certified_at_height = certified_at_height.max(result_height);
             }
             assert_eq!(attempt.attempt().stage, GovernanceStageV1::Certification);
             let certificate = attempt
                 .construct_certificate(
                     governance_attempt_id,
-                    PARLIAMENT_DUE_CERTIFICATE_HEIGHT - 1,
+                    certified_at_height,
                     PARLIAMENT_DUE_CERTIFICATE_HEIGHT,
                 )
                 .expect("construct complete exact-due Parliament certificate");
@@ -23359,9 +23378,13 @@ pub mod isi {
             .execute(&BOB_ID, &mut execution)
             .expect_err("stale account acceptance must fail closed");
             assert!(
-                stale
-                    .to_string()
-                    .contains("stale contract lifecycle revision")
+                matches!(
+                    &stale,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("stale contract lifecycle revision")
+                ),
+                "unexpected stale ownership-acceptance error: {stale:?}"
             );
             assert_eq!(
                 execution
@@ -23402,9 +23425,13 @@ pub mod isi {
             .execute(&BOB_ID, &mut execution)
             .expect_err("accepted ownership transfer cannot replay at the consumed revision");
             assert!(
-                stale_replay
-                    .to_string()
-                    .contains("stale contract lifecycle revision")
+                matches!(
+                    &stale_replay,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("stale contract lifecycle revision")
+                ),
+                "unexpected ownership-acceptance replay error: {stale_replay:?}"
             );
         }
 
@@ -23518,6 +23545,155 @@ pub mod isi {
                     .expect("certified ownership-transfer event");
             assert_eq!(event.revision, 4);
             assert_eq!(&event.lifecycle, lifecycle);
+        }
+
+        #[test]
+        fn revoking_contract_parliament_delegation_supersedes_certified_lifecycle_effect() {
+            let state = blank_test_state();
+            let block = new_dummy_block_at_height(
+                NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
+            );
+            let mut state_block = state.block(block.as_ref().header());
+            let active_code_hash = Hash::new(b"contract-delegation-revocation-test");
+            let (fixture, contract_address) = {
+                let mut seed = state_block.transaction();
+                Register::account(Account::new(ALICE_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed Parliament proposal author");
+                Register::account(Account::new(BOB_ID.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed direct contract owner");
+                let contract_address =
+                    ContractAddress::derive(seed.network_id(), &BOB_ID, 85, DataSpaceId::UNIVERSAL)
+                        .expect("derive delegated contract address");
+                let contract_subject = contract_address.subject_id();
+                Register::account(Account::new(contract_subject.clone()))
+                    .execute(&ALICE_ID, &mut seed)
+                    .expect("seed delegated contract subject");
+                let mut binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+                    &contract_address,
+                    BOB_ID.clone(),
+                );
+                binding.lifecycle.active_code_hash = Some(active_code_hash);
+                seed.world
+                    .contract_subject_bindings
+                    .insert(contract_address.clone(), binding);
+                seed.world
+                    .contract_subject_addresses
+                    .insert(contract_subject, contract_address.clone());
+                seed.world
+                    .contract_instances
+                    .insert(contract_address.clone(), active_code_hash);
+                scode::SetContractParliamentDelegation {
+                    contract_address: contract_address.clone(),
+                    expected_revision: 1,
+                    delegated: true,
+                }
+                .execute(&BOB_ID, &mut seed)
+                .expect("owner delegates contract lifecycle authority");
+                let fixture = seed_due_parliament_certificate(
+                    &mut seed,
+                    ProposalKind::ContractLifecycleGovernance(
+                        ContractLifecycleGovernanceProposalV1 {
+                            contract_address: contract_address.clone(),
+                            expected_revision: 2,
+                            action: ContractLifecycleGovernanceActionV1::Deactivate(
+                                DeactivateContractGovernanceActionV1 {
+                                    expected_code_hash: ContractCodeHash::new(
+                                        active_code_hash.into(),
+                                    ),
+                                    reason: Some("certified Parliament suspension".to_owned()),
+                                },
+                            ),
+                        },
+                    ),
+                );
+                seed.apply();
+                (fixture, contract_address)
+            };
+
+            let revoked_lifecycle = {
+                let mut revocation = state_block.transaction();
+                scode::SetContractParliamentDelegation {
+                    contract_address: contract_address.clone(),
+                    expected_revision: 2,
+                    delegated: false,
+                }
+                .execute(&BOB_ID, &mut revocation)
+                .expect("owner revokes lifecycle authority after certification");
+                let lifecycle = revocation
+                    .world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("revoked lifecycle binding")
+                    .lifecycle
+                    .clone();
+                revocation.apply();
+                lifecycle
+            };
+            assert_eq!(revoked_lifecycle.revision, 3);
+            assert_eq!(
+                revoked_lifecycle.parliament_delegation,
+                iroha_data_model::smart_contract::ContractParliamentDelegationV1::None
+            );
+
+            let mut execution = state_block.transaction();
+            execution.world.internal_event_buf.clear();
+            let observed_head = parliament_expected_head_v1(
+                &execution
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .expect("retained lifecycle proposal")
+                    .kind,
+                &execution,
+            )
+            .expect("derive post-revocation lifecycle head");
+            assert_ne!(observed_head, fixture.certificate.expected_head);
+            let outcome = gov::ParliamentAutomaticExecutionOutcomeV1::Superseded(
+                gov::ParliamentAutomaticSupersededV1 { observed_head },
+            );
+            assert_eq!(
+                execute_due_parliament_certificate_v1(
+                    fixture.governance_attempt_id,
+                    &mut execution,
+                )
+                .expect("supersede lifecycle certificate after delegation revocation"),
+                DueParliamentCertificateExecutionV1::Applied
+            );
+            let lifecycle = &execution
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("unchanged lifecycle binding")
+                .lifecycle;
+            assert_eq!(lifecycle, &revoked_lifecycle);
+            assert_eq!(lifecycle.active_code_hash, Some(active_code_hash));
+            assert_eq!(
+                execution.world.contract_instances.get(&contract_address),
+                Some(&active_code_hash),
+                "the superseded deactivation must not change the active-instance index"
+            );
+            assert_eq!(
+                execution
+                    .world
+                    .parliament_attempts
+                    .get(&fixture.governance_attempt_id)
+                    .expect("superseded Parliament attempt")
+                    .attempt()
+                    .status,
+                GovernanceAttemptStatusV1::Superseded
+            );
+            assert_eq!(
+                execution
+                    .world
+                    .governance_proposals
+                    .get(&fixture.proposal_id)
+                    .expect("superseded lifecycle proposal")
+                    .status,
+                crate::state::GovernanceProposalStatus::Superseded
+            );
+            assert_automatic_parliament_execution_event(&execution, &fixture, outcome);
         }
 
         #[test]
@@ -24546,7 +24722,7 @@ pub mod isi {
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_b_id));
         });
 
-        world_test!(global_beacon_lifecycle_rotation_is_effective_at_the_next_height {
+        world_test!(global_beacon_boundary_rotation_signs_the_successor_dkg_target {
             let state = blank_test_state();
             let header = BlockHeader::new(
                 NonZeroU64::new(40).expect("nonzero lifecycle height"),
@@ -24558,20 +24734,32 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut state_transaction = block.transaction();
-            let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
+            let mut validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
+            validator_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let ordered_roster = validator_keys
                 .iter()
                 .map(|key| crate::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
-            let roster_hash =
+            let authorization_roster_hash =
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&ordered_roster);
+            let mut successor_validator_keys =
+                (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
+            successor_validator_keys
+                .sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let successor_roster = successor_validator_keys
+                .iter()
+                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .collect::<Vec<_>>();
+            let successor_roster_hash =
+                crate::beacon::global_threshold_beacon_roster_hash_v1(&successor_roster);
+            assert_ne!(authorization_roster_hash, successor_roster_hash);
 
             let mut key_a =
                 crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
                     state_transaction.network_id,
                     [0xA4; 32],
-                    roster_hash,
+                    authorization_roster_hash,
                 );
             let key_a_activation = key_a.session.adaptive_dkg.finalized_at_height;
             key_a
@@ -24589,18 +24777,27 @@ pub mod isi {
             let key_b = crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
                 state_transaction.network_id,
                 [0xB4; 32],
-                roster_hash,
+                successor_roster_hash,
             );
-            certified_threshold_key_lifecycle_instruction_v1(
+            let install_b = certified_threshold_key_lifecycle_instruction_v1(
                 &state_transaction,
                 &validator_keys,
                 consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
                 key_b.session.session_id,
                 key_b.session.transcript_hash,
                 norito::encode_canonical(&key_b).expect("encode canonical beacon key B"),
-            )
-            .execute(&ALICE_ID, &mut state_transaction)
-            .expect("current-roster QC schedules an atomic beacon-key rotation");
+            );
+            assert_eq!(
+                install_b.certificate.roster_hash, authorization_roster_hash,
+                "the block-H roster remains the sole lifecycle-signature authority"
+            );
+            assert_eq!(
+                key_b.session.roster_hash, successor_roster_hash,
+                "the signed public state independently names the H+1 DKG target"
+            );
+            install_b
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect("block-H exact-roster QC schedules the successor DKG key");
 
             let persisted_a = state_transaction
                 .world
@@ -24618,6 +24815,22 @@ pub mod isi {
             assert!(!persisted_a.is_active_at(41));
             assert!(!persisted_b.is_active_at(40));
             assert!(persisted_b.is_active_at(41));
+            assert_eq!(
+                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
+                    &persisted_b.session,
+                    &successor_roster,
+                ),
+                Ok(successor_roster_hash),
+                "the installed key is usable by the authenticated successor roster"
+            );
+            assert_eq!(
+                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
+                    &persisted_b.session,
+                    &ordered_roster,
+                ),
+                Err(crate::beacon::GlobalThresholdBeaconError::RosterMismatch),
+                "the authorization roster cannot be substituted as the DKG target"
+            );
             assert_eq!(
                 state_transaction
                     .world
@@ -39955,7 +40168,15 @@ seiyaku GovernanceLifecycle {
                 ),
             }
             .expect_execute_err(&ALICE_ID, &mut stx, "stale ownership offer must fail");
-            assert_contains!(stale.to_string(), "stale contract lifecycle revision");
+            assert!(
+                matches!(
+                    &stale,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains("stale contract lifecycle revision")
+                ),
+                "unexpected stale ownership-offer error: {stale:?}"
+            );
             scode::OfferContractOwnership {
                 contract_address: address.clone(),
                 expected_revision: 2,

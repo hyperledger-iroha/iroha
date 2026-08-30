@@ -87,6 +87,21 @@ struct NamedMessage {
     message: ConsensusMessageV2,
 }
 #[derive(Encode)]
+#[allow(dead_code)]
+enum RetiredConsensusMessageV2Payload {
+    Proposal(Proposal),
+    Vote(Vote),
+    QuorumCertificate(QuorumCertificate),
+    TimeoutVote(TimeoutVote),
+    TimeoutCertificate(TimeoutCertificate),
+    PayloadManifest(PayloadManifest),
+}
+#[derive(Encode)]
+struct RetiredConsensusMessageV2 {
+    protocol_version: u16,
+    payload: RetiredConsensusMessageV2Payload,
+}
+#[derive(Encode)]
 struct PreV4ExecutionCommitment {
     parent_state_root: Hash,
     post_state_root: Hash,
@@ -542,20 +557,32 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             values.commit_response.signature_preimage(),
         ),
     ]);
-    let canonical_payload_chunk = values.message("payload_chunk")?;
+    let canonical_transport = values.message("payload_chunk")?;
     let canonical_vote = values.message("vote")?;
     let canonical_reproposal_vote = values.message("commit_vote_reproposal")?;
     let canonical_reproposal_qc = values.message("commit_quorum_certificate_reproposal")?;
     let canonical_merge_carrier_qc = values.message("quorum_certificate_merge_carrier")?;
     let canonical_request = values.message("commit_certificate_request")?;
     let canonical_response = values.message("commit_certificate_response")?;
-    let mut wrong_protocol_version = canonical_payload_chunk.clone();
+    let ConsensusMessageV2Payload::Proposal(canonical_proposal) =
+        &values.message("proposal")?.payload
+    else {
+        return Err("canonical proposal fixture contains the wrong payload".into());
+    };
+    let retired_payload_manifest = RetiredConsensusMessageV2 {
+        protocol_version: PROTOCOL_VERSION,
+        payload: RetiredConsensusMessageV2Payload::PayloadManifest(
+            canonical_proposal.manifest.clone(),
+        ),
+    }
+    .encode();
+    let mut wrong_protocol_version = canonical_transport.clone();
     wrong_protocol_version.protocol_version = PROTOCOL_VERSION - 1;
-    let mut truncated = canonical_payload_chunk.encode();
+    let mut truncated = canonical_transport.encode();
     truncated
         .pop()
         .ok_or("canonical payload-chunk message was unexpectedly empty")?;
-    let mut trailing_byte = canonical_payload_chunk.encode();
+    let mut trailing_byte = canonical_transport.encode();
     trailing_byte.push(0);
     let mut noncanonical_qc = values.prepare.clone();
     noncanonical_qc.signers = vec![1, 0, 2];
@@ -643,7 +670,7 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             },
         ],
     };
-    let mut unknown_payload_tag = canonical_payload_chunk.encode();
+    let mut unknown_payload_tag = canonical_transport.encode();
     replace_first_guarded(
         &mut unknown_payload_tag,
         &[5, 0, 0, 0],
@@ -761,6 +788,11 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             "negative_message",
             "unknown_payload_tag",
             unknown_payload_tag,
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "retired_payload_manifest",
+            retired_payload_manifest,
         ),
         FixtureRow::rejected(
             "negative_message",
@@ -996,6 +1028,7 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
         "trailing_byte",
         "retired_zero_prepare_tag",
         "unknown_payload_tag",
+        "retired_payload_manifest",
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
         "commit_request_invalid_network_id",

@@ -3460,23 +3460,30 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn parliament_optional_slot_survives_key_rotation_and_produces_authoritative_pulse() {
+    fn parliament_requested_slot_survives_key_rotation_and_produces_authoritative_pulse() {
         let keys = live_producer_keys();
         let network_id = beacon_fixture_network_id(0xB1);
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD3; 32]));
         let mut context = live_producer_context(&keys, network_id, parent_hash);
         context.epoch_end_height = 50;
         context.validate().expect("valid non-boundary context");
+        assert_eq!(
+            context.height, 41,
+            "the fixture is the first height after boundary block 40"
+        );
         let roster = context
             .roster
             .iter()
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
+        let mut predecessor_roster = roster.clone();
+        predecessor_roster.rotate_left(1);
+        assert_ne!(predecessor_roster, roster);
 
         let mut dkg_a = adaptive_dkg_session_fixture();
         dkg_a.network_id = network_id;
         dkg_a.session_id = [0xA1; 32];
-        dkg_a.roster_hash = global_threshold_beacon_roster_hash_v1(&roster);
+        dkg_a.roster_hash = global_threshold_beacon_roster_hash_v1(&predecessor_roster);
         let fixture_a = adaptive_beacon_fixture_for_session(dkg_a);
         let cursor = GlobalThresholdBeaconPulseLinkV1 {
             pulse_id: [0x63; 32],
@@ -3494,6 +3501,10 @@ pub(crate) mod tests {
                 .insert(governance_attempt_id, attempt);
             block.commit();
         }
+        assert!(matches!(
+            V2GlobalBeaconLifecycle::open(&context, &state, Some(0), None),
+            Err(V2GlobalBeaconError::RosterMismatch)
+        ));
 
         let mut dkg_b = adaptive_dkg_session_fixture();
         dkg_b.network_id = network_id;
@@ -3507,12 +3518,16 @@ pub(crate) mod tests {
         key_a
             .activate(key_a.session.adaptive_dkg.finalized_at_height)
             .expect("activate key A");
-        key_a.retire(35).expect("retire key A after request");
+        key_a
+            .retire(context.height)
+            .expect("retire the predecessor at the first successor height");
         let mut key_b = FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(
             fixture_b.session.record().clone(),
         )
         .expect("valid key B");
-        key_b.activate(35).expect("activate replacement key B");
+        key_b
+            .activate(context.height)
+            .expect("activate replacement key B at the first successor height");
         {
             let mut block = state.world.block();
             block
@@ -3539,10 +3554,10 @@ pub(crate) mod tests {
                 Some(u32::try_from(index).expect("validator index")),
                 Some(Arc::clone(signer)),
             )
-            .expect("optional Parliament producer opens after key rotation");
+            .expect("mandatory Parliament producer opens after key rotation");
             assert!(producer.pulse_requested());
-            assert!(!producer.pulse_required_for_consensus());
-            producer.begin_round(0).expect("sign optional slot");
+            assert!(producer.pulse_required_for_consensus());
+            producer.begin_round(0).expect("sign requested slot");
             messages.push(beacon_partial_payload(
                 producer.take_outbound().pop().expect("local partial"),
             ));
@@ -3552,9 +3567,10 @@ pub(crate) mod tests {
             .expect("open signerless validator reducer after key rotation");
         reducer.begin_round(0).expect("open routing view");
         let mut absent = NposConsensusEffects::default();
-        reducer
-            .attach_candidate_effects(0, &mut absent)
-            .expect("an unavailable Parliament pulse must not stall consensus");
+        assert!(matches!(
+            reducer.attach_candidate_effects(0, &mut absent),
+            Err(V2GlobalBeaconError::State(_))
+        ));
         assert!(absent.finalized_global_beacon_pulse.is_none());
         let mut invalid_optional_share = messages[0].clone();
         invalid_optional_share.partial.signature_share[0] ^= 1;
@@ -3565,9 +3581,10 @@ pub(crate) mod tests {
             ))
         ));
         let mut still_absent = NposConsensusEffects::default();
-        reducer
-            .attach_candidate_effects(0, &mut still_absent)
-            .expect("an invalid optional share must not stall consensus");
+        assert!(matches!(
+            reducer.attach_candidate_effects(0, &mut still_absent),
+            Err(V2GlobalBeaconError::State(_))
+        ));
         assert!(still_absent.finalized_global_beacon_pulse.is_none());
         assert_eq!(
             reducer
@@ -3583,12 +3600,12 @@ pub(crate) mod tests {
         );
         let pulse = reducer
             .finalized_pulse(0)
-            .expect("optional pulse finalized");
+            .expect("requested pulse finalized");
         assert_eq!(pulse.session_id, fixture_b.session.record().session_id);
         let mut effects = NposConsensusEffects::default();
         reducer
             .attach_candidate_effects(0, &mut effects)
-            .expect("attach reconstructed optional pulse");
+            .expect("attach reconstructed requested pulse");
         assert_eq!(effects.finalized_global_beacon_pulse, Some(pulse));
 
         let expected_anchor = GlobalThresholdBeaconChainAnchorV1 {
@@ -3653,13 +3670,16 @@ pub(crate) mod tests {
             .expect("logical request consumes replacement-key pulse");
     }
 
-    fn assert_same_block_key_rotation_persists_requested_pulse(optional_parliament_slot: bool) {
+    fn assert_same_block_key_rotation_persists_requested_pulse(parliament_requested_slot: bool) {
         let keys = live_producer_keys();
-        let network_id =
-            beacon_fixture_network_id(if optional_parliament_slot { 0xC1 } else { 0xC2 });
+        let network_id = beacon_fixture_network_id(if parliament_requested_slot {
+            0xC1
+        } else {
+            0xC2
+        });
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD4; 32]));
         let mut context = live_producer_context(&keys, network_id, parent_hash);
-        if optional_parliament_slot {
+        if parliament_requested_slot {
             context.epoch_end_height = 50;
             context.validate().expect("valid optional-slot context");
         }
@@ -3681,7 +3701,7 @@ pub(crate) mod tests {
             round: 0,
         };
         let mut state = live_producer_state(&fixture_a, cursor, parent_hash);
-        let transient_governance_attempt_id = if optional_parliament_slot {
+        let transient_governance_attempt_id = if parliament_requested_slot {
             let (governance_attempt_id, _request_ids, attempt) =
                 pending_batched_sortition_attempt(&network_id, &roster, context.height);
             let mut block = state.world.block();
@@ -3707,10 +3727,7 @@ pub(crate) mod tests {
             )
             .expect("open exact pre-transaction pulse producer");
             assert!(producer.pulse_requested());
-            assert_eq!(
-                producer.pulse_required_for_consensus(),
-                !optional_parliament_slot
-            );
+            assert!(producer.pulse_required_for_consensus());
             producer.begin_round(0).expect("sign exact pulse slot");
             messages.push(beacon_partial_payload(
                 producer.take_outbound().pop().expect("local pulse share"),
@@ -3772,10 +3789,33 @@ pub(crate) mod tests {
             height: context.height - 1,
             block_hash: parent_hash,
         };
+        let mut stale_roster = roster.clone();
+        stale_roster.reverse();
+        let stale_roster_error =
+            crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
+                &mut transaction,
+                &effects,
+                Some(expected_anchor),
+                &stale_roster,
+                context.height,
+                0,
+                0,
+                #[cfg(feature = "telemetry")]
+                None,
+            )
+            .err()
+            .expect("a stale height roster must reject the otherwise valid pulse");
+        assert!(
+            stale_roster_error
+                .to_string()
+                .contains("authenticated height roster"),
+            "unexpected stale-roster diagnostic: {stale_roster_error}"
+        );
         crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
             Some(expected_anchor),
+            &roster,
             context.height,
             0,
             0,
@@ -3843,7 +3883,7 @@ pub(crate) mod tests {
             "restored state must accept the persisted pulse under key A"
         );
 
-        if !optional_parliament_slot {
+        if !parliament_requested_slot {
             let mut block_hashes = (1_u8..=41)
                 .map(|marker| {
                     HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([marker; 32]))
@@ -3870,7 +3910,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn optional_parliament_pulse_persists_across_same_block_key_rotation() {
+    fn mandatory_parliament_pulse_persists_across_same_block_key_rotation() {
         assert_same_block_key_rotation_persists_requested_pulse(true);
     }
 
@@ -3998,8 +4038,8 @@ pub(crate) mod tests {
             ));
         }
 
-        let mut reducer = V2GlobalBeaconLifecycle::open(&context, &state, None, None)
-            .expect("open verifier-only reducer");
+        let mut reducer = V2GlobalBeaconLifecycle::open(&context, &state, Some(0), None)
+            .expect("open signerless validator reducer");
         reducer.begin_round(0).expect("open exact round");
         let mut absent_effects = NposConsensusEffects::default();
         assert!(matches!(
@@ -4088,8 +4128,8 @@ pub(crate) mod tests {
             .expect("attach exact finalized pulse to candidate effects");
         assert_eq!(effects.finalized_global_beacon_pulse, Some(pulse));
 
-        let mut restarted = V2GlobalBeaconLifecycle::open(&context, &state, None, None)
-            .expect("restart verifier-only reducer");
+        let mut restarted = V2GlobalBeaconLifecycle::open(&context, &state, Some(0), None)
+            .expect("restart signerless validator reducer");
         restarted.begin_round(0).expect("reopen exact round");
         assert_eq!(
             restarted
@@ -4488,7 +4528,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn threshold_beacon_slot_is_identical_when_prior_optional_height_is_persisted_or_omitted() {
+    fn threshold_beacon_slot_is_identical_when_prior_unrelated_height_is_persisted_or_omitted() {
         let fixture = adaptive_beacon_fixture();
         let (template, origin, target_anchor) = pulse_fixture(&fixture.session);
         let finalize_slot =
@@ -4542,7 +4582,7 @@ pub(crate) mod tests {
                     .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, origin);
                 transaction
                     .verify_and_advance_global_beacon_pulse(&fixture.session, prior, prior_anchor)
-                    .expect("persist prior optional pulse");
+                    .expect("persist prior unrelated pulse");
                 transaction.apply();
             }
             block.commit();
@@ -4560,7 +4600,7 @@ pub(crate) mod tests {
         assert_eq!(target_after_persisted_prior, target_without_prior);
         assert_eq!(
             target_after_persisted_prior.seed, target_without_prior.seed,
-            "an optional earlier pulse must not influence the later slot seed"
+            "an unrelated earlier pulse must not influence the later slot seed"
         );
     }
 

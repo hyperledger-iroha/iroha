@@ -166,21 +166,27 @@ fn public_finding_binding(
 fn public_finding_certificate_carries_recomputable_exact_quorum() {
     let proposal_content_id = ProposalContentId::new([0x51; 32]);
     let governance_attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
+    let body_bindings = vec![
+        public_finding_binding(governance_attempt_id),
+        policy_jury_binding(governance_attempt_id),
+    ];
+    let certified_at_height = body_bindings
+        .iter()
+        .map(|binding| binding.result_height)
+        .max()
+        .expect("certificate fixture has body results");
     let certificate = GovernanceCertificateV1 {
         proposal_content_id,
         governance_attempt_id,
         governance_attempt_sequence: 0,
         risk_tier: RiskTierV1::Standard,
-        body_bindings: vec![
-            public_finding_binding(governance_attempt_id),
-            policy_jury_binding(governance_attempt_id),
-        ],
+        body_bindings,
         policy_version: 1,
         effect_preimage_hash: [0x52; 32],
         expected_head: GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
             subject_id: [0x53; 32],
         }),
-        certified_at_height: 40,
+        certified_at_height,
         enact_at_height: 41,
     };
 

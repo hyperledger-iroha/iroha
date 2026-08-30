@@ -2,7 +2,6 @@ using System.Net;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Http;
-using Hyperledger.Iroha.Crypto;
 
 namespace Hyperledger.Iroha.Sdk.IntegrationTests;
 
@@ -109,8 +108,7 @@ public sealed class ToriiIntegrationSmokeTests
             new Uri(baseUrl, UriKind.Absolute),
             options: new ToriiClientOptions
             {
-                LocalSigningContext = new ToriiLocalSigningContext(
-                    NetworkId.Parse(networkId)),
+                NetworkId = NetworkId.Parse(networkId),
                 CanonicalRequestCredentials = canonicalCredentials,
             });
 
@@ -288,7 +286,7 @@ public sealed class ToriiIntegrationSmokeTests
         }
 
         var meteringPublicKeyHex = Convert.ToHexString(
-            Ed25519Signer.GetPublicKey(canonicalCredentials.PrivateKeySeed)).ToLowerInvariant();
+            AccountAddress.Parse(canonicalCredentials.AccountId).PublicKey).ToLowerInvariant();
         var quote = await client.CreateVpnQuoteAsync(new ToriiVpnQuoteCreateRequest
         {
             MeteringPublicKeyHex = meteringPublicKeyHex,

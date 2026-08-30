@@ -130,14 +130,10 @@ impl Memory {
     pub const STACK_START: u64 = 0x0030_0000;
     /// Maximum logical stack size for ABI V1 guest programs.
     pub const STACK_SIZE: u64 = IvmStackPolicy::V1.maximum_stack_bytes();
+    /// Minimum logical stack size for ABI V1 guest programs.
+    pub const MIN_STACK_SIZE: u64 = IvmStackPolicy::V1.minimum_stack_bytes();
     /// Extra slop beyond the nominal stack end (kept zero to trap exactly at the limit).
     pub const STACK_SLOP: u64 = 0;
-    /// Align a stack byte count to the VM guest-stack boundary.
-    #[must_use]
-    pub fn align_stack_bytes(bytes: u64) -> u64 {
-        let bytes = bytes.max(Self::STACK_ALIGNMENT);
-        bytes - (bytes % Self::STACK_ALIGNMENT)
-    }
     /// Current stack limit (bytes) enforced for this memory instance.
     pub fn stack_limit(&self) -> u64 {
         self.stack_limit
@@ -360,14 +356,15 @@ impl Memory {
     /// immutable ABI stack policy in `IvmConfig`.
     ///
     /// # Errors
-    /// Returns [`VMError::MemoryOutOfBounds`] when `stack_limit` exceeds the
-    /// ABI V1 maximum or the resulting memory geometry is not representable on
-    /// the host.
+    /// Returns [`VMError::MemoryOutOfBounds`] when `stack_limit` is outside the
+    /// ABI V1 range, is not exactly aligned, or the resulting memory geometry
+    /// is not representable on the host.
     pub fn new_with_stack_limit(stack_limit: u64) -> Result<Self, VMError> {
-        if stack_limit > IvmStackPolicy::V1.maximum_stack_bytes() {
+        if !(Self::MIN_STACK_SIZE..=Self::STACK_SIZE).contains(&stack_limit)
+            || !stack_limit.is_multiple_of(Self::STACK_ALIGNMENT)
+        {
             return Err(VMError::MemoryOutOfBounds);
         }
-        let stack_limit = Self::align_stack_bytes(stack_limit);
         let total_size = Memory::STACK_START
             .checked_add(stack_limit)
             .and_then(|size| size.checked_add(Memory::STACK_SLOP))
@@ -1280,8 +1277,9 @@ mod tests {
     }
     #[test]
     fn runtime_template_geometry_mismatch_fails_without_replacing_memory() {
-        let mut worker = Memory::new_with_stack_limit(Memory::STACK_ALIGNMENT).unwrap();
-        let template = Memory::new_with_stack_limit(2 * Memory::STACK_ALIGNMENT).unwrap();
+        let mut worker = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        let template =
+            Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE + Memory::STACK_ALIGNMENT).unwrap();
         worker
             .store_u8(Memory::HEAP_START, 0xA5)
             .expect("dirty worker memory");
@@ -1572,17 +1570,16 @@ mod tests {
         ));
     }
     #[test]
-    fn explicit_unaligned_stack_limit_is_normalized_before_exposure() {
-        let mut mem = Memory::new_with_stack_limit(0x60a04).unwrap();
-        assert_eq!(mem.stack_limit() % Memory::STACK_ALIGNMENT, 0);
-        assert_eq!(mem.stack_top() % Memory::STACK_ALIGNMENT, 0);
-        mem.store_u64(mem.stack_top() - 8, 7)
-            .expect("aligned stack top must accept 64-bit stores");
+    fn explicit_unaligned_stack_limit_is_rejected() {
+        assert!(matches!(
+            Memory::new_with_stack_limit(0x60a04),
+            Err(VMError::MemoryOutOfBounds)
+        ));
     }
     #[test]
     fn stack_constructor_enforces_v1_limits() {
-        let minimum = Memory::new_with_stack_limit(0).unwrap();
-        assert_eq!(minimum.stack_limit(), Memory::STACK_ALIGNMENT);
+        let minimum = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
+        assert_eq!(minimum.stack_limit(), Memory::MIN_STACK_SIZE);
 
         let maximum = Memory::new_with_stack_limit(Memory::STACK_SIZE).unwrap();
         assert_eq!(maximum.stack_limit(), Memory::STACK_SIZE);
@@ -1591,6 +1588,14 @@ mod tests {
             Memory::STACK_START + Memory::STACK_SIZE
         );
 
+        assert!(matches!(
+            Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE - 1),
+            Err(VMError::MemoryOutOfBounds)
+        ));
+        assert!(matches!(
+            Memory::new_with_stack_limit(0),
+            Err(VMError::MemoryOutOfBounds)
+        ));
         assert!(matches!(
             Memory::new_with_stack_limit(Memory::STACK_SIZE + 1),
             Err(VMError::MemoryOutOfBounds)
@@ -1602,7 +1607,7 @@ mod tests {
     }
     #[test]
     fn memory_merkle_helpers_reject_the_exclusive_end_address() {
-        let mut memory = Memory::new_with_stack_limit(Memory::STACK_ALIGNMENT).unwrap();
+        let mut memory = Memory::new_with_stack_limit(Memory::MIN_STACK_SIZE).unwrap();
         let final_byte = memory.stack_top() - 1;
         assert!(memory.merkle_path(final_byte).is_ok());
         assert!(memory.merkle_root_and_path(final_byte).is_ok());

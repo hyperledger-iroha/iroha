@@ -118,6 +118,30 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
         return try address.toI105(networkPrefix: chainDiscriminant)
     }
 
+    func testGovernanceBallotDraftResponseIsExact() throws {
+        let valid = Data(
+            "{\"drafted\":true,\"tx_instructions\":[{\"wire_id\":\"CastZkBallot\",\"payload_hex\":\"00\"}]}".utf8
+        )
+        let decoded = try JSONDecoder().decode(ToriiGovernanceBallotResponse.self, from: valid)
+        XCTAssertTrue(decoded.drafted)
+        XCTAssertEqual(decoded.txInstructions.count, 1)
+
+        for invalid in [
+            "{\"ok\":false,\"accepted\":false,\"reason\":\"invalid ballot\",\"tx_instructions\":[]}",
+            "{\"drafted\":false,\"tx_instructions\":[{\"wire_id\":\"CastZkBallot\",\"payload_hex\":\"00\"}]}",
+            "{\"drafted\":true,\"tx_instructions\":[]}",
+            "{\"drafted\":true,\"tx_instructions\":[{\"wire_id\":\"Cast ZkBallot\",\"payload_hex\":\"00\"}]}",
+            "{\"drafted\":true,\"tx_instructions\":[{\"wire_id\":\"CastZkBallot\",\"payload_hex\":\"AA\"}]}",
+        ] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiGovernanceBallotResponse.self,
+                    from: Data(invalid.utf8)
+                )
+            )
+        }
+    }
+
     func testSubmitGovernancePlainBallotRequiresCanonicalLosslessQuantity() throws {
         let canonical = "18446744073709551616.25"
         let request = ToriiGovernancePlainBallotRequest(

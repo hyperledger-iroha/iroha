@@ -136,12 +136,10 @@ impl V2EffectServices for ProductionV2Services {
                     "local proposal chunks belong to another reducer incarnation".to_owned(),
                 );
             }
-            let encoded_chunks = chunks
-                .messages
-                .iter()
-                .cloned()
-                .map(Self::preencode_v2_network_message)
-                .collect::<Result<Vec<_>, _>>()?;
+            // `NetworkMessage::clone` retains the Arc-backed message and its
+            // canonical cached bytes. Proposal retry must not deep-clone and
+            // re-encode every payload chunk.
+            let encoded_chunks = chunks.messages.clone();
             let committee = self.committee_for_round(proposal.round)?;
             let first_fast_path_send = !self.fast_path_proposals.contains(&proposal.round);
             let payload_targets = if first_fast_path_send {
@@ -255,9 +253,20 @@ impl V2EffectServices for ProductionV2Services {
                 }
                 let manifest_upgrade =
                     existing_task.manifest().is_none() && task.manifest().is_some();
-                let manifest_hash = manifest_upgrade.then(|| {
-                    HashOf::new(task.manifest().expect("manifest upgrade was checked above"))
-                });
+                let opened_chunks = manifest_upgrade
+                    .then(|| {
+                        V2ChunkSession::open(
+                            &self.context,
+                            task.manifest()
+                                .expect("manifest upgrade was checked above")
+                                .clone(),
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
+                let manifest_hash = opened_chunks
+                    .as_ref()
+                    .map(|session| session.validated_manifest().manifest_hash());
                 if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
                     return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
                 }
@@ -273,17 +282,6 @@ impl V2EffectServices for ProductionV2Services {
                     .as_ref()
                     .map(|_| task.sources().to_vec())
                     .unwrap_or_default();
-                let opened_chunks = manifest_upgrade
-                    .then(|| {
-                        V2ChunkSession::open(
-                            &self.context,
-                            task.manifest()
-                                .expect("manifest upgrade was checked above")
-                                .clone(),
-                        )
-                    })
-                    .transpose()
-                    .map_err(|error| error.to_string())?;
                 let fetch = self.fetches.get_mut(&task.id()).ok_or_else(|| {
                     "preflighted Sumeragi v2 body-fetch owner disappeared".to_owned()
                 })?;
@@ -317,10 +315,6 @@ impl V2EffectServices for ProductionV2Services {
         if task.manifest().is_none() && task.certified_request().is_none() {
             return Err("Sumeragi v2 body-fetch task has no acquisition authority".to_owned());
         }
-        let manifest_hash = task.manifest().map(HashOf::new);
-        if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
-            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
-        }
         let certified_message = task
             .certified_request()
             .map(|request| {
@@ -339,6 +333,12 @@ impl V2EffectServices for ProductionV2Services {
             .map(|manifest| V2ChunkSession::open(&self.context, manifest))
             .transpose()
             .map_err(|error| error.to_string())?;
+        let manifest_hash = chunks
+            .as_ref()
+            .map(|session| session.validated_manifest().manifest_hash());
+        if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
+            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
+        }
         if let Some(hash) = manifest_hash {
             self.fetch_by_manifest.insert(hash, task.id());
         }
@@ -434,6 +434,34 @@ impl V2EffectServices for ProductionV2Services {
         self.remove_exact_body_fetch_owner(task)?;
         operation.complete();
         Ok(())
+    }
+    fn validated_payload_manifest<'a>(
+        &'a mut self,
+        context: &wire::HeightContext,
+        task: &BodyFetchTask,
+    ) -> Result<&'a wire::ValidatedPayloadManifest, Self::Error> {
+        if context != &self.context
+            || self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live
+        {
+            return Err("Sumeragi v2 chunk validation has no exact live owner".to_owned());
+        }
+        let fetch = self
+            .fetches
+            .get(&task.id())
+            .expect("live body-fetch owner was classified above");
+        if fetch.task != *task {
+            return Err(format!(
+                "Sumeragi v2 chunk task {} differs from validation-session ownership",
+                task.id().get()
+            ));
+        }
+        fetch
+            .chunks
+            .as_ref()
+            .map(V2ChunkSession::validated_manifest)
+            .ok_or_else(|| {
+                "manifest-less certified body fetch has no chunk validation session".to_owned()
+            })
     }
     fn accept_authenticated_chunk(
         &mut self,

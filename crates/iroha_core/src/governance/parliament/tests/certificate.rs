@@ -246,6 +246,11 @@ fn certificate_and_terminal_transition_table_are_fail_closed() {
         ParliamentAggregateOutcomeV1::Approved
     );
     let id = fixture.state.attempt.id;
+    let final_result_height = fixture
+        .state
+        .body(&fixture.body_id)
+        .and_then(ParliamentBodyStateV1::result_height)
+        .expect("completed Policy Jury result height");
     fixture
         .state
         .validate()
@@ -256,16 +261,27 @@ fn certificate_and_terminal_transition_table_are_fail_closed() {
         "the atomic pre-certificate transient must never survive restart"
     );
     assert_eq!(
-        fixture.state.construct_certificate(id, 50, 50),
+        fixture
+            .state
+            .construct_certificate(id, final_result_height, final_result_height),
         Err(ParliamentReducerErrorV1::InvalidCertificateHeight)
+    );
+    assert_eq!(
+        fixture
+            .state
+            .construct_certificate(id, final_result_height + 1, 60),
+        Err(ParliamentReducerErrorV1::InvalidCertificateHeight),
+        "certification cannot be delayed beyond the final body result height"
     );
     let certificate = fixture
         .state
-        .construct_certificate(id, 50, 60)
+        .construct_certificate(id, final_result_height, 60)
         .expect("complete certificate");
     assert_eq!(certificate.body_bindings.len(), 1);
     assert_eq!(
-        fixture.state.validate_restored_height_v1(49),
+        fixture
+            .state
+            .validate_restored_height_v1(final_result_height - 1),
         Err(ParliamentReducerErrorV1::InvalidCertificateHeight)
     );
     fixture
@@ -492,9 +508,14 @@ fn parliament_pulse_slot_uses_one_canonical_json_map_key() {
 fn reducer_norito_roundtrip_is_deterministic_and_revalidated() {
     let mut fixture = opened_policy_ballot(3, 3);
     finalize_policy(&mut fixture, 2, 1, 0);
+    let final_result_height = fixture
+        .state
+        .body(&fixture.body_id)
+        .and_then(ParliamentBodyStateV1::result_height)
+        .expect("completed Policy Jury result height");
     fixture
         .state
-        .construct_certificate(fixture.state.attempt.id, 50, 60)
+        .construct_certificate(fixture.state.attempt.id, final_result_height, 60)
         .expect("certificate");
     fixture.state.validate().expect("source state validates");
     let bytes = norito::to_bytes(&fixture.state).expect("encode reducer state");

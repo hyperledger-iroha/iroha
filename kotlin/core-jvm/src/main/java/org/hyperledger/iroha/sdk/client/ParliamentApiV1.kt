@@ -381,6 +381,8 @@ object ParliamentApiV1 {
     const val MAX_TIMED_OVN_CORPUS_ENTRIES: Int = 1_000
     /** Maximum retry sequence for a whole governance attempt; valid sequences are 0 through 16. */
     const val MAX_GOVERNANCE_ATTEMPT_RETRIES: Int = 16
+    private const val GOVERNANCE_POLICY_VERSION: Int = 1
+    private const val MAX_SORTITION_RETRIES: Int = 16
     const val PUBLIC_TRANSITION_DIGEST_DOMAIN: String =
         "iroha.governance.parliament.lifecycle_transition.digest.v1"
     const val AUTOMATIC_OUTCOME_DIGEST_DOMAIN: String =
@@ -399,6 +401,17 @@ object ParliamentApiV1 {
         "ContractLifecycleGovernance",
         "ContractEmergencyHold",
         "GlobalDataTriggerPermissionGovernance",
+    )
+
+    /** Exact first-release actions admitted by contract-lifecycle governance proposals. */
+    @JvmField
+    val CONTRACT_LIFECYCLE_ACTIONS: List<String> = listOf(
+        "Activate",
+        "Deactivate",
+        "OfferOwnership",
+        "CancelOwnershipOffer",
+        "AcceptParliamentOwnership",
+        "CompleteEmergencyHoldRetrospective",
     )
 
     /** One recursively validated closed first-release proposal wire value. */
@@ -866,6 +879,9 @@ object ParliamentApiV1 {
         }
         val proposalContentId = id(attempt, "proposal_content_id")
         val attemptSequence = u32(attempt["sequence"], "attempt.sequence")
+        require(BigInteger(attemptSequence) <= BigInteger.valueOf(MAX_GOVERNANCE_ATTEMPT_RETRIES.toLong())) {
+            "attempt.sequence exceeds the first-release retry ceiling"
+        }
         val riskTier = taggedUnitIn(
             attempt["risk_tier"],
             "tier",
@@ -890,7 +906,9 @@ object ParliamentApiV1 {
         )
         val height = unsignedInteger(root["current_height"], "current_height")
         val policyVersion = unsignedInteger(root["policy_version"], "policy_version")
-        require(BigInteger(policyVersion).signum() > 0) { "policy_version must be positive" }
+        require(policyVersion == GOVERNANCE_POLICY_VERSION.toString()) {
+            "policy_version must equal the first-release Parliament policy version"
+        }
         optionalUnsignedInteger(root["terminal_height"], "terminal_height")
         optionalByteArray32(root["execution_failure_root"], "execution_failure_root")
         val requiredBodies = validateRequiredBodies(root["required_bodies"])
@@ -1545,7 +1563,10 @@ object ParliamentApiV1 {
             certificate["policy_version"],
             "certificate.policy_version",
         )
-        require(BigInteger(policyVersion).signum() > 0 && policyVersion == expectedPolicyVersion) {
+        require(policyVersion == GOVERNANCE_POLICY_VERSION.toString()) {
+            "certificate.policy_version must equal the first-release Parliament policy version"
+        }
+        require(policyVersion == expectedPolicyVersion) {
             "certificate.policy_version differs from the attempt projection"
         }
         validateExpectedHead(certificate["expected_head"], "certificate.expected_head")
@@ -1572,6 +1593,9 @@ object ParliamentApiV1 {
         val seenReleaseSlots = HashSet<String>()
         val sortitionPulseIds = HashSet<String>()
         val findings = ArrayList<ParliamentPublicFindingCertificateBindingV1>()
+        var latestBodyResultHeight = BigInteger.ZERO
+        var policyJury: CertificateJuryFacts? = null
+        var confirmationJury: CertificateJuryFacts? = null
         bindings.forEachIndexed { index, raw ->
             val context = "certificate.body_bindings[$index]"
             val binding = exactObject(raw, CERTIFICATE_BODY_BINDING_NORITO_FIELDS.toSet(), context)
@@ -1607,17 +1631,24 @@ object ParliamentApiV1 {
             for (field in listOf("roster_root", "assignment_root", "result_root")) {
                 byteArray32(binding[field], "$context.$field")
             }
-            u32(binding["election_attempt_sequence"], "$context.election_attempt_sequence")
+            val electionAttemptSequence = u32Int(
+                binding["election_attempt_sequence"],
+                "$context.election_attempt_sequence",
+                0,
+                MAX_SORTITION_RETRIES,
+            )
             val resultHeight = BigInteger(
                 unsignedInteger(binding["result_height"], "$context.result_height"),
             )
-            validateCertificateSortitionRequest(
+            latestBodyResultHeight = latestBodyResultHeight.max(resultHeight)
+            val sortition = validateCertificateSortitionRequest(
                 binding["sortition_request"],
                 expectedAttemptId,
                 body,
                 electionAttemptId,
                 sortitionRequestId,
                 beaconSessionId,
+                seats,
                 resultHeight,
                 certifiedAtHeight,
                 "$context.sortition_request",
@@ -1651,6 +1682,22 @@ object ParliamentApiV1 {
                 require(seenReleaseSlots.add(ballot.releaseSlot)) {
                     "certificate.body_bindings reuses a TLE release slot"
                 }
+                val jury = CertificateJuryFacts(
+                    electionAttemptSequence,
+                    sortition.requestHeight,
+                    resultHeight,
+                    beaconPulseId,
+                    ballot,
+                )
+                if (body == "policy-jury") {
+                    require(policyJury == null) { "certificate contains more than one policy-jury" }
+                    policyJury = jury
+                } else {
+                    require(confirmationJury == null) {
+                        "certificate contains more than one confirmation-jury"
+                    }
+                    confirmationJury = jury
+                }
             } else {
                 require(bodyStates[index].timedOvnProgress == null) {
                     "$context public body exposes timed_ovn_progress"
@@ -1664,8 +1711,42 @@ object ParliamentApiV1 {
         require(sortitionPulseIds.intersect(seenReleasePulseIds).isEmpty()) {
             "certificate reuses a sortition pulse for ballot release"
         }
+        require(certifiedAtHeight == latestBodyResultHeight) {
+            "certificate.certified_at_height must equal the latest body result height"
+        }
+        val policy = requireNotNull(policyJury) {
+            "certificate must contain exactly one approving policy-jury ballot"
+        }
+        val decisive = policy.ballot.aye + policy.ballot.nay
+        val requiresConfirmation = decisive.signum() > 0 &&
+            policy.ballot.aye.subtract(policy.ballot.nay).abs() * BigInteger.valueOf(100) <
+            decisive * BigInteger.valueOf(5)
+        require(requiresConfirmation == (confirmationJury != null)) {
+            "certificate confirmation-jury presence differs from the policy margin"
+        }
+        confirmationJury?.let { confirmation ->
+            val validRequestHeight = if (confirmation.electionAttemptSequence == 0) {
+                confirmation.requestHeight == policy.resultHeight
+            } else {
+                confirmation.requestHeight > policy.resultHeight
+            }
+            require(validRequestHeight && confirmation.beaconPulseId != policy.beaconPulseId) {
+                "certificate confirmation-jury request height must match the atomic initial " +
+                    "request or follow it on retry, with a fresh pulse"
+            }
+        }
         return findings
     }
+
+    private data class CertificateSortitionFacts(val requestHeight: BigInteger)
+
+    private data class CertificateJuryFacts(
+        val electionAttemptSequence: Int,
+        val requestHeight: BigInteger,
+        val resultHeight: BigInteger,
+        val beaconPulseId: String,
+        val ballot: CertificateBallotFacts,
+    )
 
     /** Direct bindings are checked here; Norito-derived content identifiers and roots stay opaque. */
     private fun validateCertificateSortitionRequest(
@@ -1675,10 +1756,11 @@ object ParliamentApiV1 {
         electionAttemptId: String,
         sortitionRequestId: String,
         beaconSessionId: String,
+        originalSeats: Int,
         resultHeight: BigInteger,
         certifiedAtHeight: BigInteger,
         context: String,
-    ) {
+    ): CertificateSortitionFacts {
         val request = exactObject(
             value,
             setOf(
@@ -1696,14 +1778,25 @@ object ParliamentApiV1 {
             "$context differs from its repeated certificate bindings"
         }
         byteArray32(request["candidate_root"], "$context.candidate_root")
-        u32Int(request["candidate_count"], "$context.candidate_count", 1, MAX_TIMED_OVN_CORPUS_ENTRIES)
-        u32Int(request["target_seats"], "$context.target_seats", 1, MAX_TIMED_OVN_CORPUS_ENTRIES)
+        val candidateCount = BigInteger(u32(request["candidate_count"], "$context.candidate_count"))
+        require(candidateCount.signum() > 0) { "$context.candidate_count must be positive" }
+        val targetSeats = u32Int(
+            request["target_seats"],
+            "$context.target_seats",
+            1,
+            MAX_TIMED_OVN_CORPUS_ENTRIES,
+        )
+        require(
+            originalSeats <= targetSeats &&
+                BigInteger.valueOf(originalSeats.toLong()) <= candidateCount,
+        ) { "$context original_seats exceeds its sortition bounds" }
         val requestHeight = BigInteger(unsignedInteger(request["request_height"], "$context.request_height"))
         val pulseHeight = BigInteger(unsignedInteger(request["pulse_height"], "$context.pulse_height"))
         require(requestHeight.signum() > 0 && pulseHeight > requestHeight &&
             resultHeight > pulseHeight && resultHeight <= certifiedAtHeight) {
             "$context violates the sortition/result lifecycle"
         }
+        return CertificateSortitionFacts(requestHeight)
     }
 
     private data class CertificateBallotFacts(
@@ -1712,6 +1805,8 @@ object ParliamentApiV1 {
         val releasePulseId: String,
         val releaseSlot: String,
         val acceptedBallots: Int,
+        val aye: BigInteger,
+        val nay: BigInteger,
     )
 
     private fun validateCertificateBallot(
@@ -1827,6 +1922,8 @@ object ParliamentApiV1 {
             releasePulseId,
             "$releaseBeaconSessionId:$release",
             accepted,
+            aye,
+            nay,
         )
     }
 
@@ -1844,7 +1941,9 @@ object ParliamentApiV1 {
                     "$context.head",
                 )
                 byteArray32(head["subject_id"], "$context.head.subject_id")
-                unsignedInteger(head["version"], "$context.head.version")
+                require(BigInteger(unsignedInteger(head["version"], "$context.head.version")).signum() > 0) {
+                    "$context.head.version must be positive"
+                }
                 byteArray32(head["head_root"], "$context.head.head_root")
             }
             else -> throw IllegalArgumentException("$context.state is unknown")

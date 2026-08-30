@@ -30,6 +30,7 @@ _RESPONSE_PUBLIC_BUNDLE_MAX_BYTES = 8 * 1024 * 1024
 _RESPONSE_RESTRICTED_MAX_BYTES = 32 * 1024 * 1024
 _JSON_MAX_DEPTH = 128
 _JSON_MAX_NODES = 1_000_000
+_U64_MAX = (1 << 64) - 1
 _U256_MAX = (1 << 256) - 1
 
 
@@ -181,6 +182,8 @@ def _reject_json_float(_value: str) -> Any:
 
 
 def _parse_json_integer(value: str) -> int:
+    if value == "-0":
+        raise ValueError("atomic private settlement JSON forbids negative zero")
     parsed = int(value, 10)
     if abs(parsed) > _U256_MAX:
         raise ValueError("atomic private settlement JSON contains an oversized integer")
@@ -433,13 +436,37 @@ def _response_fields(route: str) -> frozenset[str]:
     raise ValueError("unknown atomic private settlement route")
 
 
+def _validate_bundle_submit_response(parsed: dict[str, Any]) -> None:
+    for field in ("bundle_id", "carrier_id"):
+        value = parsed[field]
+        if not isinstance(value, str):
+            raise ValueError(f"settlement bundle admission {field} must be a hash literal")
+        try:
+            identifier = AtomicPrivateSettlementIdentifierV1(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"settlement bundle admission {field} must be a hash literal"
+            ) from error
+        if identifier.json_literal != value:
+            raise ValueError(
+                f"settlement bundle admission {field} must be canonical"
+            )
+    height = parsed["accepted_at_height"]
+    if type(height) is not int or height < 0 or height > _U64_MAX:
+        raise ValueError(
+            "settlement bundle admission accepted_at_height must be a u64"
+        )
+
+
 def _read_bounded_response(response: Any, maximum_bytes: int) -> bytes:
     try:
         content_length = response.headers.get("Content-Length")
+        declared_length: Optional[int] = None
         if content_length is not None:
             if re.fullmatch(r"(?:0|[1-9][0-9]*)", content_length) is None:
                 raise ValueError("settlement response Content-Length is not canonical")
-            if int(content_length, 10) > maximum_bytes:
+            declared_length = int(content_length, 10)
+            if declared_length > maximum_bytes:
                 raise ValueError("settlement response exceeds its byte bound")
         body = bytearray()
         for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
@@ -452,6 +479,10 @@ def _read_bounded_response(response: Any, maximum_bytes: int) -> bytes:
             body.extend(chunk)
         if not body:
             raise ValueError("settlement response must not be empty")
+        if declared_length is not None and len(body) != declared_length:
+            raise ValueError(
+                "settlement response length does not match Content-Length"
+            )
         return bytes(body)
     finally:
         response.close()
@@ -577,6 +608,12 @@ def create_atomic_private_settlement_client_mixin(
                     "atomic private settlement request failed with HTTP "
                     f"{response.status_code}{suffix}"
                 )
+            expected_status = 202 if route.endswith("/bundles") else 200
+            if response.status_code != expected_status:
+                response.close()
+                raise AtomicPrivateSettlementToriiErrorV1(
+                    "atomic private settlement response status is invalid"
+                )
             if response.headers.get("Content-Type") != _JSON_MEDIA_TYPE:
                 response.close()
                 raise AtomicPrivateSettlementToriiErrorV1(
@@ -593,6 +630,8 @@ def create_atomic_private_settlement_client_mixin(
                 parsed = _parse_exact_json_object(body, "atomic private settlement response")
                 if frozenset(parsed) != _response_fields(route):
                     raise ValueError("settlement response has unexpected public fields")
+                if route.endswith("/bundles"):
+                    _validate_bundle_submit_response(parsed)
                 if expected_identifier is not None and expected_identifier_field is not None:
                     if parsed.get(expected_identifier_field) != expected_identifier.json_literal:
                         raise ValueError("settlement response identifier is substituted")
@@ -630,10 +669,15 @@ def create_atomic_private_settlement_client_mixin(
                 return AtomicPrivateSettlementJsonResponseV1(route, canonical)
             except AtomicPrivateSettlementToriiErrorV1:
                 raise
-            except Exception as error:
-                raise AtomicPrivateSettlementToriiErrorV1(
-                    "atomic private settlement response is invalid"
-                ) from error
+            except Exception:
+                # Leave the parser/validator exception behind before raising the
+                # public error.  A chained JSON error can retain the complete
+                # response document in its attributes even when its message is
+                # redacted.
+                pass
+            raise AtomicPrivateSettlementToriiErrorV1(
+                "atomic private settlement response is invalid"
+            )
 
         def _private_settlement_sponsor_mutation(
             self,
@@ -701,7 +745,7 @@ def create_atomic_private_settlement_client_mixin(
         def submit_private_settlement_bundle_v1(
             self, request: AtomicPrivateSettlementPreparedRequestV1, *, canonical_auth: Any
         ) -> AtomicPrivateSettlementJsonResponseV1:
-            """Submit one exact sponsor-signed global finalization carrier."""
+            """Submit one exact sponsor-signed global finalization or abort carrier."""
 
             return self._private_settlement_sponsor_mutation(
                 request, AtomicPrivateSettlementOperationV1.BUNDLE_SUBMIT, canonical_auth

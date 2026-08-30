@@ -1,164 +1,59 @@
-# Governance Playbook
+# SORA Parliament Operations (V1)
 
-This playbook captures the day-to-day rituals that keep the Sora Network
-governance council aligned. It aggregates the authoritative references from the
-repository so individual ceremonies can remain concise, while operators always
-have a single entry point for the broader process.
+This code-adjacent checklist records the first-release operating boundary for
+SORA Parliament. Governance authority comes only from a closed typed proposal
+and its canonical Parliament attempt reducer. There is no standing council,
+detached roster, client-selected result, manual certificate, or manual
+finalize/enact path. Standalone plain and ZK referenda are a separate subsystem
+and cannot authorize a Parliament proposal.
 
-## Council Ceremonies
+## Attempt checklist
 
-- **Fixture governance** – See [Sora Parliament Fixture Approval](sorafs/signing_ceremony.md)
-  for the on-chain approval flow that the Parliament’s Infrastructure Panel now
-  follows when reviewing SoraFS chunker updates.
-- **Vote tally publication** – Refer to
-  [Governance Vote Tally](governance_vote_tally.md) for the step-by-step CLI
-  workflow and reporting template.
+1. Submit the proposal's kind-specific instruction in an ordinary signed
+   transaction. Record the immutable proposal content and the
+   `ProposalSubmitted` event.
+2. Send that exact typed proposal and its zero-based retry sequence to
+   `POST /v1/gov/parliament/attempts/draft`. Sign and submit the returned
+   `iroha.governance.parliament.attempt.create.v1` instruction. Treat
+   `ParliamentAttemptCreated` as the authoritative record of the attempt id,
+   policy, risk tier, effect hash, and compare-and-set head.
+3. For each currently legal reducer command, use
+   `POST /v1/gov/parliament/transitions/draft`, then sign and submit the returned
+   `iroha.governance.parliament.transition.submit.v1` instruction. Core derives
+   sortition, the required-body order, deadlines, results, retries, and
+   certificate bindings from committed state. A retry must use the exact next
+   attempt sequence.
+4. Recover or audit state with
+   `GET /v1/gov/parliament/attempts/{governance_attempt_id}` and
+   `GET /v1/gov/proposals/{id}`. The attempt projection is the source of truth
+   for the required bodies, public progress, retained certificate, reducer
+   payload, and terminal outcome.
+5. Follow accepted commands and consensus-owned outcomes through
+   `ParliamentLifecycleTransitionApplied`. Its optional `certificate_id`
+   identifies the automatically constructed certificate. At the exact
+   enactment height Core either applies the typed effect, records `Superseded`,
+   or records `ExecutionFailed`; a successful effect also emits
+   `ProposalEnacted`. `ProposalRejected` records a rejected proposal. Clients do
+   not submit a certificate, finalization result, or enactment command.
 
-## Operational Runbooks
+For each attempt, retain the typed proposal, draft response, signed transaction
+hashes, `ParliamentAttemptCreated`, every
+`ParliamentLifecycleTransitionApplied` event, and the final attempt projection.
+Those committed records are the audit trail; local minutes, JSON envelopes, or
+signer lists do not extend governance authority.
 
-- **API integrations** – [Governance API reference](governance_api.md) lists the
-  REST/gRPC surfaces exposed by council services, including authentication
-  requirements and pagination rules.
-- **Telemetry dashboards** – The Grafana JSON definitions under
-  `specs/grafana_*` define the “Governance Constraints” and “Scheduler
-  TEU” boards. Export the JSON into Grafana after each release to stay aligned
-  with the canonical layout.
+## SoraFS fixture-signing boundary
 
-## Data Availability Oversight
+The only SoraFS-specific Parliament proposal in V1 is
+`SorafsProviderGovernance`, closed over provider-owner `Establish`, `Rebind`,
+and `Remove` actions. Chunker fixtures and their `manifest_signatures.json`
+files are release-tooling artifacts. Their detached signatures verify the
+fixture bytes; they are not Parliament votes, reducer results, certificates, or
+approval envelopes, and they cannot authorize unrelated DA, moderation,
+subsidy, freeze, or rollback operations.
 
-### Retention classes
-
-Parliament panels approving DA manifests must reference the enforced retention
-policy before voting. The table below mirrors the defaults enforced via
-`torii.da_ingest.replication_policy` so reviewers can spot mismatches without
-hunting for the source TOML.【specs/da/replication_policy.md:1】
-
-| Governance tag | Blob class | Hot retention | Cold retention | Required replicas | Storage class |
-|----------------|------------|---------------|----------------|-------------------|---------------|
-| `da.taikai.live` | `taikai_segment` | 24 h | 14 d | 5 | `hot` |
-| `da.sidecar` | `nexus_lane_sidecar` | 6 h | 7 d | 4 | `warm` |
-| `da.governance` | `governance_artifact` | 12 h | 180 d | 3 | `cold` |
-| `da.default` | _all other classes_ | 6 h | 30 d | 3 | `warm` |
-
-The Infrastructure Panel should attach the filled template from
-`fixtures/documentation/da_manifest_review_template.md` to every ballot so the manifest
-digest, retention tag, and Norito artefacts remain linked in the governance
-record.
-
-### Signed manifest audit trail
-
-Before a ballot reaches the agenda, council staff must prove that the manifest
-bytes under review match the Parliament envelope and the SoraFS artefact. Use
-the existing tooling to collect that evidence:
-
-1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
-   or the equivalent SDK helper) so everyone hashes the same bytes that reached
-   the gateways.
-2. Run the manifest builder verifier with the signed envelope:
-   ```
-   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
-     --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
-     --json-out=/tmp/manifest_report.json
-   ```
-   This recomputes the BLAKE3 manifest digest, validates the
-   `chunk_digest_sha3_256`, and checks every Ed25519 signature embedded in
-   `manifest_signatures.json`. See `specs/sorafs/manifest_pipeline.md`
-   for additional CLI options.
-3. Copy the digest, `chunk_digest_sha3_256`, profile handle, and signer list into
-   the review template. NOTE: if the verifier reports “profile mismatch” or a
-   missing signature, halt the vote and request a corrected envelope.
-4. Store the verifier output (or CI artefact from
-   `ci/check_sorafs_fixtures.sh`) alongside the Norito `.to` payload so auditors
-   can replay the evidence without accessing internal gateways.
-
-The resulting audit pack should let Parliament recreate every hash and signature
-check even after the manifest is rotated out of hot storage.
-
-### Review checklist
-
-1. Pull the Parliament-approved manifest envelope (see
-   `specs/sorafs/signing_ceremony.md`) and record the BLAKE3 digest.
-2. Verify the manifest’s `RetentionPolicy` block matches the tag in the table
-   above; Torii will reject mismatches, but the council must capture the
-   evidence for auditors.【specs/da/replication_policy.md:32】
-3. Confirm that the submitted Norito payload references the same retention tag
-   and blob class that appears in the intake ticket.
-4. Attach proof of the policy check (CLI output, `torii.da_ingest.replication_policy`
-   dump, or CI artefact) to the review packet so SRE can replay the decision.
-5. Record planned subsidy taps or rent adjustments when the proposal depends on
-   `specs/sorafs_reserve_rent_plan.md`.
-
-### Escalation matrix
-
-| Request type | Owning panel | Evidence to attach | Deadlines & telemetry | References |
-|--------------|--------------|--------------------|-----------------------|------------|
-| Subsidy / rent adjustment | Infrastructure + Treasury | Filled DA packet, rent delta from `reserve_rentd`, updated reserve projection CSV, council vote minutes | Note rent impact before submitting the Treasury update; include rolling 30 d buffer telemetry so Finance can reconcile within the next settlement window | `specs/sorafs_reserve_rent_plan.md`, `fixtures/documentation/da_manifest_review_template.md` |
-| Moderation takedown / compliance action | Moderation + Compliance | Compliance ticket (`ComplianceUpdateV1`), proof tokens, signed manifest digest, appeal status | Follow the gateway compliance SLA (acknowledge within 24 h, full removal ≤72 h). Attach `TransparencyReportV1` excerpt showing the action. | `specs/sorafs_gateway_compliance_plan.md`, `specs/sorafs_moderation_panel_plan.md` |
-| Emergency freeze / rollback | Parliament moderation panel | Prior approval packet, new freeze order, rollback manifest digest, incident log | Publish freeze notice immediately and schedule the rollback referendum within the next governance slot; include buffer saturation + DA replication telemetry to justify the emergency. | `specs/sorafs/signing_ceremony.md`, `specs/sorafs_moderation_panel_plan.md` |
-
-Use the table when triaging intake tickets so every panel receives the exact
-artefacts required to execute its mandate.
-
-### Reporting deliverables
-
-Every DA-10 decision must ship with the following artefacts (attach them to the
-Governance DAG entry referenced in the vote):
-
-- The completed Markdown packet from
-  `fixtures/documentation/da_manifest_review_template.md` (now including signature and
-  escalation sections).
-- The signed Norito manifest (`.to`) plus the `manifest_signatures.json` envelope
-  or CI verifier logs that prove the fetch digest.
-- Any transparency updates triggered by the action:
-  - `TransparencyReportV1` delta for takedowns or compliance-driven freezes.
-  - Rent/reserve ledger delta or `ReserveSummaryV1` snapshot for subsidies.
-- Links to telemetry snapshots collected during the review (replication depth,
-  buffer headroom, moderation backlog) so observers can cross-check conditions
-  after the fact.
-
-## Moderation & Escalation
-
-Gateway takedowns, subsidy clawbacks, or DA freezes follow the compliance
-pipeline described in `specs/sorafs_gateway_compliance_plan.md` and the
-appeal tooling in `specs/sorafs_moderation_panel_plan.md`. Panels should:
-
-1. Log the originating compliance ticket (`ComplianceUpdateV1` or
-   `ModerationAppealV1`) and attach the associated proof tokens.【specs/sorafs_gateway_compliance_plan.md:20】
-2. Confirm whether the request invokes the moderation appeal path (citizen panel
-   vote) or an emergency Parliament freeze; both flows must cite the manifest
-   digest and retention tag captured in the new template.【specs/sorafs_moderation_panel_plan.md:1】
-3. Enumerate escalation deadlines (appeal commit/reveal windows, emergency
-   freeze duration) and state which council or panel owns the follow-up.
-4. Capture the telemetry snapshot (buffer headroom, moderation backlog) used to
-   justify the action so downstream audits can match the decision to the live
-   state.
-
-The compliance and moderation panels must sync their weekly transparency reports
-with the settlement router operators so takedowns and subsidies affect the same
-set of manifests.
-
-## Reporting Templates
-
-All DA-10 reviews now require a signed Markdown packet. Copy
-`fixtures/documentation/da_manifest_review_template.md`, populate the manifest metadata,
-retention verification table, and panel vote summary, then pin the completed
-document (plus referenced Norito/JSON artefacts) to the Governance DAG entry.
-Panels should link the packet in the governance minutes so future takedowns or
-subsidy renewals can cite the original manifest digest without re-running the
-entire ceremony.
-
-## Incident & Revocation Workflow
-
-Emergency actions now happen on-chain. When a fixture release needs to be
-rolled back, file a governance ticket and open a Parliament revert proposal
-pointing at the previously approved manifest digest. The Infrastructure Panel
-handles the vote, and once finalized the Nexus runtime publishes the rollback
-event that downstream clients consume. No local JSON artefacts are required.
-
-## Keeping the Playbook Current
-
-- Update this file whenever a new governance-facing runbook lands in the
-  repository.
-- Cross-link new ceremonies here so the council index remains discoverable.
-- If a referenced document moves (for example, a new SDK path), update the link
-  as part of the same pull request to avoid stale pointers.
+See [`sorafs/signing_ceremony.md`](sorafs/signing_ceremony.md) for that narrow
+boundary and [`../fixtures/sorafs_chunker/README.md`](../fixtures/sorafs_chunker/README.md)
+for fixture verification. The reducer and Torii contracts are specified in
+[`governance_pipeline.md`](governance_pipeline.md) and
+[`governance_api.md`](governance_api.md).

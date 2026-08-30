@@ -332,6 +332,24 @@ function responseFields(route) {
   throw new TypeError("unknown atomic private settlement route");
 }
 
+function validateBundleAdmission(value) {
+  for (const field of ["bundle_id", "carrier_id"]) {
+    if (typeof value[field] !== "string") {
+      throw new TypeError(`settlement bundle admission ${field} must be a hash literal`);
+    }
+    const parsed = new AtomicPrivateSettlementIdentifierV1(value[field]);
+    if (parsed.jsonLiteral !== value[field]) {
+      throw new TypeError(`settlement bundle admission ${field} must be canonical`);
+    }
+  }
+  const height = value.accepted_at_height;
+  const validNumber = typeof height === "number" && Number.isSafeInteger(height) && height >= 0;
+  const validBigInt = typeof height === "bigint" && height >= 0n && height <= 0xffffffffffffffffn;
+  if (!validNumber && !validBigInt) {
+    throw new TypeError("settlement bundle admission accepted_at_height must be a u64");
+  }
+}
+
 function identifier(value) {
   return value instanceof AtomicPrivateSettlementIdentifierV1
     ? value
@@ -573,6 +591,13 @@ export class AtomicPrivateSettlementToriiClientV1 {
         `atomic private settlement request failed with HTTP ${response.status}${suffix}`,
       );
     }
+    const expectedStatus = route.endsWith("/bundles") ? 202 : 200;
+    if (response.status !== expectedStatus) {
+      await cancelBody(response);
+      throw new AtomicPrivateSettlementToriiErrorV1(
+        "atomic private settlement response status is invalid",
+      );
+    }
     if (response.headers.get("content-type") !== JSON_MEDIA_TYPE) {
       await cancelBody(response);
       throw new AtomicPrivateSettlementToriiErrorV1(
@@ -591,6 +616,7 @@ export class AtomicPrivateSettlementToriiClientV1 {
       const responseBytes = await boundedResponseBytes(response, maximumBytes);
       const parsedBody = strictObject(responseBytes, "atomic private settlement response");
       exactFields(parsedBody, responseFields(route), "atomic private settlement response");
+      if (route.endsWith("/bundles")) validateBundleAdmission(parsedBody);
       if (identity?.field !== undefined && parsedBody[identity.field] !== identity.value.jsonLiteral) {
         throw new TypeError("settlement response identifier is substituted");
       }
@@ -631,7 +657,6 @@ export class AtomicPrivateSettlementToriiClientV1 {
       if (error instanceof AtomicPrivateSettlementToriiErrorV1) throw error;
       throw new AtomicPrivateSettlementToriiErrorV1(
         "atomic private settlement response is invalid",
-        { cause: error },
       );
     }
   }

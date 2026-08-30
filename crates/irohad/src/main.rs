@@ -4431,9 +4431,13 @@ impl NetworkRelayShared {
             ),
             LaneBlockVote(vote) => {
                 let label = match vote.body.phase {
-                    iroha_core::sumeragi::consensus::Phase::Prepare => "LaneBlockPrepareVote",
-                    iroha_core::sumeragi::consensus::Phase::Commit => "LaneBlockVote",
-                    iroha_core::sumeragi::consensus::Phase::NewView => "LaneBlockNewViewVote",
+                    iroha_data_model::block::consensus::CertPhase::Prepare => {
+                        "LaneBlockPrepareVote"
+                    }
+                    iroha_data_model::block::consensus::CertPhase::Commit => "LaneBlockVote",
+                    iroha_data_model::block::consensus::CertPhase::NewView => {
+                        "LaneBlockNewViewVote"
+                    }
                 };
                 (
                     label,
@@ -4443,9 +4447,13 @@ impl NetworkRelayShared {
             }
             LaneBlockQc(qc) => {
                 let label = match qc.body.phase {
-                    iroha_core::sumeragi::consensus::Phase::Prepare => "LaneBlockPrepareCert",
-                    iroha_core::sumeragi::consensus::Phase::Commit => "LaneBlockCert",
-                    iroha_core::sumeragi::consensus::Phase::NewView => "LaneBlockNewViewCert",
+                    iroha_data_model::block::consensus::CertPhase::Prepare => {
+                        "LaneBlockPrepareCert"
+                    }
+                    iroha_data_model::block::consensus::CertPhase::Commit => "LaneBlockCert",
+                    iroha_data_model::block::consensus::CertPhase::NewView => {
+                        "LaneBlockNewViewCert"
+                    }
                 };
                 (
                     label,
@@ -4586,11 +4594,8 @@ mod network_relay_tests {
             LaneBlockNewViewBodyV1, LaneBlockNewViewCertificateV1, LaneBlockNewViewVoteV1,
             LaneDrainVoteV1, LaneExecutablePayloadV1,
         },
-        sumeragi::{
-            consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, Phase},
-            message::{
-                BlockMessage, BlockMessageWire, KURA_REPLICA_ADVERT_VERSION_V1, KuraReplicaAdvertV1,
-            },
+        sumeragi::message::{
+            BlockMessage, BlockMessageWire, KURA_REPLICA_ADVERT_VERSION_V1, KuraReplicaAdvertV1,
         },
         torii_proxy::{
             TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
@@ -4604,6 +4609,7 @@ mod network_relay_tests {
         NetworkId,
         block::{
             BlockHeader,
+            consensus::{CertPhase, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1},
             consensus_v2::{
                 self, CommitCertificateRequest, ConsensusMessageV2, ConsensusMessageV2Payload,
                 HeightContextId, PROTOCOL_VERSION,
@@ -5571,7 +5577,7 @@ mod network_relay_tests {
             bls_aggregate_signature: vec![0xDD],
         }
     }
-    fn sample_lane_block_vote(phase: Phase) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
+    fn sample_lane_block_vote(phase: CertPhase) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
         let proposal = sample_lane_block_proposal();
         iroha_core::lane_consensus::LaneBlockVoteV1 {
             body: proposal.vote_body(phase),
@@ -5580,7 +5586,7 @@ mod network_relay_tests {
             bls_signature: vec![0xAA],
         }
     }
-    fn sample_lane_block_qc(phase: Phase) -> LaneBlockQcV1 {
+    fn sample_lane_block_qc(phase: CertPhase) -> LaneBlockQcV1 {
         let proposal = sample_lane_block_proposal();
         LaneBlockQcV1 {
             body: proposal.vote_body(phase),
@@ -5595,10 +5601,10 @@ mod network_relay_tests {
     fn lane_block_proposal_msg() -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::LaneBlockProposal(sample_lane_block_proposal()))
     }
-    fn lane_block_vote_msg(phase: Phase) -> iroha_core::NetworkMessage {
+    fn lane_block_vote_msg(phase: CertPhase) -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::LaneBlockVote(sample_lane_block_vote(phase)))
     }
-    fn lane_block_qc_msg(phase: Phase) -> iroha_core::NetworkMessage {
+    fn lane_block_qc_msg(phase: CertPhase) -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::LaneBlockQc(sample_lane_block_qc(phase)))
     }
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
@@ -5668,8 +5674,8 @@ mod network_relay_tests {
         let chunk = sumeragi_msg(v2_payload_chunk_block_message());
         let request = sumeragi_msg(sumeragi_v2_commit_certificate_request());
         let lane_proposal = lane_block_proposal_msg();
-        let lane_vote = lane_block_vote_msg(Phase::Prepare);
-        let lane_qc = lane_block_qc_msg(Phase::Commit);
+        let lane_vote = lane_block_vote_msg(CertPhase::Prepare);
+        let lane_qc = lane_block_qc_msg(CertPhase::Commit);
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
                 rate_per_sec: nz_u32(1),
@@ -5769,25 +5775,25 @@ mod network_relay_tests {
         );
         assert_eq!(
             NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockVote(
-                sample_lane_block_vote(Phase::Prepare)
+                sample_lane_block_vote(CertPhase::Prepare)
             )),
             ("LaneBlockPrepareVote", Some(5), Some(7))
         );
         assert_eq!(
             NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockVote(
-                sample_lane_block_vote(Phase::Commit)
+                sample_lane_block_vote(CertPhase::Commit)
             )),
             ("LaneBlockVote", Some(5), Some(7))
         );
         assert_eq!(
             NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockQc(
-                sample_lane_block_qc(Phase::Prepare)
+                sample_lane_block_qc(CertPhase::Prepare)
             )),
             ("LaneBlockPrepareCert", Some(5), Some(7))
         );
         assert_eq!(
             NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockQc(
-                sample_lane_block_qc(Phase::Commit)
+                sample_lane_block_qc(CertPhase::Commit)
             )),
             ("LaneBlockCert", Some(5), Some(7))
         );
@@ -8180,6 +8186,7 @@ impl Iroha {
             _computed_bls_domain,
             consensus_caps,
             signed_block_cadence_ms,
+            maximum_validator_roster_len,
             confidential_features,
         ) = if emergency_fast {
             debug_assert!(!snapshot_bootstrap_active);
@@ -8195,7 +8202,7 @@ impl Iroha {
                         state.sccp_policy_hash_snapshot(),
                     )),
                 );
-            let (mode_tag, bls_domain, caps, block_cadence_ms) = consensus_caps_from_genesis(
+            let (mode_tag, bls_domain, caps, block_cadence_ms, maximum_validator_roster_len) = consensus_caps_from_genesis(
                 effective_genesis.expect("normal startup has signed genesis metadata"),
                 &config_caps,
                 &config.sumeragi,
@@ -8210,6 +8217,7 @@ impl Iroha {
                 bls_domain,
                 caps,
                 block_cadence_ms,
+                maximum_validator_roster_len,
                 confidential_features,
             )
         } else {
@@ -8221,7 +8229,7 @@ impl Iroha {
                 view.sccp_registry.as_ref(),
                 height,
             );
-            let (mode_tag, bls_domain, caps, block_cadence_ms) = if snapshot_bootstrap_active {
+            let (mode_tag, bls_domain, caps, block_cadence_ms, maximum_validator_roster_len) = if snapshot_bootstrap_active {
                 let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
                     view.world(),
                     height,
@@ -8230,6 +8238,15 @@ impl Iroha {
                     signed_consensus_mode,
                     signed_v2_genesis_context,
                 )?;
+                let maximum_validator_roster_len =
+                    authenticated_snapshot_maximum_validator_roster_len(
+                        signed_consensus_mode,
+                        authenticated_snapshot_bootstrap
+                            .as_ref()
+                            .expect("snapshot bootstrap branch has an authenticated record"),
+                        view.world(),
+                    )
+                    .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
                 (
                     mode_tag,
                     bls_domain,
@@ -8239,6 +8256,7 @@ impl Iroha {
                         .sumeragi()
                         .block_cadence_ms()
                         .get(),
+                    maximum_validator_roster_len,
                 )
             } else {
                 consensus_caps_from_genesis(
@@ -8257,10 +8275,20 @@ impl Iroha {
                 bls_domain,
                 caps,
                 block_cadence_ms,
+                maximum_validator_roster_len,
                 confidential_features,
             )
         };
         let authenticated_block_cadence = Duration::from_millis(signed_block_cadence_ms);
+        if !emergency_fast {
+            validate_authenticated_sumeragi_ingress_geometry(
+                &config.sumeragi,
+                authenticated_block_cadence,
+                signed_consensus_mode,
+                maximum_validator_roster_len,
+            )
+            .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+        }
         if !emergency_fast
             && state.committed_height() > 0
             && state.sumeragi_block_cadence() != authenticated_block_cadence
@@ -8416,7 +8444,13 @@ impl Iroha {
                     "non-empty block store detected; using stored genesis for restart",
                 );
             } else {
-                let (fresh_mode_tag, _fresh_bls_domain, fresh_caps, fresh_block_cadence_ms) =
+                let (
+                    fresh_mode_tag,
+                    _fresh_bls_domain,
+                    fresh_caps,
+                    fresh_block_cadence_ms,
+                    fresh_maximum_validator_roster_len,
+                ) =
                     consensus_caps_from_genesis(genesis_block, &config_caps, &config.sumeragi)
                         .ok_or_else(|| {
                             Report::new(StartError::InitKura).attach(
@@ -8426,6 +8460,11 @@ impl Iroha {
                 if fresh_block_cadence_ms != signed_block_cadence_ms {
                     return Err(Report::new(StartError::InitKura).attach(
                         "fresh signed genesis cadence differs from the handshake opened for bootstrap",
+                    ));
+                }
+                if fresh_maximum_validator_roster_len != maximum_validator_roster_len {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "fresh signed genesis validator ceiling differs from the authenticated startup ceiling",
                     ));
                 }
                 verify_genesis_metadata(
@@ -12431,7 +12470,7 @@ metadata = {}
         .expect("multilane config")
     }
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "6c24bbb896e1270836d3fa4fbe71a35bedfefc6e5658f4e3e6bffae2c71269e5";
+        "2c2a75cb5d97b1c50dcdc6c5e5d900cde7f4011cf7761ebf5c3cbd9d5404c9e5";
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
@@ -12556,6 +12595,10 @@ metadata = {}
             .collect();
         assert_eq!(dataspace_aliases, ["universal"]);
         assert!(nexus_topology_is_custom(&config.nexus));
+        assert!(
+            !config.torii.sorafs_storage.enabled,
+            "the portable Sora profile must not manufacture an embedded storage-provider role"
+        );
     }
     #[test]
     fn multilane_configuration_installs_custom_nexus_topology() {
@@ -12574,6 +12617,15 @@ metadata = {}
             "the unprovisioned profile must not be a runnable node config"
         );
         let config = load_unprovisioned_profile_for_inspection(&path);
+        assert!(
+            !config.torii.sorafs_storage.enabled,
+            "the portable Nexus template must leave provider storage explicit"
+        );
+        let signers = &config.torii.sorafs_storage.native_transaction_signers;
+        assert!(signers.proof_outcome.is_none());
+        assert!(signers.repair.is_none());
+        assert!(signers.reserve.is_none());
+        assert!(signers.orderbook.is_none());
         assert_eq!(config.nexus.dataspace_catalog.entries().len(), 1);
         assert!(nexus_topology_is_custom(&config.nexus));
         let lane_aliases: Vec<_> = config
@@ -12620,6 +12672,15 @@ metadata = {}
                 .expect("temp config path to string"),
         ]);
         let (config, _) = read_config_and_genesis(&args).expect("parse config with --sora");
+        assert!(
+            !config.torii.sorafs_storage.enabled,
+            "bare --sora must not manufacture an embedded storage-provider role"
+        );
+        let mut emitter = Emitter::new();
+        validate_config_runtime(&mut emitter, &config);
+        emitter
+            .into_result()
+            .expect("bare --sora must satisfy runtime configuration validation");
         let mut expected =
             Config::from_toml_source(TomlSource::inline(minimal_config_table())).expect("default");
         expected.apply_sora_profile();
@@ -12673,6 +12734,46 @@ metadata = {}
         assert!(
             !config.torii.sorafs_storage.enabled,
             "--sora must not override an explicit operator storage opt-out"
+        );
+    }
+    #[test]
+    fn sora_flag_preserves_explicit_storage_and_rejects_missing_compliance() {
+        let mut config_file = NamedTempFile::new().expect("create temp config");
+        let mut table = minimal_config_table();
+        iroha_config::base::toml::Writer::new(&mut table)
+            .write(["sorafs", "storage", "enabled"], true);
+        config_file
+            .write_all(
+                toml::to_string(&toml::Value::Table(table))
+                    .expect("render config")
+                    .as_bytes(),
+            )
+            .expect("write config");
+        let args = parse_args_from([
+            "iroha3d",
+            "--sora",
+            "--config",
+            config_file
+                .path()
+                .to_str()
+                .expect("temp config path to string"),
+        ]);
+        let (config, _) =
+            read_config_and_genesis(&args).expect("parse explicit storage configuration");
+        assert!(
+            config.torii.sorafs_storage.enabled,
+            "--sora must preserve an explicit operator storage request"
+        );
+        let mut emitter = Emitter::new();
+        validate_config_runtime(&mut emitter, &config);
+        let error = emitter
+            .into_result()
+            .expect_err("storage without governed compliance must fail closed");
+        assert!(
+            format!("{error:?}").contains(
+                "sorafs.storage.enabled requires the governed sorafs.gateway.compliance controller"
+            ),
+            "unexpected storage validation error: {error:?}"
         );
     }
     #[test]
@@ -14250,12 +14351,25 @@ fn validate_available_genesis_for_check(
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
         build_consensus_config_caps(&config.nexus, None, None).change_context(MainError::Config)?;
-    let (mode_tag, _bls_domain, consensus_caps, block_cadence_ms) =
+    let (
+        mode_tag,
+        _bls_domain,
+        consensus_caps,
+        block_cadence_ms,
+        maximum_validator_roster_len,
+    ) =
         consensus_caps_from_genesis(genesis, &config_caps, &config.sumeragi).ok_or_else(|| {
             Report::new(MainError::Config).attach(
                 "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
             )
         })?;
+    validate_authenticated_sumeragi_ingress_geometry(
+        &config.sumeragi,
+        Duration::from_millis(block_cadence_ms),
+        signed_mode,
+        maximum_validator_roster_len,
+    )
+    .map_err(|error| Report::new(MainError::Config).attach(error))?;
     verify_genesis_metadata(
         genesis,
         config,
@@ -14514,7 +14628,13 @@ fn consensus_caps_from_genesis(
     genesis: &GenesisBlock,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
     sumeragi: &iroha_config::parameters::actual::Sumeragi,
-) -> Option<(String, String, iroha_p2p::ConsensusHandshakeCaps, u64)> {
+) -> Option<(
+    String,
+    String,
+    iroha_p2p::ConsensusHandshakeCaps,
+    u64,
+    usize,
+)> {
     let mut params = iroha_data_model::parameter::Parameters::default();
     let mut handshake_entries = Vec::new();
     for tx in genesis.0.external_transactions() {
@@ -14557,6 +14677,31 @@ fn consensus_caps_from_genesis(
     if entry.consensus_fingerprint.into_bytes() != computed_fingerprint {
         return None;
     }
+    let (permissioned_roster_len, npos_max_validators) = match &consensus_params.mode {
+        iroha_data_model::block::consensus::ConsensusGenesisModeParams::Permissioned
+            if expected_mode
+                == iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned =>
+        {
+            (
+                iroha_core::sumeragi::signed_genesis_voting_peers(genesis)
+                    .ok()?
+                    .len(),
+                None,
+            )
+        }
+        iroha_data_model::block::consensus::ConsensusGenesisModeParams::Npos(npos)
+            if expected_mode == iroha_data_model::block::consensus_v2::ConsensusMode::Npos =>
+        {
+            (0, Some(npos.max_validators))
+        }
+        _ => return None,
+    };
+    let maximum_validator_roster_len = authenticated_maximum_validator_roster_len(
+        expected_mode,
+        permissioned_roster_len,
+        npos_max_validators,
+    )
+    .ok()?;
     let mut config_caps = *config_caps;
     config_caps.execution_policy_hash = entry.sumeragi_v2.execution_policy_hash;
     config_caps.v2_config_fingerprint = sumeragi
@@ -14577,7 +14722,96 @@ fn consensus_caps_from_genesis(
             config: config_caps,
         },
         consensus_params.block_cadence_ms.get(),
+        maximum_validator_roster_len,
     ))
+}
+
+fn authenticated_snapshot_maximum_validator_roster_len(
+    mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    bootstrap: &iroha_data_model::block::consensus_v2::SnapshotV2BootstrapRecord,
+    world: &impl iroha_core::state::WorldReadOnly,
+) -> Result<usize, String> {
+    authenticated_maximum_validator_roster_len(
+        mode,
+        bootstrap.context.roster.len(),
+        world
+            .sumeragi_npos_parameters()
+            .map(|parameters| parameters.max_validators()),
+    )
+}
+
+fn authenticated_maximum_validator_roster_len(
+    mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    permissioned_roster_len: usize,
+    npos_max_validators: Option<u32>,
+) -> Result<usize, String> {
+    match mode {
+        iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
+            Ok(permissioned_roster_len)
+        }
+        iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
+            let maximum = npos_max_validators.ok_or_else(|| {
+                "authenticated NPoS state is missing signed election parameters".to_owned()
+            })?;
+            let maximum = usize::try_from(maximum).map_err(|_| {
+                "authenticated NPoS maximum validator roster does not fit this platform"
+                    .to_owned()
+            })?;
+            if !iroha_data_model::block::consensus_v2::is_valid_committee_size(maximum) {
+                return Err(
+                    "authenticated NPoS maximum validator roster is not a bounded 3f + 1 committee"
+                        .to_owned(),
+                );
+            }
+            Ok(maximum)
+        }
+    }
+}
+
+fn validate_authenticated_sumeragi_ingress_geometry(
+    sumeragi: &iroha_config::parameters::actual::Sumeragi,
+    block_cadence: Duration,
+    mode: iroha_data_model::block::consensus_v2::ConsensusMode,
+    maximum_validator_roster_len: usize,
+) -> Result<(), String> {
+    sumeragi
+        .v2_config(block_cadence, mode)
+        .map_err(|error| format!("invalid authenticated Sumeragi v2 configuration: {error}"))?
+        .validate_ingress_roster_capacity(maximum_validator_roster_len)
+        .map_err(|error| {
+            format!(
+                "Sumeragi v2 ingress cannot admit the authenticated maximum roster of {maximum_validator_roster_len} validators: {error}"
+            )
+        })
+}
+
+#[cfg(test)]
+mod authenticated_sumeragi_ingress_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn permissioned_capacity_uses_the_frozen_roster() {
+        assert_eq!(
+            authenticated_maximum_validator_roster_len(
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                4,
+                None,
+            ),
+            Ok(4)
+        );
+    }
+
+    #[test]
+    fn npos_capacity_uses_the_signed_ceiling() {
+        assert_eq!(
+            authenticated_maximum_validator_roster_len(
+                iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+                4,
+                Some(31),
+            ),
+            Ok(31)
+        );
+    }
 }
 fn signed_v2_genesis_context_metadata(
     genesis: &GenesisBlock,
@@ -19065,7 +19299,7 @@ mod tests {
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("default consensus config caps");
-            let (_, _, _, cadence_ms) =
+            let (_, _, _, cadence_ms, _) =
                 consensus_caps_from_genesis(&genesis, &config_caps, &config.sumeragi)
                     .expect("canonical genesis consensus metadata");
             OfflineSemanticGenesisFixture {
@@ -19384,7 +19618,7 @@ mod tests {
                     .build_and_sign(&genesis_keys)?;
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
-            let (mode_tag, _bls_domain, consensus_caps, _) =
+            let (mode_tag, _bls_domain, consensus_caps, _, _) =
                 consensus_caps_from_genesis(&permissioned_genesis, &config_caps, &config.sumeragi)
                     .expect("permissioned signed genesis must produce canonical v2 caps");
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;

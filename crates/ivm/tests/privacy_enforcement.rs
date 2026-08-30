@@ -755,7 +755,7 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
     );
 }
 #[test]
-fn legacy_scalar_crypto_opcodes_never_declassify_private_operands() {
+fn poseidon_opcodes_never_declassify_private_operands() {
     fn program_fetching_private_operands(operands: &[u8], word: u32) -> Vec<u8> {
         let mut words = Vec::with_capacity(operands.len() * 4 + 1);
         for (index, register) in operands.iter().copied().enumerate() {
@@ -1095,11 +1095,11 @@ fn complete_public_overwrite_clears_private_stack_range() {
     assert!(!vm.registers.tag(3));
 }
 #[test]
-fn execution_proof_commit_preserves_private_stack_ranges() {
+fn execution_summary_preserves_private_stack_ranges() {
     let mut vm = vm_with_private_stack_word();
-    let _proof = vm.execution_proof();
+    let _summary = vm.execution_summary();
     vm.run()
-        .expect("proof commitment must not discard privacy metadata");
+        .expect("execution summary must not discard privacy metadata");
     assert_eq!(vm.register(3), 0xCAFE_BABE_DEAD_BEEF);
     assert!(vm.registers.tag(3));
 }

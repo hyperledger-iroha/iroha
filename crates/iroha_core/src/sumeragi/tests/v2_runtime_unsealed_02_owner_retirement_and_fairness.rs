@@ -1770,23 +1770,17 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
         );
         runtime.can_admit_network_message_with_ingress_ownership(message, &ownership)
     };
-    let mut transport_request = wire::CommitCertificateRequest {
-        protocol_version: wire::PROTOCOL_VERSION,
-        network_id: context.network_id,
-        context_id: context.id(),
-        height: context.height,
-        requester: authenticated_peer.clone(),
-        signature: Vec::new(),
-    };
-    transport_request.signature = Signature::new(
-        transport_key.private_key(),
-        &transport_request.signature_preimage(),
-    )
-    .payload()
-    .to_vec();
-    let transport = wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::CommitCertificateRequest(transport_request),
-    );
+    let transport = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(
+        wire::PayloadChunk {
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"runtime retransmission orphan chunk",
+            )),
+            index: 0,
+            bytes: Vec::new(),
+            sender: 0,
+            signature: vec![1],
+        },
+    ));
     let owner_tag = enqueue_network(&mut runtime, original.clone())
         .expect("first authenticated proposal owns one normal slot");
     assert_eq!(runtime.queued_commands(), 1);

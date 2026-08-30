@@ -2,7 +2,8 @@ import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 } from "@noble/hashes/sha2";
 import {
@@ -10,6 +11,8 @@ import {
   noritoDecodeBlockProofs,
   noritoEncodeInstruction,
   noritoDecodeInstruction,
+  noritoDecodeInstructionBoxArchive,
+  noritoEncodeInstructionBoxArchive,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigContractCallApproveRequest,
@@ -835,6 +838,110 @@ baseTest("contract activation lifecycle instructions retain mandatory CAS revisi
       noritoDecodeInstruction(noritoEncodeInstruction(instruction)),
     );
     assert.deepEqual(decoded, instruction);
+  }
+});
+
+baseTest("pure instruction decoding is deterministic across process history", () => {
+  const contractAddress =
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  const instructions = [
+    {
+      SetContractParliamentDelegation: {
+        contract_address: contractAddress,
+        expected_revision: "9",
+        delegated: true,
+      },
+    },
+    {
+      OfferContractOwnership: {
+        contract_address: contractAddress,
+        expected_revision: "10",
+        new_owner: { owner: "Parliament", value: null },
+      },
+    },
+    {
+      AcceptContractOwnership: {
+        contract_address: contractAddress,
+        expected_revision: "12",
+      },
+    },
+    {
+      CancelContractOwnershipOffer: {
+        contract_address: contractAddress,
+        expected_revision: "13",
+      },
+    },
+    {
+      Kaigi: {
+        UnregisterKaigiRelay: {
+          relay_id: ACCOUNT_ID,
+        },
+      },
+    },
+  ];
+  const cacheSymbol = Symbol.for("iroha.js.noritoInstructionCache");
+  const previousCache = globalThis[cacheSymbol];
+  const poison = new Map();
+  globalThis[cacheSymbol] = poison;
+  try {
+    for (const instruction of instructions) {
+      const encoded = withMissingNativeBinding(() =>
+        noritoEncodeInstruction(instruction),
+      );
+      poison.set(encoded.toString("hex"), {
+        Log: { level: "ERROR", message: "forged cache entry" },
+      });
+      assert.deepEqual(
+        withMissingNativeBinding(() => noritoDecodeInstruction(encoded)),
+        instruction,
+      );
+      assert.deepEqual(
+        JSON.parse(
+          withMissingNativeBinding(() =>
+            noritoDecodeInstruction(encoded, { parseJson: false }),
+          ),
+        ),
+        instruction,
+      );
+
+      const archive = withMissingNativeBinding(() =>
+        noritoEncodeInstructionBoxArchive(instruction),
+      );
+      assert.deepEqual(
+        withMissingNativeBinding(() =>
+          noritoDecodeInstructionBoxArchive(archive),
+        ),
+        instruction,
+      );
+
+      const moduleUrl = pathToFileURL(
+        path.join(repoRoot, "javascript", "iroha_js", "src", "norito.js"),
+      ).href;
+      const script = `
+        globalThis.__IROHA_NORITO_BINDING__ = Object.freeze({
+          noritoEncodeInstruction() { throw new Error("Native binding required"); },
+          noritoDecodeInstruction() { throw new Error("Native binding required"); },
+        });
+        const { noritoDecodeInstruction } = await import(${JSON.stringify(moduleUrl)});
+        const decoded = noritoDecodeInstruction(
+          Buffer.from(${JSON.stringify(encoded.toString("base64"))}, "base64"),
+          { parseJson: false },
+        );
+        process.stdout.write(decoded);
+      `;
+      const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+        encoding: "utf8",
+      });
+      assert.equal(child.status, 0, child.stderr);
+      assert.deepEqual(JSON.parse(child.stdout), instruction);
+    }
+    assert.equal(poison.size, instructions.length);
+  } finally {
+    if (previousCache === undefined) {
+      delete globalThis[cacheSymbol];
+    } else {
+      globalThis[cacheSymbol] = previousCache;
+    }
   }
 });
 

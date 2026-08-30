@@ -29,8 +29,8 @@ use iroha_core::{
 use iroha_data_model::{
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
-        MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentNoResultKindV1, ProposalContentId,
-        ProposalKind, SccpRouteGovernanceProposal,
+        MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1, MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
+        ParliamentNoResultKindV1, ProposalContentId, ProposalKind, SccpRouteGovernanceProposal,
     },
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
     smart_contract::manifest::{EntryPointKind, ManifestProvenance},
@@ -42,8 +42,7 @@ use iroha_torii_shared::governance_proposal_api::{
     SccpRouteGovernanceProposalDraftResponseV1,
 };
 use iroha_torii_shared::parliament_api::{
-    PARLIAMENT_API_VERSION_V1, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1,
-    PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_CHAIN_BYTES_V1,
+    PARLIAMENT_API_VERSION_V1, PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_CHAIN_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
     PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentAttemptDraftRequestV1,
     ParliamentAttemptDraftResponseV1, ParliamentAttemptReadResponseV1,
@@ -902,7 +901,7 @@ pub async fn handle_gov_parliament_attempt_read(
         })?;
     let state_payload = norito::core::to_bytes_bounded(
         attempt,
-        PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1,
+        MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1,
     )
     .map_err(|_| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -2591,7 +2590,7 @@ pub async fn handle_ministry_agenda_proposal_get(
         record,
     }))
 }
-/// POST /v1/gov/ballot/plain — accept a plain quadratic ballot and build an instruction skeleton.
+/// POST /v1/gov/ballots/plain — accept a plain quadratic ballot and build an instruction skeleton.
 ///
 /// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
@@ -5245,6 +5244,37 @@ seiyaku GovernedReadFixture {
             v.get("tx_instructions")
                 .and_then(|x| x.as_array())
                 .is_some()
+        );
+
+        let invalid_dto = super::ZkBallotV1Dto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            network_id: *state.network_id_ref(),
+            election_id: "ref-1".to_string(),
+            backend: "halo2/ipa".to_string(),
+            envelope_b64: String::new(),
+            root_hint: None,
+            owner: None,
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+            nullifier: None,
+        };
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/v1/gov/ballots/zk-v1")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                norito::json::to_vec(&norito::json::to_value(&invalid_dto).unwrap()).unwrap(),
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let error: crate::ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
+        assert_eq!(error.code(), "query_validation_failed");
+        assert_eq!(
+            error.message(),
+            "envelope_b64 must be non-empty canonical base64"
         );
     }
     #[tokio::test]

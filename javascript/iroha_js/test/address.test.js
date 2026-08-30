@@ -14,7 +14,6 @@ import {
   decodeI105AccountAddress,
   encodeI105AccountAddress,
   inspectAccountId,
-  configureCurveSupport,
 } from "../src/address.js";
 import * as sourceAddressModule from "../src/address.js";
 import {
@@ -123,81 +122,26 @@ function oneMemberMultisigCanonicalBytes(curve, publicKey) {
   ]);
 }
 
-test("configureCurveSupport validates options and gating toggles", () => {
-  configureCurveSupport();
-  try {
-    for (const value of [null, [], "allow"]) {
-      assert.throws(
-        () => configureCurveSupport(value),
-        (error) =>
-          error instanceof TypeError &&
-          /configureCurveSupport options must be an object/.test(error.message),
-      );
-    }
-    assert.throws(
-      () => configureCurveSupport({ allowMlDsa: "yes" }),
-      (error) =>
-        error instanceof TypeError &&
-        /options\.allowMlDsa must be a boolean/.test(error.message),
-    );
-    assert.throws(
-      () => configureCurveSupport({ allowGost: 1 }),
-      (error) =>
-        error instanceof TypeError &&
-        /options\.allowGost must be a boolean/.test(error.message),
-    );
-    assert.throws(
-      () => configureCurveSupport({ allowSm2: "true" }),
-      (error) =>
-        error instanceof TypeError &&
-        /options\.allowSm2 must be a boolean/.test(error.message),
-    );
-    assert.throws(
-      () => configureCurveSupport({ allowMlDsa: true, allowBls: true, extra: true }),
-      (error) =>
-        error instanceof TypeError &&
-        /unsupported fields: extra/.test(error.message),
-    );
-
-    assert.throws(
-      () =>
-        AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
-          algorithm: "ml-dsa",
-        }),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-    );
-
-    configureCurveSupport({ allowMlDsa: true });
-    const singleMlDsaAddress = AccountAddress.fromAccount({
+test("the complete V1 curve registry is deterministic and has no mutable gate", () => {
+  for (const addressModule of [sourceAddressModule, distAddressModule]) {
+    assert.equal("configureCurveSupport" in addressModule, false);
+    const singleMlDsaAddress = addressModule.AccountAddress.fromAccount({
       publicKey: ML_DSA_PUBLIC_KEY,
       algorithm: "ml-dsa",
     });
     assert.ok(singleMlDsaAddress.toI105().startsWith("sora"));
-    const mlDsaAddress = new AccountAddress(
+    const mlDsaAddress = new addressModule.AccountAddress(
       { version: 0, classId: 1, normVersion: 1, extFlag: false },
       {
         tag: 1,
         version: 1,
         threshold: 1,
         members: [
-          { curve: curveIdFromAlgorithm("ml-dsa"), weight: 1, publicKey: ML_DSA_PUBLIC_KEY },
+          { curve: addressModule.curveIdFromAlgorithm("ml-dsa"), weight: 1, publicKey: ML_DSA_PUBLIC_KEY },
         ],
       },
     );
     assert.ok(mlDsaAddress.toI105().startsWith("sora"));
-    assert.throws(
-      () =>
-        AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
-          algorithm: "gost512a",
-        }),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-    );
-  } finally {
-    configureCurveSupport();
   }
 });
 
@@ -206,8 +150,6 @@ test("ML-DSA single-key controllers use the canonical extended wire form", () =>
     ["src", sourceAddressModule],
     ["dist", distAddressModule],
   ]) {
-    addressModule.configureCurveSupport({ allowMlDsa: true });
-    try {
       const address = addressModule.AccountAddress.fromAccount({
         publicKey: ML_DSA_PUBLIC_KEY,
         algorithm: "ml-dsa",
@@ -239,9 +181,6 @@ test("ML-DSA single-key controllers use the canonical extended wire form", () =>
         `${label} I105 canonical round-trip`,
       );
       assert.equal(decodedI105.toI105(), i105, `${label} I105 text round-trip`);
-    } finally {
-      addressModule.configureCurveSupport();
-    }
   }
 });
 
@@ -293,8 +232,6 @@ test("canonical decoding rejects reserved headers and controller class mismatche
       );
     }
 
-    addressModule.configureCurveSupport({ allowMlDsa: true });
-    try {
       const extendedWrongClass = Buffer.from(
         addressModule.AccountAddress.fromAccount({
           publicKey: ML_DSA_PUBLIC_KEY,
@@ -309,9 +246,6 @@ test("canonical decoding rejects reserved headers and controller class mismatche
           error.code === addressModule.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
         `${label} rejects extended ML-DSA header/controller mismatch`,
       );
-    } finally {
-      addressModule.configureCurveSupport();
-    }
 
     assert.throws(
       () => addressModule.AccountAddress.fromI105(WRONG_CLASS_SINGLE_I105, 753),
@@ -341,8 +275,6 @@ test("ML-DSA key validation rejects non-protocol shapes at shared address bounda
     ["src", sourceAddressModule],
     ["dist", distAddressModule],
   ]) {
-    addressModule.configureCurveSupport({ allowMlDsa: true });
-    try {
       for (const length of invalidLengths) {
         const publicKey = new Uint8Array(length).fill(0x5a);
         assert.throws(
@@ -399,9 +331,6 @@ test("ML-DSA key validation rejects non-protocol shapes at shared address bounda
           `${label} ${boundary} rejects all-zero ML-DSA`,
         );
       }
-    } finally {
-      addressModule.configureCurveSupport();
-    }
   }
 });
 
@@ -410,8 +339,6 @@ test("single-key and multisig wire decoders enforce canonical ML-DSA shapes", ()
     ["src", sourceAddressModule],
     ["dist", distAddressModule],
   ]) {
-    addressModule.configureCurveSupport({ allowMlDsa: true });
-    try {
       const compactEd25519 = singleKeyCanonicalBytes(0x00, 0x01, DEFAULT_PUBLIC_KEY);
       assert.deepEqual(
         Buffer.from(
@@ -452,9 +379,6 @@ test("single-key and multisig wire decoders enforce canonical ML-DSA shapes", ()
           /all-zero/u.test(error.message),
         `${label} rejects an all-zero ML-DSA multisig member`,
       );
-    } finally {
-      addressModule.configureCurveSupport();
-    }
   }
 });
 
@@ -757,12 +681,10 @@ test("fromAccount rejects control and Unicode-confusable curve algorithm aliases
   }
 });
 
-test("curve registry accepts only the protocol ML-DSA-65 aliases in src and dist", () => {
+test("curve registry accepts only the canonical ML-DSA label in src and dist", () => {
   for (const addressModule of [sourceAddressModule, distAddressModule]) {
-    addressModule.configureCurveSupport({ allowMlDsa: true });
-    try {
-      for (const algorithm of [
-        "ml-dsa",
+    assert.equal(addressModule.curveIdFromAlgorithm("ml-dsa"), 2);
+    for (const algorithm of [
         "mldsa",
         "ml_dsa",
         "mldsa65",
@@ -773,10 +695,6 @@ test("curve registry accepts only the protocol ML-DSA-65 aliases in src and dist
         "ML_DSA_65",
         "ml_dsa-65",
         "ML_DSA-65",
-      ]) {
-        assert.equal(addressModule.curveIdFromAlgorithm(algorithm), 2, algorithm);
-      }
-      for (const algorithm of [
         "MLDSA44",
         "MLDSA87",
         "ML-DSA-44",
@@ -785,17 +703,14 @@ test("curve registry accepts only the protocol ML-DSA-65 aliases in src and dist
         "ML_DSA_87",
         "ML_DSA-44",
         "ML_DSA-87",
-      ]) {
-        assert.throws(
-          () => addressModule.curveIdFromAlgorithm(algorithm),
-          (error) =>
-            error instanceof addressModule.AccountAddressError &&
-            error.code === addressModule.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-          algorithm,
-        );
-      }
-    } finally {
-      addressModule.configureCurveSupport();
+    ]) {
+      assert.throws(
+        () => addressModule.curveIdFromAlgorithm(algorithm),
+        (error) =>
+          error instanceof addressModule.AccountAddressError &&
+          error.code === addressModule.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
+        algorithm,
+      );
     }
   }
 });
@@ -881,120 +796,22 @@ test("displayFormats validates chain discriminant input", () => {
   );
 });
 
-test("configureCurveSupport gates optional curves at encode/decode time", () => {
-  configureCurveSupport();
-  try {
-    const secpAddress = AccountAddress.fromAccount({
-      publicKey: SECP256K1_PUBLIC_KEY,
-      algorithm: "secp256k1",
-    });
-    const secpI105 = secpAddress.toI105();
-    const { address: parsedSecp } = AccountAddress.parseEncoded(secpI105);
-    assert.deepEqual(
-      Buffer.from(parsedSecp.canonicalBytes()),
-      Buffer.from(secpAddress.canonicalBytes()),
-    );
-
-    assert.throws(
-      () =>
-        AccountAddress.fromAccount({ publicKey: GOST256_PUBLIC_KEY,
-          algorithm: "gost256a",
-        }),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-    );
-
-    configureCurveSupport({ allowGost: true });
-    const gostAddress = AccountAddress.fromAccount({ publicKey: GOST256_PUBLIC_KEY,
-      algorithm: "gost256a",
-    });
-    const gostI105 = gostAddress.toI105();
-    const { address: parsedGost } = AccountAddress.parseEncoded(gostI105);
-    assert.deepEqual(
-      Buffer.from(parsedGost.canonicalBytes()),
-      Buffer.from(gostAddress.canonicalBytes()),
-    );
-
-    configureCurveSupport();
-    assert.throws(
-      () => AccountAddress.parseEncoded(gostI105),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-    );
-
-    assert.throws(
-      () =>
-        AccountAddress.fromAccount({ publicKey: SM2_PUBLIC_KEY,
-          algorithm: "sm2",
-        }),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-    );
-
-    configureCurveSupport({ allowSm2: true });
-    const sm2Address = AccountAddress.fromAccount({ publicKey: SM2_PUBLIC_KEY,
-      algorithm: "sm2",
-    });
-    const sm2I105 = sm2Address.toI105();
-    const { address: parsed } = AccountAddress.parseEncoded(sm2I105);
+test("every V1 curve round-trips without process-wide configuration", () => {
+  for (const [algorithm, publicKey] of [
+    ["secp256k1", SECP256K1_PUBLIC_KEY],
+    ["gost256a", GOST256_PUBLIC_KEY],
+    ["sm2", SM2_PUBLIC_KEY],
+    ["bls_normal", BLS_NORMAL_PUBLIC_KEY],
+    ["bls_small", BLS_SMALL_PUBLIC_KEY],
+  ]) {
+    const address = AccountAddress.fromAccount({ publicKey, algorithm });
+    const encoded = address.toI105();
+    const { address: parsed } = AccountAddress.parseEncoded(encoded);
     assert.deepEqual(
       Buffer.from(parsed.canonicalBytes()),
-      Buffer.from(sm2Address.canonicalBytes()),
+      Buffer.from(address.canonicalBytes()),
+      algorithm,
     );
-
-    configureCurveSupport();
-    assert.throws(
-      () => AccountAddress.parseEncoded(sm2I105),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-    );
-
-    assert.throws(
-      () =>
-        AccountAddress.fromAccount({
-          publicKey: BLS_NORMAL_PUBLIC_KEY,
-          algorithm: "bls_normal",
-        }),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-    );
-
-    configureCurveSupport({ allowBls: true });
-    const blsNormalAddress = AccountAddress.fromAccount({
-      publicKey: BLS_NORMAL_PUBLIC_KEY,
-      algorithm: "bls_normal",
-    });
-    const blsSmallAddress = AccountAddress.fromAccount({
-      publicKey: BLS_SMALL_PUBLIC_KEY,
-      algorithm: "bls_small",
-    });
-    const blsNormalI105 = blsNormalAddress.toI105();
-    const blsSmallI105 = blsSmallAddress.toI105();
-    const { address: parsedBlsNormal } = AccountAddress.parseEncoded(blsNormalI105);
-    const { address: parsedBlsSmall } = AccountAddress.parseEncoded(blsSmallI105);
-    assert.deepEqual(
-      Buffer.from(parsedBlsNormal.canonicalBytes()),
-      Buffer.from(blsNormalAddress.canonicalBytes()),
-    );
-    assert.deepEqual(
-      Buffer.from(parsedBlsSmall.canonicalBytes()),
-      Buffer.from(blsSmallAddress.canonicalBytes()),
-    );
-
-    configureCurveSupport();
-    assert.throws(
-      () => AccountAddress.parseEncoded(blsNormalI105),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
-    );
-  } finally {
-    configureCurveSupport();
   }
 });
 

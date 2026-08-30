@@ -9,11 +9,12 @@
 //! Platforms without descriptor-relative, no-follow directory and file operations reject safety
 //! WAL storage as unsupported; lexical path checks are not an authenticated storage substitute.
 use super::v2_core::{
-    SAFETY_WAL_FILE_HEADER_LEN as FILE_HEADER_LEN, SAFETY_WAL_FRAME_HEADER_LEN as FRAME_HEADER_LEN,
-    SAFETY_WAL_FRAME_MAGIC as FRAME_MAGIC, SAFETY_WAL_HASH_LEN as HASH_LEN,
-    SAFETY_WAL_MAX_RECORD_BYTES as MAX_RECORD_BYTES, WalAppendError, WalAppendIo, WalAppendState,
-    WalCodecError, WalFileIdentity, WalFrameCorruption, WalHeaderCorruption, WalIdentityField,
-    WalIoStage, WalRetirementAuthorization, encode_wal_file_header, recover_wal_file,
+    ContextId, SAFETY_WAL_FILE_HEADER_LEN as FILE_HEADER_LEN,
+    SAFETY_WAL_FRAME_HEADER_LEN as FRAME_HEADER_LEN, SAFETY_WAL_FRAME_MAGIC as FRAME_MAGIC,
+    SAFETY_WAL_HASH_LEN as HASH_LEN, SAFETY_WAL_MAX_RECORD_BYTES as MAX_RECORD_BYTES,
+    WalAppendError, WalAppendIo, WalAppendState, WalCodecError, WalFileIdentity,
+    WalFrameCorruption, WalHeaderCorruption, WalIdentityField, WalIoStage,
+    WalRetirementAuthorization, encode_wal_file_header, recover_wal_file,
 };
 #[cfg(all(test, unix, not(target_os = "espidf")))]
 use super::v2_core::{
@@ -34,12 +35,13 @@ use std::{
 };
 use thiserror::Error;
 #[cfg(all(test, unix, not(target_os = "espidf")))]
-const FILE_HEADER_PREFIX_LEN: usize = FILE_MAGIC.len() + 2 + 2 + HASH_LEN + HASH_LEN;
+const FILE_HEADER_PREFIX_LEN: usize = FILE_MAGIC.len() + 2 + 2 + HASH_LEN + HASH_LEN + 8 + HASH_LEN;
 /// Maximum complete frames retained by one height-local safety WAL.
 pub(crate) const SAFETY_WAL_MAX_RECORDS: usize = 8 * 1024;
 /// Maximum combined payload bytes retained by one height-local safety WAL.
 pub(crate) const SAFETY_WAL_MAX_TOTAL_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 const SAFETY_WAL_RECOVERY_SCRATCH_BYTES: usize = 64 * 1024;
+const WAL_INITIALIZATION_TEMPORARY_SUFFIX: &str = ".initializing";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WalRetentionLimits {
     max_records: usize,
@@ -114,7 +116,7 @@ pub(crate) enum SafetyWalError {
         /// Validation failure.
         reason: &'static str,
     },
-    /// The WAL belongs to another network, protocol, or consensus key.
+    /// The WAL belongs to another protocol, network, height context, height, or consensus key.
     #[error("sumeragi safety WAL identity mismatch at {path}: {field}")]
     IdentityMismatch {
         /// WAL path.
@@ -209,6 +211,51 @@ struct BoundSafetyWalDirectory {
     directory: File,
     #[cfg(all(unix, not(target_os = "espidf")))]
     identity: (u64, u64),
+}
+#[cfg(all(unix, not(target_os = "espidf")))]
+struct WalInitializationDirectoryLock<'directory> {
+    directory: &'directory File,
+}
+#[cfg(all(unix, not(target_os = "espidf")))]
+impl<'directory> WalInitializationDirectoryLock<'directory> {
+    fn acquire(directory: &'directory File) -> io::Result<Self> {
+        #[cfg(not(any(
+            target_os = "horizon",
+            target_os = "solaris",
+            target_os = "vita",
+            target_os = "wasi"
+        )))]
+        {
+            rustix::fs::flock(directory, rustix::fs::FlockOperation::LockExclusive)
+                .map_err(io::Error::from)?;
+            Ok(Self { directory })
+        }
+        #[cfg(any(
+            target_os = "horizon",
+            target_os = "solaris",
+            target_os = "vita",
+            target_os = "wasi"
+        ))]
+        {
+            let _ = directory;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "exclusive safety WAL initialization locking is unavailable on this platform",
+            ))
+        }
+    }
+}
+#[cfg(all(unix, not(target_os = "espidf")))]
+impl Drop for WalInitializationDirectoryLock<'_> {
+    fn drop(&mut self) {
+        #[cfg(not(any(
+            target_os = "horizon",
+            target_os = "solaris",
+            target_os = "vita",
+            target_os = "wasi"
+        )))]
+        let _ = rustix::fs::flock(self.directory, rustix::fs::FlockOperation::Unlock);
+    }
 }
 /// Private descriptor-relative owner of one fixed safety-WAL-adjacent entry.
 #[derive(Debug)]
@@ -371,63 +418,178 @@ impl BoundSafetyWalDirectory {
             Err(unsupported_storage_binding_io())
         }
     }
-    fn open_wal_leaf(&self, name: &OsStr) -> io::Result<(File, bool)> {
+    fn open_existing_wal_leaf(&self, name: &OsStr) -> io::Result<Option<File>> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
             self.verify_linked()?;
-            let (created, flags, existing_identity) = match rustix::fs::statat(
+            let existing = match rustix::fs::statat(
                 &self.directory,
                 name,
                 rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
             ) {
                 Ok(stat) => {
                     ensure_unix_regular_single_link_stat(&stat)?;
-                    (
-                        false,
-                        rustix::fs::OFlags::RDWR
-                            | rustix::fs::OFlags::NOFOLLOW
-                            | rustix::fs::OFlags::CLOEXEC,
-                        Some((stat.st_dev as u64, stat.st_ino as u64)),
-                    )
+                    stat
                 }
-                Err(rustix::io::Errno::NOENT) => (
-                    true,
-                    rustix::fs::OFlags::RDWR
-                        | rustix::fs::OFlags::CREATE
-                        | rustix::fs::OFlags::EXCL
-                        | rustix::fs::OFlags::NOFOLLOW
-                        | rustix::fs::OFlags::CLOEXEC,
-                    None,
-                ),
+                Err(rustix::io::Errno::NOENT) => {
+                    self.verify_linked()?;
+                    return Ok(None);
+                }
                 Err(error) => return Err(io::Error::from(error)),
             };
             let file = File::from(
                 rustix::fs::openat(
                     &self.directory,
                     name,
-                    flags,
+                    rustix::fs::OFlags::RDWR
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
                     rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
                 )
                 .map_err(io::Error::from)?,
             );
-            if let Some(expected_identity) = existing_identity {
-                let opened = file.metadata()?;
-                if unix_file_identity(&opened) != expected_identity {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "safety WAL leaf changed between inspection and open",
-                    ));
-                }
+            let opened = file.metadata()?;
+            if unix_file_identity(&opened) != (existing.st_dev as u64, existing.st_ino as u64) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "safety WAL leaf changed between inspection and open",
+                ));
             }
             self.verify_leaf(&file, name)?;
             self.verify_linked()?;
-            Ok((file, created))
+            Ok(Some(file))
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
             let _ = name;
             Err(unsupported_storage_binding_io())
         }
+    }
+    fn publish_initialized_wal_leaf(
+        &self,
+        name: &OsStr,
+        header: &[u8; FILE_HEADER_LEN],
+    ) -> io::Result<File> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            self.verify_linked()?;
+            let _initialization_lock = WalInitializationDirectoryLock::acquire(&self.directory)?;
+            match rustix::fs::statat(&self.directory, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => {
+                    ensure_unix_regular_single_link_stat(&stat)?;
+                    return Err(io::Error::from(rustix::io::Errno::EXIST));
+                }
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(error) => return Err(io::Error::from(error)),
+            }
+            let temporary = wal_initialization_temporary_name(name);
+            self.remove_stale_wal_initialization(&temporary, header.len())?;
+            let mut file = File::from(
+                rustix::fs::openat(
+                    &self.directory,
+                    &temporary,
+                    rustix::fs::OFlags::RDWR
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::EXCL
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .map_err(io::Error::from)?,
+            );
+            let publication = (|| -> io::Result<()> {
+                self.verify_leaf(&file, &temporary)?;
+                file.write_all(header)?;
+                file.flush()?;
+                file.sync_all()?;
+                self.verify_leaf(&file, &temporary)?;
+                if file.metadata()?.len() != u64::try_from(header.len()).unwrap_or(u64::MAX) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "safety WAL initialization temporary has the wrong length",
+                    ));
+                }
+                self.verify_linked()?;
+                rename_wal_leaf_noreplace(&self.directory, &temporary, name)?;
+                self.verify_leaf(&file, name)?;
+                self.sync()?;
+                let durable = file.metadata()?;
+                if !durable.is_file()
+                    || durable.nlink() != 1
+                    || durable.len() != u64::try_from(header.len()).unwrap_or(u64::MAX)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "published safety WAL header changed across directory sync",
+                    ));
+                }
+                self.verify_leaf(&file, name)
+            })();
+            if let Err(error) = publication {
+                let _ = self.unlink_exact_leaf(&temporary, &file);
+                return Err(error);
+            }
+            Ok(file)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (name, header);
+            Err(unsupported_storage_binding_io())
+        }
+    }
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn remove_stale_wal_initialization(
+        &self,
+        temporary: &OsStr,
+        maximum_header_len: usize,
+    ) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        self.verify_linked()?;
+        let linked = match rustix::fs::statat(
+            &self.directory,
+            temporary,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => return Ok(()),
+            Err(error) => return Err(io::Error::from(error)),
+        };
+        ensure_unix_regular_single_link_stat(&linked)?;
+        if linked.st_size < 0
+            || u64::try_from(linked.st_size).unwrap_or(u64::MAX)
+                > u64::try_from(maximum_header_len).unwrap_or(u64::MAX)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stale safety WAL initialization temporary has an impossible length",
+            ));
+        }
+        let file = File::from(
+            rustix::fs::openat(
+                &self.directory,
+                temporary,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(io::Error::from)?,
+        );
+        let opened = file.metadata()?;
+        if !opened.is_file()
+            || opened.nlink() != 1
+            || opened.dev() != linked.st_dev as u64
+            || opened.ino() != linked.st_ino as u64
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stale safety WAL initialization temporary changed while opening",
+            ));
+        }
+        self.unlink_exact_leaf(temporary, &file)
     }
     fn verify_leaf(&self, file: &File, name: &OsStr) -> io::Result<()> {
         #[cfg(all(unix, not(target_os = "espidf")))]
@@ -483,6 +645,55 @@ impl BoundSafetyWalDirectory {
             Err(unsupported_storage_binding_io())
         }
     }
+}
+fn wal_initialization_temporary_name(wal_name: &OsStr) -> OsString {
+    let mut temporary = wal_name.to_os_string();
+    temporary.push(WAL_INITIALIZATION_TEMPORARY_SUFFIX);
+    temporary
+}
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    )
+))]
+fn rename_wal_leaf_noreplace(
+    directory: &File,
+    source: &OsStr,
+    destination: &OsStr,
+) -> io::Result<()> {
+    rustix::fs::renameat_with(
+        directory,
+        source,
+        directory,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(io::Error::from)
+}
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))
+))]
+fn rename_wal_leaf_noreplace(
+    _directory: &File,
+    _source: &OsStr,
+    _destination: &OsStr,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic no-replace safety WAL publication is unavailable on this platform",
+    ))
 }
 impl BoundSafetyWalAdjacentEntry {
     #[cfg(all(unix, not(target_os = "espidf")))]
@@ -1073,13 +1284,15 @@ pub(crate) struct SafetyWal {
     records: Vec<RecoveredRecord>,
     payload_bytes: usize,
     append_state: WalAppendState,
+    identity: WalFileIdentity,
     #[cfg(all(unix, not(target_os = "espidf")))]
     serviced_candidate_authority_minted: AtomicBool,
     #[cfg(all(unix, not(target_os = "espidf")))]
     leader_wire_authority_minted: AtomicBool,
 }
 impl SafetyWal {
-    /// Open the production WAL through one descriptor-relative Kura authority.
+    /// Open the production WAL through one descriptor-relative Kura authority and exact
+    /// protocol/network/height-context/height/validator identity.
     #[cfg(all(unix, not(target_os = "espidf")))]
     pub(crate) fn open_with_kura_authority(
         kura: &crate::kura::Kura,
@@ -1087,6 +1300,8 @@ impl SafetyWal {
         wal_name: impl Into<OsString>,
         protocol_version: u16,
         network_id: [u8; HASH_LEN],
+        context_id: ContextId,
+        height: u64,
         key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
         let wal_name = wal_name.into();
@@ -1115,6 +1330,8 @@ impl SafetyWal {
             wal_name,
             protocol_version,
             network_id,
+            context_id,
+            height,
             key_hash,
         )
     }
@@ -1126,6 +1343,8 @@ impl SafetyWal {
         wal_name: impl Into<OsString>,
         _protocol_version: u16,
         _network_id: [u8; HASH_LEN],
+        _context_id: ContextId,
+        _height: u64,
         _key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
         let path = kura
@@ -1137,16 +1356,20 @@ impl SafetyWal {
             reason: "descriptor-relative Kura-root storage is unavailable",
         })
     }
-    /// Open or create a WAL bound to the supplied network, protocol, and consensus-key hashes.
+    /// Open or create a WAL bound to the supplied protocol, network, height context, height, and
+    /// consensus-key hash.
     ///
-    /// An incomplete final frame is treated as an unacknowledged crash tail and truncated. Any
-    /// earlier structural or hash-chain failure, or a complete prefix beyond the fixed retention
-    /// bounds, is returned as an error.
+    /// A new header is synchronized under a descriptor-relative temporary and atomically published
+    /// before the final name is opened for append. An incomplete final frame is treated as an
+    /// unacknowledged crash tail and truncated. Any earlier structural or hash-chain failure, or a
+    /// complete prefix beyond the fixed retention bounds, is returned as an error.
     #[cfg(test)]
     pub(crate) fn open(
         path: impl Into<PathBuf>,
         protocol_version: u16,
         network_id: [u8; HASH_LEN],
+        context_id: ContextId,
+        height: u64,
         key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
         let path = path.into();
@@ -1176,12 +1399,14 @@ impl SafetyWal {
                 wal_name,
                 protocol_version,
                 network_id,
+                context_id,
+                height,
                 key_hash,
             )
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
-            let _ = (protocol_version, network_id, key_hash);
+            let _ = (protocol_version, network_id, context_id, height, key_hash);
             Err(SafetyWalError::UnsupportedStorageBinding {
                 path,
                 reason: "descriptor-relative storage is unavailable",
@@ -1201,41 +1426,43 @@ impl SafetyWal {
         wal_name: OsString,
         protocol_version: u16,
         network_id: [u8; HASH_LEN],
+        context_id: ContextId,
+        height: u64,
         key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
-        let parent = directory.expected_path.clone();
-        let identity = WalFileIdentity::new(protocol_version, network_id, key_hash);
-        let (mut file, created) =
-            directory
-                .open_wal_leaf(&wal_name)
-                .map_err(|source| SafetyWalError::Io {
-                    path: path.clone(),
-                    source,
-                })?;
-        if created
-            || file
-                .metadata()
-                .map_err(|source| SafetyWalError::Io {
-                    path: path.clone(),
-                    source,
-                })?
-                .len()
-                == 0
-        {
-            let header = encode_wal_file_header(identity, &frame_hash);
-            file.write_all(&header)
-                .and_then(|()| file.flush())
-                .and_then(|()| file.sync_data())
-                .and_then(|()| directory.verify_leaf(&file, &wal_name))
-                .map_err(|source| SafetyWalError::Io {
-                    path: path.clone(),
-                    source,
-                })?;
-            directory.sync().map_err(|source| SafetyWalError::Io {
-                path: parent.clone(),
+        let identity =
+            WalFileIdentity::new(protocol_version, network_id, context_id, height, key_hash);
+        let header = encode_wal_file_header(identity, &frame_hash);
+        let mut file = match directory
+            .open_existing_wal_leaf(&wal_name)
+            .map_err(|source| SafetyWalError::Io {
+                path: path.clone(),
                 source,
-            })?;
-        }
+            })? {
+            Some(file) => file,
+            None => match directory.publish_initialized_wal_leaf(&wal_name, &header) {
+                Ok(file) => file,
+                Err(source) if source.kind() == io::ErrorKind::AlreadyExists => directory
+                    .open_existing_wal_leaf(&wal_name)
+                    .map_err(|source| SafetyWalError::Io {
+                        path: path.clone(),
+                        source,
+                    })?
+                    .ok_or_else(|| SafetyWalError::Io {
+                        path: path.clone(),
+                        source: io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "competing safety WAL publication disappeared before open",
+                        ),
+                    })?,
+                Err(source) => {
+                    return Err(SafetyWalError::Io {
+                        path: path.clone(),
+                        source,
+                    });
+                }
+            },
+        };
         directory
             .verify_leaf(&file, &wal_name)
             .map_err(|source| SafetyWalError::Io {
@@ -1323,6 +1550,7 @@ impl SafetyWal {
             records: recovery.records,
             payload_bytes: recovery.payload_bytes,
             append_state,
+            identity,
             #[cfg(all(unix, not(target_os = "espidf")))]
             serviced_candidate_authority_minted: AtomicBool::new(false),
             #[cfg(all(unix, not(target_os = "espidf")))]
@@ -1493,8 +1721,21 @@ impl SafetyWal {
     /// compared the exact typed Kura receipt and consumed the finalized height.
     pub(crate) fn retire(
         self,
-        _authorization: WalRetirementAuthorization,
+        authorization: WalRetirementAuthorization,
     ) -> Result<(), SafetyWalError> {
+        if !authorization.authorizes_wal(self.identity) {
+            let field = if authorization.context_id() != self.identity.context_id() {
+                "context id"
+            } else if authorization.height() != self.identity.height() {
+                "height"
+            } else {
+                "retirement authorization"
+            };
+            return Err(SafetyWalError::IdentityMismatch {
+                path: self.path,
+                field,
+            });
+        }
         let Self {
             path,
             directory,
@@ -1818,6 +2059,8 @@ fn map_codec_error(path: &Path, error: WalCodecError) -> SafetyWalError {
             field: match field {
                 WalIdentityField::ProtocolVersion => "protocol version",
                 WalIdentityField::NetworkId => "network id",
+                WalIdentityField::ContextId => "context id",
+                WalIdentityField::Height => "height",
                 WalIdentityField::ConsensusKeyHash => "consensus key hash",
             },
         },
@@ -1847,19 +2090,28 @@ fn frame_hash(bytes: &[u8]) -> [u8; HASH_LEN] {
 mod tests {
     use super::*;
     const NETWORK_ID: [u8; HASH_LEN] = [0x11; HASH_LEN];
+    const CONTEXT_ID: ContextId = ContextId::repeat(0x33);
+    const HEIGHT: u64 = 42;
     const KEY: [u8; HASH_LEN] = [0x22; HASH_LEN];
     const PROTOCOL: u16 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION;
     fn read_test_u16(bytes: &[u8]) -> u16 {
         u16::from_le_bytes(bytes.try_into().expect("two-byte fixture field"))
     }
+    fn read_test_u64(bytes: &[u8]) -> u64 {
+        u64::from_le_bytes(bytes.try_into().expect("eight-byte fixture field"))
+    }
     #[test]
     fn file_header_uses_the_declared_canonical_layout() {
-        let header =
-            encode_wal_file_header(WalFileIdentity::new(PROTOCOL, NETWORK_ID, KEY), &frame_hash);
+        let header = encode_wal_file_header(
+            WalFileIdentity::new(PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY),
+            &frame_hash,
+        );
         let format_offset = FILE_MAGIC.len();
         let protocol_offset = format_offset + 2;
         let network_id_offset = protocol_offset + 2;
-        let key_offset = network_id_offset + HASH_LEN;
+        let context_id_offset = network_id_offset + HASH_LEN;
+        let height_offset = context_id_offset + HASH_LEN;
+        let key_offset = height_offset + 8;
         assert_eq!(&header[..FILE_MAGIC.len()], &FILE_MAGIC);
         assert_eq!(
             read_test_u16(&header[format_offset..protocol_offset]),
@@ -1869,7 +2121,12 @@ mod tests {
             read_test_u16(&header[protocol_offset..network_id_offset]),
             PROTOCOL
         );
-        assert_eq!(&header[network_id_offset..key_offset], &NETWORK_ID);
+        assert_eq!(&header[network_id_offset..context_id_offset], &NETWORK_ID);
+        assert_eq!(
+            &header[context_id_offset..height_offset],
+            CONTEXT_ID.as_bytes()
+        );
+        assert_eq!(read_test_u64(&header[height_offset..key_offset]), HEIGHT);
         assert_eq!(&header[key_offset..FILE_HEADER_PREFIX_LEN], &KEY);
         assert_eq!(
             &header[FILE_HEADER_PREFIX_LEN..],
@@ -1877,18 +2134,109 @@ mod tests {
         );
     }
     #[test]
+    fn every_initial_header_crash_prefix_recovers_without_publishing_a_partial_wal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("wal");
+        fs::create_dir(&parent).expect("create WAL directory");
+        let header = encode_wal_file_header(
+            WalFileIdentity::new(PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY),
+            &frame_hash,
+        );
+        for prefix_len in 0..=header.len() {
+            let wal_name = format!("{prefix_len:020}.wal");
+            let path = parent.join(&wal_name);
+            let temporary = parent.join(wal_initialization_temporary_name(OsStr::new(&wal_name)));
+            fs::write(&temporary, &header[..prefix_len])
+                .expect("model a crash while writing the unpublished header");
+
+            let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("reopen must discard the unpublished prefix and publish atomically");
+            assert!(wal.recovered_records().is_empty());
+            assert_eq!(fs::read(&path).expect("read published WAL"), header);
+            assert!(
+                !temporary.exists(),
+                "initialization temporary must not survive successful publication"
+            );
+            drop(wal);
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("the published header must remain recoverable");
+        }
+    }
+    #[test]
+    fn concurrent_initializers_share_one_complete_no_replace_publication() {
+        const INITIALIZERS: usize = 16;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = Arc::new(dir.path().join("sumeragi-v2.wal"));
+        let barrier = Arc::new(std::sync::Barrier::new(INITIALIZERS));
+        let initializers = (0..INITIALIZERS)
+            .map(|_| {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    SafetyWal::open(path.as_ref(), PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                        .map(drop)
+                        .map_err(|error| error.to_string())
+                })
+            })
+            .collect::<Vec<_>>();
+        for initializer in initializers {
+            initializer
+                .join()
+                .expect("initializer thread must not panic")
+                .expect("all initializers must open the one published WAL");
+        }
+        let expected = encode_wal_file_header(
+            WalFileIdentity::new(PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY),
+            &frame_hash,
+        );
+        assert_eq!(fs::read(path.as_ref()).expect("read shared WAL"), expected);
+        assert!(
+            !path
+                .with_file_name(wal_initialization_temporary_name(
+                    path.file_name().expect("WAL file name"),
+                ))
+                .exists(),
+            "serialized initialization must leave no temporary"
+        );
+    }
+    #[test]
+    fn partial_final_header_is_never_repaired_in_place() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sumeragi-v2.wal");
+        let header = encode_wal_file_header(
+            WalFileIdentity::new(PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY),
+            &frame_hash,
+        );
+        fs::write(&path, &header[..header.len() / 2]).expect("write impossible partial final WAL");
+        assert!(matches!(
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY),
+            Err(SafetyWalError::InvalidHeader {
+                reason: "truncated header",
+                ..
+            })
+        ));
+        assert_eq!(
+            fs::read(path).expect("read rejected partial WAL"),
+            header[..header.len() / 2],
+            "opening must not mutate a partial final file"
+        );
+    }
+    #[test]
     fn append_reopens_and_replays_hash_chained_records() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         let (prepare_receipt, commit_receipt) = {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("open WAL");
             let prepare = wal.append(b"prepare").expect("append Prepare");
             let commit = wal.append(b"commit").expect("append Commit");
             assert_eq!(prepare.sequence(), 0);
             assert_eq!(commit.sequence(), 1);
             (prepare, commit)
         };
-        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("reopen WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("reopen WAL");
         assert_eq!(
             wal.recovered_records(),
             [
@@ -1914,7 +2262,8 @@ mod tests {
             max_records: 2,
             max_payload_bytes: 5,
         };
-        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("open WAL");
         let _first_receipt = wal
             .append_with_limits(b"ab", limits)
             .expect("append first bounded record");
@@ -1939,7 +2288,8 @@ mod tests {
         assert_eq!(wal.payload_bytes, 5);
         let payload_path = dir.path().join("sumeragi-v2-payload.wal");
         let mut payload_wal =
-            SafetyWal::open(&payload_path, PROTOCOL, NETWORK_ID, KEY).expect("open payload WAL");
+            SafetyWal::open(&payload_path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("open payload WAL");
         let _payload_receipt = payload_wal
             .append_with_limits(b"12345", limits)
             .expect("append exact aggregate payload boundary");
@@ -1976,12 +2326,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("open WAL");
             let _one = wal.append(b"one").expect("append one");
             let _two = wal.append(b"two").expect("append two");
             let _three = wal.append(b"three").expect("append three");
         }
-        let identity = WalFileIdentity::new(PROTOCOL, NETWORK_ID, KEY);
+        let identity = WalFileIdentity::new(PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY);
         let mut file = File::open(&path).expect("open WAL for streaming recovery");
         let exact = recover_wal_stream(
             &mut file,
@@ -2023,7 +2374,8 @@ mod tests {
     fn open_wal_matches_only_its_exact_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("open WAL");
         assert!(wal.matches_path(&path));
         assert!(!wal.matches_path(&dir.path().join("foreign.wal")));
         #[cfg(all(unix, not(target_os = "espidf")))]
@@ -2037,6 +2389,8 @@ mod tests {
                 "00000000000000000001.wal",
                 PROTOCOL,
                 NETWORK_ID,
+                CONTEXT_ID,
+                HEIGHT,
                 KEY,
             );
             assert!(matches!(rejected, Err(SafetyWalError::Io { .. })));
@@ -2051,6 +2405,8 @@ mod tests {
                 "00000000000000000001.wal",
                 PROTOCOL,
                 NETWORK_ID,
+                CONTEXT_ID,
+                HEIGHT,
                 KEY,
             )
             .expect("open Kura-bound WAL");
@@ -2068,7 +2424,7 @@ mod tests {
         symlink(&foreign, &parent).expect("substitute the WAL directory with a symlink");
         let path = parent.join("sumeragi-v2.wal");
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY),
             Err(SafetyWalError::Io { .. })
         ));
         assert!(!foreign.join("sumeragi-v2.wal").exists());
@@ -2089,7 +2445,8 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let parent = root.path().join("wal");
         let path = parent.join("sumeragi-v2.wal");
-        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("open WAL");
         let (retained, foreign) = substitute_wal_parent(root.path(), &parent);
         assert!(!wal.matches_path(&path));
         assert!(matches!(
@@ -2114,7 +2471,8 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let parent = root.path().join("wal");
         let path = parent.join("sumeragi-v2.wal");
-        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("open WAL");
         let serviced = wal
             .mint_serviced_candidate_store_authority(&path)
             .expect("mint serviced-candidate authority");
@@ -2150,7 +2508,8 @@ mod tests {
     fn adjacent_authority_bounds_publish_read_and_retirement() {
         let root = tempfile::tempdir().expect("tempdir");
         let path = root.path().join("wal").join("sumeragi-v2.wal");
-        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("open WAL");
         let leader = wal
             .mint_leader_wire_store_authority(&path)
             .expect("mint leader-wire authority");
@@ -2171,7 +2530,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("open WAL");
             let _receipt = wal.append(b"durable").expect("append durable record");
         }
         let good_len = fs::metadata(&path).expect("metadata").len();
@@ -2181,7 +2541,8 @@ mod tests {
             .expect("open append")
             .write_all(b"S2FR\x01\x00")
             .expect("write crash tail");
-        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("recover WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("recover WAL");
         assert_eq!(wal.recovered_records().len(), 1);
         assert_eq!(fs::metadata(path).expect("metadata").len(), good_len);
     }
@@ -2192,7 +2553,8 @@ mod tests {
         let good_len;
         let durable_receipt;
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("open WAL");
             durable_receipt = wal
                 .append(b"durable decision")
                 .expect("append acknowledged decision");
@@ -2210,7 +2572,8 @@ mod tests {
             .expect("open WAL for truncation")
             .set_len(partial_len)
             .expect("truncate in final payload");
-        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("recover WAL");
+        let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("recover WAL");
         assert_eq!(
             wal.recovered_records(),
             [RecoveredRecord {
@@ -2226,7 +2589,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("open WAL");
             let _receipt = wal.append(b"prepare").expect("append record");
         }
         let mut bytes = fs::read(&path).expect("read WAL");
@@ -2234,7 +2598,7 @@ mod tests {
         bytes[payload_offset] ^= 0x80;
         fs::write(&path, bytes).expect("corrupt WAL");
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY),
             Err(SafetyWalError::CorruptFrame { .. })
         ));
     }
@@ -2244,7 +2608,8 @@ mod tests {
         let path = dir.path().join("sumeragi-v2.wal");
         let first_payload_len = b"prepare".len();
         {
-            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+            let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("open WAL");
             let _first_receipt = wal.append(b"prepare").expect("append first record");
             let _second_receipt = wal.append(b"decision").expect("append second record");
         }
@@ -2254,7 +2619,7 @@ mod tests {
         bytes[previous_hash_offset] ^= 0x80;
         fs::write(&path, bytes).expect("break hash chain");
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY),
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY),
             Err(SafetyWalError::CorruptFrame {
                 sequence: 1,
                 reason: "previous-frame hash mismatch",
@@ -2266,25 +2631,63 @@ mod tests {
     fn identity_mismatch_fails_closed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        drop(SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL"));
+        drop(
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+                .expect("open WAL"),
+        );
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, [0x33; HASH_LEN]),
+            SafetyWal::open(
+                &path,
+                PROTOCOL,
+                NETWORK_ID,
+                CONTEXT_ID,
+                HEIGHT,
+                [0x44; HASH_LEN],
+            ),
             Err(SafetyWalError::IdentityMismatch {
                 field: "consensus key hash",
                 ..
             })
         ));
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL.saturating_add(1), NETWORK_ID, KEY),
+            SafetyWal::open(
+                &path,
+                PROTOCOL.saturating_add(1),
+                NETWORK_ID,
+                CONTEXT_ID,
+                HEIGHT,
+                KEY,
+            ),
             Err(SafetyWalError::IdentityMismatch {
                 field: "protocol version",
                 ..
             })
         ));
         assert!(matches!(
-            SafetyWal::open(&path, PROTOCOL, [0x44; HASH_LEN], KEY),
+            SafetyWal::open(&path, PROTOCOL, [0x55; HASH_LEN], CONTEXT_ID, HEIGHT, KEY,),
             Err(SafetyWalError::IdentityMismatch {
                 field: "network id",
+                ..
+            })
+        ));
+        assert!(matches!(
+            SafetyWal::open(
+                &path,
+                PROTOCOL,
+                NETWORK_ID,
+                ContextId::repeat(0x66),
+                HEIGHT,
+                KEY,
+            ),
+            Err(SafetyWalError::IdentityMismatch {
+                field: "context id",
+                ..
+            })
+        ));
+        assert!(matches!(
+            SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT + 1, KEY,),
+            Err(SafetyWalError::IdentityMismatch {
+                field: "height",
                 ..
             })
         ));
@@ -2293,7 +2696,8 @@ mod tests {
     fn append_io_failure_poisoning_requires_verified_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("open WAL");
         let read_only = File::open(&path).expect("open read-only WAL handle");
         let writable = std::mem::replace(&mut wal.file, read_only);
         drop(writable);
@@ -2311,7 +2715,8 @@ mod tests {
         ));
         assert!(wal.recovered_records().is_empty());
         drop(wal);
-        let reopened = SafetyWal::open(path, PROTOCOL, NETWORK_ID, KEY).expect("verified reopen");
+        let reopened = SafetyWal::open(path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("verified reopen");
         assert!(reopened.recovered_records().is_empty());
         assert!(!reopened.append_state.is_failed_closed());
     }
@@ -2319,7 +2724,8 @@ mod tests {
     fn physical_retirement_removes_and_directory_syncs_a_closed_height_log() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
+        let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, CONTEXT_ID, HEIGHT, KEY)
+            .expect("open WAL");
         let _receipt = wal.append(b"decision").expect("append decision");
         let SafetyWal {
             path,
@@ -2347,6 +2753,8 @@ mod unsupported_platform_tests {
             path,
             iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             [0x11; HASH_LEN],
+            ContextId::repeat(0x33),
+            42,
             [0x22; HASH_LEN],
         );
         assert!(matches!(

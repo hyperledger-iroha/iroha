@@ -13,9 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 112_201
-EXPECTED_ASSET_SHA256 = "ae0938c31351da71ec5e2099b92c942f5a57f5dfaf82018cd1f1dcede755431d"
-EXPECTED_SEMANTIC_SHA256 = "11dcb0f72f368587eb73374987ab338686b3d4dfacb19afcfa99ee76fdbeba16"
+EXPECTED_ASSET_LENGTH = 107_288
+EXPECTED_ASSET_SHA256 = "1005ef34d13c79c611fa1e5e989df65621314968b5b66d9c949ed1f36e5537ec"
+EXPECTED_SEMANTIC_SHA256 = "0e15423ea2904c11d1bd2b03e07ae95159050a40c63d924b1a835dc678ee0f4e"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -23,26 +23,18 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "af338fada6916a39d324e9c907abebf5137bec028e9d88ad75f91c4ae3d4ffb3"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "9757e4567f26eb9b10819d3595ff4c529f3b10124f88e02a09f51d401c67957e"
+    "68c994ade75f8adb6a425bb74eed8f077dc9f1c0282feca10ba79ce2d1487dbb"
 )
 EXPECTED_BLAKE3_BYTES = (
-    0xA2, 0xAC, 0x7A, 0x48, 0xD9, 0xFF, 0x12, 0x8C,
-    0x4C, 0x36, 0xC8, 0x1C, 0x81, 0x2A, 0x68, 0xEA,
-    0xB2, 0x9E, 0x53, 0x2F, 0x0A, 0xFF, 0xE2, 0x3B,
-    0xC5, 0x41, 0x2A, 0xD5, 0xC0, 0x80, 0xDD, 0x31,
+    0xF9, 0x08, 0xDA, 0x8B, 0x71, 0x82, 0xE5, 0xD3,
+    0xFE, 0x09, 0xF8, 0xB8, 0x49, 0xEC, 0xE1, 0x47,
+    0xE8, 0x97, 0xA7, 0xB2, 0x7F, 0xC9, 0x81, 0x00,
+    0x36, 0x95, 0xA2, 0x58, 0x4C, 0x34, 0x79, 0x8D,
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
     ('iroha_connect_session_create_tool', 'iroha.connect.session.create'),
     ('iroha_connect_session_delete_tool', 'iroha.connect.session.delete'),
-    (
-        "iroha_node_query_projection_checkpoint_plan_tool",
-        "iroha.node.query_projection_checkpoint_plan",
-    ),
-    (
-        "iroha_node_query_projection_checkpoint_publish_tool",
-        "iroha.node.query_projection_checkpoint_publish",
-    ),
     ('iroha_node_query_projection_shard_catalog_tool', 'iroha.node.query_projection_shard_catalog'),
     ('iroha_da_manifests_get_tool', 'iroha.da.manifests.get'),
     ('iroha_runtime_upgrades_activate_tool', 'iroha.runtime.upgrades.activate'),

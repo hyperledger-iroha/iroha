@@ -145,23 +145,21 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x81 | `SHA3BLOCK` | SHA-3 compression round (rs1=&state[25]*8, rs2=&block[136], rd=&out_state[25]*8) |
 | 0x82 | `POSEIDON2` | Internal 64-bit scalar proof gadget; rejects every private-tag operand and is not a Kotodama source hash |
 | 0x83 | `POSEIDON6` | Internal 64-bit scalar proof gadget over `rs1..rs1+5`; rejects every private-tag operand, reserves `rs2` as zero, and requires the input window not exceed `r255` |
-| 0x88 | `AESENC` | AES encryption round |
-| 0x89 | `AESDEC` | AES decryption round |
-| 0x8A | `BLAKE2S` | BLAKE2s compression (rs1=&input[64], writes first 16 bytes to rd/rd+1) |
-| 0x8B | `ED25519VERIFY` | Ed25519 signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
-| 0x8C | `ECDSAVERIFY` | ECDSA (secp256k1) signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
-| 0x8D | `DILITHIUMVERIFY` | Dilithium signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
-| 0x8F | `ED25519BATCHVERIFY` | Ordered strict Ed25519 verification using `rs1=&NoritoBytes(Ed25519BatchRequest { entries })`; writes 1/0 to `rd` and the first failing index to `rs2`; accepts 1–512 entries and at most 512 KiB of encoded payload; gas = 500 base + 1 per payload byte + 1,000 per admitted entry |
+| 0x84 | `AESENC` | AES encryption round |
+| 0x85 | `AESDEC` | AES decryption round |
+| 0x86 | `BLAKE2S` | BLAKE2s compression (rs1=&input[64], writes first 16 bytes to rd/rd+1) |
+| 0x87 | `ED25519VERIFY` | Ed25519 signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
+| 0x88 | `ED25519BATCHVERIFY` | Ordered strict Ed25519 verification using `rs1=&NoritoBytes(Ed25519BatchRequest { entries })`; writes 1/0 to `rd` and the first failing index to `rs2`; accepts 1–512 entries and at most 512 KiB of encoded payload; gas = 500 base + 1 per payload byte + 1,000 per admitted entry |
+| 0x89 | `ECDSAVERIFY` | ECDSA (secp256k1) signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
+| 0x8A | `DILITHIUMVERIFY` | Dilithium signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0); charges the fixed base plus one gas per payload byte across all three version-1 TLV operands before hashing |
 
 In ZK mode both Poseidon forms reject any private operand. Their 64-bit results
 are internal scalar proof gadgets, not full-width source hashes or
 commitment/declassification boundaries.
 
-The slots `0x84`–`0x87` and `0x8E` are reserved and rejected in ABI V1. Earlier
-pre-release experiments truncated BLS12-381 encodings into one register and
-could not preserve a canonical point across chained operations. Full-width
-curve and commitment operations must use typed pointer/syscall or proof-envelope
-interfaces before any of these slots can be assigned semantics.
+ABI V1 defines no single-register encoding for BLS12-381 points or scalars.
+Full-width curve and commitment operations use typed pointer/syscall or
+proof-envelope interfaces.
 
 Notes
 - Vector ops (`VADD*`/`VAND`/`VXOR`/`VOR`/`VROT32`, `LOAD128`/`STORE128`) are available only when the header `VECTOR` bit is set; otherwise a deterministic mode-disabled trap occurs. `SETVL` sets the logical vector length used for gas scaling and vector helpers; it does not change the physical SIMD width.
@@ -233,7 +231,7 @@ helpers are available:
 
 | Hex | Constant | Description |
 |----:|----------|-------------|
-| 0xF4 | `SYSCALL_PROVE_EXECUTION` | Return the deterministic execution-proof summary emitted by `DefaultHost` |
+| 0xF4 | `SYSCALL_EXECUTION_SUMMARY` | Return the deterministic, self-reported execution summary emitted by `DefaultHost` |
 | 0xF5 | `SYSCALL_GROW_HEAP` | Increase heap size by `x10` bytes, without exceeding the host-installed runtime ceiling |
 | 0xF6 | `SYSCALL_VERIFY_PROOF` | Verify registry-bound proof envelopes in `CoreHost`; `DefaultHost` returns `NotImplemented` |
 | 0xF7 | `SYSCALL_GET_MERKLE_PATH` | Write the Merkle path for address `x10` to memory at `x11` |

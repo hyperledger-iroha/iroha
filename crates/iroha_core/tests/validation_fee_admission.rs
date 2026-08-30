@@ -440,7 +440,7 @@ fn complete_parliament_body_for_authorization(
     requirement: RequiredParliamentBodyV1,
     election_attempt_id: BodyElectionAttemptId,
     result_tag: u8,
-) {
+) -> u64 {
     let governance_attempt_id = attempt.attempt().id;
     attempt
         .begin_invitation_acceptance(governance_attempt_id, election_attempt_id, 20, 1)
@@ -608,6 +608,10 @@ fn complete_parliament_body_for_authorization(
             assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);
         }
     }
+    attempt
+        .body(&body_instance_id)
+        .and_then(|body| body.result_height())
+        .expect("completed authorization body result height")
 }
 fn test_parliament_authorization(
     state: &State,
@@ -694,8 +698,9 @@ fn test_parliament_authorization(
             &parliament_test_governance(&requirements),
         )
         .expect("consume deterministic simultaneous Parliament draw");
+    let mut certified_at_height = 0;
     for (index, requirement) in requirements.iter().copied().enumerate() {
-        complete_parliament_body_for_authorization(
+        let result_height = complete_parliament_body_for_authorization(
             &mut attempt,
             requirement,
             BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0),
@@ -703,14 +708,13 @@ fn test_parliament_authorization(
                 .checked_add(u8::try_from(index).expect("body index fits u8"))
                 .expect("result tag does not overflow"),
         );
+        certified_at_height = certified_at_height.max(result_height);
     }
     assert_eq!(attempt.attempt().stage, GovernanceStageV1::Certification);
     let governance_certificate = attempt
         .construct_certificate(
             governance_attempt_id,
-            enacted_at_height
-                .checked_sub(1)
-                .expect("enactment follows certification"),
+            certified_at_height,
             enacted_at_height,
         )
         .expect("construct complete validation-fee Parliament certificate");

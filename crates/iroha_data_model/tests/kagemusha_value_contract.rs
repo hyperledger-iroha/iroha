@@ -114,6 +114,26 @@ fn split_intent_v4() -> KagemushaRecursiveSpendSplitIntentV4 {
         operation_id: [0x36; 32],
     }
 }
+fn two_input_split_intent_v4() -> KagemushaRecursiveSpendSplitIntentV4 {
+    let mut split = split_intent_v4();
+    let second_anchor = KagemushaRecursiveSpendTopUpAnchorRefV2 {
+        topup_operation_id: [0x13; 32],
+        anchor_digest: [0x14; 32],
+    };
+    split.topup_anchor_refs.push(second_anchor);
+    split.inputs[0].input_note.amount =
+        KagemushaScaledAmountV2::new(TOTAL / 2, SCALE).expect("first input amount");
+    let mut second = split.inputs[0].clone();
+    second.bundle_digest = [0x25; 32];
+    second.input_note.note_commitment = [0x26; 32];
+    second.input_note.spend_nullifier = [0x27; 32];
+    second.branch_claims = vec![
+        KagemushaRecursiveSpendBranchClaimV2::root(second_anchor.anchor_digest)
+            .expect("second root claim"),
+    ];
+    split.inputs.push(second);
+    split
+}
 fn redemption_intent_v4(
     public_atomic_units: u128,
     change_atomic_units: Option<u128>,
@@ -171,7 +191,10 @@ fn scaled_amount_converts_fractional_values_exactly_at_asset_scale() {
         .expect("exact scale conversion");
     assert_eq!(amount.atomic_units, TOTAL);
     assert_eq!(amount.scale, SCALE);
-    assert_eq!(amount.public_quantity(), decimal);
+    assert_eq!(
+        amount.public_quantity().expect("valid public quantity"),
+        decimal
+    );
     let minimum: Quantity = "0.000000001".parse().expect("minimum atomic quantity");
     assert_eq!(
         KagemushaScaledAmountV2::from_public_quantity(&minimum, SCALE)
@@ -211,6 +234,16 @@ fn scaled_amount_rejects_rounding_nonpositive_values_and_overflow() {
     ));
     assert!(KagemushaScaledAmountV2::new(0, SCALE).is_err());
     assert!(KagemushaScaledAmountV2::new(1, 29).is_err());
+    let decoded_shape = KagemushaScaledAmountV2 {
+        atomic_units: 1,
+        scale: 29,
+    };
+    assert!(matches!(
+        decoded_shape.public_quantity(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+            field: "amount.scale"
+        })
+    ));
 }
 #[test]
 fn split_conserves_fractional_value_and_produces_disjoint_siblings() {
@@ -260,6 +293,32 @@ fn abi21_split_uses_v4_digest_and_rejects_nonconservation() {
         nonconserving.validate_public_binding(),
         Err(KagemushaValidationError::InvalidRecursiveSpendNote {
             field: "split.v4.conservation"
+        })
+    ));
+}
+#[test]
+fn split_requires_one_common_parent_root_and_canonical_derived_claims() {
+    let split = two_input_split_intent_v4();
+    split
+        .validate_public_binding()
+        .expect("two canonical parents at one root remain valid");
+
+    let mut mismatched_root = split.clone();
+    mismatched_root.inputs[1].input_root = [0x28; 32];
+    assert!(matches!(
+        mismatched_root.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "split.v4.inputs"
+        })
+    ));
+
+    let mut duplicate_lineage = split;
+    duplicate_lineage.topup_anchor_refs.truncate(1);
+    duplicate_lineage.inputs[1].branch_claims = duplicate_lineage.inputs[0].branch_claims.clone();
+    assert!(matches!(
+        duplicate_lineage.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "branch_claims.order" | "branch_claims.conflict"
         })
     ));
 }
@@ -445,6 +504,52 @@ fn redemption_supports_exact_full_and_partial_value_conservation() {
         ),
         Some(TOTAL)
     );
+}
+#[test]
+fn unshield_public_input_digest_rejects_impossible_standalone_shapes() {
+    let valid = redemption_intent_v4(TOTAL, None).unshield_public_inputs;
+    valid.digest().expect("canonical unshield public inputs");
+
+    for malformed in [
+        KagemushaUnshieldPublicInputsBindingV2 {
+            input_commitment_0: [0; 32],
+            ..valid
+        },
+        KagemushaUnshieldPublicInputsBindingV2 {
+            input_commitment_1: [1; 32],
+            ..valid
+        },
+        KagemushaUnshieldPublicInputsBindingV2 {
+            nullifier_0: [0; 32],
+            ..valid
+        },
+        KagemushaUnshieldPublicInputsBindingV2 {
+            nullifier_1: [1; 32],
+            ..valid
+        },
+        KagemushaUnshieldPublicInputsBindingV2 {
+            root: [0; 32],
+            ..valid
+        },
+        KagemushaUnshieldPublicInputsBindingV2 {
+            public_amount: [0; 32],
+            ..valid
+        },
+        KagemushaUnshieldPublicInputsBindingV2 {
+            public_amount: [1; 32],
+            ..valid
+        },
+        KagemushaUnshieldPublicInputsBindingV2 {
+            asset_tag: [0; 32],
+            ..valid
+        },
+        KagemushaUnshieldPublicInputsBindingV2 {
+            network_tag: [0; 32],
+            ..valid
+        },
+    ] {
+        assert!(malformed.digest().is_err());
+    }
 }
 #[test]
 fn redemption_rejects_nonconservation_and_reused_input_material() {

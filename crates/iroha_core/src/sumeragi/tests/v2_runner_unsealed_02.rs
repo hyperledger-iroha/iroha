@@ -552,14 +552,13 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
         },
     );
     assert!(v2_payload_is_terminal_reducer_control(&response));
-    let encoded = encode_payload(&context, round, subject, &body)
-        .expect("encode terminal body fixture payload");
-    let (manifest, chunks) = encoded.into_parts();
     assert!(!v2_payload_is_terminal_reducer_control(
         &wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
-            manifest_hash: HashOf::new(&manifest),
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"terminal ingress orphan chunk",
+            )),
             index: 0,
-            bytes: chunks[0].clone(),
+            bytes: Vec::new(),
             sender: 0,
             signature: vec![1],
         })

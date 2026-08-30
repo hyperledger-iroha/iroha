@@ -1660,6 +1660,12 @@ pub(crate) trait V2EffectServices {
         &mut self,
         task: &BodyFetchTask,
     ) -> Result<(), Self::Error>;
+    /// Borrow the once-validated manifest session owned by exact reconstruction work.
+    fn validated_payload_manifest<'a>(
+        &'a mut self,
+        context: &wire::HeightContext,
+        task: &BodyFetchTask,
+    ) -> Result<&'a wire::ValidatedPayloadManifest, Self::Error>;
     /// Hand one structurally, cryptographically, and outer-peer authenticated
     /// chunk to the bounded in-memory reconstruction adapter.
     fn accept_authenticated_chunk(

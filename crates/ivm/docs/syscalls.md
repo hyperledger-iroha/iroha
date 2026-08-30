@@ -501,9 +501,9 @@ ZK Helpers
 - 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&Quantity)` — Gas: G_get_bal
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig + bytes
 
-Hardware / Proofs
-- 0xF4 PROVE_EXECUTION — Args: none → `r10=&NoritoBytes(ExecutionProof), r11=status:u64` — Gas: G_prove
-  - Returns a deterministic execution-proof summary containing fixed fields plus SHA-256 commitments to the VM's PC, delta-register, ZK trace, constraint, memory, register, and step-root logs. This is a byte-stable proof artifact for first-release contracts and tooling; full SNARK/STARK proving can bind to these commitments without changing VM output across hardware.
+Runtime Summaries / Proof Verification
+- 0xF4 EXECUTION_SUMMARY — Args: none → `r10=&NoritoBytes(ExecutionSummary), r11=status:u64` — Gas: G_execution_summary
+  - Returns a deterministic, self-reported execution summary containing fixed fields plus SHA-256 digests of the VM's PC, delta-register, ZK trace, constraint, memory, register, and step-root logs. It is not an independently verifiable proof or an authenticated execution attestation. Cryptographic proof verification uses the dedicated verifier syscalls below.
 - 0xF5 GROW_HEAP — Args: `r10=bytes:u64` → `u64=new_limit` — Gas: G_grow_heap per page. Growth fails with `OutOfMemory` when it would exceed the host-installed per-runtime heap ceiling.
 - 0xF6 VERIFY_PROOF — Args: `r10=&NoritoBytes(OpenVerifyEnvelope)` → `r10=0/1, r11=status:u64` — Gas: G_verify_proof + bytes
   - `CoreHost` verifies the envelope against the on-chain verifying-key registry with the same deterministic guardrails used by the typed ZK verifier syscalls. The standalone host still returns `NotImplemented` because it has no registry or backend policy context.
@@ -693,7 +693,7 @@ node enforces that policy unconditionally.
 | 0xE0 | INPUT_PUBLISH_TLV | r10=&Blob(TLV) | ptr (r10) | asset:gas/G_input_publish@ivm.core/v2 + bytes |
 | 0xF0 | ALLOC | r10=bytes:u64 | ptr (r10) | asset:gas/G_alloc@ivm.core/v2 + bytes |
 | 0xF1 | GET_PUBLIC_INPUT | r10=&Name | ptr (&Tlv) | asset:gas/G_get_pub@ivm.core/v2 + bytes |
-| 0xF4 | PROVE_EXECUTION | - | r10=0/1 | asset:gas/G_prove@ivm.core/v2 |
+| 0xF4 | EXECUTION_SUMMARY | - | r10=ptr (&NoritoBytes(ExecutionSummary)), r11=status:u64 | asset:gas/G_execution_summary@ivm.core/v2 |
 | 0xF5 | GROW_HEAP | r10=bytes:u64 | u64=new_limit | asset:gas/G_grow_heap@ivm.core/v2 per page |
 | 0xF6 | VERIFY_PROOF | r10=&NoritoBytes(OpenVerifyEnvelope) | r10=0/1, r11=status:u64 | asset:gas/G_verify_proof@ivm.core/v2 + bytes |
 | 0xF7 | GET_MERKLE_PATH | r10=addr:u64, r11=out:u64, r12=root_out?:u64 | u64=len | asset:gas/G_mpath@ivm.core/v2 + len |

@@ -218,10 +218,6 @@ fn build_enacted_parliament_attempt_for_testing<F>(
 where
     F: FnMut(&mut ParliamentAttemptStateV1, RequiredParliamentBodyV1, BodyElectionAttemptId, u8),
 {
-    assert!(
-        enact_at_height > 9,
-        "fixture enactment must follow the complete reducer transcript"
-    );
     candidates.sort_unstable();
     candidates.dedup();
     assert!(candidates.len() >= 3, "fixture requires three candidates");
@@ -301,8 +297,18 @@ where
                 .expect("result tag does not overflow"),
         );
     }
+    let certified_at_height = attempt
+        .body_bindings
+        .values()
+        .map(|binding| binding.result_height)
+        .max()
+        .expect("completed fixture has at least one body result");
+    assert!(
+        enact_at_height > certified_at_height,
+        "fixture enactment must follow atomic certification"
+    );
     attempt
-        .construct_certificate(governance_attempt_id, enact_at_height - 1, enact_at_height)
+        .construct_certificate(governance_attempt_id, certified_at_height, enact_at_height)
         .expect("construct enacted-attempt fixture certificate");
     attempt
         .mark_enacted(governance_attempt_id, enact_at_height)
@@ -316,7 +322,7 @@ where
 /// Build one complete, proposal-bound enacted Parliament attempt for integration fixtures.
 ///
 /// This helper is available only to Core's explicit test corridor. It deliberately exercises the
-/// reducer instead of manufacturing certificate-only compatibility state.
+/// reducer instead of manufacturing detached certificate-only state.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 #[doc(hidden)]
 pub fn enacted_parliament_attempt_for_testing(

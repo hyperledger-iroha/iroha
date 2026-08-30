@@ -1570,7 +1570,8 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     }
 
     private func id(_ byte: UInt8) -> String {
-        String(repeating: String(format: "%02x", byte), count: 32)
+        String(repeating: String(format: "%02x", byte), count: 31)
+            + String(format: "%02x", byte | 1)
     }
 
     private func pending(

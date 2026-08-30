@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  let _proof = crypto::prove_execution(1);
+  let _summary = crypto::execution_summary(1);
 }
 
 }

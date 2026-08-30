@@ -3,12 +3,40 @@
 mod tests {
     use super::*;
     #[test]
-    fn query_projection_checkpoint_plan_is_non_mutating_compute() {
+    fn diagnostic_status_routes_are_explicit() {
+        let routes = [
+            diagnostic::STATUS,
+            diagnostic::STATUS_BLOCKS,
+            diagnostic::STATUS_PEERS,
+        ];
         assert_eq!(
-            runtime_governance::NODE_PROJECTION_CHECKPOINT_PLAN.effect(),
-            RouteEffect::ExpensiveCompute
+            routes.map(|route| route.path()),
+            ["/status", "/status/blocks", "/status/peers"]
+        );
+        assert!(
+            routes
+                .iter()
+                .all(|route| route.route_match() == RouteMatch::Exact)
+        );
+        assert!(
+            diagnostic::ROUTES
+                .iter()
+                .all(|route| route.path() != "/status/{*tail}")
         );
     }
+    #[test]
+    fn unverified_query_projection_publication_routes_are_absent() {
+        for retired_path in [
+            "/v1/node/query/projection/checkpoint/plan",
+            "/v1/node/query/projection/checkpoint/publish",
+        ] {
+            assert!(
+                ALL_ROUTES.iter().all(|route| route.path() != retired_path),
+                "retired unverified projection route remains catalogued: {retired_path}"
+            );
+        }
+    }
+
     #[test]
     fn credential_bound_authentication_boundaries_require_private_no_store() {
         for policy in [
@@ -669,7 +697,8 @@ mod tests {
             RouteCatalog::new(CATALOGED_ROUTES).project(CatalogProjection::OpenApi, enabled);
         for route in [
             diagnostic::STATUS,
-            diagnostic::STATUS_TAIL,
+            diagnostic::STATUS_BLOCKS,
+            diagnostic::STATUS_PEERS,
             diagnostic::METRICS,
             diagnostic::PROFILE,
             diagnostic::OPENAPI_JSON,

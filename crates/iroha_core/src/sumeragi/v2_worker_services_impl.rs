@@ -66,39 +66,44 @@ impl ProductionV2Services {
     }
     fn sign_payload_chunks(
         &self,
-        manifest: &wire::PayloadManifest,
-        chunks: Vec<Vec<u8>>,
+        payload: EncodedV2Payload,
         sender: wire::ValidatorIndex,
-    ) -> Result<Vec<wire::PayloadChunk>, String> {
-        let validated_manifest = manifest
-            .validated_for_chunks(&self.context)
+    ) -> Result<(wire::ValidatedPayloadManifest, Vec<wire::PayloadChunk>), String> {
+        // `EncodedV2Payload` is the private canonical-encoder capability. Its
+        // manifest hashes already commit these exact bytes, so signing can
+        // safely reuse them instead of hashing every chunk again.
+        let (manifest, chunks) = payload.into_parts();
+        let validated = wire::ValidatedPayloadManifest::new(&self.context, manifest)
             .map_err(|error| error.to_string())?;
-        if chunks.len() != manifest.chunk_hashes.len() {
+        if chunks.len() != validated.manifest().chunk_hashes.len() {
             return Err("encoded Sumeragi v2 chunk count differs from its manifest".to_owned());
         }
-        chunks
+        let manifest_hash = validated.manifest_hash();
+        let signed = chunks
             .into_iter()
             .enumerate()
             .map(|(index, bytes)| {
+                let index = u32::try_from(index)
+                    .map_err(|_| "Sumeragi v2 chunk index overflow".to_owned())?;
                 let mut chunk = wire::PayloadChunk {
-                    manifest_hash: validated_manifest.manifest_hash(),
-                    index: u32::try_from(index)
-                        .map_err(|_| "Sumeragi v2 chunk index overflow".to_owned())?,
+                    manifest_hash,
+                    index,
                     bytes,
                     sender,
                     signature: Vec::new(),
                 };
-                let preimage = validated_manifest
-                    .signature_payload(&chunk)
+                let preimage = validated
+                    .committed_chunk_signature_payload(index, sender)
                     .map_err(|error| error.to_string())?
                     .signature_preimage();
                 chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)
                     .map_err(|error| error.to_string())?
                     .payload()
                     .to_vec();
-                Ok(chunk)
+                Ok::<wire::PayloadChunk, String>(chunk)
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((validated, signed))
     }
     /// Reserve output after a recovered Broadcast rejoins its LedgerV1 row,
     /// retaining that durable row as crash-recovery debt.
@@ -215,10 +220,10 @@ impl ProductionV2Services {
         proposal
             .validate(&self.context)
             .map_err(|error| error.to_string())?;
-        let (manifest, chunks) = payload.into_parts();
         let sender = proposal.proposer;
-        let chunk_messages = self
-            .sign_payload_chunks(&manifest, chunks, sender)?
+        let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;
+        let manifest = validated.into_manifest();
+        let chunk_messages = signed_chunks
             .into_iter()
             .map(|chunk| {
                 Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
@@ -334,10 +339,10 @@ impl ProductionV2Services {
             .ok_or_else(|| {
                 "recovered Proposal output could not retain its exact retry authority".to_owned()
             })?;
-        let (manifest, chunks) = payload.into_parts();
         let sender = proposal.proposer;
-        let chunk_messages = self
-            .sign_payload_chunks(&manifest, chunks, sender)?
+        let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;
+        let manifest = validated.into_manifest();
+        let chunk_messages = signed_chunks
             .into_iter()
             .map(|chunk| {
                 Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
@@ -1320,45 +1325,51 @@ impl ProductionV2Services {
         let sender = self
             .local_validator
             .ok_or_else(|| "observer cannot disperse a Sumeragi v2 proposal".to_owned())?;
-        let (manifest, chunks) = payload.into_parts();
         let expected_round = wire::ConsensusRound {
             context_id: self.context.id(),
             height: self.context.height,
             view: owner.view(),
         };
-        if owner != self.active_tag || manifest.round != expected_round {
+        if owner != self.active_tag || payload.manifest().round != expected_round {
             return Err(
                 "Sumeragi v2 outbound payload is not owned by the active reducer incarnation"
                     .to_owned(),
             );
         }
-        let messages = self
-            .sign_payload_chunks(&manifest, chunks, sender)?
+        let manifest_hash = HashOf::new(payload.manifest());
+        if let Some(existing) = self.outbound_chunks.get(&manifest_hash) {
+            if !existing.owns_manifest(owner, payload.manifest()) {
+                return Err("conflicting local Sumeragi v2 payload manifest".to_owned());
+            }
+            let manifest = payload.manifest().clone();
+            self.outbound_chunks
+                .retain(|hash, _| *hash == manifest_hash);
+            operation.complete();
+            return Ok(manifest);
+        }
+        let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;
+        debug_assert_eq!(validated.manifest_hash(), manifest_hash);
+        let manifest = validated.into_manifest();
+        let messages = signed_chunks
             .into_iter()
             .map(|chunk| {
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk))
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk),
+                ))
             })
-            .collect();
-        let manifest_hash = HashOf::new(&manifest);
+            .collect::<Result<Vec<_>, _>>()?;
         let retained = RetainedOutboundPayload {
             owner,
             round: manifest.round,
             subject: manifest.subject,
+            manifest: manifest.clone(),
             messages,
         };
-        if let Some(existing) = self.outbound_chunks.get(&manifest_hash) {
-            if existing != &retained {
-                return Err("conflicting local Sumeragi v2 payload manifest".to_owned());
-            }
-            self.outbound_chunks
-                .retain(|hash, _| *hash == manifest_hash);
-        } else {
-            // There is one local proposal intent for an exact reducer owner.
-            // A deterministic fallback or a higher same-tag lock supersedes
-            // its old chunks before the replacement can enter signing.
-            self.outbound_chunks.clear();
-            self.outbound_chunks.insert(manifest_hash, retained);
-        }
+        // There is one local proposal intent for an exact reducer owner. A
+        // deterministic fallback or a higher same-tag lock supersedes its old
+        // chunks before the replacement can enter signing.
+        self.outbound_chunks.clear();
+        self.outbound_chunks.insert(manifest_hash, retained);
         operation.complete();
         Ok(manifest)
     }
@@ -1422,7 +1433,7 @@ impl ProductionV2Services {
         if let Some(fetch) = live {
             match (fetch.task.manifest(), fetch.chunks.as_ref()) {
                 (Some(manifest), Some(session)) => {
-                    let expected_hash = HashOf::new(manifest);
+                    let expected_hash = session.validated_manifest().manifest_hash();
                     if session.manifest() != manifest
                         || indexed_manifests.len() != 1
                         || indexed_manifests.first() != Some(&expected_hash)

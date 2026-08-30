@@ -7,6 +7,7 @@ import time
 import unicodedata
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from ._quantity import (
@@ -15,6 +16,11 @@ from ._quantity import (
     _normalize_quantity,
 )
 from ._quantity import _normalize_u128_quantity as _normalize_u128_quantity
+from ._validation import (
+    _normalize_json_value,
+    _normalize_mapping_payload,
+    _optional_uint,
+)
 from .address import require_canonical_asset_definition_id
 from .crypto import (
     _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
@@ -54,7 +60,6 @@ MetadataLike = Optional[Mapping[str, Any]]
 FixedBytesLike = Union[str, bytes, bytearray, memoryview]
 VerifyingKeyLike = Union[str, Mapping[str, Any]]
 _U64_MAX = (1 << 64) - 1
-_U128_MAX = (1 << 128) - 1
 ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512
 
 
@@ -142,46 +147,7 @@ def _normalize_asset_transfer_limits(
     return normalized
 
 
-def _require_canonical_positive_u128_literal(quantity: Any, context: str) -> str:
-    message = f"{context} must be a canonical positive decimal u128 string"
-    if type(quantity) is not str:
-        raise TypeError(message)
-    if (
-        not quantity
-        or len(quantity) > 39
-        or not quantity.isascii()
-        or not quantity.isdigit()
-        or quantity.startswith("0")
-    ):
-        raise ValueError(message)
-    if int(quantity, 10) > _U128_MAX:
-        raise ValueError(message)
-    return quantity
-
-
-def _require_canonical_public_balance_scope(value: Any) -> str:
-    message = "public_balance_scope must be exactly 'global' or 'dataspace:<canonical positive u64>'"
-    if type(value) is not str:
-        raise TypeError(message)
-    if value == "global":
-        return value
-    prefix = "dataspace:"
-    if not value.startswith(prefix):
-        raise ValueError(message)
-    raw = value[len(prefix) :]
-    if (
-        not raw
-        or len(raw) > 20
-        or not raw.isascii()
-        or not raw.isdigit()
-        or raw.startswith("0")
-        or int(raw, 10) > _U64_MAX
-    ):
-        raise ValueError(message)
-    return value
-
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TransactionConfig:
     """Configuration shared across transactions signed by :class:`TransactionDraft`."""
 
@@ -194,44 +160,87 @@ class TransactionConfig:
     metadata: Optional[Mapping[str, Any]] = None
 
     def __post_init__(self) -> None:
+        network_id = _require_network_id(
+            self.network_id,
+            "TransactionConfig.network_id",
+        )
+        authority = _require_exact_non_empty_string(
+            self.authority,
+            "TransactionConfig.authority",
+        )
+        fee_payment = _freeze_json(
+            _normalize_mapping_payload(
+                self.fee_payment,
+                "TransactionConfig.fee_payment",
+            )
+        )
+        creation_time_ms = _optional_uint(
+            self.creation_time_ms,
+            "TransactionConfig.creation_time_ms",
+            maximum=_U64_MAX,
+            allow_zero=True,
+        )
+        ttl_ms = _optional_uint(
+            self.ttl_ms,
+            "TransactionConfig.ttl_ms",
+            maximum=_U64_MAX,
+            allow_zero=False,
+        )
+        nonce = _optional_uint(
+            self.nonce,
+            "TransactionConfig.nonce",
+            maximum=(1 << 32) - 1,
+            allow_zero=False,
+        )
+        metadata = (
+            None
+            if self.metadata is None
+            else _freeze_json(_normalize_metadata(self.metadata))
+        )
         object.__setattr__(
             self,
             "network_id",
-            _require_network_id(self.network_id, "TransactionConfig.network_id"),
+            network_id,
         )
+        object.__setattr__(self, "authority", authority)
+        object.__setattr__(self, "fee_payment", fee_payment)
+        object.__setattr__(self, "creation_time_ms", creation_time_ms)
+        object.__setattr__(self, "ttl_ms", ttl_ms)
+        object.__setattr__(self, "nonce", nonce)
+        object.__setattr__(self, "metadata", metadata)
 
 
 def _ensure_creation_time_ms(config: TransactionConfig) -> int:
-    return int(config.creation_time_ms or int(time.time() * 1000))
+    if config.creation_time_ms is not None:
+        return config.creation_time_ms
+    return int(time.time() * 1000)
 
 
-def _normalize_metadata(metadata: MetadataLike) -> Optional[Mapping[str, Any]]:
+def _normalize_metadata(metadata: MetadataLike) -> Optional[Dict[str, Any]]:
     if metadata is None:
         return None
     if not isinstance(metadata, Mapping):
         raise TypeError("metadata must be a mapping when provided")
-    # Round-trip through JSON to ensure only JSON-serializable values remain (e.g., Decimal -> str).
-    serialized = json.dumps(metadata, default=str)
-    return json.loads(serialized)
-
-
-def _normalize_json_value(value: Any, context: str) -> Any:
-    """Convert nested payloads to JSON-serializable values, stringifying Decimals when needed."""
-
-    try:
-        serialized = json.dumps(value, default=str)
-    except TypeError as exc:  # pragma: no cover - exercised by callers
-        raise TypeError(f"{context} must be JSON serializable") from exc
-    return json.loads(serialized)
-
-
-def _normalize_mapping_payload(payload: Mapping[str, Any], context: str) -> Dict[str, Any]:
-    if not isinstance(payload, Mapping):
-        raise TypeError(f"{context} must be a mapping")
-    normalized = _normalize_json_value(payload, context)
-    if not isinstance(normalized, dict):  # pragma: no cover - json.loads object contract
-        raise TypeError(f"{context} must serialize to a JSON object")
+    normalized = _normalize_json_value(metadata, "metadata")
+    if not isinstance(normalized, dict):
+        raise TypeError("metadata must be a mapping when provided")
     return normalized
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
 
 
 def _payload_mapping(value: Any, context: str) -> Mapping[str, Any]:
@@ -379,18 +388,10 @@ class TransactionDraft:
     """Collect ordered executable entries and sign transactions with ergonomic helpers."""
 
     def __init__(self, config: TransactionConfig):
-        self._config = TransactionConfig(
-            network_id=_require_network_id(config.network_id),
-            authority=_require_exact_non_empty_string(config.authority, "authority"),
-            fee_payment=_normalize_mapping_payload(
-                config.fee_payment,
-                "fee_payment",
-            ),
-            creation_time_ms=config.creation_time_ms,
-            ttl_ms=config.ttl_ms,
-            nonce=config.nonce,
-            metadata=config.metadata,
-        )
+        if not isinstance(config, TransactionConfig):
+            raise TypeError("config must be a TransactionConfig")
+        self._config = config
+        self._creation_time_ms = _ensure_creation_time_ms(config)
         self._entries: List[TransactionExecutableEntry] = []
         self._explicit_batch = False
         self._lane_privacy_attachments: List[Mapping[str, Any]] = []
@@ -417,7 +418,7 @@ class TransactionDraft:
         return tuple(self._entries)
 
     def __iter__(self):
-        return iter(self.instructions)
+        return iter(self.entries)
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -536,7 +537,7 @@ class TransactionDraft:
         self,
         manifest: PrivacyExact12CapabilityManifestV1,
     ) -> TransactionDraft:
-        """Bind one native-validated Torii manifest to the next build.
+        """Bind one native-validated Torii manifest to every build of this draft.
 
         Native privacy construction remains closed until this binding exists;
         it then requires the selected row to be active and its complete
@@ -1362,57 +1363,34 @@ class TransactionDraft:
     def sign(
         self,
         private_key: bytes,
-        *,
-        instructions: Optional[Iterable[Instruction]] = None,
-        entries: Optional[Iterable[TransactionExecutableEntry]] = None,
-        creation_time_ms: Optional[int] = None,
-        ttl_ms: Optional[int] = None,
-        nonce: Optional[int] = None,
-        metadata: Optional[Mapping[str, Any]] = None,
-        authority: Optional[str] = None,
     ) -> SignedTransactionEnvelope:
-        """Sign the draft with ``private_key`` and return a :class:`SignedTransactionEnvelope`."""
+        """Sign exactly the state staged on this draft."""
 
-        if instructions is not None and entries is not None:
-            raise ValueError("instructions and entries are mutually exclusive")
-        payload_instructions: Optional[List[Instruction]]
-        payload_entries: Optional[List[TransactionExecutableEntry]]
-        if entries is not None:
-            payload_instructions = None
-            payload_entries = list(entries)
-        elif instructions is not None:
-            payload_instructions = list(instructions)
-            payload_entries = None
-        elif self._explicit_batch:
+        if type(private_key) is not bytes:
+            raise TypeError("private_key must be exact immutable bytes")
+        if len(private_key) != 32:
+            raise ValueError("private_key must contain exactly 32 bytes")
+        if self._explicit_batch:
             payload_instructions = None
             payload_entries = list(self._entries)
         else:
             payload_instructions = list(self.instructions)
             payload_entries = None
-        effective_authority = (
-            _require_exact_non_empty_string(authority, "authority")
-            if authority is not None
-            else self._config.authority
-        )
-        effective_creation = (
-            int(creation_time_ms)
-            if creation_time_ms is not None
-            else _ensure_creation_time_ms(self._config)
-        )
-        effective_ttl = ttl_ms if ttl_ms is not None else self._config.ttl_ms
-        effective_nonce = nonce if nonce is not None else self._config.nonce
-        effective_metadata = metadata if metadata is not None else self._config.metadata
         return build_signed_transaction(
             self._config.network_id,
-            effective_authority,
+            self._config.authority,
             private_key,
-            fee_payment=self._config.fee_payment,
+            fee_payment=_thaw_json(self._config.fee_payment),
             instructions=payload_instructions,
             entries=payload_entries,
-            creation_time_ms=effective_creation,
-            ttl_ms=effective_ttl,
-            nonce=effective_nonce,
-            metadata=effective_metadata,
+            creation_time_ms=self._creation_time_ms,
+            ttl_ms=self._config.ttl_ms,
+            nonce=self._config.nonce,
+            metadata=(
+                None
+                if self._config.metadata is None
+                else _thaw_json(self._config.metadata)
+            ),
             lane_privacy_attachments=self._lane_privacy_attachments,
         )
 
@@ -1472,36 +1450,27 @@ class TransactionDraft:
     def sign_with_keypair(
         self,
         keypair: Ed25519KeyPair,
-        *,
-        instructions: Optional[Iterable[Instruction]] = None,
-        **overrides: Any,
     ) -> SignedTransactionEnvelope:
         """Sign using an :class:`Ed25519KeyPair`."""
 
-        return self.sign(keypair.private_key, instructions=instructions, **overrides)
+        return self.sign(keypair.private_key)
 
     def sign_hex_private_key(
         self,
         private_key_hex: str,
-        *,
-        instructions: Optional[Iterable[Instruction]] = None,
-        **overrides: Any,
     ) -> SignedTransactionEnvelope:
         """Sign using a hex-encoded private key string."""
 
-        return self.sign(bytes.fromhex(private_key_hex), instructions=instructions, **overrides)
+        return self.sign(Ed25519KeyPair.from_private_key_hex(private_key_hex).private_key)
 
     def sign_and_submit(
         self,
         client: "ToriiClient",
         private_key: bytes,
-        *,
-        instructions: Optional[Iterable[Instruction]] = None,
-        **overrides: Any,
     ) -> tuple[SignedTransactionEnvelope, Any]:
         """Sign the draft and submit it via the provided :class:`ToriiClient`."""
 
-        envelope = self.sign(private_key, instructions=instructions, **overrides)
+        envelope = self.sign(private_key)
         status = client.submit_transaction_envelope(envelope)
         return envelope, status
 
@@ -1552,17 +1521,12 @@ class TransactionDraft:
         self,
         client: "ToriiClient",
         private_key_hex: str,
-        *,
-        instructions: Optional[Iterable[Instruction]] = None,
-        **overrides: Any,
     ) -> tuple[SignedTransactionEnvelope, Any]:
         """Sign using a hex-encoded key and submit the transaction."""
 
         return self.sign_and_submit(
             client,
-            bytes.fromhex(private_key_hex),
-            instructions=instructions,
-            **overrides,
+            Ed25519KeyPair.from_private_key_hex(private_key_hex).private_key,
         )
 
     def to_builder(self) -> TransactionBuilder:
@@ -1571,20 +1535,19 @@ class TransactionDraft:
         builder = TransactionBuilder(
             self._config.network_id,
             self._config.authority,
-            json.dumps(self._config.fee_payment, separators=(",", ":")),
+            json.dumps(_thaw_json(self._config.fee_payment), separators=(",", ":")),
         )
         if self._privacy_capability_manifest is not None:
             builder.bind_privacy_exact12_capability_manifest_v1(
                 self._privacy_capability_manifest
             )
-            self._privacy_capability_manifest = None
-        builder.set_creation_time_ms(_ensure_creation_time_ms(self._config))
+        builder.set_creation_time_ms(self._creation_time_ms)
         if self._config.ttl_ms is not None:
             builder.set_ttl_ms(int(self._config.ttl_ms))
         if self._config.nonce is not None:
             builder.set_nonce(int(self._config.nonce))
         if self._config.metadata is not None:
-            builder.set_metadata(self._config.metadata)
+            builder.set_metadata(_thaw_json(self._config.metadata))
         if self._explicit_batch:
             builder.use_executable_batch()
         for entry in self._entries:
@@ -1662,9 +1625,11 @@ class TransactionDraft:
         if self._config.nonce is not None:
             manifest["nonce"] = int(self._config.nonce)
 
-        creation_time_ms = self._config.creation_time_ms
-        if include_creation_time and creation_time_ms is None:
-            creation_time_ms = _ensure_creation_time_ms(self._config)
+        creation_time_ms = (
+            self._creation_time_ms
+            if include_creation_time
+            else self._config.creation_time_ms
+        )
         if creation_time_ms is not None:
             manifest["creation_time_ms"] = int(creation_time_ms)
 

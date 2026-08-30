@@ -25,7 +25,7 @@ use crate::{
     query::store::LiveQueryStore,
     smartcontracts::Registrable,
     state::State,
-    sumeragi::{consensus::Phase, network_topology::Topology},
+    sumeragi::network_topology::Topology,
 };
 use iroha_config::{
     base::WithOrigin,

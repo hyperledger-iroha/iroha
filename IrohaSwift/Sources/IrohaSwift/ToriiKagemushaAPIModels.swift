@@ -1294,6 +1294,8 @@ private enum KagemushaOperationValidation {
         let bytes = Array(value.utf8)
         guard bytes.count == 64,
               bytes.contains(where: { $0 != UInt8(ascii: "0") }),
+              let marker = bytes.last,
+              "13579bdf".utf8.contains(marker),
               bytes.allSatisfy({
                   ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
                       || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))

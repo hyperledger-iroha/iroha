@@ -2067,6 +2067,13 @@ pub(super) fn java_kagemusha_lower_hex_32(value: &str, field: &str) -> Result<Ve
     }
     Ok(digest)
 }
+fn java_kagemusha_transaction_hash(value: &str) -> Result<Vec<u8>, String> {
+    let digest = java_kagemusha_lower_hex_32(value, "transactionHash")?;
+    if digest.last().is_none_or(|octet| octet & 1 != 1) {
+        return Err("transactionHash must preserve the Iroha hash marker".to_owned());
+    }
+    Ok(digest)
+}
 #[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_kagemusha_prepare_authorization_v2(
     env: &mut jni::JNIEnv<'_>,
@@ -2505,6 +2512,82 @@ pub(super) fn java_native_kagemusha_prepare_top_up_v4(
         }
     }
 }
+pub(super) fn java_native_kagemusha_project_operation_reference_v4(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_kagemusha_archive_array_result(env, "operation reference projection", |env| {
+        use iroha_torii_shared::offline_api::{
+            OfflineOperationKind, OfflineOperationReference, OfflineOperationState,
+        };
+        let reference = java_kagemusha_decode_archive::<OfflineOperationReference>(
+            env,
+            &archive,
+            "operationReference",
+        )?;
+        let operation_id = java_kagemusha_lower_hex_32(&reference.operation_id, "operationId")?;
+        let expected_status_uri = format!("/v1/offline/operations/{}", reference.operation_id);
+        if reference.state != OfflineOperationState::Pending
+            || reference.status_uri != expected_status_uri
+            || reference.submitted_at_ms == 0
+        {
+            return Err("operation reference fields are not canonically bound".to_owned());
+        }
+        let fields = vec![
+            match reference.kind {
+                OfflineOperationKind::TopUp => b"top_up".to_vec(),
+                OfflineOperationKind::Redeem => b"redeem".to_vec(),
+            },
+            operation_id,
+            java_kagemusha_transaction_hash(&reference.transaction_hash)?,
+            reference.status_uri.into_bytes(),
+            reference.submitted_at_ms.to_string().into_bytes(),
+        ];
+        java_kagemusha_byte_arrays(env, &fields)
+    })
+}
+pub(super) fn java_native_kagemusha_project_top_up_request_operation_id_v4(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "top-up request operation projection", |env| {
+        let request = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
+        >(
+            env,
+            &archive,
+            "topUpRequest",
+            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4,
+        )?;
+        request
+            .validate_public_binding()
+            .map_err(|_| "topUpRequest binding is invalid".to_owned())?;
+        env.byte_array_from_slice(&request.operation_id)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
+pub(super) fn java_native_kagemusha_project_redeem_request_operation_id_v4(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_kagemusha_archive_array_result(env, "redeem request operation projection", |env| {
+        let request = java_kagemusha_decode_archive_bounded::<
+            iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV4,
+        >(
+            env,
+            &archive,
+            "redeemRequest",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
+        )?;
+        request
+            .validate_public_binding()
+            .map_err(|_| "redeemRequest binding is invalid".to_owned())?;
+        env.byte_array_from_slice(&request.operation_id)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })
+}
 pub(super) fn java_native_kagemusha_project_operation_status_v4(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
@@ -2531,7 +2614,7 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                     OfflineOperationKind::Redeem => b"redeem".to_vec(),
                 },
                 java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                java_kagemusha_lower_hex_32(&transaction_hash, "transactionHash")?,
+                java_kagemusha_transaction_hash(&transaction_hash)?,
                 submitted_at_ms.to_string().into_bytes(),
                 Vec::new(),
                 Vec::new(),
@@ -2546,7 +2629,7 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                 b"applied".to_vec(),
                 b"top_up".to_vec(),
                 java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                java_kagemusha_lower_hex_32(&result.transaction_hash, "transactionHash")?,
+                java_kagemusha_transaction_hash(&result.transaction_hash)?,
                 result.finalized_block_height.to_string().into_bytes(),
                 result.server_time_ms.to_string().into_bytes(),
                 norito::to_bytes(&result.anchor).map_err(|error| {
@@ -2564,7 +2647,7 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                 b"applied".to_vec(),
                 b"redeem".to_vec(),
                 java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                java_kagemusha_lower_hex_32(&result.transaction_hash, "transactionHash")?,
+                java_kagemusha_transaction_hash(&result.transaction_hash)?,
                 result.finalized_block_height.to_string().into_bytes(),
                 result.server_time_ms.to_string().into_bytes(),
                 Vec::new(),
@@ -2594,7 +2677,7 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
                         OfflineOperationKind::Redeem => b"redeem".to_vec(),
                     },
                     java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                    java_kagemusha_lower_hex_32(&transaction_hash, "transactionHash")?,
+                    java_kagemusha_transaction_hash(&transaction_hash)?,
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
