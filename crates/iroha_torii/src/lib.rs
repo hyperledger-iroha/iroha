@@ -12625,7 +12625,6 @@ macro_rules! contracts_rollup_event_get_handlers {
             #[cfg(feature = "app_api")]
             async fn $handler(
                 State(app): State<SharedAppState>,
-                Extension(authenticated_operator): Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
                 headers: axum::http::HeaderMap,
                 axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
                 AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
@@ -21320,7 +21319,7 @@ impl ToriiDataspaceReadContext {
                     block
                         .external_signed_transaction_ref_at(index)
                         .is_some_and(|candidate| {
-                            candidate.hash() == transaction.hash()
+                            candidate.hash() == *transaction.hash()
                                 && visibility.allows_external_entrypoint(&block, index)
                         })
                 })
@@ -38548,7 +38547,7 @@ where
         .await
         .map_err(|error| Error::AppServiceUnavailable {
             code: worker_failure_code,
-            message: error,
+            message: error.to_string(),
         })?;
     Ok((result?, permit))
 }

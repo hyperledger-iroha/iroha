@@ -22,7 +22,6 @@ use iroha_data_model::{
         PrivateSettlementAuditPolicyV1, PrivateSettlementCapsulePaddingV1,
         PrivateSettlementValidationError, PrivateSettlementWrappedDekV1,
         private_settlement_audit_plaintext_commitment_v1 as data_model_plaintext_commitment_v1,
-        private_settlement_capsule_canonical_upper_bound_v1,
     },
 };
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
@@ -456,6 +455,7 @@ mod tests {
     use super::*;
     use crate::private_settlement::sidecar_store::tests::sidecar_fixture;
     use iroha_crypto::{Algorithm, HybridKeyPair, KeyPair};
+    use iroha_data_model::nexus::private_settlement_capsule_canonical_upper_bound_v1;
     use iroha_data_model::nexus::{
         PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditorV1,
         PrivateSettlementHybridPublicKeyV1,

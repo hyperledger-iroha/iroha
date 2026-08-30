@@ -6492,6 +6492,7 @@ mod timed_ovn_persistence_phase_tests {
         let (mut world, key_session_id, _) = world_with_frozen_tle_roster_binding_v1();
         let mut misbound = *world
             .tle_key_session_lifecycles
+            .view()
             .get(&key_session_id)
             .expect("fixture lifecycle");
         misbound.key_session_id = TleKeySessionId::new([0xDD; 32]);
@@ -6513,6 +6514,7 @@ mod timed_ovn_persistence_phase_tests {
         let (mut world, key_session_id, _) = world_with_frozen_tle_roster_binding_v1();
         let mut miscounted = *world
             .tle_key_session_lifecycles
+            .view()
             .get(&key_session_id)
             .expect("fixture lifecycle");
         miscounted.fresh_ballot_uses = 1;

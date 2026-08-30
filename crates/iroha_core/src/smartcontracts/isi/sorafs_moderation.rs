@@ -54,14 +54,14 @@ use iroha_data_model::{
             ModerationFinalizedCursorV1, ModerationFinalizedEventPageV1,
             ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1,
             ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
-            ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerStatusV1,
-            ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
-            ModerationOutcomeRecordV1, ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1,
-            ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
-            is_canonical_moderation_identifier_v1, sorafs_moderation_panel_roster_hash_v1,
-            sorafs_moderation_pop_challenge_v1, sorafs_moderation_pop_verifier_context_v1,
-            sorafs_moderation_select_panel_v1, sorafs_moderation_sortition_digest_v1,
-            sorafs_moderation_sortition_seed_v1,
+            ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerPolicyV1,
+            ModerationLedgerStatusV1, ModerationNoShowKindV1, ModerationNoShowRecordV1,
+            ModerationOutcomeKindV1, ModerationOutcomeRecordV1, ModerationPanelSelectionV1,
+            ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1, ModerationSortitionError,
+            ModerationVoteCountsV1, is_canonical_moderation_identifier_v1,
+            sorafs_moderation_panel_roster_hash_v1, sorafs_moderation_pop_challenge_v1,
+            sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
+            sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
         },
     },
     state_path::StatePath,
@@ -3022,7 +3022,7 @@ impl Execute for ActivateSorafsModerationCase {
         })?;
         let case = ModerationCaseRecordV1 {
             spec,
-            policy: appeal.policy,
+            policy: appeal.policy.clone(),
             status: ModerationCaseStatusV1::Open,
             opened_at_unix_ms: now,
             opened_by: authority.clone(),
@@ -5614,24 +5614,34 @@ mod tests {
         world
             .account_permissions
             .insert(manager.clone(), permissions);
-        let mut state = State::new_for_testing(
+        let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
         let voting_asset_id = state.gov.voting_asset_id.clone();
-        for custody in [
+        let custody_accounts = [
             state.gov.bond_escrow_account.clone(),
             state.gov.slash_receiver_account.clone(),
-        ] {
-            if state.world.accounts.get(&custody).is_none() {
+        ];
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).expect("fixture block height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        for custody in custody_accounts {
+            if transaction.world.accounts.get(&custody).is_none() {
                 let (id, value) = Account::new(custody.clone())
                     .build(manager)
                     .into_key_value();
-                state.world.accounts.insert(id, value);
+                transaction.world.accounts.insert(id, value);
             }
         }
-        state.world.asset_definitions.insert(
+        transaction.world.asset_definitions.insert(
             voting_asset_id.clone(),
             AssetDefinition::numeric(
                 voting_asset_id.clone(),
@@ -5645,13 +5655,17 @@ mod tests {
             let asset_id = AssetId::new(voting_asset_id.clone(), account(keypair));
             let balance = Quantity::from(1_000_u32);
             let (id, value) = Asset::new(asset_id.clone(), balance.clone()).into_key_value();
-            state.world.assets.insert(id, value);
-            state.world.track_asset_holder(&asset_id);
-            state
+            transaction.world.assets.insert(id, value);
+            transaction.world.track_asset_holder(&asset_id);
+            transaction
                 .world
                 .increase_asset_total_amount(&voting_asset_id, &balance)
                 .expect("moderation fixture voting-asset total remains valid");
         }
+        transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit moderation fixture world state");
         state
     }
     fn voting_asset_balance(state: &State, account: &AccountId) -> Quantity {
@@ -5659,6 +5673,7 @@ mod tests {
         state
             .world
             .assets
+            .view()
             .get(&id)
             .map(|value| value.as_ref().clone())
             .unwrap_or_else(Quantity::zero)

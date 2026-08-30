@@ -1025,6 +1025,10 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            authority.clone(),
+        );
         activate_instance(&authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate instance");
         assert_eq!(
@@ -1126,6 +1130,10 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            authority.clone(),
+        );
         activate_instance(&authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("governed activation");
         stx.apply();
@@ -1150,6 +1158,12 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
+        transaction
+            .world
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                authority.clone(),
+            );
         let (v1_code, v1_manifest) = lifecycle_contract(
             r#"
 seiyaku LifecycleOne {
@@ -1166,6 +1180,7 @@ seiyaku LifecycleOne {
         activate_instance(
             &authority,
             contract_address.clone(),
+            1,
             v1_hash,
             &mut transaction,
         )
@@ -1230,6 +1245,7 @@ seiyaku LifecycleOne {
         activate_instance(
             &authority,
             contract_address.clone(),
+            2,
             v1_hash,
             &mut transaction,
         )
@@ -1256,6 +1272,7 @@ seiyaku LifecycleTwo {
         let unauthorized_kaizen = activate_instance(
             &authority,
             contract_address.clone(),
+            2,
             v2_hash,
             &mut transaction,
         )
@@ -1286,6 +1303,7 @@ seiyaku LifecycleTwo {
         activate_instance(
             &authority,
             contract_address.clone(),
+            2,
             v2_hash,
             &mut transaction,
         )
@@ -1405,6 +1423,12 @@ seiyaku LifecycleAba {
         let mut first_block = state.block(default_header(1));
         let mut first_transaction = first_block.transaction();
         first_transaction.tx_call_hash = Some(Hash::new(b"lifecycle-aba-first-activation"));
+        first_transaction
+            .world
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                authority.clone(),
+            );
         let code_hash = register_code_bytes(&authority, code, &mut first_transaction)
             .expect("register lifecycle bytecode");
         register_manifest(
@@ -1416,6 +1440,7 @@ seiyaku LifecycleAba {
         activate_instance(
             &authority,
             contract_address.clone(),
+            1,
             code_hash,
             &mut first_transaction,
         )
@@ -1440,7 +1465,7 @@ seiyaku LifecycleAba {
         deactivate.tx_call_hash = Some(Hash::new(b"lifecycle-aba-deactivation"));
         DeactivateContractInstance {
             contract_address: contract_address.clone(),
-            expected_revision: 1,
+            expected_revision: 2,
             reason: Some("ABA regression fixture".to_owned()),
         }
         .execute(&authority, &mut deactivate)
@@ -1455,6 +1480,7 @@ seiyaku LifecycleAba {
         activate_instance(
             &authority,
             contract_address.clone(),
+            3,
             code_hash,
             &mut second_transaction,
         )

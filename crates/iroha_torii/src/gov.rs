@@ -3479,6 +3479,7 @@ seiyaku GovernedReadFixture {
         activate_instance(
             &harness.authority,
             contract_address.clone(),
+            1,
             code_hash,
             &mut transaction,
         )

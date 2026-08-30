@@ -528,7 +528,7 @@ impl PrivateSettlementCoordinatorErrorV1 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::private_settlement::{
         protocol::{
@@ -536,8 +536,8 @@ mod tests {
         },
         sidecar_store::tests::{SidecarFixtureV1, sidecar_fixture},
     };
-    use iroha_crypto::{HashOf, KeyPair};
-    use iroha_data_model::peer::PeerId;
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_data_model::{account::AccountId, peer::PeerId};
 
     fn fixture_parts() -> (
         SidecarFixtureV1,
@@ -603,6 +603,66 @@ mod tests {
             .collect::<Vec<_>>();
         aggregate_private_settlement_phase_votes_v1(body, delta.leg_ordinal, authority, &votes)
             .expect("phase certificate")
+    }
+
+    pub(crate) fn certified_commit_bundle_fixture() -> (PrivateSettlementCommitBundleV1, KeyPair) {
+        let (fixture, deltas, authorities) = fixture_parts();
+        let manifest = fixture.sidecar.manifest.clone();
+        let mut coordinator =
+            PrivateSettlementBundleCoordinatorV1::new(manifest.clone(), authorities.clone())
+                .expect("coordinator fixture");
+        for index in 0..deltas.len() {
+            let ordinal = u8::try_from(index).expect("fixture ordinal fits u8");
+            coordinator
+                .record_audited(
+                    ordinal,
+                    Hash::new([ordinal]),
+                    manifest.authority_context_height,
+                )
+                .expect("audit fixture");
+        }
+        for index in 0..deltas.len() {
+            let prepare = certificate(
+                &manifest,
+                &deltas[index],
+                &authorities[index],
+                &fixture.validator_keys,
+                PrivateSettlementPhaseV1::Prepare,
+                private_settlement_reserved_prepared_bundle_digest_v1(),
+            );
+            coordinator
+                .record_prepare(
+                    deltas[index].clone(),
+                    prepare,
+                    manifest.authority_context_height,
+                )
+                .expect("Prepare fixture");
+        }
+        let prepared_bundle_digest = coordinator
+            .prepared_bundle_digest()
+            .expect("complete Prepare fixture");
+        for index in 0..deltas.len() {
+            let commit = certificate(
+                &manifest,
+                &deltas[index],
+                &authorities[index],
+                &fixture.validator_keys,
+                PrivateSettlementPhaseV1::Commit,
+                prepared_bundle_digest,
+            );
+            coordinator
+                .record_commit(commit, manifest.authority_context_height)
+                .expect("Commit fixture");
+        }
+        let bundle = coordinator
+            .carrier_bundle(manifest.authority_context_height, 4 * 1024 * 1024)
+            .expect("certified carrier fixture");
+        let sponsor_key = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
+        assert_eq!(
+            bundle.manifest.sponsor,
+            AccountId::new(sponsor_key.public_key().clone())
+        );
+        (bundle, sponsor_key)
     }
 
     #[test]

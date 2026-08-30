@@ -24100,6 +24100,10 @@ mod multisig_selector_tests {
         );
         let manifest = verified.manifest.signed(authority_keypair);
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            authority.clone(),
+        );
         activate_instance(authority, contract_address.clone(), 1, code_hash, &mut stx)
             .expect("activate instance");
         if let Some(contract_alias) = contract_alias {
@@ -37667,7 +37671,7 @@ const ENDPOINT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 const ENDPOINT_EXPLORER_BLOCKS: &str = "/v1/explorer/blocks";
 const ENDPOINT_EXPLORER_HEALTH: &str = "/v1/explorer/health";
 const ENDPOINT_EXPLORER_BLOCK_DETAIL: &str = "/v1/explorer/blocks/{identifier}";
-const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v1/explorer/transactions";
+pub(crate) const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v1/explorer/transactions";
 const ENDPOINT_EXPLORER_TRANSACTIONS_LATEST: &str = "/v1/explorer/transactions/latest";
 const ENDPOINT_EXPLORER_INSTRUCTIONS: &str = "/v1/explorer/instructions";
 const ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST: &str = "/v1/explorer/instructions/latest";
@@ -47172,6 +47176,7 @@ mod validation_fee_torii_ingress_tests {
             ParliamentBody::InterestPanel,
             ParliamentBody::ReviewPanel,
             ParliamentBody::CoordinationCouncil,
+            ParliamentBody::MpcCommittee,
             ParliamentBody::FmaCommittee,
             ParliamentBody::OversightCommittee,
             ParliamentBody::PolicyJury,
@@ -47614,9 +47619,14 @@ mod validation_fee_torii_ingress_tests {
             &mut stx,
         )
         .expect("register signed payout-contract manifest");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            payout_binding.contract_address.clone(),
+            authority.clone(),
+        );
         iroha_core::smartcontracts::code::activate_instance(
             authority,
             payout_binding.contract_address,
+            1,
             registered_code_hash,
             &mut stx,
         )
@@ -47634,9 +47644,12 @@ mod validation_fee_torii_ingress_tests {
             &mut stx,
         )
         .expect("register signed pool-contract manifest");
+        stx.world
+            .bind_inactive_contract_subject_for_testing(pool_contract_address(), authority.clone());
         iroha_core::smartcontracts::code::activate_instance(
             authority,
             pool_contract_address(),
+            1,
             pool_code_hash,
             &mut stx,
         )

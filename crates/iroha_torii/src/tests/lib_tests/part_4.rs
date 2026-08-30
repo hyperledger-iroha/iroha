@@ -827,7 +827,7 @@ async fn zk_ivm_cancelled_started_worker_holds_permit_until_physical_exit() {
     let permit = semaphore.clone().acquire_owned().await.expect("permit");
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let blocking = tokio::task::spawn_blocking(move || {
+    let blocking = crate::panic_recovery::spawn_blocking_recoverable(move || {
         started_tx.send(()).expect("started");
         release_rx.recv().expect("release");
         Err::<(), String>("discard me".to_owned())

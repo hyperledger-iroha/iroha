@@ -58,6 +58,20 @@ const fn private_settlement_carrier_height_is_live_v1(
     current_height >= authority_context_height && current_height < expiry_height
 }
 
+fn private_settlement_carrier_within_wire_bound_v1(
+    transaction: &SignedTransaction,
+    max_signed_transaction_bytes: u64,
+) -> Result<bool, norito::Error> {
+    let encoded = transaction.encode_wire_v1()?;
+    let signed_transaction_bytes = u64::try_from(encoded.len()).map_err(|_| {
+        norito::Error::Io(std::io::Error::other(
+            "private-settlement carrier transaction is too large",
+        ))
+    })?;
+    Ok(max_signed_transaction_bytes != 0
+        && signed_transaction_bytes <= max_signed_transaction_bytes)
+}
+
 fn governed_sidecar_store_config_v1(
     config: &iroha_config::parameters::actual::NexusAtomicPrivateSettlement,
 ) -> Result<PrivateSettlementSidecarStoreConfigV1, PrivateSettlementSidecarStoreErrorV1> {
@@ -170,16 +184,19 @@ impl PrivateSettlementToriiRuntimeV1 {
 mod governed_sidecar_store_config_tests {
     use std::num::{NonZeroU32, NonZeroU64};
 
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        NetworkId,
+        Level, NetworkId,
+        account::AccountId,
         block::BlockHeader,
+        isi::Log,
         nexus::{
             ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, LaneId,
             PRIVATE_SETTLEMENT_XCHACHA_NONCE_BYTES_V1, PrivateSettlementAuditAadV1,
             PrivateSettlementAuditCapsuleV1, PrivateSettlementCapsulePaddingV1,
             PrivateSettlementRouteV1,
         },
+        transaction::{FeePaymentIntent, TransactionBuilder},
     };
 
     use super::*;
@@ -253,6 +270,42 @@ mod governed_sidecar_store_config_tests {
         assert!(private_settlement_carrier_height_is_live_v1(19, 10, 20));
         assert!(!private_settlement_carrier_height_is_live_v1(20, 10, 20));
         assert!(!private_settlement_carrier_height_is_live_v1(21, 10, 20));
+    }
+
+    #[test]
+    fn carrier_wire_bound_counts_the_versioned_signed_envelope() {
+        let signer = KeyPair::from_seed(vec![0xA7; 32], Algorithm::Ed25519);
+        let transaction = TransactionBuilder::new(
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"Torii carrier wire bound",
+            ))),
+            AccountId::new(signer.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "complete signed carrier envelope".to_owned(),
+        )])
+        .sign(signer.private_key());
+        let exact_signed_bytes = u64::try_from(
+            transaction
+                .encode_wire_v1()
+                .expect("fixed V1 transaction wire encodes")
+                .len(),
+        )
+        .expect("fixture transaction length fits u64");
+        assert!(
+            !private_settlement_carrier_within_wire_bound_v1(&transaction, exact_signed_bytes - 1,)
+                .expect("carrier measurement succeeds")
+        );
+        assert!(
+            private_settlement_carrier_within_wire_bound_v1(&transaction, exact_signed_bytes)
+                .expect("carrier measurement succeeds")
+        );
+        assert!(
+            !private_settlement_carrier_within_wire_bound_v1(&transaction, 0)
+                .expect("zero limit fails closed")
+        );
     }
 
     #[test]
@@ -1276,18 +1329,14 @@ pub(crate) async fn handler_bundle_submit(
         .commit_bundle
         .clone()
         .into_receipt(manifest.authority_context_height);
-    let carrier_bytes = norito::encode_canonical(&transaction)
-        .and_then(|encoded| {
-            u64::try_from(encoded.len()).map_err(|_| {
-                norito::Error::Io(std::io::Error::other(
-                    "private-settlement carrier transaction is too large",
-                ))
-            })
-        })
-        .map_err(|_| crate::Error::AppQueryValidation {
-            code: "private_settlement_invalid_carrier",
-            message: "private-settlement carrier is not canonically encodable".to_owned(),
-        })?;
+    let carrier_within_bound = private_settlement_carrier_within_wire_bound_v1(
+        &transaction,
+        config.max_carrier_bytes.get(),
+    )
+    .map_err(|_| crate::Error::AppQueryValidation {
+        code: "private_settlement_invalid_carrier",
+        message: "private-settlement carrier is not canonically encodable".to_owned(),
+    })?;
     if authenticated.account != manifest.sponsor
         || transaction.authority() != &manifest.sponsor
         || transaction.fee_payment_intent() != &manifest.public_fee_intent
@@ -1303,7 +1352,7 @@ pub(crate) async fn handler_bundle_submit(
             .expiry_height
             .checked_sub(manifest.authority_context_height)
             .is_none_or(|span| span > config.max_expiry_blocks.get())
-        || carrier_bytes > config.max_carrier_bytes.get()
+        || !carrier_within_bound
     {
         return Err(crate::Error::AppQueryValidation {
             code: "private_settlement_invalid_carrier",

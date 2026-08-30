@@ -866,9 +866,13 @@ fn install_canonical_post_enactment_validation_fee_state(
         &mut state_transaction,
     )
     .expect("register signed payout-contract manifest");
+    state_transaction
+        .world
+        .bind_inactive_contract_subject_for_testing(payout_contract_address(), authority.clone());
     iroha_core::smartcontracts::code::activate_instance(
         authority,
         payout_contract_address(),
+        1,
         registered_code_hash,
         &mut state_transaction,
     )
@@ -887,9 +891,13 @@ fn install_canonical_post_enactment_validation_fee_state(
         &mut state_transaction,
     )
     .expect("register signed pool-contract manifest");
+    state_transaction
+        .world
+        .bind_inactive_contract_subject_for_testing(pool_contract_address(), authority.clone());
     iroha_core::smartcontracts::code::activate_instance(
         authority,
         pool_contract_address(),
+        1,
         pool_code_hash,
         &mut state_transaction,
     )
