@@ -1,8 +1,8 @@
-use ivm::{IVM, encoding, instruction, zk::verify_trace};
+use ivm::{IVM, encoding, instruction, zk::check_diagnostic_trace};
 mod common;
 use common::assemble_zk;
 #[test]
-fn test_verify_trace_pass() {
+fn test_diagnostic_trace_check_passes() {
     // Program: ASSERT x1==0; HALT
     let assert_inst = encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 1, 0);
     let halt_inst = encoding::wide::encode_halt();
@@ -17,16 +17,10 @@ fn test_verify_trace_pass() {
     let res = vm.run();
     assert!(res.is_ok());
     let trace = vm.register_trace();
-    verify_trace(
-        &trace,
-        vm.constraints(),
-        vm.memory_log(),
-        &vm.register_log(),
-    )
-    .unwrap();
+    check_diagnostic_trace(&trace, vm.constraints(), &vm.register_log()).unwrap();
 }
 #[test]
-fn test_verify_trace_fail() {
+fn test_diagnostic_trace_check_rejects_failed_constraint() {
     // ASSERT on non-zero register should fail verification
     let assert_inst = encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 1, 0);
     let halt_inst = encoding::wide::encode_halt();
@@ -41,11 +35,6 @@ fn test_verify_trace_fail() {
     let res = vm.run();
     assert!(res.is_err());
     let trace = vm.register_trace();
-    let verify = verify_trace(
-        &trace,
-        vm.constraints(),
-        vm.memory_log(),
-        &vm.register_log(),
-    );
-    assert!(verify.is_err());
+    let check = check_diagnostic_trace(&trace, vm.constraints(), &vm.register_log());
+    assert!(check.is_err());
 }

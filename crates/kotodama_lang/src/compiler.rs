@@ -5280,23 +5280,23 @@ kotoage fn apply_batch() authorize("Admin") {{
         );
     }
     #[test]
-    fn prove_execution_builtin_emits_prove_execution_syscall_and_complete_access() {
+    fn execution_summary_builtin_emits_execution_summary_syscall_and_complete_access() {
         let src = include_str!("compiler/fixtures/v1/c075.ko");
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
             .compile_source_with_manifest(src)
-            .expect("compile prove_execution builtin");
+            .expect("compile execution_summary builtin");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
         let needle = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            u8::try_from(ivm_abi::syscalls::SYSCALL_PROVE_EXECUTION)
-                .expect("prove_execution syscall id fits in u8"),
+            u8::try_from(ivm_abi::syscalls::SYSCALL_EXECUTION_SUMMARY)
+                .expect("execution_summary syscall id fits in u8"),
         )
         .to_le_bytes();
         assert!(
             code.windows(needle.len()).any(|window| window == needle),
-            "expected PROVE_EXECUTION syscall in compiled code"
+            "expected EXECUTION_SUMMARY syscall in compiled code"
         );
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
         let proof = entrypoints
@@ -5309,12 +5309,12 @@ kotoage fn apply_batch() authorize("Admin") {{
         assert!(proof.write_keys.is_empty());
     }
     #[test]
-    fn prove_execution_builtin_rejects_arguments() {
+    fn execution_summary_builtin_rejects_arguments() {
         let parsed = parse(include_str!("compiler/fixtures/v1/c076.ko")).expect("parse source");
         let err = analyze(&parsed).expect_err("semantic analysis should reject proof arguments");
         assert!(
             err.message
-                .contains("crypto::prove_execution expects no arguments"),
+                .contains("crypto::execution_summary expects no arguments"),
             "unexpected semantic error: {}",
             err.message
         );
@@ -12150,8 +12150,8 @@ impl Compiler {
                             push_syscall_imm8(&mut code, *number);
                             uses_zk = true;
                         }
-                        Instr::ProveExecution { dest } => {
-                            push_syscall(&mut code, syscalls::SYSCALL_PROVE_EXECUTION);
+                        Instr::ExecutionSummary { dest } => {
+                            push_syscall(&mut code, syscalls::SYSCALL_EXECUTION_SUMMARY);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::Alloc { dest, bytes } => {
@@ -18831,7 +18831,9 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
             }
             _ => IrAccessClass::Ledger(BuiltinAccess::Dynamic),
         },
-        ir::Instr::ProveExecution { .. } => access_class_for_builtin(Builtin::ProveExecution),
+        ir::Instr::ExecutionSummary { .. } => {
+            access_class_for_builtin(Builtin::ExecutionSummary)
+        }
         ir::Instr::GrowHeap { .. } => access_class_for_builtin(Builtin::GrowHeap),
         ir::Instr::GetMerklePath { .. } => access_class_for_builtin(Builtin::GetMerklePath),
         ir::Instr::GetMerkleCompact { .. } => access_class_for_builtin(Builtin::GetMerkleCompact),

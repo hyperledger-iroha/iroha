@@ -220,8 +220,11 @@ global beacon, an install or retirement included in block `H` is effective at
 successor pointer after transaction execution, verifies and persists a pulse
 authorized from `H`'s parent state. This prevents a same-block rotation from
 invalidating or reinterpreting either an optional Parliament pulse or a
-consensus-required NPoS pulse. TLE cutover remains immediate and separately
-retains predecessor public state for ballots already bound to it.
+consensus-required NPoS pulse. TLE lifecycle changes use the same one-block
+boundary: an instruction in block
+`H` keeps the predecessor selectable through `H` and activates its successor at
+`H + 1`. Predecessor public state remains available for ballots already bound
+to it.
 The fail-safe Initial executor admits this proof-carrying instruction, and the
 validation-fee guard classifies it as balance-neutral control-plane state. This
 does not delegate lifecycle authority to the transaction signer: Core always
@@ -589,7 +592,9 @@ Code Size Cap
 
 - POST `/v1/gov/ballots/plain`
   - Request: { "authority": "<i105-account-id>", "network_id": "hash:<64-uppercase-hex>#<CRC16>", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": "6000", "direction": "Aye|Nay|Abstain" }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Success (`200`): { "drafted": true, "tx_instructions": [{…}] }
+  - Invalid requests return the standard Torii `ErrorEnvelope` with HTTP `400`;
+    a failed draft never returns a successful response with an embedded rejection.
   - Scope: standalone referenda only. This route builds
     `CastPlainBallot`; it does not cast a Parliament body ballot and its tally
     cannot authorize a typed proposal or be embedded in
@@ -936,7 +941,8 @@ Unlock Sweep (Operator/Audit)
       "direction": "Aye|Nay|Abstain?",
       "nullifier": "blake2b32:…64hex?"
     }
-  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Success (`200`): { "drafted": true, "tx_instructions": [{…}] }
+  - Invalid requests return the standard Torii `ErrorEnvelope` with HTTP `400`.
   - Notes:
     - `network_id` is the mandatory typed canonical hash of the genesis header.
       `authority`, `election_id`, and `backend` are exact non-empty tokens;
@@ -978,9 +984,7 @@ Unlock Sweep (Operator/Audit)
     }
   - Response:
     {
-      "ok": true,
-      "accepted": true,
-      "reason": "build transaction skeleton",
+      "drafted": true,
       "tx_instructions": [
         { "wire_id": "CastZkBallot", "payload_hex": "…" }
       ]
@@ -988,6 +992,8 @@ Unlock Sweep (Operator/Audit)
   - Notes:
     - The strict request has no private-key field; Torii returns only an
       unsigned instruction skeleton for local signing.
+    - Invalid ballot fields return the standard Torii `ErrorEnvelope` with
+      HTTP `400`; `drafted: true` is emitted only when the skeleton exists.
     - A supplied ballot owner must equal the authenticated request authority;
       Torii rejects mismatches before returning a skeleton.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.

@@ -519,6 +519,11 @@ to sign locally and submit:
 - POST `/v1/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
 - POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts canonical V1 `BallotProof` JSON directly.
 
+Both routes return `{ "drafted": true, "tx_instructions": [...] }` only after
+constructing one unsigned instruction. Invalid fields return Torii's standard
+`ErrorEnvelope` with HTTP `400`; these drafting routes never report a
+transaction as accepted.
+
 Both routes require one typed genesis-derived `network_id` and canonical
 exact-network account authentication over the bounded raw request before DTO
 decoding. The authenticated account must equal the body `authority`; retired

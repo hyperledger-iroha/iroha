@@ -2506,11 +2506,15 @@ def _validate_codec_value(
         record[value_field], f"SCCP transfer.{value_field}", maximum_bytes=256
     )
     value = bytes.fromhex(encoded[2:])
-    valid = (
-        codec == SCCP_CODEC_CANONICAL_TEXT
-        and len(value) <= 256
-        and all(0x21 <= byte <= 0x7E for byte in value)
-    ) or (
+    if codec == SCCP_CODEC_CANONICAL_TEXT:
+        try:
+            text = value.decode("utf-8")
+            valid = normalize_sccp_codec_value(codec, text) == value
+        except (UnicodeDecodeError, TypeError, ValueError):
+            valid = False
+    else:
+        valid = False
+    valid = valid or (
         codec == SCCP_CODEC_EVM_ADDRESS20 and len(value) == 20 and any(value)
     ) or (
         codec == SCCP_CODEC_TRON_ADDRESS21

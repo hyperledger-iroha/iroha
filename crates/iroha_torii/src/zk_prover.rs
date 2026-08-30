@@ -55,6 +55,7 @@ use iroha_data_model::proof::{
     VerifyingKeyId, VerifyingKeyRecord,
 };
 use iroha_data_model::zk::BackendTag;
+use iroha_futures::supervisor::ShutdownSignal;
 use mv::storage::StorageReadOnly;
 use norito::json;
 use parking_lot::{Mutex, RwLock};
@@ -2415,7 +2416,7 @@ pub fn scan_once() -> usize {
     block_on_scan().processed_reports
 }
 /// Start background scan worker when enabled. No-op if disabled.
-pub fn start_worker() {
+pub fn start_worker(shutdown: ShutdownSignal) {
     if !cfg_enabled() {
         return;
     }
@@ -2423,7 +2424,10 @@ pub fn start_worker() {
     let period = cfg_scan_period();
     tokio::spawn(async move {
         loop {
-            let stats = run_budgeted_scan().await;
+            let stats = tokio::select! {
+                () = shutdown.receive() => break,
+                stats = run_budgeted_scan() => stats,
+            };
             if let Some(reason) = stats.budget_exhausted {
                 iroha_logger::warn!(%reason, processed = stats.processed_reports, bytes = stats.bytes_processed, "Background prover scan hit budget");
             }
@@ -2431,7 +2435,10 @@ pub fn start_worker() {
                 crate::panic_recovery::spawn_blocking_recoverable(gc_reports_once),
             )
             .await;
-            tokio::time::sleep(period).await;
+            tokio::select! {
+                () = shutdown.receive() => break,
+                () = tokio::time::sleep(period) => {}
+            }
         }
     });
 }

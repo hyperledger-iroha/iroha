@@ -7,8 +7,8 @@ use iroha_crypto::{
 };
 use iroha_data_model::{name::Name, prelude::AccountId};
 use ivm::{
-    ExecutionProof, IVM, IVMHost, PointerType, VMError, encoding, host::DefaultHost, instruction,
-    syscalls,
+    ExecutionSummary, IVM, IVMHost, PointerType, VMError, encoding, host::DefaultHost,
+    instruction, syscalls,
 };
 use sha2::Digest as Sha2Digest;
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
@@ -312,8 +312,8 @@ fn test_verify_proof_syscall() {
     let mut vm = IVM::new(u64::MAX);
     let prog = assemble_syscall(syscalls::SYSCALL_VERIFY_PROOF as u8);
     vm.load_program(&prog).unwrap();
-    let proof = norito::to_bytes(&vm.execution_proof()).expect("encode execution proof");
-    let proof_tlv = make_tlv(PointerType::NoritoBytes as u16, &proof);
+    let summary = norito::to_bytes(&vm.execution_summary()).expect("encode execution summary");
+    let proof_tlv = make_tlv(PointerType::NoritoBytes as u16, &summary);
     let proof_pointer = vm
         .alloc_input_tlv(&proof_tlv)
         .expect("allocate proof input");
@@ -325,42 +325,43 @@ fn test_verify_proof_syscall() {
     ));
 }
 #[test]
-fn test_prove_execution_syscall_returns_deterministic_summary() {
+fn test_execution_summary_syscall_returns_deterministic_summary() {
     let mut vm = IVM::new(u64::MAX);
-    let prog = assemble_syscall(syscalls::SYSCALL_PROVE_EXECUTION as u8);
+    let prog = assemble_syscall(syscalls::SYSCALL_EXECUTION_SUMMARY as u8);
     vm.load_program(&prog).unwrap();
-    vm.run().expect("PROVE_EXECUTION should produce a summary");
+    vm.run().expect("EXECUTION_SUMMARY should produce a summary");
     assert_eq!(vm.register(11), 0);
     let ptr = vm.register(10);
-    let tlv = vm.memory.validate_tlv(ptr).expect("proof tlv");
+    let tlv = vm.memory.validate_tlv(ptr).expect("summary TLV");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let proof: ExecutionProof = norito::decode_from_bytes(tlv.payload).expect("decode proof");
-    assert_eq!(proof.version, ivm::EXECUTION_PROOF_VERSION_V1);
-    assert_eq!(proof.code_hash, vm.code_hash());
-    assert!(proof.gas_used > 0);
+    let summary: ExecutionSummary =
+        norito::decode_from_bytes(tlv.payload).expect("decode summary");
+    assert_eq!(summary.version, ivm::EXECUTION_SUMMARY_VERSION_V1);
+    assert_eq!(summary.code_hash, vm.code_hash());
+    assert!(summary.gas_used > 0);
     let first_payload = tlv.payload.to_vec();
     let mut vm_again = IVM::new(u64::MAX);
     vm_again.load_program(&prog).unwrap();
-    vm_again.run().expect("second proof run");
+    vm_again.run().expect("second summary run");
     let tlv_again = vm_again
         .memory
         .validate_tlv(vm_again.register(10))
-        .expect("second proof tlv");
+        .expect("second summary TLV");
     assert_eq!(
         first_payload, tlv_again.payload,
-        "execution proof summaries must be byte-identical for identical input"
+        "execution summaries must be byte-identical for identical input"
     );
 }
 
 #[test]
-fn traced_prove_execution_quotes_and_commits_the_invocation_register_log() {
-    struct RecordingProofHost {
+fn traced_execution_summary_quotes_and_commits_the_invocation_register_log() {
+    struct RecordingSummaryHost {
         inner: DefaultHost,
         quote: Cell<Option<u64>>,
         actual: Option<u64>,
     }
 
-    impl IVMHost for RecordingProofHost {
+    impl IVMHost for RecordingSummaryHost {
         fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
             let quote = self.inner.prepare_syscall(number, vm)?;
             self.quote.set(Some(quote));
@@ -382,28 +383,32 @@ fn traced_prove_execution_quotes_and_commits_the_invocation_register_log() {
         .to_le_bytes()
         .to_vec();
     code.extend_from_slice(
-        &encoding::wide::encode_syscallx(syscalls::SYSCALL_PROVE_EXECUTION).to_le_bytes(),
+        &encoding::wide::encode_syscallx(syscalls::SYSCALL_EXECUTION_SUMMARY).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let program = assemble_zk(&code, 8);
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&program)
-        .expect("load traced proof program");
+        .expect("load traced summary program");
     vm.set_zk_trace_enabled(true);
-    let mut host = RecordingProofHost {
+    let mut host = RecordingSummaryHost {
         inner: DefaultHost::new(),
         quote: Cell::new(None),
         actual: None,
     };
 
     vm.run_with_host(&mut host)
-        .expect("PROVE_EXECUTION should preserve the active invocation log");
+        .expect("EXECUTION_SUMMARY should preserve the active invocation log");
     assert_eq!(host.quote.get(), host.actual);
-    let tlv = vm.memory.validate_tlv(vm.register(10)).expect("proof TLV");
-    let proof: ExecutionProof = norito::decode_from_bytes(tlv.payload).expect("decode proof");
+    let tlv = vm
+        .memory
+        .validate_tlv(vm.register(10))
+        .expect("summary TLV");
+    let summary: ExecutionSummary =
+        norito::decode_from_bytes(tlv.payload).expect("decode summary");
     assert!(
-        proof.register_log_len > 0,
-        "proof generated inside the callback must include earlier register events"
+        summary.register_log_len > 0,
+        "summary generated inside the callback must include earlier register events"
     );
 }
 #[test]

@@ -233,7 +233,7 @@ helpers are available:
 
 | Hex | Constant | Description |
 |----:|----------|-------------|
-| 0xF4 | `SYSCALL_PROVE_EXECUTION` | Return the deterministic execution-proof summary emitted by `DefaultHost` |
+| 0xF4 | `SYSCALL_EXECUTION_SUMMARY` | Return the deterministic, self-reported execution summary emitted by `DefaultHost` |
 | 0xF5 | `SYSCALL_GROW_HEAP` | Increase heap size by `x10` bytes, without exceeding the host-installed runtime ceiling |
 | 0xF6 | `SYSCALL_VERIFY_PROOF` | Verify registry-bound proof envelopes in `CoreHost`; `DefaultHost` returns `NotImplemented` |
 | 0xF7 | `SYSCALL_GET_MERKLE_PATH` | Write the Merkle path for address `x10` to memory at `x11` |

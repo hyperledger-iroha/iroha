@@ -45362,21 +45362,24 @@ fn validate_sccp_state_view(
 ) -> core::result::Result<(), String> {
     validate_sccp_route_liabilities_v1(world, registry, network_id)?;
     validate_sccp_ton_breaker_observations_v1(world, registry, committed_height)?;
-    if kura.emergency_fast_startup_enabled() {
+    let emergency_fast_startup = kura.emergency_fast_startup_enabled();
+    if emergency_fast_startup {
         warn!(
             "emergency Fast mode deferred historical SCCP archive-to-WSV reconciliation until a Strict restart"
         );
-        return Ok(());
     }
     let committed_height = u64::try_from(committed_height)
         .map_err(|_| "committed WSV height does not fit the SCCP height domain".to_owned())?;
-    let retained_archive_inventory = kura
-        .retained_nonempty_sccp_archive_inventory_at_or_below(committed_height)
-        .map_err(|error| {
-            format!(
-                "failed to inventory immutable Kura SCCP archives through committed WSV height {committed_height}: {error}"
-            )
-        })?;
+    let retained_archive_inventory = if emergency_fast_startup {
+        Vec::new()
+    } else {
+        kura.retained_nonempty_sccp_archive_inventory_at_or_below(committed_height)
+            .map_err(|error| {
+                format!(
+                    "failed to inventory immutable Kura SCCP archives through committed WSV height {committed_height}: {error}"
+                )
+            })?
+    };
     let pending_usage = world.sccp_outbound_pending_usage();
     let has_sccp_state = !retained_archive_inventory.is_empty()
         || !registry.lanes().is_empty()
@@ -45531,6 +45534,9 @@ fn validate_sccp_state_view(
         *count = count
             .checked_add(1)
             .ok_or_else(|| "SCCP retained pending count overflows".to_owned())?;
+    }
+    if emergency_fast_startup {
+        return Ok(());
     }
     let mut retained_archive_by_height = BTreeMap::new();
     for summary in retained_archive_inventory {
@@ -55335,6 +55341,56 @@ mod tiered_snapshot_diff_tests {
         assert!(
             error.contains("recipient cannot be executed"),
             "unexpected retained-recipient error: {error}"
+        );
+    }
+    #[test]
+    fn emergency_fast_startup_still_rejects_unsupported_retained_sender() {
+        let (mut world, key, mut message, _, _) = world_with_valid_sccp_outbound_history();
+        let mut payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&message.payload_bytes)
+            .expect("exact outbound snapshot payload decodes");
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
+        let secp256k1 = iroha_crypto::KeyPair::try_from_seed(
+            vec![0xA5; 32],
+            iroha_crypto::Algorithm::Secp256k1,
+        )
+        .expect("deterministic secp256k1 SCCP sender");
+        transfer.sender = AccountId::new(secp256k1.public_key().clone())
+            .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
+            .expect("secp256k1 account has a canonical Taira rendering")
+            .into_bytes();
+        message.payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload)
+            .expect("unsupported sender remains canonically encodable");
+        message.payload_hash = iroha_sccp::payload_hash(&message.payload_bytes);
+        let hostile_key = SccpOutboundMessageKeyV1::new(
+            key.lane,
+            iroha_sccp::sccp_message_id(key.lane, &payload)
+                .expect("unsupported sender remains structurally lane-bound"),
+        )
+        .expect("unsupported sender forms a structural replay key");
+        let descriptor = message.descriptor();
+        replace_complete_sccp_outbound_history(&mut world, hostile_key, message, descriptor);
+
+        let registry = ValidatedSccpRegistryV1::try_from_wire(
+            world.sccp_registry.view().get().clone(),
+        )
+        .expect("test registry is valid");
+        let chain_id: ChainId = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
+            .parse()
+            .expect("canonical Taira chain id");
+        let kura = Kura::blank_kura_for_testing_in_emergency_fast_mode();
+        let error = validate_sccp_state_view(
+            &world.view(),
+            registry.as_ref(),
+            &chain_id,
+            &DEFAULT_TEST_NETWORK_ID,
+            1,
+            &kura,
+            None,
+        )
+        .expect_err("Fast startup must reject a sender the semantic circuit cannot prove");
+        assert!(
+            error.contains("not a canonical destination-contract-supported Taira account"),
+            "unexpected Fast-start validation error: {error}"
         );
     }
     fn insert_complete_sccp_outbound_record(

@@ -1,8 +1,10 @@
-//! ZK lane: capture IVM formal traces, verify in the background, and report.
+//! ZK lane: capture IVM diagnostic traces, check them in the background, and report.
 //!
 //! This module provides a lightweight, non-forking background worker that can receive formal
-//! execution traces from IVM runs, verify constraints and Merkle-authenticated logs, and report
-//! outcomes. It does not mutate WSV and is intended purely for diagnostics/telemetry.
+//! execution traces from IVM runs, check recorded constraints and authenticated
+//! register-log entries, and report outcomes. It does not verify VM transition
+//! semantics or memory-event membership, does not mutate WSV, and is intended
+//! purely for diagnostics/telemetry.
 //!
 //! Integration points:
 //! - Overlay builder: after running IVM to collect queued ISIs, capture the
@@ -207,12 +209,12 @@ impl ZkTask {
         }
     }
 }
-/// Result of background verification.
+/// Result of a background diagnostic trace check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ZkOutcome {
-    /// All constraints and Merkle paths verified.
-    Verified,
-    /// Verification failed (constraint or path mismatch).
+pub enum TraceCheckOutcome {
+    /// All supported diagnostic checks passed.
+    Checked,
+    /// A constraint or authenticated register path failed its diagnostic check.
     Rejected,
 }
 /// Handle for submitting ZK tasks to the background worker.
@@ -581,7 +583,7 @@ impl WorkerPool {
         for idx in 0..worker_threads {
             let (work_tx, work_rx) = std_mpsc::sync_channel::<ZkTask>(work_queue_cap);
             work_txs.push(work_tx);
-            let name = format!("zk-lane-verify-{idx}");
+            let name = format!("zk-lane-check-{idx}");
             let join_handle = thread::Builder::new()
                 .name(name)
                 .spawn(move || {
@@ -688,17 +690,17 @@ fn dispatch_pending(pool: &mut WorkerPool, pending: &mut Vec<ZkTask>) {
 }
 fn process_job(job: ZkTask) {
     let dig = job.digest();
-    let outcome = ivm::zk::verify_trace(&job.trace, &job.constraints, &job.mem_log, &job.reg_log)
-        .map(|()| ZkOutcome::Verified)
-        .unwrap_or(ZkOutcome::Rejected);
+    let outcome = ivm::zk::check_diagnostic_trace(&job.trace, &job.constraints, &job.reg_log)
+        .map(|()| TraceCheckOutcome::Checked)
+        .unwrap_or(TraceCheckOutcome::Rejected);
     if let Some(cache) = RESULT_CACHE.get() {
         cache.record(dig, Instant::now());
     }
     emit_outcome(job, dig, outcome);
 }
-fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: ZkOutcome) {
+fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: TraceCheckOutcome) {
     #[cfg(feature = "zk-preverify")]
-    if matches!(outcome, ZkOutcome::Verified) {
+    if matches!(outcome, TraceCheckOutcome::Checked) {
         if let Some(header) = &job.header {
             let artifact =
                 crate::zk::make_trace_digest_artifact(job.code_hash, job.tx_hash.as_ref(), dig);
@@ -729,7 +731,7 @@ fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: ZkOutcome) {
         constraints = job.constraints.len(),
         mem_events = job.mem_log.len(),
         reg_events = job.reg_log.len(),
-        "zk_lane: verified formal trace"
+        "zk_lane: checked diagnostic trace"
     );
     if let Some(es) = EVENTS.get() {
         let header = job.header.unwrap_or_else(|| {
@@ -743,20 +745,20 @@ fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: ZkOutcome) {
             )
         });
         let (kind, details) = match outcome {
-            ZkOutcome::Verified => (
-                "zk_trace_verified",
+            TraceCheckOutcome::Checked => (
+                "zk_trace_checked",
                 format!(
-                    "trace verified: code_hash={}, digest={}, transport={:?}, negotiated={:?}",
+                    "diagnostic trace checks passed: code_hash={}, digest={}, transport={:?}, negotiated={:?}",
                     hex::encode(job.code_hash),
                     hex::encode(dig),
                     transport_desc,
                     negotiated_desc
                 ),
             ),
-            ZkOutcome::Rejected => (
+            TraceCheckOutcome::Rejected => (
                 "zk_trace_rejected",
                 format!(
-                    "trace rejected: code_hash={}, digest={}, transport={:?}, negotiated={:?}",
+                    "diagnostic trace check rejected: code_hash={}, digest={}, transport={:?}, negotiated={:?}",
                     hex::encode(job.code_hash),
                     hex::encode(dig),
                     transport_desc,
@@ -787,12 +789,12 @@ pub fn try_submit(task: ZkTask) -> bool {
         .get()
         .is_some_and(|handle| handle.submit(task))
 }
-/// Register a global events sender to receive ZK verification warnings.
+/// Register a global events sender to receive diagnostic trace-check warnings.
 /// No-op if already registered.
 pub fn register_events_sender(sender: crate::EventsSender) {
     let _ = EVENTS.set(sender);
 }
-/// Start the background ZK lane if Halo2 verification is enabled.
+/// Start the background diagnostic trace lane if Halo2 support is enabled.
 ///
 /// Returns an optional handle and a `tokio` task `JoinHandle` wrapped for supervisor registration.
 /// If the lane is already running, returns the existing handle and no new task.
@@ -882,7 +884,7 @@ pub fn start(
                                         queue_cap,
                                         pending = pending.len(),
                                         workers,
-                                        "zk_lane: dropping trace verification task due to saturated dispatch backlog"
+                                        "zk_lane: dropping diagnostic trace-check task due to saturated dispatch backlog"
                                     );
                                 }
                                 break;
@@ -939,7 +941,7 @@ pub fn start(
             record_lane_drop_by("shutdown_flush_drop", pending.len() as u64);
             iroha_logger::warn!(
                 dropped = pending.len(),
-                "zk_lane: dropping pending verification tasks during shutdown"
+                "zk_lane: dropping pending diagnostic trace-check tasks during shutdown"
             );
         }
         let retry_dropped = retry_ring.clear();

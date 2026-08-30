@@ -4335,7 +4335,8 @@ mod tests {
         );
 
         let mut zero_version_head = certificate.clone();
-        let GovernanceExpectedHeadV1::Present(ref mut head) = zero_version_head.expected_head else {
+        let GovernanceExpectedHeadV1::Present(ref mut head) = zero_version_head.expected_head
+        else {
             unreachable!("fixture uses a present compare-and-set head")
         };
         head.version = 0;

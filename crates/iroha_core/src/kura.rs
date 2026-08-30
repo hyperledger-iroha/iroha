@@ -3304,6 +3304,15 @@ impl Kura {
             BLOCKS_IN_MEMORY,
         )
     }
+    /// Create an isolated empty Kura that exercises emergency Fast startup validation.
+    #[cfg(test)]
+    pub(crate) fn blank_kura_for_testing_in_emergency_fast_mode() -> Arc<Kura> {
+        let mut kura = Self::blank_kura_for_testing();
+        Arc::get_mut(&mut kura)
+            .expect("a fresh test Kura has one owner")
+            .auxiliary_history_deferred = true;
+        kura
+    }
     /// Return the number of FASTPQ proof snapshots awaiting persistence in tests.
     #[cfg(test)]
     pub(crate) fn fastpq_proof_queue_len_for_testing(&self) -> usize {

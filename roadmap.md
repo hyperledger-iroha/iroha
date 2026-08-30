@@ -5,6 +5,16 @@ Last updated: 2026-08-30
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## SORA Parliament release qualification
+
+- From one settled fresh-genesis candidate, run the focused Parliament model,
+  reducer, restore, configuration, and Torii route suites followed by strict
+  all-target Clippy and the workspace test gate. Exercise the atomic
+  Policy-to-Confirmation boundary, redraw exhaustion, restart recovery, and
+  malformed snapshot rejection on a four-validator network with mandatory
+  signed RS16 DA/RBC; regenerate and compare public API artifacts and SDK
+  projections before declaring the first release qualified.
+
 ## Default-on capability follow-up
 
 - Upgrade the locked QUIC stack to a qualified `quinn-proto` release, rerun the

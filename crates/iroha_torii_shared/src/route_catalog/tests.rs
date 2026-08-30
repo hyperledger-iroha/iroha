@@ -3,13 +3,6 @@
 mod tests {
     use super::*;
     #[test]
-    fn query_projection_checkpoint_plan_is_non_mutating_compute() {
-        assert_eq!(
-            runtime_governance::NODE_PROJECTION_CHECKPOINT_PLAN.effect(),
-            RouteEffect::ExpensiveCompute
-        );
-    }
-    #[test]
     fn credential_bound_authentication_boundaries_require_private_no_store() {
         for policy in [
             AuthenticationPolicy::OnboardingToken,

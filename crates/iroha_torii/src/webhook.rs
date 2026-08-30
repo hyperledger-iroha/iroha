@@ -27,6 +27,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     prelude::DataEvent,
 };
+use iroha_futures::supervisor::ShutdownSignal;
 use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::sync::{
@@ -2258,7 +2259,7 @@ async fn try_deliver(pd: &mut PendingDelivery, secret: Option<&str>) -> bool {
     }
 }
 /// Spawn the background delivery worker. Idempotent.
-pub fn start_delivery_worker() {
+pub fn start_delivery_worker(shutdown: ShutdownSignal) {
     static STARTED: OnceLock<()> = OnceLock::new();
     if STARTED.set(()).is_err() {
         return;
@@ -2266,9 +2267,15 @@ pub fn start_delivery_worker() {
     ensure_dirs();
     tokio::spawn(async move {
         loop {
-            let delay = process_queue_once().await;
+            let delay = tokio::select! {
+                () = shutdown.receive() => break,
+                delay = process_queue_once() => delay,
+            };
             if !delay.is_zero() {
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    () = shutdown.receive() => break,
+                    () = tokio::time::sleep(delay) => {}
+                }
             }
         }
     });

@@ -9352,12 +9352,11 @@ redistributable schemas, and official trust/revocation bundles.
     hosts continue to reject it without registry context. Acceleration status
     reporting now only marks CUDA parity as OK when the backend is usable after
     policy, hardware detection, and self-tests.
-  - `PROVE_EXECUTION` now returns `NoritoBytes(ExecutionProof)` instead of a
-    reserved stub. The proof summary commits to deterministic trace/log/root
-    material with SHA-256 and is stable across repeated identical runs, while
-    leaving room for later cryptographic prover backends to bind to the same
-    public material. Focused unit, syscall, doc-sync, gas-doc, and `ivm_abi`
-    regression checks are green with `CARGO_TARGET_DIR=target/codex-ivm-scallx`.
+  - `EXECUTION_SUMMARY` returns `NoritoBytes(ExecutionSummary)` instead of a
+    reserved stub. The self-reported summary digests deterministic
+    trace/log/root material with SHA-256 and is stable across repeated identical
+    runs. It is explicitly not a proof or authenticated execution attestation;
+    cryptographic verification remains on the dedicated verifier syscalls.
   - The broader `cargo test -p ivm` corridor is green as of 2026-05-02 after
     repairing the data-model compile blocker, refreshing the AXT fixture
     headers, and moving Kotodama test helpers to host-private SCALLX numbers.

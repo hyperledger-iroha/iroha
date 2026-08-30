@@ -2296,6 +2296,7 @@ pub(crate) fn authorize_query_for_test(
 }
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
+    shutdown_signal: ShutdownSignal,
     events: EventsSender,
     kura: Arc<Kura>,
     chain_id: Arc<ChainId>,
@@ -17080,67 +17081,6 @@ async fn handler_node_query_projection_checkpoint(
     else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    Ok(crate::utils::respond_with_format(payload, format))
-}
-/// POST /v1/node/query/projection/checkpoint/plan — validate and preview a rebuilt projection checkpoint.
-#[cfg(feature = "app_api")]
-async fn handler_node_query_projection_checkpoint_plan(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-    body: crate::utils::extractors::NoritoJson<
-        crate::runtime::NodeProjectionCheckpointPublishRequest,
-    >,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/node/query/projection/checkpoint/plan",
-        true,
-    )
-    .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    let payload =
-        crate::runtime::handle_node_query_projection_checkpoint_plan(app.state.clone(), body.0)
-            .await?;
-    Ok(crate::utils::respond_with_format(payload, format))
-}
-/// POST /v1/node/query/projection/checkpoint/publish — rebuild uploaded shard refs and persist the checkpoint.
-#[cfg(feature = "app_api")]
-async fn handler_node_query_projection_checkpoint_publish(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-    body: crate::utils::extractors::NoritoJson<
-        crate::runtime::NodeProjectionCheckpointPublishRequest,
-    >,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/node/query/projection/checkpoint/publish",
-        true,
-    )
-    .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    let payload = crate::runtime::handle_node_query_projection_checkpoint_publish_with_app(
-        Some(app.clone()),
-        app.state.clone(),
-        body.0,
-    )
-    .await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
 /// GET /v1/node/query/projection/catalog/{resource} — enumerate the canonical live shard set.
@@ -34206,16 +34146,20 @@ async fn handler_subscription_ws(
         .max_message_size(STREAM_SUBSCRIPTION_MAX_MESSAGE_BYTES)
         .max_frame_size(STREAM_SUBSCRIPTION_MAX_MESSAGE_BYTES);
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
+    let shutdown = app.shutdown_signal.clone();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
         let _preauth_guard = preauth_guard;
-        if let Err(error) = routing::event::handle_events_stream_with_receiver_visible(
+        let stream = routing::event::handle_events_stream_with_receiver_visible(
             events_rx,
             ws,
             app.ws_message_timeout,
             visibility,
-        )
-        .await
-        {
+        );
+        let result = tokio::select! {
+            () = shutdown.receive() => return,
+            result = stream => result,
+        };
+        if let Err(error) = result {
             if is_expected_ws_disconnect(&error) {
                 iroha_logger::debug!(%error, "Event streaming closed by client");
             } else {
@@ -34244,14 +34188,18 @@ async fn handler_blocks_stream_ws(
         .max_message_size(STREAM_SUBSCRIPTION_MAX_MESSAGE_BYTES)
         .max_frame_size(STREAM_SUBSCRIPTION_MAX_MESSAGE_BYTES);
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
+    let shutdown = app.shutdown_signal.clone();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
         let _preauth_guard = preauth_guard;
-        if let Err(error) =
+        let stream =
             routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout, move || {
                 visibility.authorization_is_current()
-            })
-            .await
-        {
+            });
+        let result = tokio::select! {
+            () = shutdown.receive() => return,
+            result = stream => result,
+        };
+        if let Err(error) = result {
             iroha_logger::error!(%error, "Failure during block streaming");
         }
     }))
@@ -40167,9 +40115,13 @@ async fn handle_connect_ws_logic(
         ws
     };
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
+    let shutdown = app.shutdown_signal.clone();
     ws.on_upgrade(move |ws| async move {
         let _preauth_guard = preauth_guard;
-        let result = connect::handle_ws(bus, reservation, ws, send_timeout).await;
+        let result = tokio::select! {
+            () = shutdown.receive() => Ok(()),
+            result = connect::handle_ws(bus, reservation, ws, send_timeout) => result,
+        };
         permit.release().await;
         if let Err(e) = result {
             iroha_logger::warn!(%e, "connect ws session ended with error");
@@ -46961,12 +46913,41 @@ fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
         .rfind("crate::zk_attachments::init_persistence()")
         .expect("attachment persistence recovery");
     let refusal = source
-        .rfind("if !attachment_persistence_ready")
+        .rfind("refusing to start Torii before attachment quota recovery")
         .expect("failed-recovery startup refusal");
     let start = source
-        .rfind("crate::zk_prover::start_worker()")
+        .rfind("crate::zk_prover::start_worker(shutdown_signal.clone())")
         .expect("ZK-prover worker start");
     assert!(recovery < refusal && refusal < start);
+}
+
+#[cfg(test)]
+#[test]
+fn torii_start_binds_before_launching_background_workers() {
+    let source = include_str!("lib.rs");
+    let start = source
+        .rsplit_once("pub async fn start(")
+        .expect("Torii start implementation")
+        .1
+        .split_once("/// GET /openapi.json")
+        .expect("end of Torii start implementation")
+        .0;
+    let attachment_recovery = start
+        .find("crate::zk_attachments::init_persistence()")
+        .expect("attachment recovery preflight");
+    let bind = start
+        .find("bind_torii_tcp_listener(torii_address.clone())")
+        .expect("Torii listener bind");
+    assert!(attachment_recovery < bind);
+    for worker in [
+        "crate::webhook::start_delivery_worker(",
+        "self.spawn_musubi_search_projection_worker(",
+        "crate::zk_attachments::start_gc_worker(",
+        "crate::zk_prover::start_worker(",
+    ] {
+        let worker_start = start.find(worker).expect("background worker start");
+        assert!(bind < worker_start, "{worker} must start only after bind");
+    }
 }
 
 impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
@@ -49695,8 +49676,6 @@ impl Torii {
             }
             mount_local_catalog_route_rows!(
                 builder, routes;
-                NODE_PROJECTION_CHECKPOINT_PLAN => operator_post(handler_node_query_projection_checkpoint_plan, app_state);
-                NODE_PROJECTION_CHECKPOINT_PUBLISH => operator_post(handler_node_query_projection_checkpoint_publish, app_state);
                 NODE_PROJECTION_SHARD_CATALOG => operator_get(handler_node_query_projection_shard_catalog, app_state);
                 NODE_PROJECTION_SHARD_EXPORT => operator_get(handler_node_query_projection_shard_export, app_state);
                 MINISTRY_AGENDA_DRAFT => canonical_account_post(handler_ministry_agenda_proposal_draft, app_state, runtime_governance_body_limit);
@@ -51730,7 +51709,10 @@ impl Torii {
     }
     /// Helper function to create router and shared runtime state.
     #[allow(clippy::too_many_lines)]
-    fn create_api_router_with_state(&self) -> (axum::Router, SharedAppState) {
+    fn create_api_router_with_state(
+        &self,
+        shutdown_signal: ShutdownSignal,
+    ) -> (axum::Router, SharedAppState) {
         let gateway_components = self.sorafs_gateway_security.clone();
         let da_runtime = self.prepare_da_runtime_services();
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -51831,6 +51813,7 @@ impl Torii {
             Vec::new()
         });
         let app_state: SharedAppState = Arc::new(AppState {
+            shutdown_signal,
             events: self.events.clone(),
             kura: self.kura.clone(),
             chain_id: self.chain_id.clone(),
@@ -52157,7 +52140,7 @@ impl Torii {
     }
     /// Helper function to create router. This router can be tested without starting up an HTTP server
     fn create_api_router(&self) -> axum::Router {
-        self.create_api_router_with_state().0
+        self.create_api_router_with_state(ShutdownSignal::new()).0
     }
     /// Compose the HTTP router from prepared runtime state.
     #[allow(clippy::too_many_lines)]
@@ -52398,8 +52381,25 @@ impl Torii {
         if let Some(code) = self.sorafs_evidence_viewer_startup_error {
             return Err(Report::new(Error::SorafsEvidenceViewerStartup { code }));
         }
+        #[cfg(feature = "app_api")]
+        let zk_prover_enabled = !emergency_fast && crate::zk_prover::cfg_enabled();
+        #[cfg(feature = "app_api")]
+        if (self.zk_attachments_enabled || zk_prover_enabled)
+            && !crate::zk_attachments::init_persistence()
+        {
+            iroha_logger::error!("refusing to start Torii before attachment quota recovery");
+            return Err(Report::new(Error::StartServer));
+        }
         let torii_address = self.address.value().clone();
         iroha_logger::info!(addr = %torii_address, "starting Torii HTTP server");
+        // Bind before launching any background service. A bind failure must leave no detached
+        // Torii workers behind in the caller's runtime.
+        let listener = bind_torii_tcp_listener(torii_address.clone())
+            .await
+            .change_context(Error::StartServer)
+            .attach("failed to bind to the specified address")
+            .attach_with(|| self.address.clone().into_attachment())?;
+        let (api_router, app_state) = self.create_api_router_with_state(shutdown_signal.clone());
         // Initialize optional app-facing subsystems.
         #[cfg(feature = "app_api")]
         {
@@ -52408,14 +52408,19 @@ impl Torii {
                 // If the data dir isn't writable, errors are logged and the in-memory
                 // registry still functions.
                 crate::webhook::init_persistence();
-                crate::webhook::start_delivery_worker();
+                crate::webhook::start_delivery_worker(shutdown_signal.clone());
                 // Spawn a single event enqueuer that subscribes to core events and
                 // pushes JSON payloads into the webhook delivery queue. This is separate
                 // from SSE/WS consumers to avoid duplicate deliveries per connection.
                 let mut rx = self.events.subscribe();
+                let worker_shutdown = shutdown_signal.clone();
                 tokio::spawn(async move {
                     loop {
-                        match rx.recv().await {
+                        let received = tokio::select! {
+                            () = worker_shutdown.receive() => break,
+                            received = rx.recv() => received,
+                        };
+                        match received {
                             Ok(event) => {
                                 crate::webhook::enqueue_event_for_matching_webhooks(
                                     &event,
@@ -52430,23 +52435,13 @@ impl Torii {
                     }
                 });
             }
-            let zk_prover_enabled = !emergency_fast && crate::zk_prover::cfg_enabled();
-            let attachment_persistence_ready = if self.zk_attachments_enabled || zk_prover_enabled {
-                crate::zk_attachments::init_persistence()
-            } else {
-                true
-            };
-            if !attachment_persistence_ready {
-                iroha_logger::error!("refusing to start Torii before attachment quota recovery");
-                return Err(Report::new(Error::StartServer));
-            }
             if self.zk_attachments_enabled {
                 // Initialize attachments store and background GC. Every GC pass
                 // retries and fails closed on a pending quota transaction.
-                crate::zk_attachments::start_gc_worker();
+                crate::zk_attachments::start_gc_worker(shutdown_signal.clone());
             }
             if zk_prover_enabled {
-                crate::zk_prover::start_worker();
+                crate::zk_prover::start_worker(shutdown_signal.clone());
             }
         }
         #[cfg(feature = "app_api")]
@@ -52455,9 +52450,14 @@ impl Torii {
         }
         if let Some(runtime) = self.iso_bridge.clone() {
             let mut rx = self.events.subscribe();
+            let worker_shutdown = shutdown_signal.clone();
             tokio::spawn(async move {
                 loop {
-                    match rx.recv().await {
+                    let received = tokio::select! {
+                        () = worker_shutdown.receive() => break,
+                        received = rx.recv() => received,
+                    };
+                    match received {
                         Ok(EventBox::Pipeline(PipelineEventBox::Transaction(event))) => {
                             let tx_hash = event.hash().to_string();
                             match *event.status() {
@@ -52509,9 +52509,14 @@ impl Torii {
             let mut rx = self.events.subscribe();
             let cache = self.pipeline_status_cache.clone();
             let kura = self.kura.clone();
+            let worker_shutdown = shutdown_signal.clone();
             tokio::spawn(async move {
                 loop {
-                    match rx.recv().await {
+                    let received = tokio::select! {
+                        () = worker_shutdown.receive() => break,
+                        received = rx.recv() => received,
+                    };
+                    match received {
                         Ok(EventBox::Pipeline(PipelineEventBox::Transaction(event))) => {
                             cache.record_transaction_event(&event);
                         }
@@ -52589,12 +52594,6 @@ impl Torii {
                 automation.spawn(self.telemetry.clone(), shutdown_signal.clone());
             }
         }
-        let listener = bind_torii_tcp_listener(torii_address.clone())
-            .await
-            .change_context(Error::StartServer)
-            .attach("failed to bind to the specified address")
-            .attach_with(|| self.address.clone().into_attachment())?;
-        let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
         if !emergency_fast {
             sorafs::api::spawn_sorafs_capacity_reconciler_worker(

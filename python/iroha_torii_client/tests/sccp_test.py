@@ -1802,6 +1802,34 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
         normalize_sccp_proof_request(archived_identity)
 
 
+def test_bundle_accepts_only_exact_canonical_i105_sora_sender() -> None:
+    canonical = _bundle()
+    canonical_sender = "0x" + AUTHORITY.encode("utf-8").hex()
+    canonical["payload"]["Transfer"]["sender"] = canonical_sender
+    parsed = normalize_sccp_message_bundle(canonical)
+    assert parsed["payload"]["Transfer"]["sender"] == canonical_sender
+
+    checksum_tampering = AUTHORITY[:-1] + ("2" if AUTHORITY.endswith("1") else "1")
+    noncanonical_sentinel = "n369" + AUTHORITY.removeprefix("sora")
+    for invalid in (
+        checksum_tampering,
+        noncanonical_sentinel,
+        "merchant taira",
+        "merchant🙂",
+    ):
+        bundle = _bundle()
+        bundle["payload"]["Transfer"]["sender"] = (
+            "0x" + invalid.encode("utf-8").hex()
+        )
+        with pytest.raises(ValueError, match="does not match its codec"):
+            normalize_sccp_message_bundle(bundle)
+
+    invalid_utf8 = _bundle()
+    invalid_utf8["payload"]["Transfer"]["sender"] = "0xff"
+    with pytest.raises(ValueError, match="does not match its codec"):
+        normalize_sccp_message_bundle(invalid_utf8)
+
+
 def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> None:
     assert sccp._MAX_DESTINATION_ARTIFACT_BYTES == 16 * 1024 * 1024 + 128 * 1024  # noqa: SLF001
     assert sccp._MAX_DESTINATION_ARTIFACT_BASE64_BYTES == 22_544_384  # noqa: SLF001

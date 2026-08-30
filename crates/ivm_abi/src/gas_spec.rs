@@ -48,7 +48,7 @@ pub static GAS_ASSETS: &[GasAsset] = &[
     GasAsset { key: "G_path", asset_id: "asset:gas/G_path@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_pointer", asset_id: "asset:gas/G_pointer@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_private_numeric_valcom", asset_id: "asset:gas/G_private_numeric_valcom@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
-    GasAsset { key: "G_prove", asset_id: "asset:gas/G_prove@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
+    GasAsset { key: "G_execution_summary", asset_id: "asset:gas/G_execution_summary@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_reg_acct", asset_id: "asset:gas/G_reg_acct@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_reg_asset", asset_id: "asset:gas/G_reg_asset@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },
     GasAsset { key: "G_reg_domain", asset_id: "asset:gas/G_reg_domain@ivm.core/v2", unit: "gas", version: "v1", group: "syscall" },

@@ -9741,6 +9741,49 @@
         ],
         "type": "object"
       },
+      "GovernanceBallotDraftResponseV1": {
+        "additionalProperties": false,
+        "description": "Successful construction of one unsigned standalone governance ballot instruction. This response does not report transaction acceptance or mutate ledger state.",
+        "properties": {
+          "drafted": {
+            "const": true,
+            "type": "boolean"
+          },
+          "tx_instructions": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceBallotInstructionDraftV1"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "drafted",
+          "tx_instructions"
+        ],
+        "type": "object"
+      },
+      "GovernanceBallotInstructionDraftV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload_hex": {
+            "description": "Non-empty canonical lowercase hexadecimal Norito instruction payload.",
+            "pattern": "^(?:[0-9a-f]{2})+$",
+            "type": "string"
+          },
+          "wire_id": {
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "payload_hex"
+        ],
+        "type": "object"
+      },
       "GovernanceBallotProofV1": {
         "additionalProperties": false,
         "properties": {
@@ -62553,11 +62596,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/GovernanceBallotDraftResponseV1"
                 }
               }
             },
-            "description": "Successful response",
+            "description": "An unsigned plain-ballot instruction was drafted; no transaction was submitted.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -62568,6 +62611,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The ballot request is invalid and no draft was constructed."
           }
         },
         "security": [
@@ -62685,11 +62738,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/GovernanceBallotDraftResponseV1"
                 }
               }
             },
-            "description": "Successful response",
+            "description": "An unsigned ZK ballot instruction was drafted; no transaction was submitted.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -62700,6 +62753,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The ballot request is invalid and no draft was constructed."
           }
         },
         "security": [
@@ -62817,11 +62880,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/GovernanceBallotDraftResponseV1"
                 }
               }
             },
-            "description": "Successful response",
+            "description": "An unsigned instruction was drafted from the ballot proof; no transaction was submitted.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -62832,6 +62895,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The ballot request is invalid and no draft was constructed."
           }
         },
         "security": [

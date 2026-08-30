@@ -26,6 +26,7 @@ use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use flate2::read::GzDecoder;
 use iroha_config::parameters::actual::AttachmentSanitizerMode;
 use iroha_data_model::{account::AccountId, proof::PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1};
+use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
 use norito::json;
 use parking_lot::{Mutex as SyncMutex, RwLock};
@@ -2889,14 +2890,20 @@ async fn delete_attachment_if_expired_with_before_lock(
     Ok(true)
 }
 /// Start a background GC worker that removes expired attachments.
-pub fn start_gc_worker() {
+pub fn start_gc_worker(shutdown: ShutdownSignal) {
     ensure_root_dir();
     tokio::spawn(async move {
         let ttl = Duration::from_secs(ttl_secs_cfg());
         let interval = Duration::from_secs(GC_INTERVAL_SECS);
         loop {
+            if shutdown.is_sent() {
+                break;
+            }
             if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
                 for e in rd.flatten() {
+                    if shutdown.is_sent() {
+                        break;
+                    }
                     let Ok(file_type) = e.file_type() else {
                         continue;
                     };
@@ -2913,6 +2920,9 @@ pub fn start_gc_worker() {
                     let tenant = AttachmentTenant(tenant_key);
                     if let Ok(trd) = fs::read_dir(attachments_dir(&tenant)) {
                         for te in trd.flatten() {
+                            if shutdown.is_sent() {
+                                break;
+                            }
                             let te_file_name = te.file_name();
                             let Some(tname) = te_file_name.to_str() else {
                                 continue;
@@ -2933,7 +2943,10 @@ pub fn start_gc_worker() {
                     }
                 }
             }
-            tokio::time::sleep(interval).await;
+            tokio::select! {
+                () = shutdown.receive() => break,
+                () = tokio::time::sleep(interval) => {}
+            }
         }
     });
 }

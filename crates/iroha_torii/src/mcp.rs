@@ -770,8 +770,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_health_tool());
     tools.push(iroha_parameters_get_tool());
     tools.push(iroha_node_capabilities_tool());
-    tools.push(iroha_node_query_projection_checkpoint_plan_tool());
-    tools.push(iroha_node_query_projection_checkpoint_publish_tool());
     tools.push(iroha_node_query_projection_shard_catalog_tool());
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_da_ingest_tool());
@@ -1968,30 +1966,6 @@ async fn handle_named_tool_call(
         }
         "iroha.node.capabilities" => {
             match dispatch_iroha_node_capabilities(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.node.query_projection_checkpoint_plan" => {
-            match dispatch_iroha_node_query_projection_checkpoint_plan(
-                &app,
-                inbound_headers,
-                arguments,
-            )
-            .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.node.query_projection_checkpoint_publish" => {
-            match dispatch_iroha_node_query_projection_checkpoint_publish(
-                &app,
-                inbound_headers,
-                arguments,
-            )
-            .await
-            {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -9276,8 +9250,6 @@ manual_tool! {
     iroha_connect_ws_ticket_tool => "iroha.connect.ws.ticket";
     iroha_connect_session_create_tool => "iroha.connect.session.create";
     iroha_connect_session_delete_tool => "iroha.connect.session.delete";
-    iroha_node_query_projection_checkpoint_plan_tool => "iroha.node.query_projection_checkpoint_plan";
-    iroha_node_query_projection_checkpoint_publish_tool => "iroha.node.query_projection_checkpoint_publish";
     iroha_node_query_projection_shard_catalog_tool => "iroha.node.query_projection_shard_catalog";
     iroha_da_manifests_get_tool => "iroha.da.manifests.get";
     iroha_runtime_upgrades_activate_tool => "iroha.runtime.upgrades.activate";

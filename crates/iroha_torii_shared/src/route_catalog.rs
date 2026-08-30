@@ -2800,17 +2800,6 @@ pub mod runtime_governance {
         "node.query_projection.checkpoint",
         "/v1/node/query/projection/checkpoint",
     );
-    /// Validate a query-projection checkpoint plan.
-    pub const NODE_PROJECTION_CHECKPOINT_PLAN: RouteDescriptor = app_operator_post(
-        "operator.node.query_projection.checkpoint_plan",
-        "/v1/node/query/projection/checkpoint/plan",
-    )
-    .with_effect(RouteEffect::ExpensiveCompute);
-    /// Publish a rebuilt query-projection checkpoint.
-    pub const NODE_PROJECTION_CHECKPOINT_PUBLISH: RouteDescriptor = app_operator_post(
-        "operator.node.query_projection.checkpoint_publish",
-        "/v1/node/query/projection/checkpoint/publish",
-    );
     /// List canonical query-projection shards.
     pub const NODE_PROJECTION_SHARD_CATALOG: RouteDescriptor = app_operator_get(
         "operator.node.query_projection.shard_catalog",
@@ -3034,8 +3023,6 @@ pub mod runtime_governance {
         PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
         PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
         NODE_PROJECTION_CHECKPOINT,
-        NODE_PROJECTION_CHECKPOINT_PLAN,
-        NODE_PROJECTION_CHECKPOINT_PUBLISH,
         NODE_PROJECTION_SHARD_CATALOG,
         NODE_PROJECTION_SHARD_EXPORT,
         RUNTIME_UPGRADES,

@@ -5,13 +5,12 @@ use crate::{
 };
 use axum::{extract::Path, response::IntoResponse};
 use iroha_core::{
+    query::index_status::QueryIndexStatus,
     query::projection_checkpoint::{
         QUERY_PROJECTION_DA_BLOB_CLASS_CUSTOM_ID, QUERY_PROJECTION_DA_CODEC,
         QUERY_PROJECTION_DA_COMPRESSION, QUERY_PROJECTION_DEFAULT_PARTITION_COUNT,
-        QUERY_PROJECTION_SCHEMA_VERSION, QueryProjectionCheckpoint,
-        QueryProjectionCheckpointPlanError, QueryProjectionResourceKind,
-        QueryProjectionUploadedShardArchive, query_projection_default_partition_for_account,
-        query_projection_partition_for_key,
+        QUERY_PROJECTION_SCHEMA_VERSION, QueryProjectionCheckpoint, QueryProjectionResourceKind,
+        query_projection_default_partition_for_account, query_projection_partition_for_key,
     },
     query::projection_rowset::{
         QueryProjectionAccountAssetRow, QueryProjectionAccountAssetsShardRowSet,
@@ -36,14 +35,14 @@ use iroha_crypto::Algorithm;
 use iroha_data_model::{
     HasMetadata, Identifiable,
     account::curve::CurveId,
-    da::types::{BlobClass, BlobDigest, Compression, StorageTicketId},
+    da::types::{BlobClass, Compression},
     transaction::SignedTransaction,
 };
 use iroha_logger::warn;
 use mv::storage::StorageReadOnly;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -142,10 +141,6 @@ pub struct NodeProjectionCapabilities {
     pub checkpoint_contract_v1: bool,
     /// Whether the DA-backed cold projection worker is enabled.
     pub da_v1_enabled: bool,
-    /// Whether callers can preflight checkpoint publication directly through Torii.
-    pub checkpoint_plan_v1: bool,
-    /// Whether callers can persist a rebuilt projection checkpoint directly through Torii.
-    pub checkpoint_publish_v1: bool,
     /// Whether the node can enumerate the canonical live shard set directly.
     pub shard_catalog_v1: bool,
     /// Whether the node can export canonical projection shard archives directly.
@@ -212,73 +207,6 @@ pub struct NodeProjectionCheckpointShardRef {
     pub storage_ticket_hex: String,
     /// Compressed blob hash, lowercase hex.
     pub blob_hash_hex: String,
-}
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
-/// Request body for planning or publishing a projection checkpoint from uploaded shard refs.
-pub struct NodeProjectionCheckpointPublishRequest {
-    /// Unix timestamp recorded on the checkpoint descriptor itself. Defaults to now.
-    pub emitted_at_unix: Option<u64>,
-    /// Uploaded shard references that must cover the canonical non-empty live shard set.
-    pub shards: Vec<NodeProjectionCheckpointPublishShardRef>,
-}
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
-/// One uploaded shard reference used to plan or publish a projection checkpoint.
-pub struct NodeProjectionCheckpointPublishShardRef {
-    /// Stable projection resource family identifier.
-    pub resource: String,
-    /// Stable partition identifier inside the resource family.
-    pub partition_id: u32,
-    /// Optional asset-definition discriminator required for `asset_holders`.
-    pub asset_definition_id: Option<String>,
-    /// Unix timestamp that was embedded in the exported shard archive uploaded to DA.
-    pub archive_emitted_at_unix: u64,
-    /// Canonical digest of the uploaded DA manifest, hex-encoded.
-    pub manifest_digest_hex: String,
-    /// Storage ticket resolving the uploaded shard archive in DA, hex-encoded.
-    pub storage_ticket_hex: String,
-}
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ProjectionCheckpointShardKey {
-    resource: QueryProjectionResourceKind,
-    partition_id: u32,
-    asset_definition_id: Option<String>,
-}
-#[cfg(feature = "app_api")]
-impl ProjectionCheckpointShardKey {
-    fn from_archive(archive: &QueryProjectionShardArchive) -> Self {
-        Self {
-            resource: archive.resource,
-            partition_id: archive.partition_id,
-            asset_definition_id: archive.asset_definition_id.clone(),
-        }
-    }
-    fn from_catalog_entry(
-        resource: QueryProjectionResourceKind,
-        entry: NodeProjectionShardCatalogEntry,
-    ) -> Self {
-        Self {
-            resource,
-            partition_id: entry.partition_id,
-            asset_definition_id: entry.asset_definition_id,
-        }
-    }
-    fn describe(&self) -> String {
-        match &self.asset_definition_id {
-            Some(asset_definition_id) => format!(
-                "{}/partition={}/asset={asset_definition_id}",
-                self.resource.as_stable_str(),
-                self.partition_id
-            ),
-            None => format!(
-                "{}/partition={}",
-                self.resource.as_stable_str(),
-                self.partition_id
-            ),
-        }
-    }
 }
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response for the live projection shard catalog of one resource family.
@@ -458,8 +386,6 @@ pub async fn handle_node_capabilities(
             projection: NodeProjectionCapabilities {
                 checkpoint_contract_v1: true,
                 da_v1_enabled: false,
-                checkpoint_plan_v1: cfg!(feature = "app_api"),
-                checkpoint_publish_v1: cfg!(feature = "app_api"),
                 shard_catalog_v1: cfg!(feature = "app_api"),
                 archive_export_v1: cfg!(feature = "app_api"),
                 archive_version: QUERY_PROJECTION_SHARD_ARCHIVE_VERSION,
@@ -520,60 +446,6 @@ pub async fn handle_node_query_projection_checkpoint(
         .query_projection_checkpoint_snapshot()
         .map(node_projection_checkpoint_response)
 }
-#[cfg(feature = "app_api")]
-/// POST /v1/node/query/projection/checkpoint/plan — validate uploaded shard refs and build a checkpoint.
-pub async fn handle_node_query_projection_checkpoint_plan(
-    state: Arc<iroha_core::state::State>,
-    request: NodeProjectionCheckpointPublishRequest,
-) -> Result<NodeProjectionCheckpointResponse, crate::Error> {
-    let emitted_at_unix = request.emitted_at_unix.unwrap_or_else(current_unix_seconds);
-    let uploads = build_query_projection_uploaded_archives(state.as_ref(), request.shards)?;
-    validate_projection_checkpoint_shard_set(state.as_ref(), &uploads)?;
-    let plan = state
-        .plan_query_projection_checkpoint_from_archives(emitted_at_unix, uploads)
-        .map_err(projection_checkpoint_plan_error)?;
-    Ok(node_projection_checkpoint_response(plan.into_checkpoint()))
-}
-#[cfg(feature = "app_api")]
-/// POST /v1/node/query/projection/checkpoint/publish — rebuild uploaded shard refs and persist the checkpoint.
-pub async fn handle_node_query_projection_checkpoint_publish(
-    state: Arc<iroha_core::state::State>,
-    request: NodeProjectionCheckpointPublishRequest,
-) -> Result<NodeProjectionCheckpointResponse, crate::Error> {
-    handle_node_query_projection_checkpoint_publish_with_app(None, state, request).await
-}
-#[cfg(feature = "app_api")]
-/// POST /v1/node/query/projection/checkpoint/publish — rebuild uploaded shard refs, seed local cache/storage, and persist the checkpoint.
-pub async fn handle_node_query_projection_checkpoint_publish_with_app(
-    _app: Option<crate::SharedAppState>,
-    state: Arc<iroha_core::state::State>,
-    request: NodeProjectionCheckpointPublishRequest,
-) -> Result<NodeProjectionCheckpointResponse, crate::Error> {
-    let emitted_at_unix = request.emitted_at_unix.unwrap_or_else(current_unix_seconds);
-    let uploads = build_query_projection_uploaded_archives(state.as_ref(), request.shards)?;
-    validate_projection_checkpoint_shard_set(state.as_ref(), &uploads)?;
-    // A rejected publication must not replace an archive used by the current checkpoint.
-    let archives_to_cache = uploads
-        .iter()
-        .map(|upload| upload.archive.clone())
-        .collect::<Vec<_>>();
-    let checkpoint = state
-        .publish_query_projection_checkpoint_from_archives(
-            emitted_at_unix,
-            uploads.into_iter().map(|upload| {
-                (
-                    upload.archive,
-                    upload.manifest_digest,
-                    upload.storage_ticket,
-                )
-            }),
-        )
-        .map_err(projection_checkpoint_plan_error)?;
-    for archive in archives_to_cache {
-        crate::routing::cache_query_projection_archive_for_query(archive);
-    }
-    Ok(node_projection_checkpoint_response(checkpoint))
-}
 fn node_projection_checkpoint_response(
     checkpoint: QueryProjectionCheckpoint,
 ) -> NodeProjectionCheckpointResponse {
@@ -603,231 +475,6 @@ fn node_projection_checkpoint_response(
             .collect(),
     }
 }
-#[cfg(feature = "app_api")]
-fn build_query_projection_uploaded_archives(
-    state: &iroha_core::state::State,
-    shards: Vec<NodeProjectionCheckpointPublishShardRef>,
-) -> Result<Vec<QueryProjectionUploadedShardArchive>, crate::Error> {
-    let mut uploads = Vec::with_capacity(shards.len());
-    for shard in shards {
-        validate_projection_partition_id(shard.partition_id)?;
-        let manifest_digest =
-            parse_blob_digest_hex(&shard.manifest_digest_hex, "manifest_digest_hex")?;
-        let storage_ticket =
-            parse_storage_ticket_hex(&shard.storage_ticket_hex, "storage_ticket_hex")?;
-        let archive = match shard.resource.trim().to_ascii_lowercase().as_str() {
-            "accounts" => {
-                if let Some(asset_definition_id) = shard
-                    .asset_definition_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    return Err(projection_export_conversion_error(format!(
-                        "asset_definition_id is not supported for accounts checkpoint shards (got `{asset_definition_id}`)"
-                    )));
-                }
-                build_accounts_projection_shard_archive(
-                    state,
-                    shard.partition_id,
-                    shard.archive_emitted_at_unix,
-                )?
-            }
-            "account_assets" => {
-                if let Some(asset_definition_id) = shard
-                    .asset_definition_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    return Err(projection_export_conversion_error(format!(
-                        "asset_definition_id is not supported for account_assets checkpoint shards (got `{asset_definition_id}`)"
-                    )));
-                }
-                build_account_assets_projection_shard_archive(
-                    state,
-                    shard.partition_id,
-                    shard.archive_emitted_at_unix,
-                )?
-            }
-            "asset_holders" => {
-                let selector = shard
-                    .asset_definition_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        projection_export_conversion_error(
-                            "asset_definition_id is required for asset_holders checkpoint shards"
-                                .to_owned(),
-                        )
-                    })?;
-                build_asset_holders_projection_shard_archive(
-                    state,
-                    selector,
-                    shard.partition_id,
-                    shard.archive_emitted_at_unix,
-                )?
-            }
-            "asset_definitions" => {
-                if let Some(asset_definition_id) = shard
-                    .asset_definition_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    return Err(projection_export_conversion_error(format!(
-                        "asset_definition_id is not supported for asset_definitions checkpoint shards (got `{asset_definition_id}`)"
-                    )));
-                }
-                build_asset_definitions_projection_shard_archive(
-                    state,
-                    shard.partition_id,
-                    shard.archive_emitted_at_unix,
-                )?
-            }
-            "domains" => {
-                if let Some(asset_definition_id) = shard
-                    .asset_definition_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    return Err(projection_export_conversion_error(format!(
-                        "asset_definition_id is not supported for domains checkpoint shards (got `{asset_definition_id}`)"
-                    )));
-                }
-                build_domains_projection_shard_archive(
-                    state,
-                    shard.partition_id,
-                    shard.archive_emitted_at_unix,
-                )?
-            }
-            other => {
-                return Err(projection_export_conversion_error(format!(
-                    "unsupported checkpoint shard resource `{other}`"
-                )));
-            }
-        };
-        uploads.push(QueryProjectionUploadedShardArchive::new(
-            archive,
-            manifest_digest,
-            storage_ticket,
-        ));
-    }
-    Ok(uploads)
-}
-#[cfg(feature = "app_api")]
-fn validate_projection_checkpoint_shard_set(
-    state: &iroha_core::state::State,
-    uploads: &[QueryProjectionUploadedShardArchive],
-) -> Result<(), crate::Error> {
-    let expected = build_expected_projection_checkpoint_shard_keys(state)?;
-    let actual: BTreeSet<_> = uploads
-        .iter()
-        .map(|upload| ProjectionCheckpointShardKey::from_archive(&upload.archive))
-        .collect();
-    let missing_count = expected.difference(&actual).count();
-    let unexpected_count = actual.difference(&expected).count();
-    if missing_count == 0 && unexpected_count == 0 {
-        return Ok(());
-    }
-    let missing_preview = expected
-        .difference(&actual)
-        .take(8)
-        .map(ProjectionCheckpointShardKey::describe)
-        .collect::<Vec<_>>();
-    let unexpected_preview = actual
-        .difference(&expected)
-        .take(8)
-        .map(ProjectionCheckpointShardKey::describe)
-        .collect::<Vec<_>>();
-    let mut problems = Vec::new();
-    if missing_count > 0 {
-        problems.push(format!(
-            "missing {missing_count} shard(s): {}{}",
-            missing_preview.join(", "),
-            preview_suffix(missing_count, missing_preview.len())
-        ));
-    }
-    if unexpected_count > 0 {
-        problems.push(format!(
-            "unexpected {unexpected_count} shard(s): {}{}",
-            unexpected_preview.join(", "),
-            preview_suffix(unexpected_count, unexpected_preview.len())
-        ));
-    }
-    Err(projection_export_conversion_error(format!(
-        "checkpoint shard set must match the canonical live shard catalog; {}",
-        problems.join("; ")
-    )))
-}
-#[cfg(feature = "app_api")]
-fn build_expected_projection_checkpoint_shard_keys(
-    state: &iroha_core::state::State,
-) -> Result<BTreeSet<ProjectionCheckpointShardKey>, crate::Error> {
-    let mut expected = BTreeSet::new();
-    expected.extend(
-        build_accounts_projection_shard_catalog_entries(state)
-            .into_iter()
-            .map(|entry| {
-                ProjectionCheckpointShardKey::from_catalog_entry(
-                    QueryProjectionResourceKind::Accounts,
-                    entry,
-                )
-            }),
-    );
-    expected.extend(
-        build_account_assets_projection_shard_catalog_entries(state)
-            .into_iter()
-            .map(|entry| {
-                ProjectionCheckpointShardKey::from_catalog_entry(
-                    QueryProjectionResourceKind::AccountAssets,
-                    entry,
-                )
-            }),
-    );
-    expected.extend(
-        build_asset_holders_projection_shard_catalog_entries(state, None)?
-            .into_iter()
-            .map(|entry| {
-                ProjectionCheckpointShardKey::from_catalog_entry(
-                    QueryProjectionResourceKind::AssetHolders,
-                    entry,
-                )
-            }),
-    );
-    expected.extend(
-        build_asset_definitions_projection_shard_catalog_entries(state)
-            .into_iter()
-            .map(|entry| {
-                ProjectionCheckpointShardKey::from_catalog_entry(
-                    QueryProjectionResourceKind::AssetDefinitions,
-                    entry,
-                )
-            }),
-    );
-    expected.extend(
-        build_domains_projection_shard_catalog_entries(state)
-            .into_iter()
-            .map(|entry| {
-                ProjectionCheckpointShardKey::from_catalog_entry(
-                    QueryProjectionResourceKind::Domains,
-                    entry,
-                )
-            }),
-    );
-    Ok(expected)
-}
-#[cfg(feature = "app_api")]
-fn preview_suffix(total: usize, shown: usize) -> String {
-    let remaining = total.saturating_sub(shown);
-    if remaining == 0 {
-        String::new()
-    } else {
-        format!(" (+{remaining} more)")
-    }
-}
 /// GET /v1/node/query/projection/catalog/{resource} — enumerate the canonical live shard set.
 #[cfg(feature = "app_api")]
 pub async fn handle_node_query_projection_shard_catalog(
@@ -835,7 +482,8 @@ pub async fn handle_node_query_projection_shard_catalog(
     resource: String,
     query: NodeProjectionShardCatalogQuery,
 ) -> Result<NodeProjectionShardCatalogResponse, crate::Error> {
-    let index_status = state.query_index_status_snapshot();
+    let view = state.query_view();
+    let index_status = query_projection_snapshot_status(&view);
     match resource.trim().to_ascii_lowercase().as_str() {
         "accounts" => {
             if let Some(asset_definition_id) = query
@@ -856,7 +504,7 @@ pub async fn handle_node_query_projection_shard_catalog(
                     .map(|hash| hex::encode(hash.as_ref())),
                 query.offset,
                 query.limit,
-                build_accounts_projection_shard_catalog_entries(state.as_ref()),
+                build_accounts_projection_shard_catalog_entries(&view),
             )
         }
         "account_assets" => {
@@ -878,7 +526,7 @@ pub async fn handle_node_query_projection_shard_catalog(
                     .map(|hash| hex::encode(hash.as_ref())),
                 query.offset,
                 query.limit,
-                build_account_assets_projection_shard_catalog_entries(state.as_ref()),
+                build_account_assets_projection_shard_catalog_entries(&view),
             )
         }
         "asset_holders" => build_projection_shard_catalog_response(
@@ -890,7 +538,7 @@ pub async fn handle_node_query_projection_shard_catalog(
             query.offset,
             query.limit,
             build_asset_holders_projection_shard_catalog_entries(
-                state.as_ref(),
+                &view,
                 query.asset_definition_id.as_deref(),
             )?,
         ),
@@ -913,7 +561,7 @@ pub async fn handle_node_query_projection_shard_catalog(
                     .map(|hash| hex::encode(hash.as_ref())),
                 query.offset,
                 query.limit,
-                build_asset_definitions_projection_shard_catalog_entries(state.as_ref()),
+                build_asset_definitions_projection_shard_catalog_entries(&view),
             )
         }
         "domains" => {
@@ -935,7 +583,7 @@ pub async fn handle_node_query_projection_shard_catalog(
                     .map(|hash| hex::encode(hash.as_ref())),
                 query.offset,
                 query.limit,
-                build_domains_projection_shard_catalog_entries(state.as_ref()),
+                build_domains_projection_shard_catalog_entries(&view),
             )
         }
         other => Err(projection_export_conversion_error(format!(
@@ -953,6 +601,7 @@ pub async fn handle_node_query_projection_shard_export(
 ) -> Result<QueryProjectionShardArchive, crate::Error> {
     validate_projection_partition_id(partition_id)?;
     let emitted_at_unix = current_unix_seconds();
+    let view = state.query_view();
     match resource.trim().to_ascii_lowercase().as_str() {
         "accounts" => {
             if let Some(asset_definition_id) = query
@@ -965,7 +614,7 @@ pub async fn handle_node_query_projection_shard_export(
                     "asset_definition_id is not supported for accounts export (got `{asset_definition_id}`)"
                 )));
             }
-            build_accounts_projection_shard_archive(state.as_ref(), partition_id, emitted_at_unix)
+            build_accounts_projection_shard_archive(&view, partition_id, emitted_at_unix)
         }
         "account_assets" => {
             if let Some(asset_definition_id) = query
@@ -978,11 +627,7 @@ pub async fn handle_node_query_projection_shard_export(
                     "asset_definition_id is not supported for account_assets export (got `{asset_definition_id}`)"
                 )));
             }
-            build_account_assets_projection_shard_archive(
-                state.as_ref(),
-                partition_id,
-                emitted_at_unix,
-            )
+            build_account_assets_projection_shard_archive(&view, partition_id, emitted_at_unix)
         }
         "asset_holders" => {
             let selector = query
@@ -996,7 +641,7 @@ pub async fn handle_node_query_projection_shard_export(
                     )
                 })?;
             build_asset_holders_projection_shard_archive(
-                state.as_ref(),
+                &view,
                 selector,
                 partition_id,
                 emitted_at_unix,
@@ -1013,11 +658,7 @@ pub async fn handle_node_query_projection_shard_export(
                     "asset_definition_id is not supported for asset_definitions export (got `{asset_definition_id}`)"
                 )));
             }
-            build_asset_definitions_projection_shard_archive(
-                state.as_ref(),
-                partition_id,
-                emitted_at_unix,
-            )
+            build_asset_definitions_projection_shard_archive(&view, partition_id, emitted_at_unix)
         }
         "domains" => {
             if let Some(asset_definition_id) = query
@@ -1030,7 +671,7 @@ pub async fn handle_node_query_projection_shard_export(
                     "asset_definition_id is not supported for domains export (got `{asset_definition_id}`)"
                 )));
             }
-            build_domains_projection_shard_archive(state.as_ref(), partition_id, emitted_at_unix)
+            build_domains_projection_shard_archive(&view, partition_id, emitted_at_unix)
         }
         other => Err(projection_export_conversion_error(format!(
             "unsupported projection resource `{other}`"
@@ -1086,12 +727,18 @@ fn build_projection_shard_catalog_response(
     })
 }
 #[cfg(feature = "app_api")]
+fn query_projection_snapshot_status(state: &impl StateReadOnly) -> QueryIndexStatus {
+    QueryIndexStatus {
+        indexed_height: u64::try_from(state.height())
+            .expect("supported target pointer widths fit the committed state height into u64"),
+        indexed_block_hash: state.latest_block_hash(),
+    }
+}
+#[cfg(feature = "app_api")]
 fn build_accounts_projection_shard_catalog_entries(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
 ) -> Vec<NodeProjectionShardCatalogEntry> {
-    let world = state.world_view();
-    let accounts = crate::routing::collect_subject_accounts(&world);
-    drop(world);
+    let accounts = crate::routing::collect_subject_accounts(state.world());
     let mut counts: BTreeMap<u32, u64> = BTreeMap::new();
     for account in accounts {
         let partition_id =
@@ -1112,20 +759,18 @@ fn build_accounts_projection_shard_catalog_entries(
 }
 #[cfg(feature = "app_api")]
 pub(crate) fn build_accounts_projection_shard_archive(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
     partition_id: u32,
     emitted_at_unix: u64,
 ) -> Result<QueryProjectionShardArchive, crate::Error> {
-    let world = state.world_view();
-    let accounts = crate::routing::collect_subject_accounts(&world);
-    drop(world);
+    let accounts = crate::routing::collect_subject_accounts(state.world());
     let mut rows = Vec::new();
     for account in accounts {
         let account_id = account.id().to_string();
         if query_projection_default_partition_for_account(&account_id) != partition_id {
             continue;
         }
-        let alias = crate::routing::primary_alias_projection_for_account_id(state, account.id());
+        let alias = crate::routing::PrimaryAliasProjection::default();
         rows.push(QueryProjectionAccountRow {
             account_id,
             primary_alias: alias.literal,
@@ -1147,7 +792,7 @@ pub(crate) fn build_accounts_projection_shard_archive(
         ))
     })?;
     Ok(QueryProjectionShardArchive::from_index_status(
-        state.query_index_status_snapshot(),
+        query_projection_snapshot_status(state),
         emitted_at_unix,
         QueryProjectionResourceKind::Accounts,
         partition_id,
@@ -1158,16 +803,15 @@ pub(crate) fn build_accounts_projection_shard_archive(
 }
 #[cfg(feature = "app_api")]
 fn build_account_assets_projection_shard_catalog_entries(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
 ) -> Vec<NodeProjectionShardCatalogEntry> {
-    let world = state.world_view();
+    let world = state.world();
     let mut counts: BTreeMap<u32, u64> = BTreeMap::new();
     for asset in world.assets_iter() {
         let partition_id =
             query_projection_default_partition_for_account(&asset.id().account().to_string());
         *counts.entry(partition_id).or_default() += 1;
     }
-    drop(world);
     counts
         .into_iter()
         .map(
@@ -1182,11 +826,11 @@ fn build_account_assets_projection_shard_catalog_entries(
 }
 #[cfg(feature = "app_api")]
 pub(crate) fn build_account_assets_projection_shard_archive(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
     partition_id: u32,
     emitted_at_unix: u64,
 ) -> Result<QueryProjectionShardArchive, crate::Error> {
-    let world = state.world_view();
+    let world = state.world();
     let mut rows = Vec::new();
     for asset in world.assets_iter() {
         let account_id = asset.id().account().to_string();
@@ -1204,8 +848,7 @@ pub(crate) fn build_account_assets_projection_shard_archive(
             ),
             Err(_) => (definition_id.to_string(), None),
         };
-        let alias =
-            crate::routing::primary_alias_projection_for_account_id(state, asset.id().account());
+        let alias = crate::routing::PrimaryAliasProjection::default();
         rows.push(QueryProjectionAccountAssetRow {
             account_id,
             asset: definition_id.to_string(),
@@ -1220,7 +863,6 @@ pub(crate) fn build_account_assets_projection_shard_archive(
             has_primary_alias: alias.has_primary_alias,
         });
     }
-    drop(world);
     rows.sort_by(|left, right| {
         left.account_id
             .cmp(&right.account_id)
@@ -1237,7 +879,7 @@ pub(crate) fn build_account_assets_projection_shard_archive(
         ))
     })?;
     Ok(QueryProjectionShardArchive::from_index_status(
-        state.query_index_status_snapshot(),
+        query_projection_snapshot_status(state),
         emitted_at_unix,
         QueryProjectionResourceKind::AccountAssets,
         partition_id,
@@ -1248,9 +890,9 @@ pub(crate) fn build_account_assets_projection_shard_archive(
 }
 #[cfg(feature = "app_api")]
 fn build_asset_definitions_projection_shard_catalog_entries(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
 ) -> Vec<NodeProjectionShardCatalogEntry> {
-    let world = state.world_view();
+    let world = state.world();
     let mut counts: BTreeMap<u32, u64> = BTreeMap::new();
     for definition in world.asset_definitions_iter() {
         let id = definition.id().to_string();
@@ -1260,7 +902,6 @@ fn build_asset_definitions_projection_shard_catalog_entries(
         );
         *counts.entry(partition_id).or_default() += 1;
     }
-    drop(world);
     counts
         .into_iter()
         .map(
@@ -1275,12 +916,12 @@ fn build_asset_definitions_projection_shard_catalog_entries(
 }
 #[cfg(feature = "app_api")]
 pub(crate) fn build_asset_definitions_projection_shard_archive(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
     partition_id: u32,
     emitted_at_unix: u64,
 ) -> Result<QueryProjectionShardArchive, crate::Error> {
-    let now_ms = crate::routing::asset_alias_observation_time_ms(state);
-    let world = state.world_view();
+    let now_ms = state.query_ledger_time_ms();
+    let world = state.world();
     let alias_bindings: BTreeMap<_, _> = world
         .asset_definition_alias_bindings()
         .iter()
@@ -1326,7 +967,6 @@ pub(crate) fn build_asset_definitions_projection_shard_archive(
             metadata,
         });
     }
-    drop(world);
     rows.sort_by(|left, right| left.id.cmp(&right.id));
     let rowset = QueryProjectionShardRowSet::AssetDefinitions(
         QueryProjectionAssetDefinitionsShardRowSet::new(partition_id, rows),
@@ -1338,7 +978,7 @@ pub(crate) fn build_asset_definitions_projection_shard_archive(
         ))
     })?;
     Ok(QueryProjectionShardArchive::from_index_status(
-        state.query_index_status_snapshot(),
+        query_projection_snapshot_status(state),
         emitted_at_unix,
         QueryProjectionResourceKind::AssetDefinitions,
         partition_id,
@@ -1349,9 +989,9 @@ pub(crate) fn build_asset_definitions_projection_shard_archive(
 }
 #[cfg(feature = "app_api")]
 fn build_domains_projection_shard_catalog_entries(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
 ) -> Vec<NodeProjectionShardCatalogEntry> {
-    let world = state.world_view();
+    let world = state.world();
     let mut counts: BTreeMap<u32, u64> = BTreeMap::new();
     for domain in world.domains_iter() {
         let id = domain.id().to_string();
@@ -1361,7 +1001,6 @@ fn build_domains_projection_shard_catalog_entries(
         );
         *counts.entry(partition_id).or_default() += 1;
     }
-    drop(world);
     counts
         .into_iter()
         .map(
@@ -1376,11 +1015,11 @@ fn build_domains_projection_shard_catalog_entries(
 }
 #[cfg(feature = "app_api")]
 pub(crate) fn build_domains_projection_shard_archive(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
     partition_id: u32,
     emitted_at_unix: u64,
 ) -> Result<QueryProjectionShardArchive, crate::Error> {
-    let world = state.world_view();
+    let world = state.world();
     let mut rows = Vec::new();
     for domain in world.domains_iter() {
         let id = domain.id().to_string();
@@ -1392,7 +1031,6 @@ pub(crate) fn build_domains_projection_shard_archive(
             rows.push(QueryProjectionDomainRow { id });
         }
     }
-    drop(world);
     rows.sort_by(|left, right| left.id.cmp(&right.id));
     let rowset = QueryProjectionShardRowSet::Domains(QueryProjectionDomainsShardRowSet::new(
         partition_id,
@@ -1405,7 +1043,7 @@ pub(crate) fn build_domains_projection_shard_archive(
         ))
     })?;
     Ok(QueryProjectionShardArchive::from_index_status(
-        state.query_index_status_snapshot(),
+        query_projection_snapshot_status(state),
         emitted_at_unix,
         QueryProjectionResourceKind::Domains,
         partition_id,
@@ -1416,15 +1054,15 @@ pub(crate) fn build_domains_projection_shard_archive(
 }
 #[cfg(feature = "app_api")]
 fn build_asset_holders_projection_shard_catalog_entries(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
     asset_definition_selector: Option<&str>,
 ) -> Result<Vec<NodeProjectionShardCatalogEntry>, crate::Error> {
-    let now_ms = crate::routing::asset_alias_observation_time_ms(state);
-    let world = state.world_view();
+    let now_ms = state.query_ledger_time_ms();
+    let world = state.world();
     let selected_definition_id = asset_definition_selector
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|selector| crate::routing::resolve_asset_definition_selector(&world, selector, now_ms))
+        .map(|selector| crate::routing::resolve_asset_definition_selector(world, selector, now_ms))
         .transpose()?;
     let mut counts: BTreeMap<(iroha_data_model::asset::AssetDefinitionId, u32), u64> =
         BTreeMap::new();
@@ -1463,20 +1101,19 @@ fn build_asset_holders_projection_shard_catalog_entries(
             asset_alias,
         });
     }
-    drop(world);
     Ok(entries)
 }
 #[cfg(feature = "app_api")]
 pub(crate) fn build_asset_holders_projection_shard_archive(
-    state: &iroha_core::state::State,
+    state: &impl StateReadOnly,
     asset_definition_selector: &str,
     partition_id: u32,
     emitted_at_unix: u64,
 ) -> Result<QueryProjectionShardArchive, crate::Error> {
-    let now_ms = crate::routing::asset_alias_observation_time_ms(state);
-    let world = state.world_view();
+    let now_ms = state.query_ledger_time_ms();
+    let world = state.world();
     let definition_id = crate::routing::resolve_asset_definition_selector(
-        &world,
+        world,
         asset_definition_selector,
         now_ms,
     )?;
@@ -1506,11 +1143,10 @@ pub(crate) fn build_asset_holders_projection_shard_archive(
         .map(|(account_id, _)| {
             (
                 account_id.clone(),
-                crate::routing::primary_alias_projection_for_account_id(state, account_id),
+                crate::routing::PrimaryAliasProjection::default(),
             )
         })
         .collect();
-    drop(world);
     let mut rows = Vec::new();
     for ((account_id, scope), quantity) in aggregated {
         let canonical_id = account_id.to_string();
@@ -1548,7 +1184,7 @@ pub(crate) fn build_asset_holders_projection_shard_archive(
         ))
     })?;
     Ok(QueryProjectionShardArchive::from_index_status(
-        state.query_index_status_snapshot(),
+        query_projection_snapshot_status(state),
         emitted_at_unix,
         QueryProjectionResourceKind::AssetHolders,
         partition_id,
@@ -1564,12 +1200,6 @@ fn projection_export_conversion_error(message: impl Into<String>) -> crate::Erro
     ))
 }
 #[cfg(feature = "app_api")]
-fn projection_checkpoint_plan_error(err: QueryProjectionCheckpointPlanError) -> crate::Error {
-    projection_export_conversion_error(format!(
-        "failed to validate query projection checkpoint publish plan: {err}"
-    ))
-}
-#[cfg(feature = "app_api")]
 fn validate_projection_partition_id(partition_id: u32) -> Result<(), crate::Error> {
     if partition_id >= QUERY_PROJECTION_DEFAULT_PARTITION_COUNT {
         return Err(projection_export_conversion_error(format!(
@@ -1578,27 +1208,6 @@ fn validate_projection_partition_id(partition_id: u32) -> Result<(), crate::Erro
         )));
     }
     Ok(())
-}
-#[cfg(feature = "app_api")]
-fn parse_blob_digest_hex(value: &str, field: &str) -> Result<BlobDigest, crate::Error> {
-    parse_fixed_hex_32(value, field).map(BlobDigest::new)
-}
-#[cfg(feature = "app_api")]
-fn parse_storage_ticket_hex(value: &str, field: &str) -> Result<StorageTicketId, crate::Error> {
-    parse_fixed_hex_32(value, field).map(StorageTicketId::new)
-}
-#[cfg(feature = "app_api")]
-fn parse_fixed_hex_32(value: &str, field: &str) -> Result<[u8; 32], crate::Error> {
-    let trimmed = value.trim_start_matches("0x");
-    let bytes = hex::decode(trimmed).map_err(|err| {
-        projection_export_conversion_error(format!(
-            "invalid hex in `{field}` (expected 32 bytes): {err}"
-        ))
-    })?;
-    let len = bytes.len();
-    bytes.try_into().map_err(|_| {
-        projection_export_conversion_error(format!("`{field}` must be 32 bytes (got {len})"))
-    })
 }
 #[cfg(feature = "app_api")]
 fn current_unix_seconds() -> u64 {

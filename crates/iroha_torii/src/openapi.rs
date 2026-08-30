@@ -1070,6 +1070,47 @@ mod tests {
         );
     }
     #[test]
+    fn standalone_ballot_drafts_publish_one_exact_success_and_standard_bad_request() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "GovernanceBallotDraftResponseV1",
+            &["drafted", "tx_instructions"],
+            &[],
+        );
+        let response = component_properties(schemas, "GovernanceBallotDraftResponseV1");
+        assert_eq!(response["drafted"]["const"].as_bool(), Some(true));
+        assert_eq!(response["tx_instructions"]["minItems"].as_u64(), Some(1));
+        assert_eq!(response["tx_instructions"]["maxItems"].as_u64(), Some(1));
+        assert_eq!(
+            response["tx_instructions"]["items"]["$ref"].as_str(),
+            Some("#/components/schemas/GovernanceBallotInstructionDraftV1")
+        );
+        assert_strict_object_schema(
+            schemas,
+            "GovernanceBallotInstructionDraftV1",
+            &["wire_id", "payload_hex"],
+            &[],
+        );
+
+        for path in [
+            "/v1/gov/ballots/plain",
+            "/v1/gov/ballots/zk-v1",
+            "/v1/gov/ballots/zk-v1/ballot-proof",
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_response_schema_ref(operation, "200", path),
+                "#/components/schemas/GovernanceBallotDraftResponseV1"
+            );
+            assert_eq!(
+                operation_response_schema_ref(operation, "400", path),
+                "#/components/schemas/ErrorEnvelope"
+            );
+        }
+    }
+    #[test]
     fn account_onboarding_current_state_openapi_is_one_closed_v1_observation() {
         const PATH: &str = "/v1/accounts/onboarding/current-state";
         const REQUEST: &str = "AccountOnboardingCurrentStateRequest";

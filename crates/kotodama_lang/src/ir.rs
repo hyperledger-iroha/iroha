@@ -868,8 +868,8 @@ pub enum Instr {
         /// Temp holding pointer to NoritoBytes TLV (INPUT)
         payload: Temp,
     },
-    /// Execution proof summary as NoritoBytes returned by the host.
-    ProveExecution {
+    /// Self-reported execution summary as NoritoBytes returned by the host.
+    ExecutionSummary {
         dest: Temp,
     },
     /// Grow VM heap by `bytes`, returning the new heap limit.
@@ -6070,9 +6070,9 @@ fn lower_surface_builtin_call(
         Builtin::Sm4GcmSeal | Builtin::Sm4GcmOpen | Builtin::Sm4CcmSeal | Builtin::Sm4CcmOpen => {
             lower_sm4_builtin_call(ctx, builtin, args, vars)
         }
-        Builtin::ProveExecution => {
+        Builtin::ExecutionSummary => {
             let dest = ctx.new_temp();
-            ctx.current_instr(Instr::ProveExecution { dest });
+            ctx.current_instr(Instr::ExecutionSummary { dest });
             dest
         }
         Builtin::GrowHeap => {
