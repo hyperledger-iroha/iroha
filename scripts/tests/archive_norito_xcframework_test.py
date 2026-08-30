@@ -760,14 +760,20 @@ print(f"{digest} {size}")
         )
         self.assertIn("protocol_abis != header_abis", builder)
         self.assertIn("KAGEMUSHA_ARTIFACT_ABI_VERSION=22", builder)
-        rustup_locator = '"$USER_HOME_DIR/.cargo/bin/rustup")'
+        rustup_locator = 'RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"'
         self.assertIn(rustup_locator, builder)
         rustup_locator_offset = builder.index(rustup_locator)
-        self.assertIn("resolve(strict=True)", builder[:rustup_locator_offset])
+        self.assertIn("RUSTUP_CANONICAL_BINARY=", builder[rustup_locator_offset:])
+        self.assertIn("resolve(strict=True)", builder[rustup_locator_offset:])
         self.assertIn(
-            'for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"',
+            'for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_CANONICAL_BINARY"',
             builder[rustup_locator_offset:],
         )
+        self.assertIn(
+            '"$RUSTUP_BINARY" which --toolchain "$PINNED_RUST_TOOLCHAIN" cargo',
+            builder[rustup_locator_offset:],
+        )
+        self.assertIn("RUSTUP_CANONICAL_AFTER_DISPATCH", builder)
         self.assertIn(
             '"native_bridge_abi_version": $BRIDGE_ABI_VERSION,',
             builder,

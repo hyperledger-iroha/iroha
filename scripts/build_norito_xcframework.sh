@@ -463,10 +463,15 @@ USER_HOME_DIR="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$USER_HOME_DIR")"
 GIT_BINARY="/usr/bin/git"
-RUSTUP_BINARY="$(run_python312_clean -c \
+RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"
+RUSTUP_CANONICAL_BINARY="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
-  "$USER_HOME_DIR/.cargo/bin/rustup")"
-for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"; do
+  "$RUSTUP_BINARY")"
+[[ -e "$RUSTUP_BINARY" && -x "$RUSTUP_BINARY" ]] || {
+  echo "[-] The pinned rustup dispatcher is unavailable: $RUSTUP_BINARY" >&2
+  exit 1
+}
+for tool_path in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_CANONICAL_BINARY"; do
   [[ -f "$tool_path" && ! -L "$tool_path" && -x "$tool_path" ]] || {
     echo "[-] Pinned Python, Git, and rustup executables are required: $tool_path" >&2
     exit 1
@@ -517,6 +522,13 @@ RUSTDOC_BINARY="$(
   env -i "${RUSTUP_ENV[@]}" \
     "$RUSTUP_BINARY" which --toolchain "$PINNED_RUST_TOOLCHAIN" rustdoc
 )"
+RUSTUP_CANONICAL_AFTER_DISPATCH="$(run_python312_clean -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$RUSTUP_BINARY")"
+if [[ "$RUSTUP_CANONICAL_AFTER_DISPATCH" != "$RUSTUP_CANONICAL_BINARY" ]]; then
+  echo "[-] The pinned rustup dispatcher changed during tool resolution" >&2
+  exit 1
+fi
 CARGO_BINARY="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$CARGO_BINARY")"

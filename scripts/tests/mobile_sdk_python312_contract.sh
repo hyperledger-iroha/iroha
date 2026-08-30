@@ -159,6 +159,10 @@ grep -Fq 'sys.version_info[:2] != (3, 12)' "$JVM_NATIVE_GATE" \
   || fail "JVM native gate does not require exact Python 3.12"
 grep -Fq '"$PYTHON_BINARY" -I -S' "$JVM_NATIVE_GATE" \
   || fail "JVM native gate does not isolate Python helpers from site packages"
+grep -Fq 'RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"' "$JVM_NATIVE_GATE" \
+  || fail "JVM native gate does not preserve rustup dispatcher semantics"
+grep -Fq 'RUSTUP_CANONICAL_BINARY=' "$JVM_NATIVE_GATE" \
+  || fail "JVM native gate does not authenticate the rustup dispatcher target"
 [[ "$(grep -Fc 'python-version: "3.12"' "$MOBILE_WORKFLOW")" -eq 3 ]] \
   || fail "mobile workflow must pin Python 3.12 in exactly three jobs"
 [[ "$(grep -Fc 'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python"' "$MOBILE_WORKFLOW")" -eq 3 ]] \

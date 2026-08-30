@@ -123,9 +123,10 @@ fi
 USER_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 USER_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$USER_HOME_DIR")"
 GIT_BINARY="/usr/bin/git"
-RUSTUP_BINARY="$("$PYTHON_BINARY" -I -S -c \
+RUSTUP_BINARY="$USER_HOME_DIR/.cargo/bin/rustup"
+RUSTUP_CANONICAL_BINARY="$("$PYTHON_BINARY" -I -S -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
-  "$USER_HOME_DIR/.cargo/bin/rustup")"
+  "$RUSTUP_BINARY")"
 MOBILE_CARGO_HOME="$USER_HOME_DIR/.cargo"
 MOBILE_RUSTUP_HOME="$USER_HOME_DIR/.rustup"
 MOBILE_GRADLE_HOME="$USER_HOME_DIR/.gradle"
@@ -133,7 +134,9 @@ MOBILE_TMPDIR="/tmp"
 for directory in "$USER_HOME_DIR" "$MOBILE_CARGO_HOME" "$MOBILE_RUSTUP_HOME" "$MOBILE_TMPDIR"; do
   [[ "$directory" == /* ]] || fail "mobile build directories must be absolute: $directory"
 done
-for tool in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_BINARY"; do
+[[ -e "$RUSTUP_BINARY" && -x "$RUSTUP_BINARY" ]] \
+  || fail "pinned rustup dispatcher is unavailable: $RUSTUP_BINARY"
+for tool in "$PYTHON_BINARY" "$GIT_BINARY" "$RUSTUP_CANONICAL_BINARY"; do
   [[ -f "$tool" && ! -L "$tool" && -x "$tool" ]] \
     || fail "pinned build tool is not a regular executable: $tool"
 done
@@ -200,6 +203,11 @@ RUSTC_BINARY="$(
   /usr/bin/env -i "${RUSTUP_ENV[@]}" \
     "$RUSTUP_BINARY" which --toolchain "$PINNED_TOOLCHAIN" rustc
 )"
+RUSTUP_CANONICAL_AFTER_DISPATCH="$("$PYTHON_BINARY" -I -S -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$RUSTUP_BINARY")"
+[[ "$RUSTUP_CANONICAL_AFTER_DISPATCH" == "$RUSTUP_CANONICAL_BINARY" ]] \
+  || fail "pinned rustup dispatcher changed during tool resolution"
 CARGO_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$CARGO_BINARY")"
 RUSTC_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$RUSTC_BINARY")"
 [[ -x "$CARGO_BINARY" && -x "$RUSTC_BINARY" ]] \
