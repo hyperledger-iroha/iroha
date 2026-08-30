@@ -5,7 +5,9 @@ use axum::{http::StatusCode, response::IntoResponse};
 use iroha_config::parameters::actual::{LaneRoutingPolicy, TelemetryProfile};
 use iroha_core::telemetry::Telemetry;
 use iroha_telemetry::metrics::Metrics;
-use iroha_torii::{MaybeTelemetry, StatusView, handle_metrics, handle_status};
+use iroha_torii::{
+    MaybeTelemetry, handle_metrics, handle_status, handle_status_blocks, handle_status_peers,
+};
 use std::sync::Arc;
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -24,7 +26,6 @@ async fn disabled_profile_hides_status_and_metrics() {
     let status_err = handle_status(
         &telemetry,
         None,
-        StatusView::Full,
         LaneRoutingPolicy::default(),
         0,
         None,
@@ -35,6 +36,15 @@ async fn disabled_profile_hides_status_and_metrics() {
         status_err.into_response().status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
+    for status_err in [
+        handle_status_blocks(&telemetry, 1).unwrap_err(),
+        handle_status_peers(&telemetry, 1).unwrap_err(),
+    ] {
+        assert_eq!(
+            status_err.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
     let metrics_err = handle_metrics(&telemetry).await.unwrap_err();
     assert_eq!(
         metrics_err.into_response().status(),
@@ -47,7 +57,6 @@ async fn operator_profile_exposes_status_only() {
     let status_resp = handle_status(
         &telemetry,
         None,
-        StatusView::Full,
         LaneRoutingPolicy::default(),
         0,
         None,
@@ -69,7 +78,6 @@ async fn extended_profile_exposes_prometheus_metrics() {
     let status_resp = handle_status(
         &telemetry,
         None,
-        StatusView::Full,
         LaneRoutingPolicy::default(),
         0,
         None,
@@ -100,7 +108,6 @@ async fn full_profile_combines_all_capabilities() {
     let status = handle_status(
         &telemetry,
         None,
-        StatusView::Full,
         LaneRoutingPolicy::default(),
         0,
         None,

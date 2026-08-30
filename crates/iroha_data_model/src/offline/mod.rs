@@ -88,9 +88,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2: u32 =
 /// last admitted top-up can exercise all 64 branch decisions, including eight
 /// two-output peer splits, without stranding its private balance.
 pub const KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2: u32 =
-    KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
-        - KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2
-        - 1;
+    KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 - KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2 - 1;
 /// Maximum canonical top-up shield proof envelope accepted at typed ingress.
 pub const KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2: usize = 192 * 1024;
 /// Absolute canonical byte ceiling for one ABI-21 unshield-v3 proof.
@@ -4540,6 +4538,20 @@ mod kagemusha_v4_artifact_contract_tests {
     }
     #[test]
     fn topup_shield_reserves_the_complete_recursive_lifecycle() {
+        assert_eq!(
+            KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2,
+            u32::from(KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2)
+                + KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+        );
+        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2, 72);
+        assert_eq!(KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2, 65_463);
+        let last_insertable_leaf = KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2 - 1;
+        assert_eq!(
+            last_insertable_leaf + 1 + KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2,
+            KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 - 1,
+            "the complete future-output budget must leave one in-range empty frontier leaf"
+        );
+
         let backend: iroha_schema::Ident = KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into();
         let mut proof = ProofAttachment::new_ref(
             backend.clone(),
@@ -4550,7 +4562,7 @@ mod kagemusha_v4_artifact_contract_tests {
         let mut evidence = KagemushaTopUpShieldEvidenceV2 {
             initial_root: digest(b"top-up initial root"),
             finalized_root: digest(b"top-up finalized root"),
-            leaf_index: KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2 - 1,
+            leaf_index: last_insertable_leaf,
             proof,
         };
         evidence
@@ -6061,6 +6073,13 @@ impl KagemushaRecursiveSpendRedemptionIntentV4 {
             || actual_lineage_roots != expected_lineage_roots
             || self.parent_proof_step_count == 0
             || self.parent_proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
+            || (self.change_output.is_some()
+                && self.parent_proof_step_count >= KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2)
+            || (self.change_output.is_some()
+                && self
+                    .parent_branch_claims
+                    .iter()
+                    .any(|claim| claim.path.depth >= KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2))
             || self.parent_peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || self.public_amount.scale != self.input_note.amount.scale
             || self.unshield_public_inputs_digest == [0; 32]

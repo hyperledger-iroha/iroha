@@ -11,7 +11,10 @@ use iroha_data_model::{
         InstructionBox,
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
     },
-    offline::KagemushaRecursiveSpendTopUpAnchorV4,
+    offline::{
+        KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2,
+        KagemushaRecursiveSpendTopUpAnchorV4,
+    },
     state_path::StatePath,
     transaction::{
         SignedTransaction, TransactionBuilder, TransactionEntrypoint,
@@ -428,10 +431,15 @@ fn validate_kagemusha_v4_topup_snapshot(
             "Offline confidential tree position exceeds the protocol index.",
         )
     })?;
-    if zk_state.commitments.len() >= zk_state.tree_profile.capacity()
-        || zk_state
-            .commitments
-            .contains(&request.current_note.note_commitment)
+    if authoritative_leaf_index >= KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2 {
+        return Err(validation(
+            "offline_topup_tree_full",
+            "Offline confidential tree has no top-up position with a complete recursive lifecycle.",
+        ));
+    }
+    if zk_state
+        .commitments
+        .contains(&request.current_note.note_commitment)
         || zk_state
             .nullifiers
             .contains(&request.current_note.note_commitment)
@@ -1657,7 +1665,7 @@ fn ensure_unproven_pending_window_is_live(
     snapshot_time_ms: u64,
     expires_at_ms: u64,
 ) -> Result<(), Error> {
-    if snapshot_time_ms <= expires_at_ms {
+    if snapshot_time_ms < expires_at_ms {
         return Ok(());
     }
     Err(offline_operation_index_inconsistent(
@@ -2210,6 +2218,8 @@ mod tests {
             .expect("redemption snapshot validator");
         let topup = &source[start..end];
         assert!(topup.contains(".preview_commitment_root("));
+        assert!(topup.contains("KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2"));
+        assert!(!topup.contains("tree_profile.capacity()"));
         assert!(!topup.contains("commitments.clone()"));
         assert!(!topup.contains(".compute_root("));
         for namespace_check in [
@@ -4119,21 +4129,23 @@ mod tests {
     fn unproven_pending_state_fails_closed_after_signed_expiry() {
         ensure_unproven_pending_window_is_live(9_999, 10_000)
             .expect("a pre-expiry operation may still acquire authoritative provenance");
-        ensure_unproven_pending_window_is_live(10_000, 10_000)
-            .expect("the signed expiry boundary is inclusive");
-        let error = ensure_unproven_pending_window_is_live(10_001, 10_000)
-            .expect_err("an expired operation without provenance must not remain pending forever");
-        assert!(matches!(
-            &error,
-            Error::AppServiceUnavailable {
-                code: "offline_operation_index_inconsistent",
-                ..
-            }
-        ));
-        assert_eq!(
-            error.into_response().status(),
-            axum::http::StatusCode::SERVICE_UNAVAILABLE
-        );
+        for snapshot_time_ms in [10_000, 10_001] {
+            let error = ensure_unproven_pending_window_is_live(snapshot_time_ms, 10_000)
+                .expect_err(
+                    "an operation at or after its exclusive expiry must not remain pending",
+                );
+            assert!(matches!(
+                &error,
+                Error::AppServiceUnavailable {
+                    code: "offline_operation_index_inconsistent",
+                    ..
+                }
+            ));
+            assert_eq!(
+                error.into_response().status(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
     }
     #[test]
     fn kagemusha_v4_anchor_finality_binding_rejects_identity_hash_or_height_mismatch() {

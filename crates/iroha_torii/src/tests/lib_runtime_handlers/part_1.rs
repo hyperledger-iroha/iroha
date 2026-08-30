@@ -1756,8 +1756,17 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let torii_proxy_http_ingress_envelope =
         ToriiProxyHttpIngressEnvelope::from_max_content_bytes(proxy_frame_bytes)
             .expect("default proxy HTTP memory envelope fits");
-    let query_fanout_inflight = QueryWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
+    let query_fanout_inflight = ByteWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
         .expect("default query memory pool fits weighted semaphore geometry");
+    #[cfg(feature = "app_api")]
+    let offline_command_memory_inflight = ByteWeightedMemoryPool::new(
+        offline_command_memory_pool_bytes(
+            usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
+                .expect("default content limit fits usize"),
+        )
+        .expect("default offline command memory pool fits usize"),
+    )
+    .expect("default offline command memory pool fits weighted semaphore geometry");
     let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
         usize::try_from(query_fanout_inflight.capacity_bytes())
             .expect("default weighted query pool capacity fits usize"),
@@ -1839,6 +1848,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         proof_rate_limiter: limits::RateLimiter::new(None, None),
         proof_egress_limiter: limits::RateLimiter::new_u64(None, None),
         proof_body_inflight,
+        #[cfg(feature = "app_api")]
+        offline_command_memory_inflight,
         soracloud_public_rate_limiter: limits::RateLimiter::new(None, None),
         soracloud_mutation_rate_limiter: limits::RateLimiter::new(None, None),
         soracloud_mutation_inflight,

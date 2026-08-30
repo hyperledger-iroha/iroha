@@ -96,7 +96,8 @@ public sealed class ToriiIdentifierResolutionAuthenticationTests
             {
                 LocalSigningContext = new ToriiLocalSigningContext(networkId ?? ExactNetwork),
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(AccountId, PrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
     private sealed class CountingHandler(HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
     {

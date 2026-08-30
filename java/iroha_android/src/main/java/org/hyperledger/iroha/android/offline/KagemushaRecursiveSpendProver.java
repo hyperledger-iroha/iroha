@@ -128,9 +128,11 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAXIMUM_PEER_HOPS = 8;
   public static final int MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 384 * 1024;
   public static final int CONFIDENTIAL_TREE_DEPTH = 16;
-  /** Top-up insertion leaves one tree position reserved for the proof-bound successor. */
-  public static final int TOP_UP_SHIELD_INSERTION_CAPACITY =
-      (1 << CONFIDENTIAL_TREE_DEPTH) - 1;
+  /**
+   * Exclusive top-up insertion capacity. The tail reserves 64 branch-depth outputs, eight optional
+   * peer-change outputs, and the final dummy leaf required by the proof circuit.
+   */
+  public static final int TOP_UP_SHIELD_INSERTION_CAPACITY = 65_463;
   public static final int MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4 = 4 * 1024;
   public static final int MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4 = 16 * 1024;
 

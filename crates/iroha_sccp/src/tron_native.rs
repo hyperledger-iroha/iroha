@@ -1640,7 +1640,7 @@ mod tests {
     fn test_transfer() -> crate::TransferPayloadV1 {
         crate::TransferPayloadV1 {
             version: 1,
-            source_domain: SCCP_DOMAIN_TRON,
+            source_domain: crate::SCCP_DOMAIN_TRON,
             dest_domain: 0,
             nonce: 7,
             route_revision: 1,

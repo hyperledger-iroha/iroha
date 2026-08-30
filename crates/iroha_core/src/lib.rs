@@ -247,6 +247,8 @@ const MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES: usize =
 const MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES: usize =
     iroha_config::parameters::defaults::network::MAX_PLAINTEXT_FRAME_BYTES.get();
 const MAX_SUMERAGI_V2_DECODE_DEPTH: usize = 64;
+const MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS: usize =
+    iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1;
 const _: () = assert!(
     MAX_SUMERAGI_V2_CHUNK_NETWORK_FRAME_BYTES < MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES
 );
@@ -554,14 +556,20 @@ fn enforce_inbound_manifest_limits(manifest: &[u8], flags: u8) -> Result<(), nor
         iroha_data_model::block::consensus_v2::MAX_DA_CHUNK_COUNT as usize,
     )
 }
+fn enforce_inbound_peer_id_limits(peer_id: &[u8], flags: u8) -> Result<(), norito::core::Error> {
+    // `PeerId` is a one-field struct around `PublicKey`; the latter delegates
+    // directly to `PublicKeyCompact`'s `ConstVec<u8>` wire. Its sequence
+    // includes the algorithm byte in addition to the bounded key payload.
+    const FIELDS: [InboundStructField; 1] = [InboundStructField::Sized];
+    let public_key = inbound_struct_field(peer_id, flags, &FIELDS, 0)?;
+    enforce_inbound_sequence_limit(public_key, MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS)
+}
 fn enforce_inbound_consensus_v2_payload_limits(
     tag: u32,
     payload: &[u8],
     flags: u8,
 ) -> Result<(), norito::core::Error> {
-    use iroha_data_model::block::consensus_v2::{
-        MAX_CONSENSUS_SIGNATURE_BYTES, MAX_DA_CHUNK_SIZE_BYTES, MAX_DA_PAYLOAD_SIZE_BYTES,
-    };
+    use iroha_data_model::block::consensus_v2 as wire;
     const PROPOSAL_FIELDS: [InboundStructField; 6] = [
         InboundStructField::Sized,
         // `ValidatorIndex` is a type alias, but the derive deliberately treats
@@ -587,38 +595,42 @@ fn enforce_inbound_consensus_v2_payload_limits(
         InboundStructField::ByteSequence,
     ];
     match tag {
-        0 => {
+        wire::CONSENSUS_MESSAGE_V2_PROPOSAL_TAG => {
             enforce_inbound_manifest_limits(
                 inbound_struct_field(payload, flags, &PROPOSAL_FIELDS, 3)?,
                 flags,
             )?;
             enforce_inbound_byte_sequence_limit(
                 inbound_struct_field(payload, flags, &PROPOSAL_FIELDS, 5)?,
-                MAX_CONSENSUS_SIGNATURE_BYTES,
+                wire::MAX_CONSENSUS_SIGNATURE_BYTES,
             )
         }
-        5 => {
+        wire::CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG => {
             enforce_inbound_byte_sequence_limit(
                 inbound_struct_field(payload, flags, &CHUNK_FIELDS, 2)?,
-                MAX_DA_CHUNK_SIZE_BYTES as usize,
+                wire::MAX_DA_CHUNK_SIZE_BYTES as usize,
             )?;
             enforce_inbound_byte_sequence_limit(
                 inbound_struct_field(payload, flags, &CHUNK_FIELDS, 4)?,
-                MAX_CONSENSUS_SIGNATURE_BYTES,
+                wire::MAX_CONSENSUS_SIGNATURE_BYTES,
             )
         }
-        7 => {
+        wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG => {
             enforce_inbound_manifest_limits(
                 inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 1)?,
                 flags,
             )?;
             enforce_inbound_byte_sequence_limit(
                 inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 2)?,
-                MAX_DA_PAYLOAD_SIZE_BYTES as usize,
+                wire::MAX_DA_PAYLOAD_SIZE_BYTES as usize,
+            )?;
+            enforce_inbound_peer_id_limits(
+                inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 3)?,
+                flags,
             )?;
             enforce_inbound_byte_sequence_limit(
                 inbound_struct_field(payload, flags, &CERTIFIED_RESPONSE_FIELDS, 4)?,
-                MAX_CONSENSUS_SIGNATURE_BYTES,
+                wire::MAX_CONSENSUS_SIGNATURE_BYTES,
             )
         }
         _ => Ok(()),
@@ -640,17 +652,26 @@ fn inbound_consensus_v2_topic(
     payload: &[u8],
     flags: u8,
 ) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
-    use iroha_data_model::block::consensus_v2::PROTOCOL_VERSION;
+    use iroha_data_model::block::consensus_v2 as wire;
     use iroha_p2p::network::message::Topic;
     let (version, tag, _) = inbound_consensus_v2_parts(payload, flags)?;
-    if version != PROTOCOL_VERSION {
+    if version != wire::PROTOCOL_VERSION {
         return Ok(Topic::Other);
     }
     match tag {
-        0..=4 | 9..=10 => Ok(Topic::ConsensusSafety),
-        7 => Ok(Topic::ConsensusPayload),
-        5 => Ok(Topic::ConsensusChunk),
-        6 | 8 => Ok(Topic::Consensus),
+        wire::CONSENSUS_MESSAGE_V2_PROPOSAL_TAG
+        | wire::CONSENSUS_MESSAGE_V2_VOTE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_QUORUM_CERTIFICATE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_TIMEOUT_VOTE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_TIMEOUT_CERTIFICATE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_RESPONSE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG => {
+            Ok(Topic::ConsensusSafety)
+        }
+        wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG => Ok(Topic::ConsensusPayload),
+        wire::CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG => Ok(Topic::ConsensusChunk),
+        wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_REQUEST_TAG
+        | wire::CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_REQUEST_TAG => Ok(Topic::Consensus),
         _ => Err(norito::core::Error::Message(
             "unknown Sumeragi v2 payload discriminant".to_owned(),
         )),
@@ -661,29 +682,35 @@ fn inbound_consensus_v2_decode_limits(
     framed_len: usize,
     flags: u8,
 ) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
-    use iroha_data_model::block::consensus_v2::{
-        MAX_CONSENSUS_SIGNATURE_BYTES, MAX_DA_CHUNK_COUNT, MAX_DA_CHUNK_SIZE_BYTES,
-        MAX_DA_PAYLOAD_SIZE_BYTES, PROTOCOL_VERSION,
-    };
+    use iroha_data_model::block::consensus_v2 as wire;
     let (version, tag, payload_field) = inbound_consensus_v2_parts(payload, flags)?;
-    if version != PROTOCOL_VERSION {
+    if version != wire::PROTOCOL_VERSION {
         // The raw topic classifier routes another protocol revision through
         // the much smaller `Other` cap before this hook is reached.
         return Ok(None);
     }
-    let default_sequence_limit = usize::try_from(MAX_DA_CHUNK_COUNT)
+    let default_sequence_limit = usize::try_from(wire::MAX_DA_CHUNK_COUNT)
         .unwrap_or(usize::MAX)
-        .max(MAX_CONSENSUS_SIGNATURE_BYTES);
+        .max(wire::MAX_CONSENSUS_SIGNATURE_BYTES)
+        .max(MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS);
     let (frame_limit, sequence_limit) = match tag {
-        5 => (
+        wire::CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG => (
             MAX_SUMERAGI_V2_CHUNK_NETWORK_FRAME_BYTES,
-            usize::try_from(MAX_DA_CHUNK_SIZE_BYTES).unwrap_or(usize::MAX),
+            usize::try_from(wire::MAX_DA_CHUNK_SIZE_BYTES).unwrap_or(usize::MAX),
         ),
-        7 => (
+        wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG => (
             MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES,
-            usize::try_from(MAX_DA_PAYLOAD_SIZE_BYTES).unwrap_or(usize::MAX),
+            usize::try_from(wire::MAX_DA_PAYLOAD_SIZE_BYTES).unwrap_or(usize::MAX),
         ),
-        0..=4 | 6 | 8..=10 => (
+        wire::CONSENSUS_MESSAGE_V2_PROPOSAL_TAG
+        | wire::CONSENSUS_MESSAGE_V2_VOTE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_QUORUM_CERTIFICATE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_TIMEOUT_VOTE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_TIMEOUT_CERTIFICATE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_REQUEST_TAG
+        | wire::CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_REQUEST_TAG
+        | wire::CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_RESPONSE_TAG
+        | wire::CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG => (
             MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES,
             default_sequence_limit,
         ),

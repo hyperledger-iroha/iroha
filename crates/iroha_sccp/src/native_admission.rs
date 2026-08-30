@@ -6,12 +6,11 @@
 use super::{
     BscNativeSourceError, BscNativeSourceProofV1, EthereumNativeSourceErrorV1,
     EthereumNativeSourceProofV1, H256, SccpPayloadV1, TonNativeSourceError, TonNativeSourceProofV1,
-    TronNativeSourceError, TronNativeSourceProofV1, bsc_native_anchor_block_number,
-    canonical_sccp_payload_bytes, payload_hash, sccp_lane_id_hash_v1,
-    sccp_lane_source_event_digest_v1, sccp_message_id, sccp_message_source_domain,
-    sccp_message_target_domain, sccp_source_identity_hash_v1, verify_bsc_native_source,
-    verify_ethereum_native_source_proof_v1, verify_sccp_payload_structure,
-    verify_ton_native_source, verify_tron_native_source,
+    TronNativeSourceError, TronNativeSourceProofV1, canonical_sccp_payload_bytes, payload_hash,
+    sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
+    sccp_message_source_domain, sccp_message_target_domain, sccp_source_identity_hash_v1,
+    verify_bsc_native_source, verify_ethereum_native_source_proof_v1,
+    verify_sccp_payload_structure, verify_ton_native_source, verify_tron_native_source,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
@@ -757,13 +756,6 @@ fn verify_bsc_native_admission_v1(
     context: &GovernedNativeAdmissionContextV1<'_>,
     native: &BscNativeSourceProofV1,
 ) -> Result<VerifiedNativeFinalityV1, SccpNativeAdmissionErrorV1> {
-    if bsc_native_anchor_block_number(&native.finality.anchor)
-        .map_err(BscNativeSourceError::Finality)
-        .map_err(SccpNativeAdmissionErrorV1::Bsc)?
-        != context.trust_anchor.checkpoint_height
-    {
-        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
-    }
     let proof = context.proof;
     let canonical_payload = canonical_sccp_payload_bytes(&proof.payload)
         .map_err(|_| SccpNativeAdmissionErrorV1::InvalidPayload)?;
@@ -777,6 +769,9 @@ fn verify_bsc_native_admission_v1(
         &canonical_payload,
     )
     .map_err(SccpNativeAdmissionErrorV1::Bsc)?;
+    if validated.finality.anchor_block_number != context.trust_anchor.checkpoint_height {
+        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
+    }
     if validated.source_identity_hash != proof.source.source_identity_hash
         || validated.lane_hash != context.lane_hash
         || validated.finality.anchor_hash != proof.source.trust_anchor.anchor_hash

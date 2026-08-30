@@ -15,14 +15,13 @@ pub const SAFETY_WAL_FORMAT_VERSION: u16 = 1;
 pub const SAFETY_WAL_HASH_LEN: usize = 32;
 /// Maximum encoded payload accepted in one safety-WAL frame.
 pub const SAFETY_WAL_MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
-const SAFETY_WAL_FILE_HEADER_PREFIX_LEN: usize =
-    SAFETY_WAL_FILE_MAGIC.len()
-        + 2
-        + 2
-        + SAFETY_WAL_HASH_LEN
-        + SAFETY_WAL_HASH_LEN
-        + 8
-        + SAFETY_WAL_HASH_LEN;
+const SAFETY_WAL_FILE_HEADER_PREFIX_LEN: usize = SAFETY_WAL_FILE_MAGIC.len()
+    + 2
+    + 2
+    + SAFETY_WAL_HASH_LEN
+    + SAFETY_WAL_HASH_LEN
+    + 8
+    + SAFETY_WAL_HASH_LEN;
 /// Canonical byte width of a complete safety-WAL file header.
 pub const SAFETY_WAL_FILE_HEADER_LEN: usize =
     SAFETY_WAL_FILE_HEADER_PREFIX_LEN + SAFETY_WAL_HASH_LEN;
@@ -779,6 +778,24 @@ impl WalRetirementAuthorization {
             subject: finalized.decision().subject(),
             certificate: finalized.decision().reference(),
         }
+    }
+    /// Construct a self-consistent retirement token for filesystem adapter tests.
+    #[cfg(test)]
+    pub(crate) fn from_durable_decision_for_test(
+        context_id: ContextId,
+        height: u64,
+        subject: Subject,
+        certificate: CertificateRef,
+    ) -> Option<Self> {
+        let authorization = Self {
+            context_id,
+            height,
+            subject,
+            certificate,
+        };
+        authorization
+            .matches_durable_decision(context_id, height, subject, certificate)
+            .then_some(authorization)
     }
     /// Return the frozen height-context identity.
     #[must_use]
@@ -1566,7 +1583,8 @@ mod byte_lifecycle_tests {
         VotingMode, VotingPower,
     };
     use super::*;
-    const IDENTITY: WalFileIdentity = WalFileIdentity::new(3, [0x11; 32], [0x22; 32]);
+    const IDENTITY: WalFileIdentity =
+        WalFileIdentity::new(3, [0x11; 32], ContextId::repeat(0x33), 9, [0x22; 32]);
     fn replay_context() -> HeightContext {
         let roster = (1_u8..=4)
             .map(|byte| Validator::new(ValidatorId::repeat(byte), VotingPower::new(1)))
@@ -1891,6 +1909,8 @@ mod byte_lifecycle_tests {
                 WalFileIdentity::new(
                     different_protocol_version,
                     IDENTITY.network_id(),
+                    IDENTITY.context_id(),
+                    IDENTITY.height(),
                     IDENTITY.consensus_key_hash(),
                 ),
                 WalIdentityField::ProtocolVersion,
@@ -1899,6 +1919,8 @@ mod byte_lifecycle_tests {
                 WalFileIdentity::new(
                     IDENTITY.protocol_version(),
                     [0x44; 32],
+                    IDENTITY.context_id(),
+                    IDENTITY.height(),
                     IDENTITY.consensus_key_hash(),
                 ),
                 WalIdentityField::NetworkId,
@@ -1907,6 +1929,28 @@ mod byte_lifecycle_tests {
                 WalFileIdentity::new(
                     IDENTITY.protocol_version(),
                     IDENTITY.network_id(),
+                    ContextId::repeat(0x55),
+                    IDENTITY.height(),
+                    IDENTITY.consensus_key_hash(),
+                ),
+                WalIdentityField::ContextId,
+            ),
+            (
+                WalFileIdentity::new(
+                    IDENTITY.protocol_version(),
+                    IDENTITY.network_id(),
+                    IDENTITY.context_id(),
+                    IDENTITY.height() + 1,
+                    IDENTITY.consensus_key_hash(),
+                ),
+                WalIdentityField::Height,
+            ),
+            (
+                WalFileIdentity::new(
+                    IDENTITY.protocol_version(),
+                    IDENTITY.network_id(),
+                    IDENTITY.context_id(),
+                    IDENTITY.height(),
                     [0x55; 32],
                 ),
                 WalIdentityField::ConsensusKeyHash,
@@ -1917,6 +1961,47 @@ mod byte_lifecycle_tests {
                 Err(WalCodecError::IdentityMismatch(expected))
             );
         }
+    }
+    #[test]
+    fn retirement_authorization_targets_one_exact_wal_identity() {
+        let subject = Subject::repeat(0x66);
+        let certificate = CertificateRef::new(
+            IDENTITY.context_id(),
+            Round::new(IDENTITY.height(), 2),
+            Phase::Commit,
+            subject,
+        );
+        let authorization = WalRetirementAuthorization {
+            context_id: IDENTITY.context_id(),
+            height: IDENTITY.height(),
+            subject,
+            certificate,
+        };
+        assert!(authorization.authorizes_wal(IDENTITY));
+        assert!(!authorization.authorizes_wal(WalFileIdentity::new(
+            IDENTITY.protocol_version(),
+            IDENTITY.network_id(),
+            ContextId::repeat(0x77),
+            IDENTITY.height(),
+            IDENTITY.consensus_key_hash(),
+        )));
+        assert!(!authorization.authorizes_wal(WalFileIdentity::new(
+            IDENTITY.protocol_version(),
+            IDENTITY.network_id(),
+            IDENTITY.context_id(),
+            IDENTITY.height() + 1,
+            IDENTITY.consensus_key_hash(),
+        )));
+        let invalid_phase = WalRetirementAuthorization {
+            certificate: CertificateRef::new(
+                IDENTITY.context_id(),
+                Round::new(IDENTITY.height(), 2),
+                Phase::Prepare,
+                subject,
+            ),
+            ..authorization
+        };
+        assert!(!invalid_phase.authorizes_wal(IDENTITY));
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum FakeIoError {

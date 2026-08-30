@@ -21316,9 +21316,7 @@ pub mod tests {
             QueuePlanBindingApplicationEvidence::AppliedDirect,
         );
     }
-    fn resolve_globally_bound_fixture_pending_obligation(
-        fixture: &GloballyBoundGuardFixture,
-    ) {
+    fn resolve_globally_bound_fixture_pending_obligation(fixture: &GloballyBoundGuardFixture) {
         let signer = checked_random_queue_keypair();
         let block = crate::block::BlockBuilder::new(vec![fixture.transaction.clone()])
             .chain(0, None)

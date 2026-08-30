@@ -836,6 +836,19 @@ fn v4_pair_enforces_zero_one_two_parent_shapes_and_exact_bounds() {
     let params = valid_step_circuit_params_v4();
     let maximum =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4;
+    let oversized_bound = maximum
+        .checked_add(1)
+        .expect("absolute pair bound fits u32");
+    assert_eq!(
+        KagemushaPastaCycleProofPairV4::decode_authenticated(
+            &[0],
+            &params,
+            &params,
+            oversized_bound,
+        )
+        .expect_err("an oversized authenticated bound must fail before decoding"),
+        "Kagemusha V4 authenticated pair bound is invalid"
+    );
     for (step, parent_count) in [(1, 0), (2, 1), (3, 2)] {
         let pair = v4_pair(step, parent_count);
         let layout = pair

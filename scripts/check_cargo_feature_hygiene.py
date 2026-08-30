@@ -530,6 +530,22 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
 }
 
 
+# Explicit opt-ins must not leak into dependencies compiled for ordinary member
+# targets. These exact consumers are non-shipping fixture/tool contexts whose
+# normal dependencies intentionally need the named surface. Keeping this as a
+# closed, occurrence-checked inventory makes every exception reviewable.
+NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST: tuple[
+    tuple[str, str, str], ...
+] = (
+    ("executor_custom_data_model", "iroha_data_model", "fault_injection"),
+    ("integration_tests", "iroha_torii", "ws_integration_tests"),
+    ("xtask", "iroha", "test-fixtures"),
+    ("xtask", "iroha_torii", "profiling"),
+    ("xtask", "iroha_torii", "ws_integration_tests"),
+    ("xtask", "norito", "bench-internal"),
+)
+
+
 def _load_toml(path: Path) -> dict[str, Any]:
     with path.open("rb") as source:
         return tomllib.load(source)
@@ -601,10 +617,11 @@ def local_default_feature_closure(
 ) -> frozenset[str]:
     """Return local Cargo features reachable from the local ``default`` feature.
 
-    Dependency forwards (``crate/feature`` and ``crate?/feature``) and explicit
-    optional-dependency activations (``dep:crate``) are terminal edges. Bare
-    names are traversed only when they name another local explicit or implicit
-    feature.
+    A non-weak dependency forward (``crate/feature``) activates an optional
+    dependency just like its same-named implicit feature. Weak forwards
+    (``crate?/feature``) remain conditional and terminal, as do explicit
+    optional-dependency activations (``dep:crate``). Bare names are traversed
+    only when they name another local explicit or implicit feature.
     """
 
     if "default" not in features:
@@ -624,6 +641,14 @@ def local_default_feature_closure(
                 and "/" not in member
             ):
                 pending.append(member)
+                continue
+            dependency, separator, _dependency_feature = member.partition("/")
+            if (
+                separator
+                and not dependency.endswith("?")
+                and features.get(dependency) == (f"dep:{dependency}",)
+            ):
+                pending.append(dependency)
     return frozenset(reachable)
 
 
@@ -696,6 +721,62 @@ def workspace_member_manifests(
     included = _expand_member_patterns(root, members, require_match=True)
     excluded = _expand_member_patterns(root, excludes, require_match=False)
     return tuple(sorted(included - excluded))
+
+
+def _dependency_target_and_features(
+    dependency: str,
+    specification: Any,
+    workspace_dependencies: dict[str, Any],
+) -> tuple[str, frozenset[str]]:
+    """Resolve a dependency alias and its locally selected Cargo features."""
+
+    inherited: Any = None
+    if isinstance(specification, dict) and specification.get("workspace") is True:
+        inherited = workspace_dependencies.get(dependency)
+
+    target_package = dependency
+    selected_features: set[str] = set()
+    for candidate in (inherited, specification):
+        if not isinstance(candidate, dict):
+            continue
+        package = candidate.get("package")
+        if isinstance(package, str) and package:
+            target_package = package
+        raw_features = candidate.get("features", [])
+        if isinstance(raw_features, list):
+            selected_features.update(
+                feature
+                for feature in raw_features
+                if isinstance(feature, str) and feature
+            )
+
+    return target_package, frozenset(selected_features)
+
+
+def _non_dev_explicit_opt_in_dependency_selections(
+    document: dict[str, Any], workspace_dependencies: dict[str, Any]
+) -> tuple[tuple[str, str, str, str], ...]:
+    """Return non-dev dependency selections of classified explicit opt-ins.
+
+    Rows contain the dependency table, local dependency key, resolved package,
+    and selected feature. Workspace dependency features are inherited when the
+    member uses ``workspace = true``; ``package`` keys resolve aliases.
+    """
+
+    selections: list[tuple[str, str, str, str]] = []
+    for section, dependencies in _dependency_tables(document):
+        if section.rsplit(".", 1)[-1] == "dev-dependencies":
+            continue
+        for dependency, specification in dependencies.items():
+            target_package, selected_features = _dependency_target_and_features(
+                dependency, specification, workspace_dependencies
+            )
+            opt_ins = EXPLICIT_OPT_IN_FEATURES.get(target_package)
+            if opt_ins is None:
+                continue
+            for feature in sorted(selected_features & frozenset(opt_ins)):
+                selections.append((section, dependency, target_package, feature))
+    return tuple(selections)
 
 
 def _check_expected_features(
@@ -850,8 +931,51 @@ def check_repository(root: Path) -> list[str]:
     except ValueError as error:
         return [*errors, f"{root_manifest_path}: {error}"]
 
+    raw_allowlist = NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST
+    if tuple(sorted(set(raw_allowlist))) != raw_allowlist:
+        errors.append(
+            f"{root_manifest_path}: non-shipping explicit opt-in dependency "
+            "allowlist must be sorted and contain no duplicates"
+        )
+    allowlist = frozenset(raw_allowlist)
+    valid_allowlist: set[tuple[str, str, str]] = set()
+    for consumer, dependency, feature in sorted(allowlist):
+        if feature not in EXPLICIT_OPT_IN_FEATURES.get(dependency, ()):
+            errors.append(
+                f"{root_manifest_path}: non-shipping explicit opt-in dependency "
+                f"allowlist entry `{consumer} -> {dependency}/{feature}` does not "
+                "name a classified explicit opt-in feature"
+            )
+            continue
+        valid_allowlist.add((consumer, dependency, feature))
+
+    workspace_package_names: set[str] = set()
+    observed_allowlist_entries: set[tuple[str, str, str]] = set()
     for manifest_path in member_manifests:
         document = _load_toml(manifest_path)
+        package = document.get("package", {})
+        package_name = package.get("name") if isinstance(package, dict) else None
+        if isinstance(package_name, str) and package_name:
+            workspace_package_names.add(package_name)
+            for section, dependency_key, target_package, feature in (
+                _non_dev_explicit_opt_in_dependency_selections(
+                    document, workspace_dependencies
+                )
+            ):
+                entry = (package_name, target_package, feature)
+                if entry in valid_allowlist:
+                    observed_allowlist_entries.add(entry)
+                    continue
+                alias = (
+                    ""
+                    if dependency_key == target_package
+                    else f" (package `{target_package}`)"
+                )
+                errors.append(
+                    f"{manifest_path}: package `{package_name}` [{section}] "
+                    f"dependency `{dependency_key}`{alias} selects explicit opt-in "
+                    f"feature `{feature}` from a non-dev dependency declaration"
+                )
         errors.extend(_check_expected_features(document, manifest_path))
         for section, dependencies in _dependency_tables(document):
             for dependency in sorted(FOUNDATIONAL_DEPENDENCIES & dependencies.keys()):
@@ -863,6 +987,17 @@ def check_repository(root: Path) -> list[str]:
                         f"{manifest_path}: [{section}] `{dependency}` must set "
                         "`default-features = false` and select features locally"
                     )
+
+    for consumer, dependency, feature in sorted(
+        valid_allowlist - observed_allowlist_entries
+    ):
+        if dependency not in workspace_package_names:
+            continue
+        errors.append(
+            f"{root_manifest_path}: stale non-shipping explicit opt-in dependency "
+            f"allowlist entry `{consumer} -> {dependency}/{feature}` is not selected "
+            "by a non-dev workspace dependency declaration"
+        )
 
     return errors
 

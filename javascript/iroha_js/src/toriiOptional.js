@@ -5,8 +5,6 @@
 // shared governance graph behind one entry avoids duplicate split chunks while
 // leaving the ordinary client startup path small.
 export {
-  normalizeBridgeMessageSubmitPayload,
-  normalizeBridgeProofSubmitPayload,
   normalizeSccpCapabilities,
   normalizeSccpMessageBundle,
   normalizeSccpProofRequest,
@@ -14,7 +12,6 @@ export {
   normalizeSccpRegistry,
   normalizeSccpRouteGovernanceAction,
   normalizeSccpSoraOutboundMaterial,
-  parseSccpBridgeSubmitResponseJson,
   parseSccpJsonObject,
 } from "./sccp.js";
 

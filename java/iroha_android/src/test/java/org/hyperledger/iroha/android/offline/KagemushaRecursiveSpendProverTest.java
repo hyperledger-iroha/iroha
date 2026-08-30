@@ -260,7 +260,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS == 8;
     assert KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4
         == 384 * 1024;
-    assert KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY == 65_535;
+    assert KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY == 65_463;
     final int lastValidLeaf =
         KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY - 1;
     final byte[] lastValidDirections = leafDirections(lastValidLeaf);

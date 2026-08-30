@@ -2219,13 +2219,14 @@ pub fn sccp_counterparty_account_codec(domain: u32) -> Option<u8> {
 }
 /// Return the non-SORA endpoint of a valid SORA/external domain pair.
 pub fn sccp_counterparty_domain(primary: u32, secondary: u32) -> Option<u32> {
-    if primary != SCCP_DOMAIN_SORA {
-        return Some(primary);
+    match (primary, secondary) {
+        (SCCP_DOMAIN_SORA, external) | (external, SCCP_DOMAIN_SORA)
+            if is_supported_domain(external) && external != SCCP_DOMAIN_SORA =>
+        {
+            Some(external)
+        }
+        _ => None,
     }
-    if secondary != SCCP_DOMAIN_SORA {
-        return Some(secondary);
-    }
-    None
 }
 /// Return the external destination for one SORA-origin outbound message.
 ///
@@ -2238,6 +2239,36 @@ pub fn sccp_counterparty_domain_for_message_payload(payload: &SccpPayloadV1) -> 
         && target_domain != SCCP_DOMAIN_SORA
         && is_supported_domain(target_domain))
     .then_some(target_domain)
+}
+#[cfg(test)]
+mod counterparty_domain_tests {
+    use super::*;
+
+    #[test]
+    fn counterparty_domain_requires_exactly_one_sora_endpoint() {
+        for external in SCCP_CORE_REMOTE_DOMAINS {
+            assert_eq!(
+                sccp_counterparty_domain(SCCP_DOMAIN_SORA, external),
+                Some(external)
+            );
+            assert_eq!(
+                sccp_counterparty_domain(external, SCCP_DOMAIN_SORA),
+                Some(external)
+            );
+            assert_eq!(sccp_counterparty_domain(external, external), None);
+        }
+
+        assert_eq!(
+            sccp_counterparty_domain(SCCP_DOMAIN_SORA, SCCP_DOMAIN_SORA),
+            None
+        );
+        assert_eq!(
+            sccp_counterparty_domain(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC),
+            None
+        );
+        assert_eq!(sccp_counterparty_domain(SCCP_DOMAIN_SORA, u32::MAX), None);
+        assert_eq!(sccp_counterparty_domain(u32::MAX, SCCP_DOMAIN_SORA), None);
+    }
 }
 /// Return the stable application-payload label for `payload`.
 pub fn sccp_message_payload_kind_key(payload: &SccpPayloadV1) -> &'static str {
@@ -5715,6 +5746,54 @@ mod canonical_payload_encoding_tests {
             route_id: SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1.as_bytes().to_vec(),
         }
     }
+    fn account_fixture(domain: u32) -> Vec<u8> {
+        match domain {
+            SCCP_DOMAIN_SORA => b"alice".to_vec(),
+            SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => vec![0x11; 20],
+            SCCP_DOMAIN_TRON => {
+                let mut address = vec![0x11; 21];
+                address[0] = 0x41;
+                address
+            }
+            SCCP_DOMAIN_TON => canonical_sccp_ton_account36_bytes_v1(SccpTonAddressV1 {
+                workchain: 0,
+                account: [0x11; 32],
+            })
+            .expect("canonical basechain account")
+            .to_vec(),
+            _ => unreachable!("closed SCCP domain fixture"),
+        }
+    }
+    #[test]
+    fn payload_structure_accepts_only_sora_external_domain_pairs() {
+        let domains = [
+            SCCP_DOMAIN_SORA,
+            SCCP_DOMAIN_ETH,
+            SCCP_DOMAIN_BSC,
+            SCCP_DOMAIN_TRON,
+            SCCP_DOMAIN_TON,
+        ];
+        for source_domain in domains {
+            for dest_domain in domains {
+                let mut transfer = transfer_fixture();
+                transfer.source_domain = source_domain;
+                transfer.sender_codec = sccp_counterparty_account_codec(source_domain)
+                    .expect("closed source domain codec");
+                transfer.sender = account_fixture(source_domain);
+                transfer.dest_domain = dest_domain;
+                transfer.recipient_codec = sccp_counterparty_account_codec(dest_domain)
+                    .expect("closed destination domain codec");
+                transfer.recipient = account_fixture(dest_domain);
+                let expected =
+                    (source_domain == SCCP_DOMAIN_SORA) ^ (dest_domain == SCCP_DOMAIN_SORA);
+                assert_eq!(
+                    verify_sccp_payload_structure(&SccpPayloadV1::Transfer(transfer)),
+                    expected,
+                    "unexpected topology verdict for {source_domain}->{dest_domain}"
+                );
+            }
+        }
+    }
     #[test]
     fn canonical_payload_encoders_roundtrip_every_variable_field() {
         let transfer = transfer_fixture();
@@ -5885,9 +5964,8 @@ pub fn verify_sccp_payload_structure(payload: &SccpPayloadV1) -> bool {
             };
             payload.version == 1
                 && payload.route_revision != 0
-                && is_supported_domain(payload.source_domain)
                 && is_supported_domain(payload.asset_home_domain)
-                && payload.source_domain != payload.dest_domain
+                && sccp_counterparty_domain(payload.source_domain, payload.dest_domain).is_some()
                 && validate_sccp_codec_bytes(payload.asset_id_codec, &payload.asset_id)
                 && payload.amount != 0
                 && payload.sender_codec == expected_sender_codec
@@ -7809,9 +7887,9 @@ mod tests {
             &trusted_finality(&fixture.bundle),
         )
         .expect("parsed artifact binds to governed route");
-        assert_eq!(verified.public_inputs, fixture.request.public_inputs);
+        assert_eq!(verified.public_inputs(), &fixture.request.public_inputs);
         assert_eq!(
-            verified.public_inputs.finality_height,
+            verified.public_inputs().finality_height,
             fixture.request.public_inputs.finality_height
         );
         assert_eq!(

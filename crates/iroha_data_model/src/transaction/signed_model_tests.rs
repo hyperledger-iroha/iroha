@@ -23,7 +23,7 @@ use crate::{
     },
     transaction::{
         ExecutableBatchItem,
-        executable::ContractInvocation,
+        executable::{ContractInvocation, IvmProved},
         signed::{MultisigSignature, MultisigSignatures},
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
@@ -894,6 +894,31 @@ fn assert_privacy_ivm_paths_rejected() {
     assert_privacy_binding_absent(
         &raw_ivm,
         "an ordinary IVM transaction has no privacy binding",
+    );
+    let ordinary_proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
+        bytecode: IvmBytecode::from_compiled(vec![2]),
+        overlay: vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "ordinary proved overlay".into(),
+        ))]
+        .into(),
+        events_commitment: Hash::new(b"ordinary events"),
+        gas_policy_commitment: Hash::new(b"ordinary gas"),
+    }));
+    assert_privacy_binding_absent(
+        &ordinary_proved,
+        "an ordinary proved transaction has no privacy binding",
+    );
+    let proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
+        bytecode: IvmBytecode::from_compiled(vec![2]),
+        overlay: vec![InstructionBox::from(draft_privacy_submission())].into(),
+        events_commitment: Hash::new(b"events"),
+        gas_policy_commitment: Hash::new(b"gas"),
+    }));
+    assert_privacy_binding_rejects_path(
+        &proved,
+        PrivacyTransactionIntentUnsupportedPathV1::IvmProved,
+        "proved overlays cannot carry a V1 privacy submission",
     );
 }
 fn assert_privacy_dynamic_dispatch_paths_rejected() {

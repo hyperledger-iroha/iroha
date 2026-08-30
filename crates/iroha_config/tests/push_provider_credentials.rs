@@ -16,6 +16,7 @@ fn canonical_push_json(extra_field: &str) -> String {
     format!(
         r#"{{
             "enabled": true,
+            "rate_limit_enabled": true,
             "rate_per_minute": 60,
             "burst": 30,
             "connect_timeout_ms": 5000,
@@ -32,6 +33,42 @@ fn canonical_push_json(extra_field: &str) -> String {
             {extra_field}
         }}"#
     )
+}
+
+#[test]
+fn zero_valued_push_limits_are_rejected_by_the_schema() {
+    for field in ["rate_per_minute", "burst", "max_topics_per_device"] {
+        let table = format!("[torii.push]\n{field} = 0\n")
+            .parse()
+            .expect("push TOML should be syntactically valid");
+        let error = base_reader()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<UserConfig>()
+            .expect_err("zero-valued push limits must not be normalized");
+        let report = format!("{error:?}");
+        assert!(report.contains(field), "{report}");
+    }
+}
+
+#[test]
+fn excessive_push_topic_limit_is_rejected_during_actual_parse() {
+    let table = format!(
+        "[torii.push]\nmax_topics_per_device = {}\n",
+        iroha_config::parameters::defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE_V1 + 1
+    )
+    .parse()
+    .expect("push TOML should be syntactically valid");
+    let user = base_reader()
+        .with_toml_source(TomlSource::inline(table))
+        .read_and_complete::<UserConfig>()
+        .expect("positive topic limit should pass schema decoding");
+    let error = user
+        .parse()
+        .expect_err("excessive push topic limit must fail actual parsing");
+    assert!(
+        format!("{error:?}").contains("max_topics_per_device must not exceed"),
+        "{error:?}"
+    );
 }
 
 #[test]

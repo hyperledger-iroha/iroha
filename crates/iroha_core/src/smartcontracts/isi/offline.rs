@@ -30,13 +30,14 @@ use iroha_data_model::{
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1,
-        KagemushaActiveReceiverActiveEntryV1, KagemushaActiveReceiverAmbiguousEntryV1,
-        KagemushaActiveReceiverEntryV1, KagemushaActiveReceiverKeyV1,
-        KagemushaActiveReceiverSnapshotV1, KagemushaActiveReceiverValueV1,
-        KagemushaOnlineHardwareAssertionV1, KagemushaRecipientPaymentRequestV2,
-        KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
-        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpAnchorV4,
-        KagemushaRequestAuthorizationV2, OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2, KagemushaActiveReceiverActiveEntryV1,
+        KagemushaActiveReceiverAmbiguousEntryV1, KagemushaActiveReceiverEntryV1,
+        KagemushaActiveReceiverKeyV1, KagemushaActiveReceiverSnapshotV1,
+        KagemushaActiveReceiverValueV1, KagemushaOnlineHardwareAssertionV1,
+        KagemushaRecipientPaymentRequestV2, KagemushaRecursiveSpendBranchClaimV2,
+        KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
+        KagemushaRecursiveSpendTopUpAnchorV4, KagemushaRequestAuthorizationV2,
+        OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1,
         OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
@@ -5387,8 +5388,8 @@ pub mod isi {
         }
         Ok(())
     }
-    /// Return the authoritative insertion index while reserving the successor
-    /// leaf required by recursive-spend initialization.
+    /// Return the authoritative insertion index while reserving the complete
+    /// recursive-spend output budget and final empty frontier leaf.
     fn kagemusha_v4_topup_leaf_index(
         commitment_count: usize,
         tree_capacity: usize,
@@ -5399,16 +5400,27 @@ pub mod isi {
                 "Kagemusha confidential tree position does not fit the protocol index",
             )
         })?;
-        let insertion_capacity = tree_capacity.checked_sub(1).ok_or_else(|| {
-            labeled_invariant(
-                "topup_tree_full",
-                "Kagemusha confidential tree cannot reserve an initialization leaf",
-            )
-        })?;
+        let lifecycle_reserve = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_MAX_FUTURE_OUTPUTS_V2)
+            .ok()
+            .and_then(|outputs| outputs.checked_add(1))
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "topup_tree_full",
+                    "Kagemusha recursive lifecycle reserve does not fit this platform",
+                )
+            })?;
+        let insertion_capacity = tree_capacity
+            .checked_sub(lifecycle_reserve)
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "topup_tree_full",
+                    "Kagemusha confidential tree cannot reserve the complete recursive lifecycle",
+                )
+            })?;
         if commitment_count >= insertion_capacity {
             return Err(labeled_invariant(
                 "topup_tree_full",
-                "Kagemusha confidential tree has no top-up position with a successor initialization leaf",
+                "Kagemusha confidential tree has no top-up position with a complete recursive lifecycle",
             ));
         }
         Ok(leaf_index)

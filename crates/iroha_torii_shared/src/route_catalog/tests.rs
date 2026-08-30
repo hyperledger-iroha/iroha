@@ -1161,12 +1161,50 @@ mod tests {
                 "unsupported route must not enter the first-release catalog: {unsupported_path}"
             );
         }
-        assert!(operator_authentication::ROUTES.iter().all(|route| {
+        for route in [
+            operator_authentication::REGISTRATION_OPTIONS,
+            operator_authentication::REGISTRATION_VERIFY,
+            operator_authentication::LOGIN_OPTIONS,
+            operator_authentication::LOGIN_VERIFY,
+        ] {
+            assert!(
             route.surface() == ApiSurface::Operator
                 && route.authentication() == AuthenticationPolicy::OperatorCredentialExchange
                 && !route.projections().sdk()
                 && !route.projections().mcp()
-        }));
+            );
+        }
+        let inventory = operator_authentication::CREDENTIALS;
+        assert_eq!(inventory.method(), HttpMethod::Get);
+        assert_eq!(inventory.path(), "/v1/operator/auth/credentials");
+        assert_eq!(inventory.surface(), ApiSurface::Operator);
+        assert_eq!(inventory.effect(), RouteEffect::ReadOnly);
+        assert_eq!(inventory.admission(), AdmissionPolicy::Operator);
+        assert_eq!(
+            inventory.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+        let deletion = operator_authentication::CREDENTIAL_DELETE;
+        assert_eq!(deletion.method(), HttpMethod::Delete);
+        assert_eq!(
+            deletion.path(),
+            "/v1/operator/auth/credentials/{credential_id}"
+        );
+        assert_eq!(deletion.surface(), ApiSurface::Operator);
+        assert_eq!(deletion.effect(), RouteEffect::Mutation);
+        assert_eq!(deletion.admission(), AdmissionPolicy::Operator);
+        assert_eq!(
+            deletion.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+        assert!(
+            [inventory, deletion].iter().all(|route| {
+                route.projections().openapi()
+                    && !route.projections().sdk()
+                    && !route.projections().mcp()
+                    && route.requires_private_no_store()
+            })
+        );
     }
     fn contract_and_application_routes() -> Vec<RouteDescriptor> {
         contracts_and_verification_keys::ROUTES

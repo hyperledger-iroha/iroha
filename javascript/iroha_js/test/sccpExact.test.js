@@ -7,6 +7,7 @@ import { keccak_256 } from "@noble/hashes/sha3";
 
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";
+import * as sccpExports from "../src/sccp.js";
 import {
   SCCP_CODEC_CANONICAL_TEXT,
   SCCP_CODEC_EVM_ADDRESS20,
@@ -17,9 +18,6 @@ import {
   SCCP_NETWORK_PROFILES,
   SCCP_PAYLOAD_KINDS,
   deriveSccpTonDestinationHashesV1,
-  normalizeBridgeMessageSubmitPayload,
-  normalizeBridgeProofSubmitPayload,
-  normalizeSccpBridgeSubmitResponse,
   normalizeSccpCapabilities,
   normalizeSccpCodecValue,
   normalizeSccpMessageBundle,
@@ -28,9 +26,7 @@ import {
   normalizeSccpRegistry,
   normalizeSccpRouteGovernanceAction,
   normalizeSccpSoraOutboundMaterial,
-  parseSccpBridgeSubmitResponseJson,
   parseSccpJsonObject,
-  sccpReplayEmptyHashesV1,
   sccpSourceEventDigest,
 } from "../src/sccp.js";
 import { ToriiClient } from "../src/toriiClient.js";
@@ -51,27 +47,10 @@ const MESSAGE_BUNDLE_NORITO_TYPE = "iroha_sccp::TairaSccpMessageProofV1";
 const PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
 const TON_PROOF_REQUEST_NORITO_TYPE =
   "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1";
-const DESTINATION_PROOF_NORITO_TYPE =
-  "iroha_data_model::bridge::BridgeSccpDestinationProofV1";
-const NATIVE_MESSAGE_PROOF_NORITO_TYPE =
-  "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
-const REPLAY_WITNESS_NORITO_TYPE =
-  "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1";
 const PUBLIC_SIGNAL_SCHEMA_HASH =
   "7567439F41173D6745A3D51923CB70371ACC7D66F23CEFB4100D6D5D7A432CBB";
 const SORA_TAIRA_CHAIN_ID_HASH =
   "CF1CFC0F57B0BFA4C21882A9870317A1F4812F86533897095E3944BE34C5BBA7";
-
-function feePayment(gasLimit = null) {
-  return {
-    payer: "authority",
-    value: { charge_limits: [], gas_limit: gasLimit },
-  };
-}
-
-function b64(bytes) {
-  return Buffer.from(bytes).toString("base64");
-}
 
 function network(profile) {
   return { network: profile.replaceAll("-", "_"), profile: null };
@@ -362,127 +341,6 @@ function sccpNoritoFrame(typeName, { payload = Buffer.from([1, 2, 3, 4]), paddin
     Buffer.from([0x02]),
     Buffer.alloc(padding),
     payload,
-  ]);
-}
-
-function destinationProofB64(options) {
-  return b64(sccpNoritoFrame(DESTINATION_PROOF_NORITO_TYPE, options));
-}
-
-function nativeProofB64(options) {
-  return b64(sccpNoritoFrame(NATIVE_MESSAGE_PROOF_NORITO_TYPE, options));
-}
-
-function compactLength(value) {
-  let remaining = BigInt(value);
-  const bytes = [];
-  do {
-    let byte = Number(remaining & 0x7fn);
-    remaining >>= 7n;
-    if (remaining !== 0n) byte |= 0x80;
-    bytes.push(byte);
-  } while (remaining !== 0n);
-  return Buffer.from(bytes);
-}
-
-function compactField(value) {
-  const bytes = Buffer.from(value);
-  return Buffer.concat([compactLength(bytes.length), bytes]);
-}
-
-function compactString(value) {
-  const bytes = Buffer.from(value, "utf8");
-  return Buffer.concat([compactLength(bytes.length), bytes]);
-}
-
-function rawByteVector(value) {
-  const bytes = Buffer.from(value);
-  return Buffer.concat([littleEndian(bytes.length, 8), bytes]);
-}
-
-function replayWitnessPayload(
-  priorRecordDigest = Buffer.alloc(32),
-  expectedRoot = Buffer.from(sccpReplayEmptyHashesV1().at(-1).slice(2), "hex"),
-) {
-  return Buffer.concat([
-    compactField(expectedRoot),
-    compactField(priorRecordDigest),
-    compactField(Buffer.alloc(32)),
-    compactField(littleEndian(0, 8)),
-  ]);
-}
-
-function replayWitnessB64(options = {}) {
-  const payload = options.payload ?? replayWitnessPayload();
-  return b64(sccpNoritoFrame(REPLAY_WITNESS_NORITO_TYPE, { ...options, payload }));
-}
-
-function canonicalSccpTransactionPayload({
-  creationTimeMs,
-  proofBase64,
-  destination,
-  backendTag,
-  routeHash = Buffer.alloc(32, 0x31),
-  rangeStart = 7,
-  rangeEnd = 9,
-  replayWitnessBase64 = replayWitnessB64(),
-  instructionCount = 1,
-} = {}) {
-  const proof = Buffer.from(proofBase64, "base64");
-  const typedContainer = Buffer.concat([
-    compactField(littleEndian(backendTag, 4)),
-    compactField(routeHash),
-    compactField(rawByteVector(proof)),
-  ]);
-  const bridgePayload = Buffer.concat([
-    littleEndian(destination ? 3 : 2, 4),
-    compactField(typedContainer),
-  ]);
-  const range = Buffer.concat([
-    compactField(littleEndian(rangeStart, 8)),
-    compactField(littleEndian(rangeEnd, 8)),
-  ]);
-  const bridgeProof = Buffer.concat([compactField(range), compactField(bridgePayload)]);
-  const replayOption = destination
-    ? Buffer.from([0])
-    : Buffer.concat([
-        Buffer.from([1]),
-        compactField(
-          Buffer.from(replayWitnessBase64, "base64").subarray(40),
-        ),
-      ]);
-  const archive = sccpNoritoFrame(
-    "iroha_data_model::isi::bridge::SubmitBridgeProof",
-    {
-      payload: Buffer.concat([
-        compactField(bridgeProof),
-        compactField(replayOption),
-      ]),
-    },
-  );
-  const instruction = Buffer.concat([
-    compactField(compactString("iroha.instruction.v1::bridge::SubmitBridgeProof")),
-    compactField(rawByteVector(archive)),
-  ]);
-  const instructions = Buffer.concat([
-    littleEndian(instructionCount, 8),
-    compactField(instruction),
-  ]);
-  const executable = Buffer.concat([
-    littleEndian(0, 4),
-    compactField(instructions),
-  ]);
-  return Buffer.concat([
-    compactField(Buffer.from([0])),
-    compactField(Buffer.from([0])),
-    compactField(littleEndian(creationTimeMs, 8)),
-    compactField(executable),
-    compactField(Buffer.from([0])),
-    compactField(Buffer.from([0])),
-    compactField(Buffer.from([0])),
-    compactField(littleEndian(1, 4)),
-    compactField(littleEndian(0, 8)),
-    compactField(Buffer.from([0])),
   ]);
 }
 
@@ -1038,58 +896,6 @@ function recentItem(height = 9, id = MESSAGE_ID, commitmentIndex = 0) {
       proof_request_path: `/v1/sccp/proof-requests/${id}`,
     },
   };
-}
-
-function preparedResponse(overrides = {}) {
-  const response = {
-    submitted: false,
-    payload_kind: "transfer",
-    message_id_hex: MESSAGE_ID,
-    backend: "bridge/sccp/native/bsc-parlia-v1",
-    counterparty_domain: 2,
-    counterparty_chain: "bsc-mainnet",
-    route_configuration_hash_hex: HASH(0x31),
-    range_start_height: 7,
-    range_end_height: 9,
-    creation_time_ms: 10,
-    tx_hash_hex: null,
-    transaction_payload_b64: null,
-    signing_message_b64: null,
-    ...overrides,
-  };
-  const nativeTags = {
-    "bridge/sccp/native/ethereum-beacon-v1": 0,
-    "bridge/sccp/native/bsc-parlia-v1": 1,
-    "bridge/sccp/native/tron-dpos-v1": 2,
-    "bridge/sccp/native/ton-masterchain-v1": 3,
-  };
-  const destinationTags = {
-    "evm-groth16-bn254-v1": 0,
-    "tron-groth16-bn254-v1": 1,
-    "ton-groth16-bls12381-v1": 2,
-  };
-  const destination = Object.prototype.hasOwnProperty.call(destinationTags, response.backend);
-  const proofBase64 = destination ? destinationProofB64() : nativeProofB64();
-  const payload = overrides.transaction_payload_b64 === undefined
-    ? canonicalSccpTransactionPayload({
-        creationTimeMs: response.creation_time_ms,
-        proofBase64,
-        destination,
-        backendTag: destination ? destinationTags[response.backend] : nativeTags[response.backend],
-        routeHash: Buffer.from(response.route_configuration_hash_hex, "hex"),
-        rangeStart: response.range_start_height,
-        rangeEnd: response.range_end_height,
-      })
-    : Buffer.from(response.transaction_payload_b64 ?? "", "base64");
-  const digest = Uint8Array.from(blake2b256(payload));
-  digest[31] |= 1;
-  if (!response.submitted) {
-    response.transaction_payload_b64 = b64(payload);
-    if (overrides.signing_message_b64 === undefined) {
-      response.signing_message_b64 = b64(digest);
-    }
-  }
-  return response;
 }
 
 test("closed SCCP inventory exposes only the four external mainnets and Sora Taira", async () => {
@@ -2256,304 +2062,6 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   assert.throws(() => normalizeSccpProofRequest(archivedIdentity), /Taira chain commitment/u);
 });
 
-test("submit DTOs preserve the exact prepared transaction for detached signing", () => {
-  const destinationProof = destinationProofB64();
-  const nativeProof = nativeProofB64();
-  const transactionPayload = b64(canonicalSccpTransactionPayload({
-    creationTimeMs: 10,
-    proofBase64: destinationProof,
-    destination: true,
-    backendTag: 0,
-  }));
-  const proof = normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    signature_b64: b64(new Uint8Array(64).fill(1)),
-    transaction_payload_b64: transactionPayload,
-    destination_proof_b64: destinationProof,
-    creation_time_ms: 10,
-  });
-  assert.deepEqual(Object.keys(proof), [
-    "authority",
-    "fee_payment",
-    "signature_b64",
-    "transaction_payload_b64",
-    "destination_proof_b64",
-    "creation_time_ms",
-  ]);
-  assert.equal(proof.transaction_payload_b64, transactionPayload);
-  assert.deepEqual(Object.keys(normalizeBridgeMessageSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    native_proof_b64: nativeProof,
-    replay_witness_b64: replayWitnessB64(),
-  })), ["authority", "fee_payment", "native_proof_b64", "replay_witness_b64"]);
-  const nativeTransactionPayload = b64(canonicalSccpTransactionPayload({
-    creationTimeMs: 10,
-    proofBase64: nativeProof,
-    destination: false,
-    backendTag: 1,
-  }));
-  const native = normalizeBridgeMessageSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    signature_b64: "AQ==",
-    transaction_payload_b64: nativeTransactionPayload,
-    native_proof_b64: nativeProof,
-    replay_witness_b64: replayWitnessB64(),
-    creation_time_ms: 10,
-  });
-  assert.equal(native.transaction_payload_b64, nativeTransactionPayload);
-});
-
-test("signed submit DTOs bind the sole instruction, exact proof, and non-membership witness", () => {
-  const nativeProof = nativeProofB64();
-  const witness = replayWitnessB64();
-  const signed = (transactionPayload, proof = nativeProof, replay = witness) => ({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    signature_b64: "AQ==",
-    transaction_payload_b64: b64(transactionPayload),
-    native_proof_b64: proof,
-    replay_witness_b64: replay,
-    creation_time_ms: 10,
-  });
-  const canonical = canonicalSccpTransactionPayload({
-    creationTimeMs: 10,
-    proofBase64: nativeProof,
-    destination: false,
-    backendTag: 1,
-    replayWitnessBase64: witness,
-  });
-  assert.doesNotThrow(() => normalizeBridgeMessageSubmitPayload(signed(canonical)));
-
-  const otherProof = nativeProofB64({ payload: Buffer.from([2]) });
-  assert.throws(
-    () => normalizeBridgeMessageSubmitPayload(signed(
-      canonicalSccpTransactionPayload({
-        creationTimeMs: 10,
-        proofBase64: otherProof,
-        destination: false,
-        backendTag: 1,
-        replayWitnessBase64: witness,
-      }),
-    )),
-    /proof does not match/u,
-  );
-  const otherWitness = replayWitnessB64({
-    payload: replayWitnessPayload(Buffer.alloc(32), Buffer.alloc(32, 0x77)),
-  });
-  assert.throws(
-    () => normalizeBridgeMessageSubmitPayload(signed(
-      canonicalSccpTransactionPayload({
-        creationTimeMs: 10,
-        proofBase64: nativeProof,
-        destination: false,
-        backendTag: 1,
-        replayWitnessBase64: otherWitness,
-      }),
-    )),
-    /replay witness does not match/u,
-  );
-  assert.throws(
-    () => normalizeBridgeMessageSubmitPayload(signed(
-      canonicalSccpTransactionPayload({
-        creationTimeMs: 10,
-        proofBase64: nativeProof,
-        destination: false,
-        backendTag: 1,
-        replayWitnessBase64: witness,
-        instructionCount: 2,
-      }),
-    )),
-    /exactly one instruction/u,
-  );
-  assert.throws(
-    () => normalizeBridgeMessageSubmitPayload({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      native_proof_b64: nativeProof,
-      replay_witness_b64: replayWitnessB64({
-        payload: replayWitnessPayload(Buffer.alloc(32, 0x55)),
-      }),
-    }),
-    /non-membership|prior digest/u,
-  );
-});
-
-test("submit DTOs reject mixed signing state, malformed encodings, and retired fields", () => {
-  const proof = {
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64(),
-  };
-  for (const [field, value] of [
-    ["public_key_hex", HASH(1)],
-    ["message_bundle_b64", "AQ=="],
-    ["proof_bytes_hex", "01"],
-    ["network_id_hex", HASH(2)],
-    ["manifest_hash", HASH(3)],
-    ["deployment", {}],
-    ["allow_unready", true],
-    ["signature", "AQ=="],
-    ["client_signature_b64", "AQ=="],
-  ]) assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, [field]: value }));
-  for (const artifact of ["AQ", " AQ==", "AQ==\n", "", "====", "A==="]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, destination_proof_b64: artifact }));
-  }
-  for (const signingState of [
-    { signature_b64: "AQ==", creation_time_ms: 1 },
-    { transaction_payload_b64: "AQ==", creation_time_ms: 1 },
-    { signature_b64: "AQ==", transaction_payload_b64: "Ag==" },
-    { signature_b64: "AQ", transaction_payload_b64: "Ag==", creation_time_ms: 1 },
-    { signature_b64: "AQ==", transaction_payload_b64: "Ag", creation_time_ms: 1 },
-  ]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, ...signingState }));
-  }
-  for (const creation_time_ms of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1"]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, creation_time_ms }));
-  }
-  const { fee_payment: _feePayment, ...withoutFeePayment } = proof;
-  assert.throws(
-    () => normalizeBridgeProofSubmitPayload(withoutFeePayment),
-    /fee_payment/u,
-  );
-  for (const fee_payment of [
-    null,
-    { payer: "authority", value: { charge_limits: [], gas_limit: 0 } },
-    { payer: "authority", value: { charge_limits: [], gas_limit: null, legacy: true } },
-    {
-      payer: "sponsor",
-      value: {
-        program_id: { sponsor: AUTHORITY, name: "wallet_fx" },
-        program_revision: 0,
-        charge_limits: [],
-        gas_limit: null,
-      },
-    },
-  ]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({ ...proof, fee_payment }));
-  }
-});
-
-test("submit DTOs bind the exact proof schema and require zero header padding", () => {
-  assert.doesNotThrow(() => normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64(),
-  }));
-  assert.doesNotThrow(() => normalizeBridgeMessageSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    native_proof_b64: nativeProofB64(),
-    replay_witness_b64: replayWitnessB64(),
-  }));
-  assert.throws(() => normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: nativeProofB64(),
-  }), /schema hash/u);
-  assert.throws(() => normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: b64(
-      sccpNoritoFrame("iroha_sccp::SccpGroth16Bn254ProofArtifactV1"),
-    ),
-  }), /schema hash/u);
-  assert.throws(() => normalizeBridgeMessageSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    native_proof_b64: destinationProofB64(),
-    replay_witness_b64: replayWitnessB64(),
-  }), /schema hash/u);
-  for (const padding of [1, 8, 64]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: destinationProofB64({ padding }),
-    }), /exactly 0 bytes/u);
-    assert.throws(() => normalizeBridgeMessageSubmitPayload({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      native_proof_b64: nativeProofB64({ padding }),
-      replay_witness_b64: replayWitnessB64(),
-    }), /exactly 0 bytes/u);
-  }
-  assert.throws(() => normalizeBridgeProofSubmitPayload({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64({ payload: Buffer.alloc(0) }),
-  }), /non-empty/u);
-  for (const authority of [ACCOUNT.toI105(753), ACCOUNT.toI105(0), ACCOUNT.toI105(370)]) {
-    assert.throws(() => normalizeBridgeProofSubmitPayload({
-      authority,
-      fee_payment: feePayment(),
-      destination_proof_b64: destinationProofB64(),
-    }), /discriminant|prefix/u);
-    assert.throws(() => normalizeBridgeMessageSubmitPayload({
-      authority,
-      fee_payment: feePayment(),
-      native_proof_b64: nativeProofB64(),
-      replay_witness_b64: replayWitnessB64(),
-    }), /discriminant|prefix/u);
-  }
-});
-
-test("bridge response and JSON parser reject contradictions, aliases, and duplicate fields", () => {
-  assert.equal(normalizeSccpBridgeSubmitResponse(preparedResponse()).submitted, false);
-  assert.equal(normalizeSccpBridgeSubmitResponse(preparedResponse({
-    backend: "evm-groth16-bn254-v1",
-  })).backend, "evm-groth16-bn254-v1");
-  assert.equal(normalizeSccpBridgeSubmitResponse(preparedResponse({
-    backend: "ton-groth16-bls12381-v1",
-    counterparty_domain: 4,
-    counterparty_chain: "ton-mainnet",
-  })).backend, "ton-groth16-bls12381-v1");
-  assert.equal(normalizeSccpBridgeSubmitResponse({
-    ...preparedResponse(),
-    submitted: true,
-    tx_hash_hex: HASH(0x55),
-    transaction_payload_b64: null,
-    signing_message_b64: null,
-  }).submitted, true);
-  for (const value of [
-    { ...preparedResponse(), payload_kind: "burn" },
-    { ...preparedResponse(), counterparty_chain: "solana-mainnet-beta" },
-    { ...preparedResponse(), proof_artifact_hash: HASH(3) },
-    { ...preparedResponse(), manifest_hash_hex: HASH(3) },
-    { ...preparedResponse(), route_configuration_hash_hex: HASH(0xab).toUpperCase() },
-    { ...preparedResponse(), creation_time_ms: 0 },
-    { ...preparedResponse(), tx_hash_hex: HASH(4) },
-    { ...preparedResponse(), transaction_payload_b64: b64(Uint8Array.of(1, 2, 3, 5)) },
-    { ...preparedResponse(), signing_message_b64: b64(new Uint8Array(32).fill(9)) },
-  ]) assert.throws(() => normalizeSccpBridgeSubmitResponse(value));
-  const missingRouteHash = preparedResponse();
-  delete missingRouteHash.route_configuration_hash_hex;
-  assert.throws(() => normalizeSccpBridgeSubmitResponse(missingRouteHash), /missing required/u);
-  assert.throws(
-    () => normalizeSccpBridgeSubmitResponse(preparedResponse(), { submitted: true }),
-    /signing state/u,
-  );
-  const json = JSON.stringify(preparedResponse());
-  assert.equal(parseSccpBridgeSubmitResponseJson(json).submitted, false);
-  assert.throws(() => parseSccpBridgeSubmitResponseJson(json.replace("{", '{"submitted":false,')), /duplicate/u);
-  assert.throws(
-    () => parseSccpBridgeSubmitResponseJson(
-      json.replace(
-        `"route_configuration_hash_hex":"${HASH(0x31)}"`,
-        `"route_configuration_hash_hex":"${HASH(0x31)}","route_configuration_hash_hex":"${HASH(0x32)}"`,
-      ),
-    ),
-    /duplicate/u,
-  );
-  assert.throws(() => parseSccpJsonObject(`${json}{}`), /trailing/u);
-  assert.equal(
-    parseSccpJsonObject('{"value":9007199254740993}').value,
-    9007199254740993n,
-  );
-  assert.throws(() => parseSccpJsonObject('{"value":1.0}'), /canonical integers/u);
-});
-
 function response(
   value,
   {
@@ -2686,28 +2194,6 @@ test("Torii SCCP Norito preflight accepts both concrete request types with zero 
     );
     assert.equal(streamed.streamState.released, true);
   }
-});
-
-test("destination submit admits the 128 KiB outer allowance and rejects its base64 overflow", () => {
-  const legacyMaximum = 16 * 1024 * 1024 + 64 * 1024;
-  const outerMaximum = 16 * 1024 * 1024 + 128 * 1024;
-  assert.equal(4 * Math.ceil(outerMaximum / 3), 22_544_384);
-  assert.throws(
-    () => normalizeBridgeProofSubmitPayload({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: Buffer.alloc(legacyMaximum + 1).toString("base64"),
-    }),
-    /not an NRT0 frame/u,
-  );
-  assert.throws(
-    () => normalizeBridgeProofSubmitPayload({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: Buffer.alloc(outerMaximum + 1).toString("base64"),
-    }),
-    /byte-size bound/u,
-  );
 });
 
 test("Torii SCCP Norito preflight rejects malformed and cross-type frames", async () => {
@@ -2864,16 +2350,6 @@ test("Torii SCCP routes apply their endpoint-specific declared response limits",
       invoke: (client) => client.getSccpProofRequest(MESSAGE_ID, { format: "norito" }),
       contentType: "application/x-norito",
     },
-    {
-      name: "submit JSON",
-      maximumBytes: 64 * 1024 * 1024,
-      invoke: (client) => client.submitBridgeProof({
-        authority: AUTHORITY,
-        fee_payment: feePayment(),
-        destination_proof_b64: destinationProofB64(),
-      }),
-      contentType: "application/json",
-    },
   ];
   for (const entry of cases) {
     const declaredOverflow = response({}, {
@@ -2937,109 +2413,27 @@ test("Torii exact client rejects path/query injection and retired option aliases
   assert.equal(typeof client.getSccpProofManifests, "undefined");
 });
 
-test("Torii proof submit sends only the closed destination artifact DTO", async () => {
-  let observed;
-  const client = new ToriiClient("https://example.invalid", {
-    fetchImpl: async (url, init) => {
-      observed = { url: String(url), body: JSON.parse(init.body) };
-      return response(preparedResponse({
-        creation_time_ms: 42,
-        backend: "evm-groth16-bn254-v1",
-      }));
-    },
-  });
-  await client.submitBridgeProof({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64(),
-    creation_time_ms: 42,
-  });
-  assert.deepEqual(observed, {
-    url: "https://example.invalid/v1/bridge/proofs/submit",
-    body: {
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: destinationProofB64(),
-      creation_time_ms: 42,
-    },
-  });
-});
+test("first-release JS SCCP exports no unauthenticated write surface", () => {
+  for (const retired of [
+    "normalizeBridgeProofSubmitPayload",
+    "normalizeBridgeMessageSubmitPayload",
+    "normalizeSccpBridgeSubmitResponse",
+    "parseSccpBridgeSubmitResponseJson",
+  ]) {
+    assert.equal(retired in sccpExports, false, retired);
+  }
+  assert.equal(typeof ToriiClient.prototype.submitBridgeProof, "undefined");
+  assert.equal(typeof ToriiClient.prototype.submitBridgeMessage, "undefined");
 
-test("Torii prepare then submit resends the byte-identical transaction payload", async () => {
-  const calls = [];
-  const prepared = preparedResponse({
-    creation_time_ms: 42,
-    backend: "evm-groth16-bn254-v1",
-  });
-  const client = new ToriiClient("https://example.invalid", {
-    fetchImpl: async (url, init) => {
-      const body = JSON.parse(init.body);
-      calls.push({ url: String(url), body });
-      if (calls.length === 1) return response(prepared);
-      return response({
-        ...prepared,
-        submitted: true,
-        tx_hash_hex: HASH(0x55),
-        transaction_payload_b64: null,
-        signing_message_b64: null,
-      });
-    },
-  });
-  const preparation = await client.submitBridgeProof({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    destination_proof_b64: destinationProofB64(),
-    creation_time_ms: 42,
-  });
-  const submission = await client.submitBridgeProof({
-    authority: AUTHORITY,
-    fee_payment: feePayment(),
-    signature_b64: b64(new Uint8Array(64).fill(7)),
-    transaction_payload_b64: preparation.transaction_payload_b64,
-    destination_proof_b64: destinationProofB64(),
-    creation_time_ms: preparation.creation_time_ms,
-  });
-  assert.equal(submission.submitted, true);
-  assert.equal(calls[1].body.transaction_payload_b64, prepared.transaction_payload_b64);
-  assert.deepEqual(calls[1].body.fee_payment, feePayment());
-  assert(Buffer.from(calls[1].body.transaction_payload_b64, "base64").length > 40);
-});
-
-test("Torii rejects response state that contradicts prepare or signed submit", async () => {
-  const submitted = {
-    ...preparedResponse(),
-    submitted: true,
-    tx_hash_hex: HASH(0x55),
-    transaction_payload_b64: null,
-    signing_message_b64: null,
-  };
-  const prepareClient = new ToriiClient("https://example.invalid", {
-    fetchImpl: async () => response(submitted),
-  });
-  await assert.rejects(
-    () => prepareClient.submitBridgeProof({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      destination_proof_b64: destinationProofB64(),
-    }),
-    /signing state/u,
-  );
-  const prepared = preparedResponse({
-    creation_time_ms: 42,
-    backend: "evm-groth16-bn254-v1",
-  });
-  const submitClient = new ToriiClient("https://example.invalid", {
-    fetchImpl: async () => response(prepared),
-  });
-  await assert.rejects(
-    () => submitClient.submitBridgeProof({
-      authority: AUTHORITY,
-      fee_payment: feePayment(),
-      signature_b64: "AQ==",
-      transaction_payload_b64: prepared.transaction_payload_b64,
-      destination_proof_b64: destinationProofB64(),
-      creation_time_ms: 42,
-    }),
-    /signing state/u,
-  );
+  const declarations = fs.readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  for (const retired of [
+    "SccpDetachedSigningState",
+    "SccpBridgeProofSubmitPayload",
+    "SccpBridgeMessageSubmitPayload",
+    "SccpBridgeSubmitResponse",
+    "submitBridgeProof",
+    "submitBridgeMessage",
+  ]) {
+    assert.doesNotMatch(declarations, new RegExp(`\\b${retired}\\b`, "u"));
+  }
 });

@@ -255,12 +255,12 @@ FAMILIES = {
 }
 
 ROUTE_MACRO_DEFINITION_SHA256 = {
-    "catalog_route_policy": "c475a7e8265ec2c2bf300226a5082cd7cab8653dd29d4e3dfa0629d5a8a444c6",
+    "catalog_route_policy": "fa04877d472358a46fef1153c5ae2aeaf3f7c55d478e8e6d13ada0244fd334c7",
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_ROW_COUNT = 538
-ROUTE_TUPLE_SHA256 = "de67a5d395a48ca6599eed51a132cf8da0ddb330600c6d9b3b17a2c4c6874daf"
+ROUTE_ROW_COUNT = 540
+ROUTE_TUPLE_SHA256 = "b5cfcb7385ea0a238de97394171d47b996d7076afb82239c2311b0ab4f4702a4"
 
 
 def _normalized_tokens(source: str) -> bytes:

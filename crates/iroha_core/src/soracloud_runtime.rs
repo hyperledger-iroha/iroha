@@ -1775,9 +1775,15 @@ mod tests {
             pulse_id: [0x88; 32],
         };
         world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
-        world
-            .global_beacon_pulse_slots
-            .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+        world.global_beacon_pulse_slots.insert(
+            (
+                iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                    &pulse.network_id,
+                ),
+                pulse.height,
+            ),
+            pulse.pulse_id,
+        );
         world
     }
     fn sample_inrou_resolver_manifest() -> SoraInrouManifestV1 {

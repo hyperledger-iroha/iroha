@@ -1867,8 +1867,6 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     );
     assert!(caps.query.projection.checkpoint_contract_v1);
     assert!(!caps.query.projection.da_v1_enabled);
-    assert!(!caps.query.projection.checkpoint_plan_v1);
-    assert!(!caps.query.projection.checkpoint_publish_v1);
     assert_eq!(
         caps.query.projection.shard_catalog_v1,
         cfg!(feature = "app_api")

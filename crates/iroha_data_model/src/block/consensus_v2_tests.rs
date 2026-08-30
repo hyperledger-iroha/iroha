@@ -1539,49 +1539,87 @@ mod tests {
             Err(ValidationError::SignerOutOfRange)
         );
         let variants = vec![
-            ConsensusMessageV2Payload::Proposal(proposal),
-            ConsensusMessageV2Payload::Vote(Vote {
-                round: manifest.round,
-                proposal_round: manifest.round,
-                phase: GlobalPhase::Prepare,
-                subject: manifest.subject,
-                execution_commitment: prepare.execution_commitment,
-                signer: 0,
-                signature: vec![1],
-            }),
-            ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
-            ConsensusMessageV2Payload::TimeoutVote(TimeoutVote {
-                round: timeout.round,
-                highest_prepare_qc: Some(prepare.clone()),
-                signer: 0,
-                signature: vec![2],
-            }),
-            ConsensusMessageV2Payload::TimeoutCertificate(timeout),
-            ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
-                manifest_hash: HashOf::new(&manifest),
-                index: 0,
-                bytes: b"body".to_vec(),
-                sender: 0,
-                signature: vec![0x66; 48],
-            }),
-            ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-            ConsensusMessageV2Payload::CertifiedBodyResponse(CertifiedBodyResponse {
-                request_hash: HashOf::new(&request),
-                manifest,
-                body: b"body".to_vec(),
-                responder: context.roster[0].validator.clone(),
-                signature: vec![3],
-            }),
-            ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
-            ConsensusMessageV2Payload::CommitCertificateResponse(CommitCertificateResponse {
-                request_hash: HashOf::new(&commit_request),
-                certificate: commit,
-                responder: context.roster[0].validator.clone(),
-                signature: vec![4],
-            }),
-            ConsensusMessageV2Payload::GlobalBeaconPartialSignature(beacon_partial),
+            (
+                ConsensusMessageV2Payload::Proposal(proposal),
+                CONSENSUS_MESSAGE_V2_PROPOSAL_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::Vote(Vote {
+                    round: manifest.round,
+                    proposal_round: manifest.round,
+                    phase: GlobalPhase::Prepare,
+                    subject: manifest.subject,
+                    execution_commitment: prepare.execution_commitment,
+                    signer: 0,
+                    signature: vec![1],
+                }),
+                CONSENSUS_MESSAGE_V2_VOTE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
+                CONSENSUS_MESSAGE_V2_QUORUM_CERTIFICATE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::TimeoutVote(TimeoutVote {
+                    round: timeout.round,
+                    highest_prepare_qc: Some(prepare.clone()),
+                    signer: 0,
+                    signature: vec![2],
+                }),
+                CONSENSUS_MESSAGE_V2_TIMEOUT_VOTE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+                CONSENSUS_MESSAGE_V2_TIMEOUT_CERTIFICATE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
+                    manifest_hash: HashOf::new(&manifest),
+                    index: 0,
+                    bytes: b"body".to_vec(),
+                    sender: 0,
+                    signature: vec![0x66; 48],
+                }),
+                CONSENSUS_MESSAGE_V2_PAYLOAD_CHUNK_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
+                CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_REQUEST_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::CertifiedBodyResponse(CertifiedBodyResponse {
+                    request_hash: HashOf::new(&request),
+                    manifest,
+                    body: b"body".to_vec(),
+                    responder: context.roster[0].validator.clone(),
+                    signature: vec![3],
+                }),
+                CONSENSUS_MESSAGE_V2_CERTIFIED_BODY_RESPONSE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
+                CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_REQUEST_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::CommitCertificateResponse(CommitCertificateResponse {
+                    request_hash: HashOf::new(&commit_request),
+                    certificate: commit,
+                    responder: context.roster[0].validator.clone(),
+                    signature: vec![4],
+                }),
+                CONSENSUS_MESSAGE_V2_COMMIT_CERTIFICATE_RESPONSE_TAG,
+            ),
+            (
+                ConsensusMessageV2Payload::GlobalBeaconPartialSignature(beacon_partial),
+                CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG,
+            ),
         ];
-        for payload in variants {
+        for (payload, expected_tag) in variants {
+            assert_eq!(
+                payload.encode().get(..core::mem::size_of::<u32>()),
+                Some(expected_tag.to_le_bytes().as_slice()),
+                "payload discriminant drifted from its public first-release tag"
+            );
             let message = ConsensusMessageV2::new(payload);
             let encoded = message.encode();
             let decoded = ConsensusMessageV2::decode(&mut &encoded[..])

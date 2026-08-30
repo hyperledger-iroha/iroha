@@ -215,6 +215,7 @@ mod tests {
             .expect("open first body-store instance");
         let first = store.instance_identity();
         assert!(first.same_instance(&store.instance_identity()));
+        drop(store);
         let reopened = V2BodyStore::open(directory.path(), context)
             .expect("reopen the same body-store path independently");
         assert!(
@@ -1755,9 +1756,14 @@ mod tests {
         let (context, keys) = context_and_keys();
         let (body, manifest) = body_and_manifest(&context, &keys, None);
         let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
-        let _receipt = store.store(manifest, body).expect("store body");
+        let receipt = store.store(manifest, body).expect("store body");
         let context_directory = directory.path().join(hex::encode(context.id().0.as_ref()));
-        let temporary_path = context_directory.join("interrupted.norito.tmp");
+        let mut temporary_name = store
+            .path_for(receipt.round(), receipt.subject())
+            .into_os_string();
+        temporary_name.push(".tmp");
+        let temporary_path = std::path::PathBuf::from(temporary_name);
+        drop(store);
         fs::write(&temporary_path, b"partial").expect("write incomplete temp file");
         V2BodyStore::open(directory.path(), context.clone())
             .expect("incomplete temp is unacknowledged");
@@ -2021,5 +2027,198 @@ mod tests {
             store.store(manifest, body),
             Err(V2BodyStoreError::BlockSubjectMismatch)
         ));
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn body_store_rejects_a_symlink_context_directory() {
+        let root = TempDir::new().expect("temporary body-store root");
+        let outside = TempDir::new().expect("outside directory");
+        let sentinel_path = outside.path().join("sentinel");
+        fs::write(&sentinel_path, b"outside remains untouched").expect("write sentinel");
+        let (context, _) = context_and_keys();
+        let context_path = root.path().join(hex::encode(context.id().0.as_ref()));
+        std::os::unix::fs::symlink(outside.path(), &context_path).expect("install context symlink");
+
+        assert!(matches!(
+            V2BodyStore::open(root.path(), context),
+            Err(V2BodyStoreError::StorageBinding { .. })
+        ));
+        assert_eq!(
+            fs::read(sentinel_path).expect("read sentinel"),
+            b"outside remains untouched"
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn body_store_exclusively_owns_one_context_directory() {
+        let root = TempDir::new().expect("temporary body-store root");
+        let (context, _) = context_and_keys();
+        let first = V2BodyStore::open(root.path(), context.clone()).expect("open first owner");
+        let error = match V2BodyStore::open(root.path(), context.clone()) {
+            Ok(_) => panic!("a second live context owner must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(&error, V2BodyStoreError::Io { source, .. } if source.kind() == std::io::ErrorKind::WouldBlock),
+            "unexpected second-owner error: {error}"
+        );
+        drop(first);
+        V2BodyStore::open(root.path(), context).expect("lock is released with the owner");
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn atomic_publication_never_follows_preexisting_temp_links() {
+        fn temporary_path(destination: &Path) -> std::path::PathBuf {
+            let mut name = destination.as_os_str().to_os_string();
+            name.push(".tmp");
+            name.into()
+        }
+
+        let root = TempDir::new().expect("temporary body-store root");
+        let outside = TempDir::new().expect("outside directory");
+        let sentinel_path = outside.path().join("sentinel");
+        let sentinel = b"outside remains untouched";
+        fs::write(&sentinel_path, sentinel).expect("write sentinel");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(root.path(), context).expect("open body store");
+        let body_path = store.path_for(manifest.round, manifest.subject);
+        let body_temporary_path = temporary_path(&body_path);
+
+        std::os::unix::fs::symlink(&sentinel_path, &body_temporary_path)
+            .expect("install temporary symlink");
+        assert!(matches!(
+            store.store(manifest.clone(), body.clone()),
+            Err(V2BodyStoreError::Io { .. })
+        ));
+        assert_eq!(fs::read(&sentinel_path).expect("read sentinel"), sentinel);
+        fs::remove_file(&body_temporary_path).expect("remove temporary symlink");
+
+        fs::hard_link(&sentinel_path, &body_temporary_path).expect("install temporary hard link");
+        assert!(matches!(
+            store.store(manifest.clone(), body.clone()),
+            Err(V2BodyStoreError::Io { .. })
+        ));
+        assert_eq!(fs::read(&sentinel_path).expect("read sentinel"), sentinel);
+        fs::remove_file(&body_temporary_path).expect("remove temporary hard link");
+
+        let receipt = store.store(manifest, body).expect("publish body normally");
+        let marker_path = store.validated_path_for(receipt.round(), receipt.subject());
+        let marker_temporary_path = temporary_path(&marker_path);
+        std::os::unix::fs::symlink(&sentinel_path, &marker_temporary_path)
+            .expect("install marker temporary symlink");
+        let execution_commitment =
+            ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        assert!(matches!(
+            store.persist_validated_receipt(&receipt, execution_commitment),
+            Err(V2BodyStoreError::Io { .. })
+        ));
+        assert_eq!(fs::read(&sentinel_path).expect("read sentinel"), sentinel);
+        fs::remove_file(marker_temporary_path).expect("remove marker temporary symlink");
+        store
+            .persist_validated_receipt(&receipt, execution_commitment)
+            .expect("publish marker normally");
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn startup_rejects_symlink_and_multiply_linked_leaves() {
+        let root = TempDir::new().expect("temporary body-store root");
+        let outside = TempDir::new().expect("outside directory");
+        let sentinel_path = outside.path().join("sentinel");
+        fs::write(&sentinel_path, b"outside remains untouched").expect("write sentinel");
+        let (context, _) = context_and_keys();
+        let context_path = root.path().join(hex::encode(context.id().0.as_ref()));
+        fs::create_dir(&context_path).expect("create context directory");
+        let hostile_path = context_path.join("hostile.norito");
+
+        std::os::unix::fs::symlink(&sentinel_path, &hostile_path).expect("install leaf symlink");
+        assert!(matches!(
+            V2BodyStore::open(root.path(), context.clone()),
+            Err(V2BodyStoreError::UnexpectedEntry(path)) if path == hostile_path
+        ));
+        fs::remove_file(&hostile_path).expect("remove leaf symlink");
+
+        fs::hard_link(&sentinel_path, &hostile_path).expect("install multiply linked leaf");
+        assert!(matches!(
+            V2BodyStore::open(root.path(), context),
+            Err(V2BodyStoreError::UnexpectedEntry(path)) if path == hostile_path
+        ));
+        assert_eq!(
+            fs::read(sentinel_path).expect("read sentinel"),
+            b"outside remains untouched"
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn retirement_durably_removes_markers_before_bodies() {
+        let root = TempDir::new().expect("temporary body-store root");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(root.path(), context.clone()).expect("open body store");
+        let receipt = store.store(manifest, body).expect("store body");
+        let execution_commitment =
+            ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        store
+            .persist_validated_receipt(&receipt, execution_commitment)
+            .expect("store validation marker");
+        let directory = store
+            .bound_directory
+            .take()
+            .expect("mutable store retains a bound directory");
+        drop(store);
+
+        directory
+            .simulate_crash_after_marker_sync_for_test()
+            .expect("complete the marker-first retirement phase");
+        let reopened = V2BodyStore::open(root.path(), context)
+            .expect("marker-first crash cut leaves a recoverable body store");
+        assert_eq!(reopened.entries.len(), 1, "the body remains recoverable");
+        assert!(
+            reopened.pending_revalidation.is_empty(),
+            "no validation authority survives without its body"
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn retirement_cannot_be_redirected_to_a_replacement_directory() {
+        let root = TempDir::new().expect("temporary body-store root");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(root.path(), context).expect("open body store");
+        store.store(manifest, body).expect("store body");
+        let directory = store
+            .bound_directory
+            .take()
+            .expect("mutable store retains a bound directory");
+        let context_path = directory.context_path.clone();
+        let moved_path = root.path().join("moved-context");
+        drop(store);
+        fs::rename(&context_path, &moved_path).expect("move the bound directory");
+        fs::create_dir(&context_path).expect("install replacement directory");
+        let replacement_sentinel = context_path.join("sentinel");
+        fs::write(&replacement_sentinel, b"replacement remains untouched")
+            .expect("write replacement sentinel");
+
+        assert!(matches!(
+            directory.retire(),
+            Err(V2BodyStoreError::StorageBinding { .. })
+        ));
+        assert_eq!(
+            fs::read(replacement_sentinel).expect("read replacement sentinel"),
+            b"replacement remains untouched"
+        );
+        assert!(
+            fs::read_dir(moved_path)
+                .expect("read moved context")
+                .next()
+                .is_some(),
+            "the originally bound body directory must not be emptied"
+        );
     }
 }

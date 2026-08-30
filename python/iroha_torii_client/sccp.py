@@ -1,4 +1,4 @@
-"""Closed first-release SCCP discovery, artifact, and submission helpers."""
+"""Closed first-release SCCP discovery and artifact helpers."""
 
 from __future__ import annotations
 
@@ -59,21 +59,6 @@ _SORA_TAIRA_CHAIN_ID_HASH = bytes.fromhex(
 )
 _SORA_TAIRA_CHAIN_ID = bytes.fromhex("fc56984b2be7431d840e21514d1883f0")
 _MAX_WIRE_BYTES = 16 * 1024 * 1024
-_MAX_DESTINATION_ARTIFACT_BYTES = _MAX_WIRE_BYTES + 128 * 1024
-_MAX_DESTINATION_ARTIFACT_BASE64_BYTES = (
-    4 * ((_MAX_DESTINATION_ARTIFACT_BYTES + 2) // 3)
-)
-_MAX_DETACHED_SIGNATURE_BYTES = 16 * 1024
-_DESTINATION_ARTIFACT_TYPE_NAME = (
-    "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
-)
-_NATIVE_INBOUND_PROOF_TYPE_NAME = (
-    "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
-)
-_REPLAY_WITNESS_TYPE_NAME = (
-    "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
-)
-_MAX_REPLAY_WITNESS_BYTES = 16 * 1024
 _MAX_U64 = (1 << 64) - 1
 _MAX_U128 = (1 << 128) - 1
 _MAX_TON_COINS = (1 << 120) - 1
@@ -2845,157 +2830,6 @@ def normalize_sccp_proof_request(value: Any) -> Mapping[str, Any]:
     return _deep_freeze(record)
 
 
-def _authority(value: Any, label: str) -> str:
-    authority = _text(value, label, 512)
-    from .client import _decode_canonical_i105_string
-
-    _decode_canonical_i105_string(authority)
-    return authority
-
-
-def _fee_payment(value: Any, label: str) -> Dict[str, Any]:
-    # Import lazily because the public client owns the shared typed fee-intent
-    # normalizer and imports this SCCP module for its route codecs.
-    from .client import ToriiClient
-
-    return ToriiClient._normalize_fee_payment_intent(value, context=label)
-
-
-def normalize_bridge_proof_submit_payload(value: Any) -> Dict[str, Any]:
-    """Build the sole supported destination-proof submission body."""
-
-    record = _exact_fields(
-        value,
-        frozenset(
-            {
-                "authority",
-                "fee_payment",
-                "signature_b64",
-                "transaction_payload_b64",
-                "destination_proof_b64",
-                "creation_time_ms",
-            }
-        ),
-        "bridge proof submit",
-        frozenset({"authority", "fee_payment", "destination_proof_b64"}),
-    )
-    destination_proof = _canonical_base64(
-        record["destination_proof_b64"],
-        "bridge proof submit.destination_proof_b64",
-        maximum_bytes=_MAX_DESTINATION_ARTIFACT_BYTES,
-    )
-    validate_norito_frame(
-        destination_proof,
-        context="bridge proof submit.destination_proof_b64",
-        expected_type_name=_DESTINATION_ARTIFACT_TYPE_NAME,
-        expected_padding_length=0,
-    )
-    creation_time = (
-        None
-        if "creation_time_ms" not in record
-        else _integer(record["creation_time_ms"], "bridge proof submit.creation_time_ms", 1)
-    )
-    result: Dict[str, Any] = {
-        "authority": _authority(record["authority"], "bridge proof submit.authority"),
-        "fee_payment": _fee_payment(
-            record["fee_payment"], "bridge proof submit.fee_payment"
-        ),
-        **_detached_signing_state(record, "bridge proof submit", creation_time),
-        "destination_proof_b64": record["destination_proof_b64"],
-    }
-    if creation_time is not None:
-        result["creation_time_ms"] = creation_time
-    return result
-
-
-def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
-    """Build the sole supported native inbound message submission body."""
-
-    record = _exact_fields(
-        value,
-        frozenset(
-            {
-                "authority",
-                "fee_payment",
-                "signature_b64",
-                "transaction_payload_b64",
-                "native_proof_b64",
-                "replay_witness_b64",
-                "creation_time_ms",
-            }
-        ),
-        "bridge message submit",
-        frozenset(
-            {"authority", "fee_payment", "native_proof_b64", "replay_witness_b64"}
-        ),
-    )
-    native_proof = _canonical_base64(
-        record["native_proof_b64"], "bridge message submit.native_proof_b64"
-    )
-    validate_norito_frame(
-        native_proof,
-        context="bridge message submit.native_proof_b64",
-        expected_type_name=_NATIVE_INBOUND_PROOF_TYPE_NAME,
-        expected_padding_length=0,
-    )
-    replay_witness = _canonical_base64(
-        record["replay_witness_b64"],
-        "bridge message submit.replay_witness_b64",
-        maximum_bytes=_MAX_REPLAY_WITNESS_BYTES,
-    )
-    validate_norito_frame(
-        replay_witness,
-        context="bridge message submit.replay_witness_b64",
-        expected_type_name=_REPLAY_WITNESS_TYPE_NAME,
-        expected_padding_length=0,
-    )
-    creation_time = (
-        None
-        if "creation_time_ms" not in record
-        else _integer(record["creation_time_ms"], "bridge message submit.creation_time_ms", 1)
-    )
-    result: Dict[str, Any] = {
-        "authority": _authority(record["authority"], "bridge message submit.authority"),
-        "fee_payment": _fee_payment(
-            record["fee_payment"], "bridge message submit.fee_payment"
-        ),
-        **_detached_signing_state(record, "bridge message submit", creation_time),
-        "native_proof_b64": record["native_proof_b64"],
-        "replay_witness_b64": record["replay_witness_b64"],
-    }
-    if creation_time is not None:
-        result["creation_time_ms"] = creation_time
-    return result
-
-
-def _detached_signing_state(
-    record: Mapping[str, Any], label: str, creation_time: Optional[int]
-) -> Dict[str, str]:
-    has_signature = "signature_b64" in record
-    has_transaction_payload = "transaction_payload_b64" in record
-    if has_signature != has_transaction_payload:
-        raise ValueError(
-            f"{label} must omit both signature_b64 and transaction_payload_b64 for preparation "
-            "or provide both for signed submission"
-        )
-    if not has_signature:
-        return {}
-    if creation_time is None:
-        raise ValueError(f"{label}.creation_time_ms is required for signed submission")
-    _canonical_base64(
-        record["signature_b64"],
-        f"{label}.signature_b64",
-        maximum_bytes=_MAX_DETACHED_SIGNATURE_BYTES,
-    )
-    _canonical_base64(
-        record["transaction_payload_b64"], f"{label}.transaction_payload_b64"
-    )
-    return {
-        "signature_b64": record["signature_b64"],
-        "transaction_payload_b64": record["transaction_payload_b64"],
-    }
-
-
 def _iroha_prehash(payload: bytes) -> bytes:
     digest = bytearray(hashlib.blake2b(payload, digest_size=32).digest())
     digest[-1] |= 1
@@ -3170,7 +3004,5 @@ __all__ = [
     "normalize_sccp_recent_messages",
     "normalize_sccp_message_bundle",
     "normalize_sccp_proof_request",
-    "normalize_bridge_proof_submit_payload",
-    "normalize_bridge_message_submit_payload",
     "parse_sccp_json_object",
 ]

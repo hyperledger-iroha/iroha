@@ -18,8 +18,13 @@ pub fn preflight_registered_kagemusha_v2_hardware_authorization(
     asset: &AssetDefinitionId,
     evaluated_at_ms: u64,
 ) -> Result<(), String> {
-    if evaluated_at_ms == 0 || &authorization.asset_definition_id != asset {
-        return Err("Kagemusha hardware authorization has an invalid snapshot or asset".to_owned());
+    authorization
+        .validate_for_payload_at(authorization.payload_digest, evaluated_at_ms)
+        .map_err(|error| format!("Kagemusha hardware authorization is not live: {error}"))?;
+    if &authorization.asset_definition_id != asset {
+        return Err(
+            "Kagemusha hardware authorization does not match the operation asset".to_owned(),
+        );
     }
     let state_key = kagemusha_online_registration_state_key(&authorization.registration_hash)
         .map_err(|error| format!("Kagemusha registration key is invalid: {error}"))?;

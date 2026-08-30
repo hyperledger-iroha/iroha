@@ -9385,6 +9385,14 @@ impl Client {
             "{field} must be exactly 64 lowercase hexadecimal characters"
         ))
     }
+    fn require_canonical_transaction_hash(value: &str, field: &str) -> Result<()> {
+        if is_canonical_signed_transaction_hash_text(value) {
+            return Ok(());
+        }
+        Err(eyre!(
+            "{field} must be exactly 64 lowercase hexadecimal characters with the Iroha hash marker set"
+        ))
+    }
     fn require_governance_selector_v1(value: &str, field: &str) -> Result<()> {
         if iroha_data_model::governance::is_valid_governance_selector_v1(value) {
             return Ok(());
@@ -9469,7 +9477,10 @@ impl Client {
                 "offline operation response kind or initial state does not match the request"
             ));
         }
-        Self::require_lower_hex_32(&reference.transaction_hash, "transaction_hash")?;
+        Self::require_canonical_transaction_hash(
+            &reference.transaction_hash,
+            "transaction_hash",
+        )?;
         if reference.submitted_at_ms != submitted_at_ms {
             return Err(eyre!(
                 "offline operation response submission time does not match the signed request"
@@ -9529,11 +9540,41 @@ impl Client {
                 result,
             } => {
                 let (transaction_hash, finalized_block_height, server_time_ms) = match result {
-                    OfflineOperationResult::TopUp(result) => (
-                        &result.transaction_hash,
-                        result.finalized_block_height,
-                        result.server_time_ms,
-                    ),
+                    OfflineOperationResult::TopUp(result) => {
+                        result.anchor.validate_public_binding().map_err(|error| {
+                            eyre!("offline applied top-up contains an invalid anchor: {error}")
+                        })?;
+                        result
+                            .finality_proof
+                            .validate_structure()
+                            .map_err(|error| {
+                                eyre!(
+                                    "offline applied top-up contains an invalid finality proof: {error}"
+                                )
+                            })?;
+                        let anchor_ref = result.anchor.compact_ref().map_err(|error| {
+                            eyre!("offline applied top-up anchor cannot be referenced: {error}")
+                        })?;
+                        if result.finality_proof.anchor != anchor_ref
+                            || result.finality_proof.commit_qc.height_context.network_id
+                                != result.anchor.network_id
+                            || operation_id != &hex::encode(result.anchor.topup_operation_id)
+                            || result.transaction_hash
+                                != hex::encode(result.anchor.finalized_tx_hash)
+                            || result.finalized_block_height != result.anchor.finalized_height
+                            || result.finalized_block_height
+                                != result.finality_proof.commit_qc.height_context.height
+                        {
+                            return Err(eyre!(
+                                "offline applied top-up anchor, finality proof, and terminal result are not mutually bound"
+                            ));
+                        }
+                        (
+                            &result.transaction_hash,
+                            result.finalized_block_height,
+                            result.server_time_ms,
+                        )
+                    }
                     OfflineOperationResult::Redeem(result) => (
                         &result.transaction_hash,
                         result.finalized_block_height,
@@ -9565,7 +9606,7 @@ impl Client {
                 ));
             }
         }
-        Self::require_lower_hex_32(transaction_hash, "transaction_hash")
+        Self::require_canonical_transaction_hash(transaction_hash, "transaction_hash")
     }
     fn validate_offline_capability(status: &OfflineStatus) -> Result<()> {
         if status.cash_handoff_capability
@@ -10088,6 +10129,28 @@ fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) ->
 mod offline_client_tests {
     use super::{evidence_http_tests::*, *};
     use crate::{http::Response as HttpResponse, http_default::RequestSnapshot};
+    use iroha_data_model::{
+        NetworkId,
+        account::AccountId,
+        asset::{AssetDefinitionId, AssetId},
+        block::consensus_v2::{
+            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout,
+            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId, PayloadEncoding,
+            QuorumCertificate, PROTOCOL_VERSION,
+        },
+        domain::DomainId,
+        offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2, KagemushaRecursiveSpendArtifactBindingV4,
+            KagemushaRecursiveSpendTopUpAnchorV4, KagemushaScaledAmountV2,
+            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpAnchorMerkleProofV2,
+            KagemushaTopUpFinalityCompactQcV2, KagemushaTopUpFinalityHeightContextV2,
+            KagemushaTopUpFinalityProofV2,
+        },
+        proof::VerifyingKeyId,
+    };
+    use iroha_torii_shared::offline_api::OfflineTopUpResult;
     use norito::derive::NoritoSerialize;
     use std::sync::{Arc, Mutex};
     #[derive(NoritoSerialize)]
@@ -10109,10 +10172,161 @@ mod offline_client_tests {
             operation_id: operation_id.to_owned(),
             kind,
             state: OfflineOperationState::Pending,
-            transaction_hash: "22".repeat(32),
+            transaction_hash: canonical_transaction_hash_text(),
             status_uri: format!("/v1/offline/operations/{operation_id}"),
             submitted_at_ms: 42,
         }
+    }
+    fn canonical_transaction_hash_text() -> String {
+        format!("{}23", "22".repeat(31))
+    }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture keeps the applied result, anchor, compact QC, and proof mutually consistent"
+    )]
+    fn applied_topup_status_fixture() -> (String, OfflineOperationStatus) {
+        let operation_id = [0x11; 32];
+        let mut transaction_hash = [0x22; 32];
+        transaction_hash[31] = 0x23;
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"offline-client-topup")),
+        );
+        let payer_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("deterministic top-up payer key");
+        let payer = AccountId::new(payer_key.public_key().clone());
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("client", "offline").expect("fixture domain"),
+            "cash".parse().expect("fixture asset name"),
+        );
+        let amount = KagemushaScaledAmountV2::new(500, 2).expect("fixture amount");
+        let anchor = KagemushaRecursiveSpendTopUpAnchorV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
+            network_id,
+            payer: payer.clone(),
+            asset: AssetId::new(asset_definition.clone(), payer),
+            asset_scale: amount.scale,
+            amount,
+            initial_root: [0x31; 32],
+            finalized_root: [0x32; 32],
+            shield_leaf_index: 7,
+            current_note: KagemushaSpendableNoteDescriptorV2 {
+                network_id,
+                asset: asset_definition,
+                note_commitment: [0x33; 32],
+                spend_nullifier: [0x34; 32],
+                amount,
+            },
+            topup_operation_id: operation_id,
+            shield_verifier_id: VerifyingKeyId::new("halo2/ipa", "topup-shield-v2"),
+            shield_verifier_commitment: [0x35; 32],
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV4 {
+                version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+                generation: "kagemusha-release-v4-1".to_owned(),
+                manifest_sha256: [0x36; 32],
+            },
+            finalized_height: 42,
+            finalized_tx_hash: transaction_hash,
+            anchor_digest: [0; 32],
+        }
+        .finalize_digest()
+        .expect("valid top-up anchor");
+        let context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+            Hash::new(b"offline-client-topup-context"),
+        ));
+        let round = ConsensusRound {
+            context_id,
+            height: anchor.finalized_height,
+            view: 0,
+        };
+        let ordinary_writes_root = Hash::new(b"offline-client-ordinary-writes");
+        let topup_anchor_root = Hash::new(b"offline-client-topup-root");
+        let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
+            Hash::new(b"offline-client-parent-state"),
+            ExecutionCommitment::topup_post_state_root(
+                1,
+                ordinary_writes_root,
+                topup_anchor_root,
+            ),
+            ordinary_writes_root,
+            Some(topup_anchor_root),
+            1,
+            1,
+            Hash::new(b"offline-client-block-wire"),
+        )
+        .expect("valid execution commitment");
+        let finality_proof = KagemushaTopUpFinalityProofV2 {
+            version: KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
+            anchor: anchor.compact_ref().expect("valid anchor reference"),
+            commit_qc: KagemushaTopUpFinalityCompactQcV2 {
+                height_context: KagemushaTopUpFinalityHeightContextV2 {
+                    context_id,
+                    network_id,
+                    protocol_version: PROTOCOL_VERSION,
+                    height: anchor.finalized_height,
+                    epoch: 0,
+                    epoch_end_height: 100,
+                    next_epoch_snapshot: None,
+                    mode: ConsensusMode::Permissioned,
+                    parent_commit_qc: None,
+                    snapshot_bootstrap: None,
+                    nexus_amx_context_hash: Hash::new(b"offline-client-amx"),
+                    execution_policy_hash: Hash::new(b"offline-client-policy"),
+                    da_layout: DataAvailabilityLayout {
+                        encoding: PayloadEncoding::ReedSolomon16,
+                        chunk_size_bytes: 1024,
+                        data_shards: 1,
+                        parity_shards: 1,
+                        max_payload_size_bytes: 4096,
+                        max_chunk_count: 8,
+                    },
+                    leader_seed: [0x37; 32],
+                },
+                certificate: QuorumCertificate {
+                    round,
+                    proposal_round: round,
+                    phase: GlobalPhase::Commit,
+                    subject: BlockSubject {
+                        parent_block_hash: None,
+                        block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                            b"offline-client-block",
+                        )),
+                        payload_hash: Hash::new(b"offline-client-payload"),
+                    },
+                    execution_commitment,
+                    signers: vec![0],
+                    aggregate_signature: vec![0x38; 96],
+                },
+            },
+            anchor_path: KagemushaTopUpAnchorMerkleProofV2 {
+                leaf_index: 0,
+                leaf_count: 1,
+                siblings: Vec::new(),
+            },
+        };
+        let operation_id = hex::encode(operation_id);
+        (
+            operation_id.clone(),
+            OfflineOperationStatus::Applied {
+                operation_id,
+                result: OfflineOperationResult::TopUp(OfflineTopUpResult {
+                    transaction_hash: hex::encode(transaction_hash),
+                    finalized_block_height: anchor.finalized_height,
+                    server_time_ms: 1_700_000_000_000,
+                    anchor,
+                    finality_proof,
+                }),
+            },
+        )
+    }
+    fn topup_result_mut(status: &mut OfflineOperationStatus) -> &mut OfflineTopUpResult {
+        let OfflineOperationStatus::Applied {
+            result: OfflineOperationResult::TopUp(result),
+            ..
+        } = status
+        else {
+            panic!("fixture must be an applied top-up")
+        };
+        result
     }
     fn accepted_response(reference: &OfflineOperationReference) -> HttpResponse<Vec<u8>> {
         HttpResponse::builder()
@@ -10280,7 +10494,7 @@ mod offline_client_tests {
         let status = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
-            transaction_hash: "22".repeat(32),
+            transaction_hash: canonical_transaction_hash_text(),
             submitted_at_ms: 42,
         };
         let response = HttpResponse::builder()
@@ -10310,12 +10524,69 @@ mod offline_client_tests {
         let status = OfflineOperationStatus::Pending {
             operation_id: operation_id.clone(),
             kind: OfflineOperationKind::TopUp,
-            transaction_hash: "22".repeat(32),
+            transaction_hash: canonical_transaction_hash_text(),
             submitted_at_ms: 0,
         };
         let error = Client::validate_offline_operation_status(&status, &operation_id)
             .expect_err("zero pending submission time must fail closed");
         assert!(error.to_string().contains("submitted_at_ms"));
+    }
+    #[test]
+    fn offline_operation_responses_reject_unmarked_transaction_hashes() {
+        let operation_id = "11".repeat(32);
+        let mut reference = operation_reference(&operation_id, OfflineOperationKind::TopUp);
+        reference.transaction_hash = "22".repeat(32);
+        let response = accepted_response(&reference);
+        let reference_error = Client::validate_offline_operation_reference(
+            &response,
+            &reference,
+            &operation_id,
+            OfflineOperationKind::TopUp,
+            42,
+        )
+        .expect_err("a transaction hash without the Iroha marker must fail closed");
+        assert!(reference_error.to_string().contains("hash marker"));
+
+        let status = OfflineOperationStatus::Pending {
+            operation_id: operation_id.clone(),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: "22".repeat(32),
+            submitted_at_ms: 42,
+        };
+        let status_error = Client::validate_offline_operation_status(&status, &operation_id)
+            .expect_err("a status transaction hash without the Iroha marker must fail closed");
+        assert!(status_error.to_string().contains("hash marker"));
+    }
+    #[test]
+    fn applied_topup_status_binds_operation_anchor_proof_and_finality() {
+        let (operation_id, status) = applied_topup_status_fixture();
+        Client::validate_offline_operation_status(&status, &operation_id)
+            .expect("mutually bound applied top-up status");
+
+        let mut mismatched_transaction = status.clone();
+        topup_result_mut(&mut mismatched_transaction).transaction_hash =
+            format!("{}25", "22".repeat(31));
+        let error = Client::validate_offline_operation_status(
+            &mismatched_transaction,
+            &operation_id,
+        )
+        .expect_err("terminal transaction must match the finalized anchor");
+        assert!(error.to_string().contains("not mutually bound"));
+
+        let mut mismatched_proof = status.clone();
+        topup_result_mut(&mut mismatched_proof)
+            .finality_proof
+            .anchor
+            .anchor_digest[0] ^= 1;
+        let error = Client::validate_offline_operation_status(&mismatched_proof, &operation_id)
+            .expect_err("finality proof must select the returned anchor");
+        assert!(error.to_string().contains("not mutually bound"));
+
+        let mut mismatched_height = status;
+        topup_result_mut(&mut mismatched_height).finalized_block_height += 1;
+        let error = Client::validate_offline_operation_status(&mismatched_height, &operation_id)
+            .expect_err("terminal height must match the anchor and QC context");
+        assert!(error.to_string().contains("not mutually bound"));
     }
     #[test]
     fn applied_operation_status_rejects_zero_finality_fields() {
@@ -10327,7 +10598,7 @@ mod offline_client_tests {
                 operation_id: operation_id.clone(),
                 result: OfflineOperationResult::Redeem(
                     iroha_torii_shared::offline_api::OfflineRedeemResult {
-                        transaction_hash: "22".repeat(32),
+                        transaction_hash: canonical_transaction_hash_text(),
                         finalized_block_height,
                         server_time_ms,
                     },

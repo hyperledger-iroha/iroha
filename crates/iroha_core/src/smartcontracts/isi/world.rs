@@ -20,7 +20,8 @@ pub mod isi {
     use crate::governance::draw::body_committee_size;
     use crate::governance::parliament::{
         PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1, ParliamentBodyStateV1,
-        ParliamentDecisionModeV1, parliament_attempt_policy_v1,
+        ParliamentDecisionModeV1, canonical_governance_attempt_ids_v1,
+        parliament_attempt_policy_v1, validate_parliament_randomness_redraw_lineage_v1,
     };
     use base64::engine::Engine as _;
     use core::{
@@ -113,8 +114,8 @@ pub mod isi {
             ContractEmergencyHoldProposalV1, ContractLifecycleGovernanceActionV1,
             ContractLifecycleGovernanceProposalV1, DeployContractProposal,
             GlobalDataTriggerPermissionGovernanceActionV1,
-            GlobalDataTriggerPermissionGovernanceProposalV1, GovernanceAttemptStatusV1,
-            GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
+            GlobalDataTriggerPermissionGovernanceProposalV1, GovernanceAttemptId,
+            GovernanceAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
             GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
             MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ParliamentAggregateOutcomeV1,
             ParliamentAggregateTallyV1, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
@@ -5351,26 +5352,50 @@ pub mod isi {
     }
     fn parliament_certificate_for_proposal_v1(
         proposal_id: [u8; 32],
+        proposal: &ProposalKind,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(GovernanceCertificateV1, u64), Error> {
         let proposal_content_id =
             iroha_data_model::governance::types::ProposalContentId::new(proposal_id);
-        let mut matches = state_transaction
-            .world
-            .parliament_attempts
-            .iter()
-            .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
-            .filter_map(|(_, attempt)| {
-                if attempt.attempt().status != GovernanceAttemptStatusV1::Enacted {
-                    return None;
-                }
-                let enacted_at_height = attempt.terminal_height()?;
-                let certificate = attempt
-                    .certificate()
-                    .filter(|certificate| certificate.enact_at_height == enacted_at_height)?
-                    .clone();
-                Some((certificate, enacted_at_height))
-            });
+        let mut history = Vec::new();
+        let mut history_ended = false;
+        for attempt_id in canonical_governance_attempt_ids_v1(proposal_content_id) {
+            let Some(attempt) = state_transaction.world.parliament_attempts.get(&attempt_id) else {
+                history_ended = true;
+                continue;
+            };
+            if history_ended {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance proposal has a sparse Parliament attempt history".into(),
+                ));
+            }
+            attempt.validate().map_err(parliament_reducer_error)?;
+            if attempt.attempt().id != attempt_id
+                || attempt.proposal_content_id() != proposal_content_id
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance proposal has a Parliament attempt under the wrong canonical key"
+                        .into(),
+                ));
+            }
+            attempt
+                .validate_proposal_bindings_v1(proposal)
+                .map_err(parliament_reducer_error)?;
+            history.push(attempt);
+        }
+        validate_parliament_randomness_redraw_lineage_v1(history.iter().copied())
+            .map_err(parliament_reducer_error)?;
+        let mut matches = history.into_iter().filter_map(|attempt| {
+            if attempt.attempt().status != GovernanceAttemptStatusV1::Enacted {
+                return None;
+            }
+            let enacted_at_height = attempt.terminal_height()?;
+            let certificate = attempt
+                .certificate()
+                .filter(|certificate| certificate.enact_at_height == enacted_at_height)?
+                .clone();
+            Some((certificate, enacted_at_height))
+        });
         let (certificate, enacted_at_height) = matches.next().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 "governance proposal has no exact certified Parliament attempt".into(),
@@ -5425,8 +5450,11 @@ pub mod isi {
                 "validation-fee payout lifecycle must be enacted before policy enactment".into(),
             ));
         }
-        let (certificate, lifecycle_enacted_at_height) =
-            parliament_certificate_for_proposal_v1(lifecycle_id, state_transaction)?;
+        let (certificate, lifecycle_enacted_at_height) = parliament_certificate_for_proposal_v1(
+            lifecycle_id,
+            &lifecycle.kind,
+            state_transaction,
+        )?;
         let lifecycle_payload =
             lifecycle
                 .as_validation_fee_payout_lifecycle()
@@ -9132,7 +9160,7 @@ pub mod isi {
         let Some(pulse_id) = state_transaction
             .world
             .global_beacon_pulse_slots
-            .get(&(state_transaction.network_id, height))
+            .get(&(session_id, height))
             .copied()
         else {
             return false;
@@ -21534,10 +21562,13 @@ pub mod isi {
                 .world
                 .global_beacon_pulses
                 .insert(pulse.pulse_id, pulse);
-            state_transaction
-                .world
-                .global_beacon_pulse_slots
-                .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+            state_transaction.world.global_beacon_pulse_slots.insert(
+                (
+                    BeaconSessionId::for_network_v1(&pulse.network_id),
+                    pulse.height,
+                ),
+                pulse.pulse_id,
+            );
             let logical_session =
                 iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
                     &state_transaction.network_id,
@@ -22047,10 +22078,13 @@ pub mod isi {
                     .world
                     .global_beacon_pulses
                     .insert(pulse.pulse_id, pulse);
-                state_transaction
-                    .world
-                    .global_beacon_pulse_slots
-                    .insert((pulse.network_id, pulse.height), pulse.pulse_id);
+                state_transaction.world.global_beacon_pulse_slots.insert(
+                    (
+                        BeaconSessionId::for_network_v1(&pulse.network_id),
+                        pulse.height,
+                    ),
+                    pulse.pulse_id,
+                );
                 BeaconPulseId::new(pulse.pulse_id)
             } else {
                 let pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));

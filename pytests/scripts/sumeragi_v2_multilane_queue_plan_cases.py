@@ -312,22 +312,27 @@ def test_queue_plan_pending_membership_contract_rejects_phantom_member(
     module = load_checker()
     models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
     path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
-    replace_once(
+    replace_once_after(
         path,
-        "if storage.get(&obligation_key).is_none() {",
-        "if false {",
+        "fn queue_plan_pending_route_members_from_storage_with_limit(",
+        "            let obligation_payload = storage.get(&obligation_key).ok_or_else(|| {\n"
+        "                MergeLedgerCommitError::ExecutionMarkerConflict(format!(\n"
+        "                    \"QueuePlan pending-route member marker `{key}` has no exact obligation `{obligation_key}`\"\n"
+        "                ))\n"
+        "            })?;\n",
+        "            let obligation_payload = storage.get(&obligation_key).unwrap_or(payload);\n",
     )
     errors = validate_queue_plan_pending_membership_fixture(
         tmp_path, module, models
     )
     assert any(
         "queue_plan_pending_route_members_from_storage" in error
-        and "storage.get(&obligation_key).is_none()" in error
+        and "storage.get(&obligation_key).ok_or_else" in error
         for error in errors
     ), errors
 
 
-def test_queue_plan_pending_membership_contract_rejects_full_roster_obligation_decode(
+def test_queue_plan_pending_membership_contract_rejects_inexact_roster_obligation_projection(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -336,17 +341,16 @@ def test_queue_plan_pending_membership_contract_rejects_full_roster_obligation_d
     replace_once_after(
         path,
         "fn queue_plan_pending_route_members_from_storage_with_limit(",
-        "            let obligation_key = Self::queue_plan_pending_obligation_marker_key(\n",
-        "            let _ = Self::decode_exact_queue_plan_pending_obligation_marker(\n"
-        "                key, payload,\n"
-        "            )?;\n"
-        "            let obligation_key = Self::queue_plan_pending_obligation_marker_key(\n",
+        "if marker != expected {",
+        "if false {",
     )
     errors = validate_queue_plan_pending_membership_fixture(
         tmp_path, module, models
     )
     assert any(
-        "without decoding the full obligation payload" in error for error in errors
+        "decode the exact bounded obligation" in error
+        and "complete canonical projection" in error
+        for error in errors
     ), errors
 
 
@@ -660,14 +664,20 @@ def test_queue_plan_pending_membership_contract_rejects_stage_apply_before_list(
 
 
 @pytest.mark.parametrize(
-    "symbol",
+    ("symbol", "resolution_token"),
     (
-        "resolve_queue_plan_pending_obligations_for_entrypoints",
-        "resolve_required_queue_plan_pending_obligations",
+        (
+            "resolve_queue_plan_pending_obligations_for_entrypoints",
+            "State::resolve_queue_plan_pending_obligation_in_storage(",
+        ),
+        (
+            "resolve_required_queue_plan_pending_obligations",
+            "State::resolve_queue_plan_pending_obligation_by_signed_alias_in_storage(",
+        ),
     ),
 )
 def test_queue_plan_pending_membership_contract_rejects_bulk_apply_before_list(
-    tmp_path: Path, symbol: str
+    tmp_path: Path, symbol: str, resolution_token: str
 ) -> None:
     module = load_checker()
     models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
@@ -675,7 +685,7 @@ def test_queue_plan_pending_membership_contract_rejects_bulk_apply_before_list(
     swap_ordered_once_after(
         path,
         f"fn {symbol}(",
-        "State::resolve_queue_plan_pending_obligation_in_storage(",
+        resolution_token,
         "markers.apply();",
     )
     errors = validate_queue_plan_pending_membership_fixture(

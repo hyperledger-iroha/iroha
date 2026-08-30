@@ -600,10 +600,6 @@ export {
   canonicalSccpMessagePublicInputsBytes,
   normalizeSccpMessageBundle,
   normalizeSccpProofRequest,
-  normalizeBridgeProofSubmitPayload,
-  normalizeBridgeMessageSubmitPayload,
-  normalizeSccpBridgeSubmitResponse,
-  parseSccpBridgeSubmitResponseJson,
   parseSccpJsonObject,
 } from "./sccp.js";
 export {

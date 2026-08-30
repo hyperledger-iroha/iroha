@@ -198,7 +198,8 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
             client.GetNodeCapabilitiesAsync(TestContext.Current.CancellationToken));
@@ -312,7 +313,8 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     AccountId,
                     PrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
     private static async Task InvokeAsync(ToriiClient client, string path)
     {

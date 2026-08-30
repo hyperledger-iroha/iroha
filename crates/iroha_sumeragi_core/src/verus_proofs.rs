@@ -1405,6 +1405,49 @@ pub proof fn incomplete_kura_durability_cannot_authorize_wal_retirement(
         !wal_retirement_authorized(step),
 {
 }
+/// Projection of applying one minted retirement token to one physical WAL.
+pub struct WalRetirementTargetProjection {
+    /// Whether the token passed the complete durable-finality predicate.
+    pub authorization_valid: bool,
+    /// Height context carried by the retirement token.
+    pub authorization_context: int,
+    /// Block height carried by the retirement token.
+    pub authorization_height: int,
+    /// Height context frozen into the WAL header.
+    pub wal_context: int,
+    /// Block height frozen into the WAL header.
+    pub wal_height: int,
+}
+/// Whether a durable-finality token owns the exact physical WAL target.
+pub open spec fn wal_retirement_matches_target(step: WalRetirementTargetProjection) -> bool {
+    wal_retirement_target_matches_body!(
+        step.authorization_valid,
+        step.authorization_context,
+        step.authorization_height,
+        step.wal_context,
+        step.wal_height,
+    )
+}
+/// An accepted retirement target is exact in both context and numeric height.
+pub proof fn accepted_wal_retirement_has_exact_target(step: WalRetirementTargetProjection)
+    requires
+        wal_retirement_matches_target(step),
+    ensures
+        step.authorization_valid,
+        step.authorization_context == step.wal_context,
+        step.authorization_height == step.wal_height,
+{
+}
+/// A foreign context or height cannot authorize physical WAL removal.
+pub proof fn foreign_wal_retirement_target_is_rejected(step: WalRetirementTargetProjection)
+    requires
+        !step.authorization_valid
+            || step.authorization_context != step.wal_context
+            || step.authorization_height != step.wal_height,
+    ensures
+        !wal_retirement_matches_target(step),
+{
+}
 // ---------------------------------------------------------------------------
 // Exact WAL safety projection
 // ---------------------------------------------------------------------------

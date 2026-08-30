@@ -48,7 +48,10 @@ Completed history lives in [`status.md`](./status.md).
 - From that same candidate, regenerate and compare the route catalog, served
   OpenAPI mirrors, fixtures, and Rust/CLI, Kotlin, mirrored Java, Swift, Python,
   and JavaScript projections. Keep `Cargo.lock` unchanged and do not promote a
-  dirty-tree generated artifact as release evidence.
+  dirty-tree generated artifact as release evidence. Before qualification,
+  require the root and IVM fuzz lock graphs to agree with their manifests; the
+  security-remediation lane must not normalize either lockfile on behalf of an
+  unrelated dependency change.
 - Run relevant four-validator restart and authorization scenarios for contract
   ownership/holds, scoped Torii history and streams, mixed-route visibility,
   transaction admission, and any ledger-backed ISO settlement transition.
@@ -534,6 +537,15 @@ Completed history lives in [`status.md`](./status.md).
   authenticated sealed-reveal alias recovery, replay-terminal QueuePlan
   obligation compaction and exact evidence, opaque contract-state boundaries,
   and sibling-carrier queue retirement across live cleanup and restart.
+  Proposal-local runtime lookups now enumerate only the bounded canonical V1
+  attempt-key space, while restore retains its complete-map rejection of corrupt
+  key-to-attempt bindings. The derived exact unavailable-pulse-slot index is
+  maintained on attempt replacement/removal and rebuilt from authoritative
+  attempts on restore; the candidate matrix must exercise late-pulse conflict
+  rejection and index reconstruction without weakening the complete restore
+  contradiction scan. Current QueuePlan evidence is composite: the full
+  subset produced 34 passes and three stale-control failures, and the corrected
+  controls then passed 4/4. It is not a clean single-run qualification result.
 - Candidate-qualify the exact Ready-Proposal-Sign producer-point preemption and
   the certified-response queue-refresh retry. The first patched four-validator
   rerun showed no recurrence of the former queue-cut fail-stop, but its
@@ -644,11 +656,24 @@ Completed history lives in [`status.md`](./status.md).
   pinned Verus, chaos/soak qualification, and a clean externally signed release
   corridor. The earlier 11,488,938-generated/8,495,064-distinct-state TLC run
   predates the proposal-wide redraw model revision and is not current evidence.
-  The changed model's deterministic source/model gate and all 15 lifecycle
-  corridor source checks are green, but a compatible pinned JAR is not present
-  in this checkout and no replacement exhaustive TLC run is claimed. Model
-  checking remains regression evidence and does not replace cryptographic
-  review, real-HSM custody, or multi-peer tests.
+  The changed model's deterministic source/model gate passes; the lifecycle
+  corridor passes 15/15 checks and 213 subtests; and the OpenAPI fail-closed
+  suite passes 11/11. The authored, embedded, and versioned-current OpenAPI
+  mirrors are reconciled at 3,435,240 bytes with SHA-256
+  `557e833671015821989660aaf80232554515c5fa9a6dc0d87ee6e7dcb8a0d59b`.
+  Their unsigned manifest and versions metadata deliberately remain at the
+  committed snapshot so this dirty worktree cannot impersonate an immutable,
+  externally signed candidate; version verification is expected to fail closed.
+  The existing `Executable::IvmProved` ZK proof-verification and replay surface
+  is preserved. Terminally unavailable Parliament beacon slots are now tracked
+  by one exact logical-session/height derived index, rebuilt and conflict-checked
+  on restore and updated atomically on attempt replacement or removal. Still
+  pending are exact four-validator qualification, a full
+  pinned TLC run, genuine-HSM evidence, independent review, signed OpenAPI
+  provenance, full workspace tests and strict all-target Clippy, a same-source
+  Swift native bridge, and one immutable release candidate. Model checking and
+  these focused source checks remain regression evidence, not production-
+  readiness evidence.
 - Candidate-qualify both contract-governance effects and the append-only
   emergency-hold retrospective. Exercise exact revision/head supersession,
   owner and delegation changes, activation/deactivation, ABI/artifact mismatch,
@@ -3736,11 +3761,10 @@ profiles: Ethereum mainnet, BNB Smart Chain mainnet, TRON mainnet, and TON
 mainnet, each paired with SORA Taira Sumeragi-v2 chain id
 `fc56984b-2be7-431d-840e-21514d1883f0` and I105 discriminant `369`
 (`0x0171`). The archived pre-v2 Taira chain is not a settlement target.
-Sepolia, BSC testnet, Nile, and Shasta remain exact test profiles. Solana
-testnet remains an implemented SCCP V1 runtime and SDK profile outside this
-production evidence corridor. TON testnet is schema/conformance-only and can
-never satisfy a production evidence row. Generic proof backends, arbitrary
-assets, Nexus settlement, and compatibility manifests are not part of SCCP V1.
+Sepolia, BSC testnet, Nile, Shasta, every Solana profile, and TON testnet are
+test-only rejection cases; none has a runtime or SDK network variant in SCCP
+V1. Generic proof backends, arbitrary assets, Nexus settlement, and
+compatibility manifests are not part of SCCP V1.
 
 The live node admits only Sumeragi-v2 wire revision 4 and dispatches the worker
 to the serialized v2 height runner; the legacy actor is never selected under a
@@ -3812,12 +3836,11 @@ native admission authenticates the governed zero state and masterchain
 checkpoint, ordinary-catchain or Simplex Ed25519 finality, the selected shard,
 transaction pre-state route identity, and exact outbound message. The only
 destination submit envelope is `BridgeSccpDestinationProofV1`, whose closed
-backend selects EVM/TVM/Solana BN254 or TON BLS12-381 material;
-generic ICS and transparent-ZK variants carry only a verifier-manifest hash and
-are rejected by bridge submission until a real generic on-chain verifier is
-implemented. Cryptographic finality is mandatory in every SCCP build; the crate
-has no BLS feature switch or alternate no-verification path that could make two
-validator binaries disagree on the same proof.
+backend selects EVM or TVM BN254 material, or TON BLS12-381 material. Generic
+bridge-proof variants are not SCCP submission formats. Cryptographic finality
+is mandatory in every SCCP build; the crate has no BLS feature switch or
+alternate no-verification path that could make two validator binaries disagree
+on the same proof.
 
 Torii exposes one exact detached two-phase flow on both SCCP submit endpoints.
 Preparation omits `signature_b64` and `transaction_payload_b64`; direct
@@ -3828,7 +3851,7 @@ Multisig authorities use preparation followed by the multisig workflow, never
 the direct detached-signature shortcut. The unified response uses
 `route_configuration_hash_hex`; the retired manifest alias is not accepted.
 The proof-request endpoint returns the governed concrete BN254 request for
-EVM/BSC/TRON/Solana or concrete BLS12-381 request for TON, rather than an opaque
+EVM/BSC/TRON or concrete BLS12-381 request for TON, rather than an opaque
 generic job or an extra enum wrapper on the wire. Consensus meters TON native
 Ed25519 signature/key work and the destination BLS12-381 pairing with explicit
 transaction/block quotas before dispatching proof-controlled cryptography.
@@ -3901,8 +3924,8 @@ No fixture key, signal-binding circuit, synthetic receipt, unavailable lane,
 or self-consistent proof-controlled roster counts as production evidence.
 
 The signed SCCP V1 production evidence corridor is only Taira↔Ethereum,
-Taira↔BSC, Taira↔TRON, and Taira↔TON mainnet. Solana testnet and TON
-testnet remain outside that inventory and cannot satisfy its blockers or
+Taira↔BSC, Taira↔TRON, and Taira↔TON mainnet. Solana and testnet profiles are
+rejected, not dormant alternatives, and cannot satisfy its blockers or
 evidence rows. Generic proof jobs/artifacts and retired route-manifest
 workflows remain excluded from the first release.
 

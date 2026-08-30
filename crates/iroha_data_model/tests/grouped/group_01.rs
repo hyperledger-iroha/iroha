@@ -26,8 +26,6 @@ mod blockheader_roundtrip;
 mod confidential_memo_envelope_v1;
 #[path = "../consensus_roundtrip.rs"]
 mod consensus_roundtrip;
-#[path = "../consensus_state_roundtrip.rs"]
-mod consensus_state_roundtrip;
 #[path = "../da_ingest_roundtrip.rs"]
 mod da_ingest_roundtrip;
 #[path = "../data_model.rs"]

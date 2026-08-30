@@ -154,11 +154,11 @@ expected_hash_file = "genesis.expected_hash"
 [torii.operator_auth]
 # enabled = false
 # require_mtls = false
-# tokens = [] # Dedicated x-iroha-operator-token values accepted only before the first credential.
+# tokens = [] # Unique 32..=256-byte visible-ASCII x-iroha-operator-token values; required until the first credential exists.
 # rate_per_minute = 30
 # burst = 10
-# ephemeral_state_capacity = 4096 # Each of challenges, sessions, and lockout identities.
-# credential_capacity = 64 # Maximum persisted WebAuthn credentials.
+# ephemeral_state_capacity = 4096 # Each of challenges, sessions, and lockout identities; maximum 65536.
+# credential_capacity = 64 # Maximum persisted WebAuthn credentials; maximum 1024.
 # lockout_failures = 5
 # lockout_window_secs = 300
 # lockout_duration_secs = 900

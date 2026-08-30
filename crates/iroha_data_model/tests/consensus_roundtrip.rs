@@ -5,14 +5,13 @@ use iroha_data_model::{
     block::{
         Header as BlockHeader,
         consensus::{
-            CertPhase, ConsensusBlockHeader, ConsensusGenesisModeParams, ConsensusGenesisParams,
-            Evidence, EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg, LaneBlockCommitment,
-            LaneSettlementReceipt, NposGenesisParams, Proposal, Qc, QcAggregate, QcRef, QcVote,
-            SumeragiV2EquivocationEvidence,
+            ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence, EvidenceRecord, ExecKv,
+            ExecWitness, ExecWitnessMsg, LaneBlockCommitment, LaneSettlementReceipt,
+            NposGenesisParams, SumeragiV2EquivocationEvidence,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId, PERMISSIONED_TAG,
+            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId,
             PROTOCOL_VERSION as V2_PROTOCOL_VERSION, PayloadEncoding, QuorumCertificateRef,
             SumeragiV2BodyState, SumeragiV2Equivocation, SumeragiV2GenesisContextParameters,
             SumeragiV2HeightContextStatus, SumeragiV2QcResponse, SumeragiV2Status,
@@ -76,13 +75,6 @@ fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         panic!("{algorithm:?} consensus fixture key generation should succeed: {err}")
     })
 }
-fn checked_bls_keypair() -> KeyPair {
-    checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
-}
-fn checked_bls_peer_id() -> PeerId {
-    PeerId::new(checked_bls_keypair().public_key().clone())
-}
-
 fn checked_bls_peer_id_from_seed(seed: u8) -> PeerId {
     let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
         .expect("derive checked BLS consensus fixture keypair");
@@ -157,43 +149,6 @@ fn rng_hash(rng: &mut DeterministicRng) -> Hash {
 fn rng_block_hash(rng: &mut DeterministicRng) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(rng_hash(rng))
 }
-fn rng_cert_phase_any(rng: &mut DeterministicRng) -> CertPhase {
-    match rng.up_to(2) {
-        0 => CertPhase::Prepare,
-        1 => CertPhase::Commit,
-        _ => CertPhase::NewView,
-    }
-}
-fn rng_commit_qc_ref(rng: &mut DeterministicRng) -> QcRef {
-    QcRef {
-        height: rng.next_u64(),
-        view: rng.next_u64(),
-        epoch: rng.next_u64(),
-        subject_block_hash: rng_block_hash(rng),
-        phase: rng_cert_phase_any(rng),
-    }
-}
-fn rng_consensus_block_header(rng: &mut DeterministicRng) -> ConsensusBlockHeader {
-    ConsensusBlockHeader {
-        parent_hash: rng_block_hash(rng),
-        tx_root: rng_hash(rng),
-        state_root: rng_hash(rng),
-        proposer: rng.next_u32(),
-        height: rng.next_u64(),
-        view: rng.next_u64(),
-        epoch: rng.next_u64(),
-        highest_qc: rng_commit_qc_ref(rng),
-    }
-}
-fn rng_commit_aggregate(rng: &mut DeterministicRng) -> QcAggregate {
-    let signers_bitmap = rng.bytes(8);
-    let bls_len = rng.range_inclusive(0, 96);
-    let bls_aggregate_signature = (0..bls_len).map(|_| rng.next_u8()).collect();
-    QcAggregate {
-        signers_bitmap,
-        bls_aggregate_signature,
-    }
-}
 fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisParams {
     let mode = if rng.next_bool() {
         ConsensusGenesisModeParams::Npos(rng_npos_genesis_params(rng))
@@ -229,80 +184,6 @@ fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
         evidence_horizon_blocks: rng.next_u64(),
         activation_lag_blocks: rng.next_u64(),
         slashing_delay_blocks: rng.next_u64(),
-    }
-}
-fn rng_proposal(rng: &mut DeterministicRng) -> Proposal {
-    Proposal {
-        header: rng_consensus_block_header(rng),
-        payload_hash: rng_hash(rng),
-    }
-}
-fn rng_commit_vote(rng: &mut DeterministicRng) -> QcVote {
-    let phase = rng_cert_phase_any(rng);
-    let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
-    let (block_hash, height, epoch) = highest_qc.as_ref().map_or_else(
-        || (rng_block_hash(rng), rng.next_u64(), rng.next_u64()),
-        |cert| (cert.subject_block_hash, cert.height, cert.epoch),
-    );
-    let (parent_state_root, post_state_root) = if matches!(phase, CertPhase::Commit) {
-        (rng_hash(rng), rng_hash(rng))
-    } else {
-        (
-            Hash::prehashed([0u8; Hash::LENGTH]),
-            Hash::prehashed([0u8; Hash::LENGTH]),
-        )
-    };
-    QcVote {
-        phase,
-        block_hash,
-        parent_state_root,
-        post_state_root,
-        height,
-        view: rng.next_u64(),
-        epoch,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc,
-        signer: rng.next_u32(),
-        bls_sig: rng.bytes(64),
-    }
-}
-fn rng_commit_qc(rng: &mut DeterministicRng) -> Qc {
-    let phase = rng_cert_phase_any(rng);
-    let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
-    let (subject_block_hash, height, epoch) = highest_qc.as_ref().map_or_else(
-        || (rng_block_hash(rng), rng.next_u64(), rng.next_u64()),
-        |cert| (cert.subject_block_hash, cert.height, cert.epoch),
-    );
-    let (parent_state_root, post_state_root) = if matches!(phase, CertPhase::Commit) {
-        (rng_hash(rng), rng_hash(rng))
-    } else {
-        (
-            Hash::prehashed([0u8; Hash::LENGTH]),
-            Hash::prehashed([0u8; Hash::LENGTH]),
-        )
-    };
-    let roster_len = rng.range_inclusive(1, 4);
-    let mut validator_set = Vec::with_capacity(roster_len);
-    for _ in 0..roster_len {
-        validator_set.push(checked_bls_peer_id());
-    }
-    Qc {
-        phase,
-        subject_block_hash,
-        parent_state_root,
-        post_state_root,
-        height,
-        view: rng.next_u64(),
-        epoch,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: 1,
-        validator_set,
-        aggregate: rng_commit_aggregate(rng),
     }
 }
 fn rng_exec_kv(rng: &mut DeterministicRng) -> ExecKv {
@@ -510,109 +391,8 @@ fn consensus_genesis_norito_roundtrip() {
     assert_roundtrip(&with_npos);
     assert_roundtrip(&without_npos);
 }
-#[allow(clippy::too_many_lines)]
 #[test]
-fn consensus_messages_norito_roundtrip() {
-    let validator_set = vec![checked_bls_peer_id(), checked_bls_peer_id()];
-    let cert_header = QcRef {
-        height: 42,
-        view: 4,
-        epoch: 2,
-        subject_block_hash: sample_block_hash(0x10),
-        phase: CertPhase::Commit,
-    };
-    let block_header = ConsensusBlockHeader {
-        parent_hash: sample_block_hash(0x01),
-        tx_root: sample_hash(0x02),
-        state_root: sample_hash(0x03),
-        proposer: 7,
-        height: 43,
-        view: 5,
-        epoch: 2,
-        highest_qc: cert_header,
-    };
-    let proposal = Proposal {
-        header: block_header,
-        payload_hash: sample_hash(0x04),
-    };
-    let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
-    let prepare_vote = QcVote {
-        phase: CertPhase::Prepare,
-        block_hash: sample_block_hash(0x05),
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height: 43,
-        view: 5,
-        epoch: 2,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc: None,
-        signer: 11,
-        bls_sig: sample_bytes(0xA0, 32),
-    };
-    let other_prepare_vote = QcVote {
-        block_hash: sample_block_hash(0x06),
-        ..prepare_vote.clone()
-    };
-    let commit_vote = QcVote {
-        phase: CertPhase::Commit,
-        block_hash: sample_block_hash(0x07),
-        parent_state_root: sample_hash(0x0B),
-        post_state_root: sample_hash(0x0C),
-        ..prepare_vote.clone()
-    };
-    let aggregate = QcAggregate {
-        signers_bitmap: sample_bytes(0xE0, 8),
-        bls_aggregate_signature: sample_bytes(0xF0, 96),
-    };
-    let commit_cert = Qc {
-        phase: CertPhase::Commit,
-        subject_block_hash: sample_block_hash(0x09),
-        parent_state_root: sample_hash(0x0A),
-        post_state_root: sample_hash(0x0F),
-        height: 43,
-        view: 6,
-        epoch: 2,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: 1,
-        validator_set: validator_set.clone(),
-        aggregate: aggregate.clone(),
-    };
-    let new_view_vote = QcVote {
-        phase: CertPhase::NewView,
-        block_hash: cert_header.subject_block_hash,
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height: cert_header.height,
-        view: 7,
-        epoch: cert_header.epoch,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc: Some(cert_header),
-        signer: 12,
-        bls_sig: sample_bytes(0xC0, 32),
-    };
-    let new_view_cert = Qc {
-        phase: CertPhase::NewView,
-        subject_block_hash: cert_header.subject_block_hash,
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height: cert_header.height,
-        view: 7,
-        epoch: cert_header.epoch,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: Some(cert_header),
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: 1,
-        validator_set: validator_set.clone(),
-        aggregate: aggregate.clone(),
-    };
+fn consensus_persistence_norito_roundtrip() {
     let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0002));
     let evidence_record = EvidenceRecord {
         evidence: evidence.clone(),
@@ -644,164 +424,13 @@ fn consensus_messages_norito_roundtrip() {
         epoch: 2,
         witness: exec_witness.clone(),
     };
-    assert_roundtrip(&cert_header);
-    assert_roundtrip(&block_header);
-    assert_roundtrip(&proposal);
-    assert_roundtrip(&prepare_vote);
-    assert_roundtrip(&other_prepare_vote);
-    assert_roundtrip(&commit_vote);
-    assert_roundtrip(&new_view_vote);
-    assert_roundtrip(&aggregate);
-    assert_roundtrip(&commit_cert);
-    assert_roundtrip(&new_view_cert);
     assert_roundtrip(&evidence);
     assert_roundtrip(&evidence_record);
     assert_roundtrip(&exec_witness);
     assert_roundtrip(&exec_witness_msg);
 }
 #[test]
-#[allow(clippy::too_many_lines)]
-fn current_qc_json_requires_highest_qc_and_rejects_unknown_fields() {
-    macro_rules! assert_required_highest_qc {
-        ($ty:ty, $value:expr) => {{
-            let expected: $ty = $value;
-            let json = norito::json::to_value(&expected).expect("serialize current QC JSON");
-            assert!(
-                json.get("highest_qc")
-                    .is_some_and(norito::json::Value::is_null),
-                "{} must serialize an absent highest QC as an explicit null",
-                stringify!($ty)
-            );
-            assert_eq!(
-                norito::json::from_value::<$ty>(json.clone())
-                    .expect("decode explicit highest-QC slot"),
-                expected
-            );
-
-            let mut missing = json.clone();
-            assert!(
-                missing
-                    .as_object_mut()
-                    .expect("current QC JSON object")
-                    .remove("highest_qc")
-                    .is_some()
-            );
-            assert!(
-                norito::json::from_value::<$ty>(missing).is_err(),
-                "{} must reject an omitted highest-QC slot",
-                stringify!($ty)
-            );
-
-            let mut unknown = json;
-            unknown
-                .as_object_mut()
-                .expect("current QC JSON object")
-                .insert(
-                    "pre_release_field".to_owned(),
-                    norito::json::Value::Bool(true),
-                );
-            assert!(
-                norito::json::from_value::<$ty>(unknown).is_err(),
-                "{} must reject unknown JSON fields",
-                stringify!($ty)
-            );
-        }};
-    }
-
-    let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
-    let vote = QcVote {
-        phase: CertPhase::Prepare,
-        block_hash: sample_block_hash(0x71),
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height: 70,
-        view: 8,
-        epoch: 3,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc: None,
-        signer: 2,
-        bls_sig: sample_bytes(0x72, 48),
-    };
-    assert_required_highest_qc!(QcVote, vote);
-
-    let aggregate = QcAggregate {
-        signers_bitmap: vec![0b0000_0111],
-        bls_aggregate_signature: sample_bytes(0x73, 96),
-    };
-    let validator_set = Vec::<PeerId>::new();
-    let qc = Qc {
-        phase: CertPhase::Commit,
-        subject_block_hash: sample_block_hash(0x74),
-        parent_state_root: sample_hash(0x75),
-        post_state_root: sample_hash(0x76),
-        height: 70,
-        view: 8,
-        epoch: 3,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_owned(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: 1,
-        validator_set,
-        aggregate: aggregate.clone(),
-    };
-    assert_required_highest_qc!(Qc, qc);
-
-    let mut aggregate_json =
-        norito::json::to_value(&aggregate).expect("serialize current QC aggregate JSON");
-    assert_eq!(
-        norito::json::from_value::<QcAggregate>(aggregate_json.clone())
-            .expect("decode current QC aggregate JSON"),
-        aggregate
-    );
-    aggregate_json
-        .as_object_mut()
-        .expect("current QC aggregate JSON object")
-        .insert(
-            "pre_release_field".to_owned(),
-            norito::json::Value::Bool(true),
-        );
-    assert!(
-        norito::json::from_value::<QcAggregate>(aggregate_json).is_err(),
-        "QcAggregate must reject unknown JSON fields"
-    );
-}
-#[test]
-#[allow(clippy::too_many_lines)]
-fn qc_and_evidence_record_reject_shortened_pre_release_binary_layouts() {
-    #[derive(Encode)]
-    struct PreReleaseQcVote {
-        phase: CertPhase,
-        block_hash: HashOf<BlockHeader>,
-        parent_state_root: Hash,
-        post_state_root: Hash,
-        height: u64,
-        view: u64,
-        epoch: u64,
-        chain_order_hash: Hash,
-        rechain_seq: u64,
-        signer: u32,
-        bls_sig: Vec<u8>,
-    }
-    #[derive(Encode)]
-    struct PreReleaseQc {
-        phase: CertPhase,
-        subject_block_hash: HashOf<BlockHeader>,
-        parent_state_root: Hash,
-        post_state_root: Hash,
-        height: u64,
-        view: u64,
-        epoch: u64,
-        chain_order_hash: Hash,
-        rechain_seq: u64,
-        mode_tag: String,
-        validator_set_hash: HashOf<Vec<PeerId>>,
-        validator_set_hash_version: u16,
-        validator_set: Vec<PeerId>,
-        aggregate: QcAggregate,
-    }
+fn evidence_record_rejects_shortened_pre_release_binary_layouts() {
     #[derive(Encode)]
     struct PreReleaseEvidenceRecord {
         evidence: Evidence,
@@ -818,86 +447,6 @@ fn qc_and_evidence_record_reject_shortened_pre_release_binary_layouts() {
         penalty_applied: bool,
         penalty_cancelled: bool,
     }
-
-    let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
-    let vote = QcVote {
-        phase: CertPhase::Prepare,
-        block_hash: sample_block_hash(0x81),
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height: 80,
-        view: 9,
-        epoch: 4,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc: None,
-        signer: 7,
-        bls_sig: sample_bytes(0x82, 48),
-    };
-    assert_roundtrip(&vote);
-    let shortened_vote = PreReleaseQcVote {
-        phase: vote.phase,
-        block_hash: vote.block_hash,
-        parent_state_root: vote.parent_state_root,
-        post_state_root: vote.post_state_root,
-        height: vote.height,
-        view: vote.view,
-        epoch: vote.epoch,
-        chain_order_hash: vote.chain_order_hash,
-        rechain_seq: vote.rechain_seq,
-        signer: vote.signer,
-        bls_sig: vote.bls_sig.clone(),
-    }
-    .encode();
-    assert!(
-        QcVote::decode_all(&mut shortened_vote.as_slice()).is_err(),
-        "QcVote must reject the pre-release layout without highest_qc"
-    );
-
-    let validator_set = Vec::<PeerId>::new();
-    let aggregate = QcAggregate {
-        signers_bitmap: vec![0b0000_0111],
-        bls_aggregate_signature: sample_bytes(0x83, 96),
-    };
-    let qc = Qc {
-        phase: CertPhase::Commit,
-        subject_block_hash: sample_block_hash(0x84),
-        parent_state_root: sample_hash(0x85),
-        post_state_root: sample_hash(0x86),
-        height: 80,
-        view: 9,
-        epoch: 4,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_owned(),
-        highest_qc: None,
-        validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH])),
-        validator_set_hash_version: 1,
-        validator_set,
-        aggregate,
-    };
-    assert_roundtrip(&qc);
-    let shortened_qc = PreReleaseQc {
-        phase: qc.phase,
-        subject_block_hash: qc.subject_block_hash,
-        parent_state_root: qc.parent_state_root,
-        post_state_root: qc.post_state_root,
-        height: qc.height,
-        view: qc.view,
-        epoch: qc.epoch,
-        chain_order_hash: qc.chain_order_hash,
-        rechain_seq: qc.rechain_seq,
-        mode_tag: qc.mode_tag.clone(),
-        validator_set_hash: qc.validator_set_hash,
-        validator_set_hash_version: qc.validator_set_hash_version,
-        validator_set: qc.validator_set.clone(),
-        aggregate: qc.aggregate.clone(),
-    }
-    .encode();
-    assert!(
-        Qc::decode_all(&mut shortened_qc.as_slice()).is_err(),
-        "Qc must reject the pre-release layout without highest_qc"
-    );
 
     let evidence = rng_evidence(&mut DeterministicRng::new(0xE1D3_0084));
     let record = EvidenceRecord {
@@ -1030,18 +579,6 @@ fn consensus_roundtrip_deterministic_fuzz() {
             );
             panic!("consensus genesis roundtrip mismatch");
         }
-        let cert_header = rng_commit_qc_ref(&mut rng);
-        assert_roundtrip(&cert_header);
-        let block_header = rng_consensus_block_header(&mut rng);
-        assert_roundtrip(&block_header);
-        let proposal = rng_proposal(&mut rng);
-        assert_roundtrip(&proposal);
-        let vote = rng_commit_vote(&mut rng);
-        assert_roundtrip(&vote);
-        let aggregate = rng_commit_aggregate(&mut rng);
-        assert_roundtrip(&aggregate);
-        let cert = rng_commit_qc(&mut rng);
-        assert_roundtrip(&cert);
         let exec_kv = rng_exec_kv(&mut rng);
         assert_roundtrip(&exec_kv);
         let exec_witness = rng_exec_witness(&mut rng);

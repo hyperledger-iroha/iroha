@@ -940,8 +940,12 @@ pub(super) fn run_pending_kura_lifecycle_height(
             signature_policy,
         )
     } else {
-        V2BodyStore::open_with_policy_and_capacity(
-            storage_root.join("bodies"),
+        let body_store_authority = kura
+            .mint_v2_body_store_directory_authority()
+            .map_err(|error| V2RunnerError::Service(error.to_string()))?;
+        V2BodyStore::open_with_kura_authority_and_capacity(
+            kura.as_ref(),
+            body_store_authority,
             context.clone(),
             signature_policy,
             body_store_capacity,

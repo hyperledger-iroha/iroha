@@ -56,6 +56,24 @@ def test_rejects_unclassified_implicit_optional_dependency_feature() -> None:
     )
 
 
+def test_non_weak_optional_dependency_forward_activates_implicit_feature() -> None:
+    document = {
+        "features": {"default": ["backend/accelerated"]},
+        "dependencies": {"backend": {"version": "1", "optional": True}},
+    }
+    features = FEATURE_HYGIENE.cargo_visible_features(document)
+
+    assert FEATURE_HYGIENE.local_default_feature_closure(features) == frozenset(
+        {"default", "backend"}
+    )
+
+    document["features"]["default"] = ["backend?/accelerated"]
+    weak_features = FEATURE_HYGIENE.cargo_visible_features(document)
+    assert FEATURE_HYGIENE.local_default_feature_closure(
+        weak_features
+    ) == frozenset({"default"})
+
+
 def test_rejects_broken_portable_default_closure() -> None:
     document = copy.deepcopy(_guarded_document("iroha_core"))
     document["features"]["default"].remove("simd")
@@ -157,14 +175,20 @@ def _member_rows(*, implicit_norito_defaults: bool = False) -> list[str]:
     return rows
 
 
-def _write_member(root: Path, member: str, rows: list[str]) -> None:
+def _write_member(
+    root: Path,
+    member: str,
+    rows: list[str],
+    *,
+    package_name: str | None = None,
+) -> None:
     member_root = root / member
-    member_root.mkdir(parents=True)
+    member_root.mkdir(parents=True, exist_ok=True)
     (member_root / "Cargo.toml").write_text(
         "\n".join(
             [
                 "[package]",
-                f'name = "{member_root.name}"',
+                f'name = "{package_name or member_root.name}"',
                 'version = "0.1.0"',
                 "",
                 "[dependencies]",
@@ -227,6 +251,42 @@ def test_accepts_explicit_workspace_member_feature_ownership(tmp_path: Path) -> 
     _write_fixture(tmp_path)
 
     assert FEATURE_HYGIENE.check_repository(tmp_path) == []
+
+
+def test_rejects_irohad_normal_dependency_selecting_core_quic(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(tmp_path)
+    rows = _member_rows()
+    rows[rows.index("iroha_core = { workspace = true, default-features = false }")] = (
+        'iroha_core = { workspace = true, default-features = false, features = ["quic"] }'
+    )
+    _write_member(tmp_path, "crates/consumer", rows, package_name="irohad")
+
+    errors = FEATURE_HYGIENE.check_repository(tmp_path)
+
+    assert any(
+        "package `irohad` [dependencies] dependency `iroha_core` selects explicit "
+        "opt-in feature `quic`" in error
+        for error in errors
+    )
+
+
+def test_rejects_stale_nonshipping_dependency_allowlist_entry(monkeypatch) -> None:
+    current = FEATURE_HYGIENE.NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST
+    monkeypatch.setattr(
+        FEATURE_HYGIENE,
+        "NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST",
+        tuple(sorted((*current, ("irohad", "iroha_core", "quic")))),
+    )
+
+    errors = FEATURE_HYGIENE.check_repository(ROOT)
+
+    assert any(
+        "stale non-shipping explicit opt-in dependency allowlist entry "
+        "`irohad -> iroha_core/quic`" in error
+        for error in errors
+    )
 
 
 def test_workspace_members_expand_globs_deduplicate_and_respect_excludes(

@@ -22,7 +22,6 @@ from typing import (
     Literal,
     Mapping,
     MutableMapping,
-    NoReturn,
     Optional,
     Sequence,
     Tuple,
@@ -152,23 +151,32 @@ from .native_amx import (
 from .norito_frame import schema_hash_for_type_name, validate_norito_frame
 from .offline_models import (
     KagemushaArtifactBindingV4Json,
+    OfflineAndroidKeyMintAssertionJson,
+    OfflineAndroidKeyMintHardwareAssertionVariantJson,
     OfflineAssetScale,
     OfflineAuthorizationJson,
     OfflineBranchClaimJson,
     OfflineBranchPathJson,
+    OfflineDeviceSignatureJson,
+    OfflineHardwareAssertionJson,
+    OfflineIosAppAttestAssertionJson,
+    OfflineIosAppAttestHardwareAssertionVariantJson,
     OfflineLanePrivacyMerkleVariantJson,
     OfflineLanePrivacyMerkleWitnessJson,
     OfflineLanePrivacyProofJson,
     OfflineMerkleProofJson,
+    OfflinePastaCycleProofEnvelopeV4Json,
     OfflinePeerSplitTransitionJson,
     OfflinePeerSplitTransitionVariantJson,
     OfflineProofAttachmentJson,
     OfflineProofBackend,
     OfflineProofBoxJson,
     OfflineRecursiveSpendBundleJson,
+    OfflineRecursiveOperationVectorV4Json,
     OfflineRecursiveSpendProofJson,
     OfflineRecursiveSpendStatementJson,
     OfflineRecursiveSpendTransitionJson,
+    OfflineRecursiveStateBoundaryV5Json,
     OfflineRedeemChangeJson,
     OfflineRedemptionChangeTransitionJson,
     OfflineRedemptionChangeTransitionVariantJson,
@@ -245,10 +253,6 @@ _SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024
 _SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
 _SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES = (
     _SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024
-)
-_SCCP_WRITE_DISABLED_MESSAGE = (
-    "Python SCCP proof/native writes are disabled because this SDK does not provide "
-    "an authenticated SCCP write transport"
 )
 _KAIGI_RELAY_RESPONSE_MAX_BYTES = _SCCP_JSON_RESPONSE_MAX_BYTES
 _SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME = "iroha_sccp::TairaSccpMessageProofV1"
@@ -896,6 +900,12 @@ __all__ = [
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
     "OfflineSpendableNoteJson",
+    "OfflineDeviceSignatureJson",
+    "OfflineAndroidKeyMintAssertionJson",
+    "OfflineIosAppAttestAssertionJson",
+    "OfflineAndroidKeyMintHardwareAssertionVariantJson",
+    "OfflineIosAppAttestHardwareAssertionVariantJson",
+    "OfflineHardwareAssertionJson",
     "OfflineAuthorizationJson",
     "OfflineVerifierKeyIdJson",
     "OfflineProofBoxJson",
@@ -913,6 +923,9 @@ __all__ = [
     "OfflineVerifiedFoldRecordBundleJson",
     "OfflineProofAttachmentJson",
     "OfflineTopUpShieldEvidenceJson",
+    "OfflineRecursiveOperationVectorV4Json",
+    "OfflineRecursiveStateBoundaryV5Json",
+    "OfflinePastaCycleProofEnvelopeV4Json",
     "OfflineRecursiveSpendBundleJson",
     "OfflineTopUpAnchorReferenceJson",
     "OfflineBranchPathJson",
@@ -1940,7 +1953,9 @@ _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
 _OFFLINE_MAX_ASSET_SCALE = 28
-_OFFLINE_TOP_UP_SHIELD_INSERTION_CAPACITY = (1 << 16) - 1
+# Reserve 64 branch-depth outputs, eight optional peer-change outputs, and the
+# proof circuit's final dummy leaf at the tail of the 16-level tree.
+_OFFLINE_TOP_UP_SHIELD_INSERTION_CAPACITY = 65_463
 _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
 _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
 _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
@@ -10198,43 +10213,6 @@ class ToriiClient(
             maximum_body_bytes=_SCCP_RECENT_RESPONSE_MAX_BYTES,
         )
         return normalize_sccp_recent_messages(payload)
-
-    def submit_bridge_proof(
-        self,
-        *,
-        authority: str,
-        destination_proof_b64: str,
-        fee_payment: Mapping[str, Any],
-        signature_b64: Optional[str] = None,
-        transaction_payload_b64: Optional[str] = None,
-        creation_time_ms: Optional[int] = None,
-    ) -> NoReturn:
-        """Reject SORA-origin proof writes before any HTTP request.
-
-        The Python SDK currently exposes SCCP discovery and artifacts as read-only surfaces; it
-        does not provide the authenticated transport required for value-moving SCCP writes.
-        """
-
-        raise RuntimeError(_SCCP_WRITE_DISABLED_MESSAGE)
-
-    def submit_bridge_message(
-        self,
-        *,
-        authority: str,
-        native_proof_b64: str,
-        replay_witness_b64: str,
-        fee_payment: Mapping[str, Any],
-        signature_b64: Optional[str] = None,
-        transaction_payload_b64: Optional[str] = None,
-        creation_time_ms: Optional[int] = None,
-    ) -> NoReturn:
-        """Reject native inbound proof writes before any HTTP request.
-
-        The Python SDK currently exposes SCCP discovery and artifacts as read-only surfaces; it
-        does not provide the authenticated transport required for value-moving SCCP writes.
-        """
-
-        raise RuntimeError(_SCCP_WRITE_DISABLED_MESSAGE)
 
     @staticmethod
     def _sccp_message_id(value: Any) -> str:

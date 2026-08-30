@@ -773,7 +773,8 @@ public sealed class FeeQuoteResponseValidationTests
                     AuthorityPrivateKeySeed),
                 JsonSerializerOptions = serializerOptions
                     ?? new JsonSerializerOptions(JsonSerializerDefaults.Web),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
     private static byte[] QuoteBody(ToriiFeeQuoteResponse quote, int? exactLength = null)
     {

@@ -1,9 +1,8 @@
 //! Norito-encoded consensus message types shared across Sumeragi implementations.
 //!
 //! These types cover shared consensus parameters and diagnostics, authenticated v2 evidence,
-//! lane-local certificates, and retained QC projections. Global consensus messages and
-//! signed RS16 data availability live in [`super::consensus_v2`]; there is no global-v1 RBC
-//! message family.
+//! and lane-local certificates. Global consensus messages and signed RS16 data availability
+//! live in [`super::consensus_v2`]; there is no global-v1 message family.
 use super::Header as BlockHeader;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -20,14 +19,6 @@ use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
 use std::{string::String, vec::Vec};
-/// Chain-order hash used by fixtures that do not model live validator ordering.
-///
-/// Live consensus code should populate QC votes and certificates with the
-/// selected canonical validator-order hash for the active height/view.
-#[must_use]
-pub fn default_chain_order_hash() -> Hash {
-    Hash::new(b"iroha:sumeragi:v1:chain-order:default")
-}
 /// Height alias for consensus.
 pub type Height = u64;
 /// View/round number alias.
@@ -186,131 +177,6 @@ impl IntoSchema for CertPhase {
         ];
         metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
     }
-}
-/// Reference to an existing QC header for embedding in proposals.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct QcRef {
-    /// Height of the certified block.
-    pub height: Height,
-    /// View in which the certificate was formed.
-    pub view: View,
-    /// Epoch index (0 in permissioned mode).
-    pub epoch: u64,
-    /// Block hash certified by the certificate.
-    pub subject_block_hash: HashOf<BlockHeader>,
-    /// Phase certified by the certificate.
-    pub phase: CertPhase,
-}
-/// Block header fields essential for consensus (proposal header subset).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-pub struct ConsensusBlockHeader {
-    /// Parent block hash.
-    pub parent_hash: HashOf<BlockHeader>,
-    /// Merkle root of included transactions.
-    pub tx_root: Hash,
-    /// State commitment after executing the block.
-    pub state_root: Hash,
-    /// Proposer index within the active validator set.
-    pub proposer: ValidatorIndex,
-    /// Block height.
-    pub height: Height,
-    /// Consensus view/round number.
-    pub view: View,
-    /// Epoch index for `NPoS`. Zero in permissioned builds.
-    pub epoch: u64,
-    /// Embedded reference to the highest QC known to the proposer.
-    pub highest_qc: QcRef,
-}
-/// Proposal message with payload commitment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-pub struct Proposal {
-    /// Proposal header (consensus-relevant subset).
-    pub header: ConsensusBlockHeader,
-    /// Hash of the full block payload (DA). Used for availability tracking.
-    pub payload_hash: Hash,
-}
-/// QC vote over a specific block and phase (BLS-only).
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct QcVote {
-    /// Target phase (`Prepare`, `Commit`, `NewView`).
-    pub phase: CertPhase,
-    /// Hash of the block being voted on.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Parent state root bound into the QC vote.
-    pub parent_state_root: Hash,
-    /// Post-state root bound into the QC vote.
-    pub post_state_root: Hash,
-    /// Block height of the subject.
-    pub height: Height,
-    /// View number of the vote.
-    pub view: View,
-    /// Epoch index for `NPoS`; 0 in permissioned.
-    pub epoch: u64,
-    /// Hash of the canonical validator ordering this vote is valid under.
-    pub chain_order_hash: Hash,
-    /// Validator-order update sequence this vote is valid under.
-    pub rechain_seq: u64,
-    /// Highest known QC for `NewView` votes, bound into the vote signature.
-    ///
-    /// The slot is always encoded; `None` is canonical for the other phases.
-    #[norito(required)]
-    pub highest_qc: Option<QcRef>,
-    /// Signer index within the active validator set.
-    pub signer: ValidatorIndex,
-    /// BLS signature over the canonical QC-vote preimage.
-    pub bls_sig: Vec<u8>,
-}
-/// BLS aggregate signature envelope with signer bitmap for constant-size certificates.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct QcAggregate {
-    /// Compact signer bitmap (LSB-first).
-    pub signers_bitmap: Vec<u8>,
-    /// BLS12-381 aggregate signature bytes (compressed).
-    pub bls_aggregate_signature: Vec<u8>,
-}
-/// QC certifying a phase for a block.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct Qc {
-    /// Phase certified by this certificate.
-    pub phase: CertPhase,
-    /// Block hash certified by the certificate.
-    pub subject_block_hash: HashOf<BlockHeader>,
-    /// Parent state root bound into the QC.
-    pub parent_state_root: Hash,
-    /// Post-state root bound into the QC.
-    pub post_state_root: Hash,
-    /// Height of the subject block.
-    pub height: Height,
-    /// View in which the certificate was formed.
-    pub view: View,
-    /// Epoch index.
-    pub epoch: u64,
-    /// Hash of the canonical validator ordering this certificate is valid under.
-    pub chain_order_hash: Hash,
-    /// Validator-order update sequence this certificate is valid under.
-    pub rechain_seq: u64,
-    /// Consensus mode tag used to domain-separate signatures.
-    pub mode_tag: String,
-    /// Highest known QC that justifies a `NewView` QC, bound into the aggregate signature.
-    ///
-    /// The slot is always encoded; `None` is canonical for the other phases.
-    #[norito(required)]
-    pub highest_qc: Option<QcRef>,
-    /// Stable hash of the validator set that produced the certificate.
-    pub validator_set_hash: HashOf<Vec<PeerId>>,
-    /// Version of the validator-set hashing scheme.
-    pub validator_set_hash_version: u16,
-    /// Ordered validator set used when assembling the certificate.
-    pub validator_set: Vec<PeerId>,
-    /// Aggregate signature and signer bitmap.
-    pub aggregate: QcAggregate,
 }
 /// Self-contained frozen context and exact signed artifacts for one Sumeragi v2 equivocation proof.
 ///
@@ -4096,12 +3962,6 @@ macro_rules! impl_decode_from_slice_via_codec {
         }
     };
 }
-impl_decode_from_slice_via_codec!(QcRef);
-impl_decode_from_slice_via_codec!(ConsensusBlockHeader);
-impl_decode_from_slice_via_codec!(Proposal);
-impl_decode_from_slice_via_codec!(QcVote);
-impl_decode_from_slice_via_codec!(QcAggregate);
-impl_decode_from_slice_via_codec!(Qc);
 impl_decode_from_slice_via_codec!(ExecKv);
 impl_decode_from_slice_via_codec!(ExecWitness);
 impl_decode_from_slice_via_codec!(Evidence);

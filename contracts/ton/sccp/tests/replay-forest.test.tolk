@@ -82,7 +82,7 @@ get fun `test TON replay hashes match independent final V1 golden`() {
     expect((key >> SCCP_REPLAY_DEPTH_V1) as uint8).toEqual(12);
     val digest = sccpTonReplayRecordDigestV1(replayTestRecord());
     expect(digest).toEqual(
-        0x47d14b8f9825981ea24647fdf1a6f9da2e779b32ee2e5705888756572f5c4b73,
+        0x28f1edb09538eb5d5b4698546e47b2e8335978bbae4b09c108107c68883b8800,
     );
     expect(sccpReplayAuxiliaryWordSha256V1(replayTestRecord().auxiliaryIdentitySha256)).toEqual(
         0x84126d0dd850199be29021aadbaee68cb9199047b1cb7ec9894ddb1e3562783c,
@@ -96,7 +96,7 @@ get fun `test TON replay hashes match independent final V1 golden`() {
             sccpReplayOccupiedLeafV1(key, digest),
             replayTestEmptyWitness(),
         ),
-    ).toEqual(0xae8127b12c22ba814b1303f2b176cd139334c6661869e37a0bb0c2661b12b026);
+    ).toEqual(0x697ab0a8df3d63b596daecf39b785f2add35acd19fd0d73288b4e12b79351f1b);
 }
 
 get fun `test canonical payload commitment uses one SHA256 layer`() {
@@ -127,7 +127,7 @@ get fun `test fresh occupation and identical membership keep counters stable`() 
     expect(fresh.leafCount).toEqual(1);
     expect(fresh.updateSequence).toEqual(1);
     expect(fresh.newRoot).toEqual(
-        0xae8127b12c22ba814b1303f2b176cd139334c6661869e37a0bb0c2661b12b026,
+        0x697ab0a8df3d63b596daecf39b785f2add35acd19fd0d73288b4e12b79351f1b,
     );
     val membership: SccpReplayWitnessV1 = {
         expectedShardRoot: fresh.newRoot,

@@ -51,6 +51,7 @@ public sealed partial class ToriiClient
         {
             throw new ArgumentOutOfRangeException(nameof(transportAssurance));
         }
+        injectedTransactionSubmissionTransportIsOneShot = true;
         injectedSoraFsReputationTransportIsOneShot = true;
     }
 

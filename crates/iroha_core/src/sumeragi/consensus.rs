@@ -15,13 +15,9 @@ compile_error!(
 use iroha_config::parameters::actual::Sumeragi as SumeragiConfig;
 #[cfg(test)]
 use iroha_crypto::HashOf;
-#[cfg(test)]
-use iroha_data_model::block::consensus::{Qc, QcAggregate, QcRef, QcVote};
 use iroha_data_model::block::consensus::{
     CertPhase, ConsensusGenesisModeParams, ConsensusGenesisParams, NposGenesisParams,
 };
-#[cfg(test)]
-use iroha_data_model::block::consensus::default_chain_order_hash;
 pub use iroha_data_model::block::consensus::{
     Evidence, ExecKv, ExecWitness, LaneBlockProposalV1, ValidatorIndex,
 };
@@ -36,63 +32,6 @@ pub type Phase = CertPhase;
 use crate::state::{StateView, WorldReadOnly};
 use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::prelude::*;
-#[cfg(test)]
-type Vote = QcVote;
-#[cfg(test)]
-fn qc_signer_count(qc: &Qc) -> usize {
-    qc.aggregate
-        .signers_bitmap
-        .iter()
-        .map(|byte| byte.count_ones() as usize)
-        .sum()
-}
-#[cfg(test)]
-fn vote_preimage(network_id: &NetworkId, mode_tag: &str, vote: &Vote) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
-    let domain = consensus_domain(network_id, "Vote", b"v1", mode_tag);
-    out.extend_from_slice(&domain);
-    out.extend_from_slice(vote.block_hash.as_ref().as_ref());
-    out.extend_from_slice(vote.parent_state_root.as_ref());
-    out.extend_from_slice(vote.post_state_root.as_ref());
-    out.extend_from_slice(&vote.height.to_be_bytes());
-    out.extend_from_slice(&vote.view.to_be_bytes());
-    out.extend_from_slice(&vote.epoch.to_be_bytes());
-    out.extend_from_slice(vote.chain_order_hash.as_ref());
-    out.extend_from_slice(&vote.rechain_seq.to_be_bytes());
-    out.push(vote.phase as u8);
-    match vote.highest_qc {
-        Some(highest_qc) => {
-            out.push(1);
-            out.extend_from_slice(&highest_qc.height.to_be_bytes());
-            out.extend_from_slice(&highest_qc.view.to_be_bytes());
-            out.extend_from_slice(&highest_qc.epoch.to_be_bytes());
-            out.extend_from_slice(highest_qc.subject_block_hash.as_ref().as_ref());
-            out.push(highest_qc.phase as u8);
-        }
-        None => out.push(0),
-    }
-    out
-}
-#[cfg(test)]
-fn consensus_domain(
-    network_id: &NetworkId,
-    message_type_tag: &str,
-    extra: &[u8],
-    mode_tag: &str,
-) -> [u8; 32] {
-    use iroha_crypto::blake2::{Blake2b512, Digest as _};
-    let mut hasher = Blake2b512::new();
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha-sumeragi-consensus/v1");
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, network_id.as_bytes());
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, mode_tag.as_bytes());
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, &PROTO_VERSION.to_be_bytes());
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, message_type_tag.as_bytes());
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, extra);
-    let digest = iroha_crypto::blake2::Digest::finalize(hasher);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..32]);
-    out
-}
 /// Compute the genesis-embedded v2 consensus-parameters fingerprint.
 ///
 /// The projection deliberately omits v1 collectors, phase-specific and
@@ -241,7 +180,6 @@ impl HandshakeGate {
             parameters_fingerprint,
         }
     }
-    /// Validate a peer handshake tuple. Returns Ok(()) on exact match; Err otherwise.
     /// Validate peer parameters from the handshake.
     ///
     /// # Errors
@@ -285,21 +223,10 @@ impl HandshakeGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1;
     fn test_network_id(seed: &str) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::new(seed.as_bytes()),
         ))
-    }
-    fn checked_bls_keypair() -> KeyPair {
-        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-            .expect("Sumeragi consensus fixture BLS key generation should succeed")
-    }
-    fn sample_validator_set(count: usize) -> Vec<PeerId> {
-        (0..count)
-            .map(|_| PeerId::new(checked_bls_keypair().public_key().clone()))
-            .collect()
     }
     fn permissioned_genesis_params() -> ConsensusGenesisParams {
         ConsensusGenesisParams {
@@ -312,288 +239,6 @@ mod tests {
             v2_context:
                 iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
         }
-    }
-    fn qc_with_raw_signers_bitmap(signers_bitmap: Vec<u8>) -> Qc {
-        let validator_set = Vec::<PeerId>::new();
-        let validator_set_hash = HashOf::new(&validator_set);
-        Qc {
-            phase: Phase::Commit,
-            subject_block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
-                [3u8; 32],
-            )),
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 2,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap,
-                bls_aggregate_signature: vec![1],
-            },
-        }
-    }
-    #[test]
-    fn qc_roundtrip_encode_decode() {
-        let validator_set = sample_validator_set(16);
-        let qc = Qc {
-            phase: Phase::Prepare,
-            subject_block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
-                [0u8; 32],
-            )),
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 10,
-            view: 7,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0xAA, 0x01],
-                bls_aggregate_signature: vec![1, 2, 3],
-            },
-        };
-        let bytes = qc.encode();
-        let dec = Qc::decode(&mut &bytes[..]).expect("decode qc");
-        assert_eq!(qc, dec);
-    }
-    #[test]
-    fn qc_signer_count_formal_gate_matrix() {
-        let cases: [(&str, &[u8], usize); 12] = [
-            ("empty", &[], 0),
-            ("zero_byte", &[0], 0),
-            ("low_bit", &[1], 1),
-            ("high_bit", &[128], 1),
-            ("full_byte", &[255], 8),
-            ("two_sparse", &[3, 5], 4),
-            ("three_sparse", &[1, 2, 4], 3),
-            ("padding_bits", &[240], 4),
-            ("alternating_pair", &[170, 85], 8),
-            ("two_full_bytes", &[255, 255], 16),
-            ("three_zero_bytes", &[0, 0, 0], 0),
-            ("mixed_three", &[15, 0, 240], 8),
-        ];
-        for (name, bitmap, expected) in cases {
-            let qc = qc_with_raw_signers_bitmap(bitmap.to_vec());
-            assert_eq!(qc_signer_count(&qc), expected, "{name}");
-            assert!(
-                expected <= bitmap.len().saturating_mul(8),
-                "{name} count must fit inside the bitmap width"
-            );
-        }
-    }
-    #[test]
-    fn qc_signer_count_counts_bits() {
-        let validator_set = sample_validator_set(16);
-        let qc = Qc {
-            phase: Phase::Commit,
-            subject_block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
-                [1u8; 32],
-            )),
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 2,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0b1010_0101, 0b0000_0011],
-                bls_aggregate_signature: vec![1, 2, 3],
-            },
-        };
-        assert_eq!(qc_signer_count(&qc), 6);
-    }
-    #[test]
-    fn qc_signer_count_empty_bitmap() {
-        let validator_set = sample_validator_set(0);
-        let qc = Qc {
-            phase: Phase::Commit,
-            subject_block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
-                [2u8; 32],
-            )),
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 2,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: Vec::new(),
-                bls_aggregate_signature: vec![9],
-            },
-        };
-        assert_eq!(qc_signer_count(&qc), 0);
-    }
-    #[test]
-    fn domain_depends_on_all_fields() {
-        let cid_a = test_network_id("iroha:test:A");
-        let cid_b = test_network_id("iroha:test:B");
-        let d1 = consensus_domain(&cid_a, "Vote", b"x", PERMISSIONED_TAG);
-        let d2 = consensus_domain(&cid_b, "Vote", b"x", PERMISSIONED_TAG);
-        assert_ne!(d1, d2);
-    }
-    #[test]
-    fn vote_preimage_uses_current_domain_tag() {
-        let chain = test_network_id("iroha:test:preimage-tags");
-        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
-        let vote = Vote {
-            block_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([1u8; 32]),
-            post_state_root: iroha_crypto::Hash::prehashed([2u8; 32]),
-            height: 11,
-            view: 2,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            phase: Phase::Prepare,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
-        };
-        let vote_preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
-        assert_eq!(
-            &vote_preimage[..32],
-            &consensus_domain(&chain, "Vote", b"v1", PERMISSIONED_TAG)
-        );
-    }
-    #[test]
-    fn vote_preimage_matches_formal_layout_and_excludes_signature_material() {
-        let chain = test_network_id("iroha:test:classic-vote-preimage-layout");
-        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x11; 32]));
-        let parent_state_root = iroha_crypto::Hash::prehashed([0x12; 32]);
-        let post_state_root = iroha_crypto::Hash::prehashed([0x13; 32]);
-        let chain_order_hash = iroha_crypto::Hash::prehashed([0x14; 32]);
-        let highest_block_hash =
-            HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x15; 32]));
-        let mut vote = Vote {
-            block_hash,
-            parent_state_root,
-            post_state_root,
-            height: 0x0102_0304_0506_0708,
-            view: 0x1112_1314_1516_1718,
-            epoch: 0x2122_2324_2526_2728,
-            chain_order_hash,
-            rechain_seq: 0x3132_3334_3536_3738,
-            phase: Phase::Commit,
-            highest_qc: None,
-            signer: 0x4142_4344,
-            bls_sig: vec![0xAA, 0xBB, 0xCC],
-        };
-        let mut expected_without_highest = Vec::new();
-        expected_without_highest.extend_from_slice(&consensus_domain(
-            &chain,
-            "Vote",
-            b"v1",
-            PERMISSIONED_TAG,
-        ));
-        expected_without_highest.extend_from_slice(vote.block_hash.as_ref().as_ref());
-        expected_without_highest.extend_from_slice(vote.parent_state_root.as_ref());
-        expected_without_highest.extend_from_slice(vote.post_state_root.as_ref());
-        expected_without_highest.extend_from_slice(&vote.height.to_be_bytes());
-        expected_without_highest.extend_from_slice(&vote.view.to_be_bytes());
-        expected_without_highest.extend_from_slice(&vote.epoch.to_be_bytes());
-        expected_without_highest.extend_from_slice(vote.chain_order_hash.as_ref());
-        expected_without_highest.extend_from_slice(&vote.rechain_seq.to_be_bytes());
-        expected_without_highest.push(vote.phase as u8);
-        expected_without_highest.push(0);
-        assert_eq!(
-            vote_preimage(&chain, PERMISSIONED_TAG, &vote),
-            expected_without_highest
-        );
-        assert_ne!(
-            vote_preimage(
-                &test_network_id("iroha:test:classic-vote-other-chain"),
-                PERMISSIONED_TAG,
-                &vote
-            ),
-            expected_without_highest,
-            "chain id must be bound through the consensus domain"
-        );
-        assert_ne!(
-            vote_preimage(&chain, NPOS_TAG, &vote),
-            expected_without_highest,
-            "mode tag must be bound through the consensus domain"
-        );
-        vote.signer = 0x5152_5354;
-        vote.bls_sig = vec![0xDD, 0xEE, 0xFF, 0x00];
-        assert_eq!(
-            vote_preimage(&chain, PERMISSIONED_TAG, &vote),
-            expected_without_highest,
-            "mutable signer transport fields must stay outside the vote preimage"
-        );
-        vote.highest_qc = Some(QcRef {
-            height: 0x6162_6364_6566_6768,
-            view: 0x7172_7374_7576_7778,
-            epoch: 0x8182_8384_8586_8788,
-            subject_block_hash: highest_block_hash,
-            phase: Phase::Prepare,
-        });
-        let mut expected_with_highest = expected_without_highest;
-        *expected_with_highest
-            .last_mut()
-            .expect("highest flag should be present") = 1;
-        let highest = vote.highest_qc.expect("highest qc");
-        expected_with_highest.extend_from_slice(&highest.height.to_be_bytes());
-        expected_with_highest.extend_from_slice(&highest.view.to_be_bytes());
-        expected_with_highest.extend_from_slice(&highest.epoch.to_be_bytes());
-        expected_with_highest.extend_from_slice(highest.subject_block_hash.as_ref().as_ref());
-        expected_with_highest.push(highest.phase as u8);
-        assert_eq!(
-            vote_preimage(&chain, PERMISSIONED_TAG, &vote),
-            expected_with_highest
-        );
-    }
-    #[test]
-    fn vote_preimage_binds_chain_order() {
-        let chain = test_network_id("iroha:test:chain-order-binding");
-        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
-        let vote = Vote {
-            block_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([1u8; 32]),
-            post_state_root: iroha_crypto::Hash::prehashed([2u8; 32]),
-            height: 11,
-            view: 2,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            phase: Phase::Prepare,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
-        };
-        let base = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
-        let mut changed_order = vote.clone();
-        changed_order.chain_order_hash = iroha_crypto::Hash::new(b"alternate-chain-order");
-        assert_ne!(
-            base,
-            vote_preimage(&chain, PERMISSIONED_TAG, &changed_order)
-        );
-        let mut changed_seq = vote;
-        changed_seq.rechain_seq = 1;
-        assert_ne!(base, vote_preimage(&chain, PERMISSIONED_TAG, &changed_seq));
     }
     #[test]
     fn handshake_gate_rejects_same_name_same_config_different_genesis() {

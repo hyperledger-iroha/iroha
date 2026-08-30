@@ -320,7 +320,6 @@ public sealed partial class ToriiClient
             throw new JsonException($"{context}.da_v1_enabled must be false.");
         }
 
-        ValidateProjectionFeatureFlags(response, context);
         ValidateExactInt32(response.ArchiveVersion, QueryProjectionArchiveVersion, $"{context}.archive_version");
         ValidateExactInt32(response.SchemaVersion, QueryProjectionSchemaVersion, $"{context}.schema_version");
         ValidateExactInt32(response.BlobClassCustomId, QueryProjectionBlobClassCustomId, $"{context}.blob_class_custom_id");
@@ -354,12 +353,4 @@ public sealed partial class ToriiClient
         }
     }
 
-    private static void ValidateProjectionFeatureFlags(ToriiNodeProjectionCapabilities response, string context)
-    {
-        if (response.CheckpointPlanV1 || response.CheckpointPublishV1)
-        {
-            throw new JsonException(
-                $"{context}.checkpoint_plan_v1 and {context}.checkpoint_publish_v1 must be false until the DA projection worker can verify and persist uploaded archives.");
-        }
-    }
 }

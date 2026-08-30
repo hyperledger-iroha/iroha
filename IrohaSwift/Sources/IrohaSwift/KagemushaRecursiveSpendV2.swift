@@ -178,7 +178,9 @@ public enum KagemushaRecursiveSpend {
     public static let wireVersionV4: UInt16 = 4
     public static let localWitnessVersionV4: UInt16 = 4
     /// Top-up insertion leaves the last Merkle position for the proof-bound successor.
-    public static let topUpShieldInsertionCapacityV2: UInt32 = (1 << 16) - 1
+    /// Exclusive insertion capacity after reserving 64 branch-depth outputs, eight optional
+    /// peer-change outputs, and the final dummy leaf required by the proof circuit.
+    public static let topUpShieldInsertionCapacityV2: UInt32 = 65_463
     /// First-release maximum number of recursive parents consumed by one transition.
     public static let maximumInputsPerTransition = 2
     /// First-release peer-hop bound advertised by universal capability discovery and

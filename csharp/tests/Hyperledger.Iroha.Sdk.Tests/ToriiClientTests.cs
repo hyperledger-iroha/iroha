@@ -361,7 +361,11 @@ public sealed partial class ToriiClientTests
                 CanonicalAccountId,
                 CanonicalPrivateKeySeed),
         };
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler), options);
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            options,
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
         using var document = await client.GetJsonDocumentAsync("/v1/query", "gas_units=100&cursor_mode=stored", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(document.RootElement.GetProperty("ok").GetBoolean());
@@ -485,7 +489,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.GetJsonDocumentAsync("/v1/query", "gas_units=100", cancellationToken: TestContext.Current.CancellationToken));
@@ -515,7 +520,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var document = await client.GetJsonDocumentAsync("/v1/query", "gas_units=100", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -577,7 +583,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(HttpMethod.Get, path!, cancellationToken: TestContext.Current.CancellationToken));
 
@@ -601,7 +608,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(new HttpMethod(method), "/v1/query", cancellationToken: TestContext.Current.CancellationToken));
@@ -628,7 +636,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(new HttpMethod(method), "/v1/query", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -674,7 +683,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(HttpMethod.Get, "/v1/query", query: query, cancellationToken: TestContext.Current.CancellationToken));
@@ -717,7 +727,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(HttpMethod.Get, "/v1/query", accept: accept, cancellationToken: TestContext.Current.CancellationToken));
@@ -746,7 +757,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(HttpMethod.Get, "/v1/query", accept: accept, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -771,7 +783,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(
             HttpMethod.Get,
@@ -807,7 +820,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SendAsync(
@@ -862,8 +876,6 @@ public sealed partial class ToriiClientTests
                   "archive_version": 1,
                   "blob_class_custom_id": 1001,
                   "checkpoint_contract_v1": true,
-                  "checkpoint_plan_v1": false,
-                  "checkpoint_publish_v1": false,
                   "codec": "application/x-iroha-query-shard+norito+zstd",
                   "compression": "zstd",
                   "da_v1_enabled": false,
@@ -951,8 +963,6 @@ public sealed partial class ToriiClientTests
         var projection = new ToriiNodeProjectionCapabilities
         {
             CheckpointContractV1 = true,
-            CheckpointPlanV1 = false,
-            CheckpointPublishV1 = false,
             ShardCatalogV1 = true,
             ArchiveExportV1 = true,
             ArchiveVersion = 1,
@@ -1368,14 +1378,8 @@ public sealed partial class ToriiClientTests
         };
         yield return new object?[]
         {
-            "query.projection.checkpoint_plan_v1",
-            NodeCapabilitiesResponseJson("query.projection.checkpoint_plan_v1", true),
-            "must be false",
-        };
-        yield return new object?[]
-        {
             "query.projection.export_supported_resources",
-            NodeCapabilitiesResponseJsonWithProjectionFeatureFlags(false, false, false, false, new JsonArray("accounts")),
+            NodeCapabilitiesResponseJsonWithProjectionAvailability(false, false, new JsonArray("accounts")),
             "must be empty",
         };
         yield return new object?[]
@@ -22443,7 +22447,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
     }
 
     private static ToriiClient CreateVerifyingKeyClient(RecordingHandler handler)
@@ -23070,8 +23075,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["archive_version"] = 1,
             ["blob_class_custom_id"] = 1001,
             ["checkpoint_contract_v1"] = true,
-            ["checkpoint_plan_v1"] = false,
-            ["checkpoint_publish_v1"] = false,
             ["codec"] = "application/x-iroha-query-shard+norito+zstd",
             ["compression"] = "zstd",
             ["da_v1_enabled"] = false,
@@ -23207,12 +23210,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             case "query.projection.da_v1_enabled":
                 projection["da_v1_enabled"] = JsonValueForMetadata(value);
                 break;
-            case "query.projection.checkpoint_plan_v1":
-                projection["checkpoint_plan_v1"] = JsonValueForMetadata(value);
-                break;
-            case "query.projection.checkpoint_publish_v1":
-                projection["checkpoint_publish_v1"] = JsonValueForMetadata(value);
-                break;
             case "query.projection.shard_catalog_v1":
                 projection["shard_catalog_v1"] = JsonValueForMetadata(value);
                 break;
@@ -23277,18 +23274,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return response.ToJsonString();
     }
 
-    private static string NodeCapabilitiesResponseJsonWithProjectionFeatureFlags(
-        bool checkpointPlan,
-        bool checkpointPublish,
+    private static string NodeCapabilitiesResponseJsonWithProjectionAvailability(
         bool shardCatalog,
         bool archiveExport,
         JsonArray exportSupportedResources)
     {
-        var response = JsonNode.Parse(NodeCapabilitiesResponseJson("query.projection.checkpoint_plan_v1", checkpointPlan))!.AsObject();
+        var response = JsonNode.Parse(NodeCapabilitiesResponseJson("query.projection.shard_catalog_v1", shardCatalog))!.AsObject();
         var query = response["query"]!.AsObject();
         var projection = query["projection"]!.AsObject();
-        projection["checkpoint_publish_v1"] = checkpointPublish;
-        projection["shard_catalog_v1"] = shardCatalog;
         projection["archive_export_v1"] = archiveExport;
         projection["export_supported_resources"] = exportSupportedResources;
         return response.ToJsonString();
@@ -23329,8 +23322,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return "query.aggregate.exact_results";
         yield return "query.projection.checkpoint_contract_v1";
         yield return "query.projection.da_v1_enabled";
-        yield return "query.projection.checkpoint_plan_v1";
-        yield return "query.projection.checkpoint_publish_v1";
         yield return "query.projection.shard_catalog_v1";
         yield return "query.projection.archive_export_v1";
         yield return "query.projection.archive_version";
@@ -23374,8 +23365,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return ("aggregate", "exact_results");
         yield return ("projection", "checkpoint_contract_v1");
         yield return ("projection", "da_v1_enabled");
-        yield return ("projection", "checkpoint_plan_v1");
-        yield return ("projection", "checkpoint_publish_v1");
         yield return ("projection", "shard_catalog_v1");
         yield return ("projection", "archive_export_v1");
         yield return ("projection", "archive_version");

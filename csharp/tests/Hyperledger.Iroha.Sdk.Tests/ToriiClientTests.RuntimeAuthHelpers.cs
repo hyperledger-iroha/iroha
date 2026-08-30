@@ -15,5 +15,6 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 }

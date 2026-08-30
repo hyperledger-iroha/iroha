@@ -1145,6 +1145,16 @@ fn simplex_finality_transcript(
     Some(transcript)
 }
 
+fn ton_block_signatures_are_canonically_ordered(signatures: &TonBlockSignaturesV1) -> bool {
+    let entries = match signatures {
+        TonBlockSignaturesV1::Ordinary(proof) => proof.signatures.as_slice(),
+        TonBlockSignaturesV1::Simplex(proof) => proof.signatures.as_slice(),
+    };
+    entries
+        .windows(2)
+        .all(|pair| pair[0].node_id_short < pair[1].node_id_short)
+}
+
 fn verify_block_signatures(
     block: TonBlockIdExtV1,
     active: &TonValidatorSetV1,
@@ -1171,6 +1181,7 @@ fn verify_block_signatures(
         || validator_hash != active.validator_list_hash_short
         || entries.is_empty()
         || entries.len() > TON_MAX_SIGNATURES
+        || !ton_block_signatures_are_canonically_ordered(signatures)
     {
         return Err(TonNativeSourceError::InvalidSignatures);
     }
@@ -3282,7 +3293,7 @@ fn verify_masterchain_finality(
         {
             return Err(TonNativeSourceError::ResourceLimit);
         }
-        let (boc, computed, root) = parse_single_root_boc(&block_proof.block_proof_boc)
+        let (boc, computed, root) = parse_canonical_single_root_boc(&block_proof.block_proof_boc)
             .ok_or(TonNativeSourceError::InvalidBoc)?;
         if ton_proven_root_hash(&boc, &computed, root) != Some(block_proof.block_id.root_hash) {
             return Err(TonNativeSourceError::InvalidBoc);
@@ -4838,16 +4849,6 @@ fn ton_deployment_readback_matches_governance(
         && readback.verifying_key == deployment.verifying_key
 }
 
-fn ton_block_signatures_are_canonically_ordered(signatures: &TonBlockSignaturesV1) -> bool {
-    let entries = match signatures {
-        TonBlockSignaturesV1::Ordinary(proof) => proof.signatures.as_slice(),
-        TonBlockSignaturesV1::Simplex(proof) => proof.signatures.as_slice(),
-    };
-    entries
-        .windows(2)
-        .all(|pair| pair[0].node_id_short < pair[1].node_id_short)
-}
-
 /// Verify one canonical dual-account TON mint-breaker observation.
 ///
 /// Both account openings are selected from the same finalized TON-mainnet
@@ -4883,13 +4884,6 @@ pub fn verify_sccp_ton_breaker_observation_v1(
     let SccpDestinationDeploymentV1::Ton(deployment) = &governed_route.destination else {
         return Err(TonNativeSourceError::BreakerDeploymentMismatch);
     };
-    for block in &proof.finality.blocks {
-        if !ton_block_signatures_are_canonically_ordered(&block.signatures) {
-            return Err(TonNativeSourceError::InvalidBreakerObservation);
-        }
-        parse_canonical_single_root_boc(&block.block_proof_boc)
-            .ok_or(TonNativeSourceError::InvalidBoc)?;
-    }
     let masterchain = verify_masterchain_finality(
         &proof.finality,
         SccpNetworkV1::TonMainnet,
@@ -5056,8 +5050,8 @@ fn ton_verify_transaction_pre_state(
     previous_transaction_lt: u64,
     transaction_lt: u64,
 ) -> Result<(), TonNativeSourceError> {
-    let (boc, computed, root) =
-        parse_single_root_boc(proof_boc).ok_or(TonNativeSourceError::SourceDeploymentMismatch)?;
+    let (boc, computed, root) = parse_canonical_single_root_boc(proof_boc)
+        .ok_or(TonNativeSourceError::SourceDeploymentMismatch)?;
     if ton_proven_root_hash(&boc, &computed, root) != Some(expected_account_hash) {
         return Err(TonNativeSourceError::SourceDeploymentMismatch);
     }
@@ -5088,8 +5082,8 @@ fn ton_verify_source_account_state(
     transaction_hash: H256,
     transaction_new_account_hash: H256,
 ) -> Result<(), TonNativeSourceError> {
-    let (boc, computed, root) =
-        parse_single_root_boc(proof_boc).ok_or(TonNativeSourceError::InvalidShardState)?;
+    let (boc, computed, root) = parse_canonical_single_root_boc(proof_boc)
+        .ok_or(TonNativeSourceError::InvalidShardState)?;
     if ton_proven_root_hash(&boc, &computed, root) != Some(expected_state_root) {
         return Err(TonNativeSourceError::InvalidShardState);
     }
@@ -5230,7 +5224,7 @@ pub fn verify_ton_native_source(
         return Err(TonNativeSourceError::ShardNotFinalized);
     }
     let (shard_boc, shard_computed, shard_root) =
-        parse_single_root_boc(&proof.event.shard_block_proof_boc)
+        parse_canonical_single_root_boc(&proof.event.shard_block_proof_boc)
             .ok_or(TonNativeSourceError::InvalidBoc)?;
     if ton_proven_root_hash(&shard_boc, &shard_computed, shard_root)
         != Some(proof.event.shard_block_id.root_hash)
@@ -6277,10 +6271,11 @@ mod tests {
             validator_list_hash_short: hash,
             validators,
         };
-        let entries = fixtures
+        let mut entries = fixtures
             .iter()
             .map(|(pair, validator)| signed_entry(pair, *validator, &transcript))
             .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.node_id_short);
         let proof = |signatures| {
             TonBlockSignaturesV1::Ordinary(TonOrdinaryBlockSignaturesV1 {
                 catchain_seqno: 9,
@@ -6302,6 +6297,12 @@ mod tests {
             roster_key_parse_count(),
             active.validators.len(),
             "signature verification must charge one roster-key pass separately from signer checks"
+        );
+        let mut out_of_order = entries.clone();
+        out_of_order.swap(0, 1);
+        assert_eq!(
+            verify_block_signatures(block, &active, &proof(out_of_order)),
+            Err(TonNativeSourceError::InvalidSignatures)
         );
         assert_eq!(
             verify_block_signatures(
@@ -6381,7 +6382,7 @@ mod tests {
 
         reset_roster_key_parse_count();
         let ordinary_verified = verify_masterchain_finality(
-            &proof_with(ordinary),
+            &proof_with(ordinary.clone()),
             SccpNetworkV1::TonMainnet,
             anchor_hash,
         )
@@ -6397,6 +6398,24 @@ mod tests {
             Some(block.root_hash)
         );
         assert_eq!(roster_key_parse_count(), 2);
+
+        let mut crc_alias = block_proof_boc.clone();
+        crc_alias[4] |= 0x40;
+        let crc = ton_crc32c(&crc_alias).to_le_bytes();
+        crc_alias.extend_from_slice(&crc);
+        let (alias_boc, alias_computed, alias_root) =
+            parse_single_root_boc(&crc_alias).expect("CRC alias remains semantically parseable");
+        assert_eq!(
+            ton_proven_root_hash(&alias_boc, &alias_computed, alias_root),
+            Some(block.root_hash)
+        );
+        assert!(parse_canonical_single_root_boc(&crc_alias).is_none());
+        let mut aliased_proof = proof_with(ordinary);
+        aliased_proof.blocks[0].block_proof_boc = crc_alias;
+        assert_eq!(
+            verify_masterchain_finality(&aliased_proof, SccpNetworkV1::TonMainnet, anchor_hash,),
+            Err(TonNativeSourceError::InvalidBoc)
+        );
 
         let candidate_data = simplex_candidate_without_parents(block);
         let unsigned_simplex = TonSimplexBlockSignaturesV1 {

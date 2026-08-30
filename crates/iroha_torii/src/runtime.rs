@@ -144,10 +144,6 @@ pub struct NodeProjectionCapabilities {
     pub checkpoint_contract_v1: bool,
     /// Whether the DA-backed cold projection worker is enabled.
     pub da_v1_enabled: bool,
-    /// Whether this node exposes direct checkpoint preflight publication.
-    pub checkpoint_plan_v1: bool,
-    /// Whether this node exposes direct checkpoint publication.
-    pub checkpoint_publish_v1: bool,
     /// Whether the node can enumerate the canonical live shard set directly.
     pub shard_catalog_v1: bool,
     /// Whether the node can export canonical projection shard archives directly.
@@ -393,8 +389,6 @@ pub async fn handle_node_capabilities(
             projection: NodeProjectionCapabilities {
                 checkpoint_contract_v1: true,
                 da_v1_enabled: false,
-                checkpoint_plan_v1: false,
-                checkpoint_publish_v1: false,
                 shard_catalog_v1: cfg!(feature = "app_api"),
                 archive_export_v1: cfg!(feature = "app_api"),
                 archive_version: QUERY_PROJECTION_SHARD_ARCHIVE_VERSION,
@@ -1620,8 +1614,6 @@ mod tests {
         );
         assert!(resp.query.projection.checkpoint_contract_v1);
         assert!(!resp.query.projection.da_v1_enabled);
-        assert!(!resp.query.projection.checkpoint_plan_v1);
-        assert!(!resp.query.projection.checkpoint_publish_v1);
         assert_eq!(
             resp.query.projection.shard_catalog_v1,
             cfg!(feature = "app_api")
@@ -1800,8 +1792,6 @@ mod tests {
             resp.query.projection.archive_export_v1,
             cfg!(feature = "app_api")
         );
-        assert!(!resp.query.projection.checkpoint_plan_v1);
-        assert!(!resp.query.projection.checkpoint_publish_v1);
         assert_eq!(
             resp.query.projection.shard_catalog_v1,
             cfg!(feature = "app_api")

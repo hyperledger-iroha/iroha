@@ -2677,7 +2677,7 @@ mod measured_bytes_impls {
         },
         common::Owned,
         confidential::ConfidentialStatus,
-        consensus::{CertPhase, FinalizedGlobalThresholdBeaconPulseV1, QcRef},
+        consensus::{CertPhase, FinalizedGlobalThresholdBeaconPulseV1},
         domain::{Domain, DomainId},
         events::EventFilterBox,
         governance::types::{
@@ -2789,7 +2789,6 @@ mod measured_bytes_impls {
         NumericSpec,
         ParliamentBody,
         ProofStatus,
-        QcRef,
         Repeats,
         RuntimeUpgradeId,
         RuntimeUpgradeStatus,

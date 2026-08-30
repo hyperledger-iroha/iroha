@@ -1,13 +1,16 @@
-//! Optional WebAuthn/mTLS second-factor authentication for Torii operator endpoints.
+//! WebAuthn and mTLS authentication for Torii operator endpoints.
 //!
-//! Exact-network operator request signatures remain mandatory at the route middleware boundary;
-//! sessions and bootstrap tokens never authorize a route by themselves.
+//! Ordinary operator routes still require their exact-network request signature at middleware;
+//! a WebAuthn session is an additional gate, not a substitute. The four credential-exchange
+//! routes are the deliberate exception: mTLS plus a first-credential bootstrap token or an
+//! authenticated WebAuthn session owns enrollment, and a verified assertion owns session issue.
 use crate::{
     JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value, limits,
     routing::MaybeTelemetry,
 };
 use axum::{
-    extract::{ConnectInfo, State},
+    body::Body,
+    extract::{ConnectInfo, Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -25,11 +28,14 @@ use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     fs,
-    io::{Cursor, Write as _},
+    io::{Cursor, Read as _, Write as _},
     net::IpAddr,
     num::NonZeroUsize,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{
+        Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
@@ -42,7 +48,10 @@ pub(crate) const CREDENTIAL_EXCHANGE_BODY_LIMIT: usize = 64 * 1024;
 const CHALLENGE_BYTES: usize = 32;
 const SESSION_TOKEN_BYTES: usize = 32;
 const MAX_CREDENTIAL_ID_BYTES: usize = 1_024;
+const MAX_CREDENTIAL_ID_B64URL_BYTES: usize = (MAX_CREDENTIAL_ID_BYTES * 4 + 2) / 3;
 const P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN: usize = 65;
+const MAX_CREDENTIAL_RECORD_JSON_BYTES: usize = 2_048;
+const CREDENTIAL_FILE_JSON_OVERHEAD_BYTES: usize = 128;
 const ACTION_GATE: &str = "gate";
 const ACTION_REGISTER_OPTIONS: &str = "register_options";
 const ACTION_REGISTER_VERIFY: &str = "register_verify";
@@ -64,7 +73,7 @@ pub struct AuthContext {
 enum EnrollmentAuthority {
     None,
     BootstrapToken,
-    Session,
+    Session(u64),
 }
 #[derive(Debug, Clone)]
 pub struct OperatorAuthError {
@@ -298,6 +307,30 @@ impl OperatorAuthError {
             "credential_capacity_exhausted",
         )
     }
+    fn credential_duplicate() -> Self {
+        Self::operational(
+            StatusCode::CONFLICT,
+            "operator_webauthn_credential_duplicate",
+            "operator WebAuthn credential is already enrolled",
+            "credential_duplicate",
+        )
+    }
+    fn credential_not_found() -> Self {
+        Self::operational(
+            StatusCode::NOT_FOUND,
+            "operator_webauthn_credential_not_found",
+            "operator WebAuthn credential was not found",
+            "credential_not_found",
+        )
+    }
+    fn last_credential() -> Self {
+        Self::operational(
+            StatusCode::CONFLICT,
+            "operator_webauthn_last_credential",
+            "the last operator WebAuthn credential cannot be deleted without a configured bootstrap token",
+            "last_credential",
+        )
+    }
 }
 impl IntoResponse for OperatorAuthError {
     fn into_response(self) -> Response {
@@ -391,6 +424,10 @@ enum ChallengeKind {
 #[derive(Clone, Debug)]
 struct ChallengeEntry {
     kind: ChallengeKind,
+}
+#[derive(Clone, Debug)]
+struct SessionEntry {
+    credential_revocation_generation: u64,
 }
 #[derive(Debug)]
 struct ExpiringEntry<V> {
@@ -511,6 +548,11 @@ impl<V> BoundedExpiringStore<V> {
         self.next_generation = u64::try_from(self.entries.len())
             .expect("entry count cannot exceed the addressable process memory");
     }
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.expiries.clear();
+        self.next_generation = 0;
+    }
     #[cfg(test)]
     fn len(&self) -> usize {
         self.entries.len()
@@ -533,14 +575,12 @@ impl LockoutTracker {
             entries: Mutex::new(BoundedExpiringStore::new(capacity)),
         }
     }
-    fn is_locked(&self, key: &str) -> Result<bool, ExpiringStoreAtCapacity> {
+    fn is_locked(&self, key: &str) -> bool {
         let now = Instant::now();
         let mut entries = self.entries.lock();
-        match entries.get(key, now) {
-            Some(entry) => Ok(entry.locked_until.is_some_and(|until| now < until)),
-            None if entries.is_at_capacity(now) => Err(ExpiringStoreAtCapacity),
-            None => Ok(false),
-        }
+        entries
+            .get(key, now)
+            .is_some_and(|entry| entry.locked_until.is_some_and(|until| now < until))
     }
     fn record_failure(&self, key: &str) -> Result<bool, ExpiringStoreAtCapacity> {
         let Some(limit) = self.config.failures else {
@@ -548,11 +588,18 @@ impl LockoutTracker {
         };
         let now = Instant::now();
         let mut entries = self.entries.lock();
-        let mut entry = entries.remove(key, now).unwrap_or(FailureEntry {
-            failures: 0,
-            window_start: now,
-            locked_until: None,
-        });
+        let mut entry = match entries.remove(key, now) {
+            Some(entry) => entry,
+            // Preserve every live tracked identity and the hard memory bound. An attacker that
+            // rotates identities must not turn a full failure table into a global admission
+            // failure for otherwise valid, previously unseen callers.
+            None if entries.is_at_capacity(now) => return Ok(false),
+            None => FailureEntry {
+                failures: 0,
+                window_start: now,
+                locked_until: None,
+            },
+        };
         if let Some(locked_until) = entry.locked_until {
             if now < locked_until {
                 entries.insert(key.to_owned(), entry, locked_until, now)?;
@@ -590,12 +637,13 @@ pub struct OperatorAuth {
     enabled: bool,
     require_mtls: bool,
     mtls_trusted_proxy_nets: Vec<limits::IpNet>,
-    bootstrap_tokens: HashSet<String>,
+    bootstrap_token_hashes: HashSet<[u8; 32]>,
     webauthn: Option<WebAuthnPolicy>,
     credentials: Arc<RwLock<Vec<StoredCredential>>>,
     credential_capacity: usize,
-    sessions: Mutex<BoundedExpiringStore<()>>,
+    sessions: Mutex<BoundedExpiringStore<SessionEntry>>,
     challenges: Mutex<BoundedExpiringStore<ChallengeEntry>>,
+    credential_revocation_generation: AtomicU64,
     limiter: limits::RateLimiter,
     lockout: LockoutTracker,
     telemetry: MaybeTelemetry,
@@ -607,6 +655,7 @@ impl OperatorAuth {
         data_dir: PathBuf,
         telemetry: MaybeTelemetry,
     ) -> Result<Self, OperatorAuthInitError> {
+        validate_operator_auth_capacities(&config)?;
         let webauthn = if config.enabled {
             let Some(cfg) = config.webauthn.clone() else {
                 return Err(OperatorAuthInitError::MissingWebAuthn);
@@ -635,6 +684,7 @@ impl OperatorAuth {
                 config.lockout.duration,
             )?;
         }
+        let bootstrap_token_hashes = validate_bootstrap_tokens(config.enabled, &config.tokens)?;
         let credentials_path = operator_credentials_path(&data_dir);
         let credentials = if config.enabled {
             let policy = webauthn
@@ -649,12 +699,12 @@ impl OperatorAuth {
         } else {
             Vec::new()
         };
-        let bootstrap_tokens = config
-            .tokens
-            .into_iter()
-            .map(|token| token.trim().to_string())
-            .filter(|token| !token.is_empty())
-            .collect();
+        if config.enabled && credentials.is_empty() && bootstrap_token_hashes.is_empty() {
+            return Err(OperatorAuthInitError::InvalidPolicy(
+                "torii.operator_auth.tokens must contain a bootstrap token until the first WebAuthn credential is persisted"
+                    .to_owned(),
+            ));
+        }
         let rate_per_minute = config.rate_per_minute.map(std::num::NonZeroU32::get);
         let burst = config.burst.map(std::num::NonZeroU32::get);
         let limiter = limits::RateLimiter::new_per_minute(rate_per_minute, burst);
@@ -663,12 +713,13 @@ impl OperatorAuth {
             enabled: config.enabled,
             require_mtls: config.require_mtls,
             mtls_trusted_proxy_nets: limits::parse_cidrs(&config.mtls_trusted_proxy_cidrs),
-            bootstrap_tokens,
+            bootstrap_token_hashes,
             webauthn,
             credentials: Arc::new(RwLock::new(credentials)),
             credential_capacity: config.credential_capacity.get(),
             sessions: Mutex::new(BoundedExpiringStore::new(ephemeral_state_capacity)),
             challenges: Mutex::new(BoundedExpiringStore::new(ephemeral_state_capacity)),
+            credential_revocation_generation: AtomicU64::new(0),
             limiter,
             lockout: LockoutTracker::new(config.lockout, ephemeral_state_capacity),
             telemetry,
@@ -714,18 +765,10 @@ impl OperatorAuth {
             self.record_event(action, "rate_limited", err.metric_label());
             return Err(err);
         }
-        match self.lockout.is_locked(&key) {
-            Ok(false) => {}
-            Ok(true) => {
-                let err = OperatorAuthError::locked_out();
-                self.record_event(action, "locked", err.metric_label());
-                return Err(err);
-            }
-            Err(ExpiringStoreAtCapacity) => {
-                let err = OperatorAuthError::state_capacity_exhausted();
-                self.record_event(action, "error", err.metric_label());
-                return Err(err);
-            }
+        if self.lockout.is_locked(&key) {
+            let err = OperatorAuthError::locked_out();
+            self.record_event(action, "locked", err.metric_label());
+            return Err(err);
         }
         let ctx = AuthContext {
             key,
@@ -733,7 +776,11 @@ impl OperatorAuth {
         };
         if self.require_mtls && !mtls_present(headers, remote_ip, &self.mtls_trusted_proxy_nets) {
             let err = OperatorAuthError::missing_mtls();
-            return Err(self.record_error(&ctx, action, err));
+            // A client that never crossed the trusted mTLS boundary has no authenticated
+            // operator identity to lock out. Tracking these failures lets arbitrary network
+            // sources consume every bounded lockout slot before credential authentication.
+            self.record_event(action, "denied", err.metric_label());
+            return Err(err);
         }
         Ok(ctx)
     }
@@ -747,7 +794,7 @@ impl OperatorAuth {
         }
         let ctx = self.check_common(headers, remote_ip, ACTION_GATE).await?;
         if let Some(session) = session_from_headers(headers) {
-            if self.session_valid(session) {
+            if self.session_generation(session).is_some() {
                 self.record_success(&ctx, ACTION_GATE, "session");
                 return Ok(());
             }
@@ -769,11 +816,11 @@ impl OperatorAuth {
             return Err(err);
         }
         let mut ctx = self.check_common(headers, remote_ip, action).await?;
-        if let Some(session) = session_from_headers(headers) {
-            if self.session_valid(session) {
-                ctx.enrollment_authority = EnrollmentAuthority::Session;
-                return Ok(ctx);
-            }
+        if let Some(session) = session_from_headers(headers)
+            && let Some(generation) = self.session_generation(session)
+        {
+            ctx.enrollment_authority = EnrollmentAuthority::Session(generation);
+            return Ok(ctx);
         }
         if !self
             .has_credentials()
@@ -954,7 +1001,7 @@ impl OperatorAuth {
             created_at_ms,
         };
         let total = self
-            .upsert_credential(credential, ctx.enrollment_authority)
+            .insert_credential(credential, ctx.enrollment_authority)
             .map_err(|err| self.record_error(ctx, ACTION_REGISTER_VERIFY, err))?;
         self.record_success(ctx, ACTION_REGISTER_VERIFY, "ok");
         Ok(RegistrationOutcome {
@@ -1123,7 +1170,16 @@ impl OperatorAuth {
             .expect("operator auth durations are validated during initialization");
         self.sessions
             .lock()
-            .insert(token.clone(), (), expires_at, now)
+            .insert(
+                token.clone(),
+                SessionEntry {
+                    credential_revocation_generation: self
+                        .credential_revocation_generation
+                        .load(Ordering::Acquire),
+                },
+                expires_at,
+                now,
+            )
             .map_err(|_| OperatorAuthError::state_capacity_exhausted())?;
         Ok(SessionOutcome {
             session_token: token,
@@ -1131,7 +1187,7 @@ impl OperatorAuth {
             credential_id: encode_b64url(credential_id),
         })
     }
-    fn upsert_credential(
+    fn insert_credential(
         &self,
         credential: StoredCredential,
         authority: EnrollmentAuthority,
@@ -1140,21 +1196,103 @@ impl OperatorAuth {
         validate_stored_credential(&credential, &policy.allowed_algorithms)
             .map_err(OperatorAuthError::invalid_payload)?;
         let mut credentials = self.credentials_write()?;
+        if let EnrollmentAuthority::Session(generation) = authority
+            && generation
+                != self
+                    .credential_revocation_generation
+                    .load(Ordering::Acquire)
+        {
+            return Err(OperatorAuthError::invalid_session());
+        }
         if authority == EnrollmentAuthority::BootstrapToken && !credentials.is_empty() {
             return Err(OperatorAuthError::missing_session());
         }
-        let mut updated = credentials.clone();
-        if let Some(pos) = updated.iter().position(|entry| entry.id == credential.id) {
-            updated[pos] = credential;
-        } else {
-            if updated.len() >= self.credential_capacity {
-                return Err(OperatorAuthError::credential_capacity_exhausted());
-            }
-            updated.push(credential);
+        if credentials.iter().any(|entry| entry.id == credential.id) {
+            return Err(OperatorAuthError::credential_duplicate());
         }
+        if credentials.len() >= self.credential_capacity {
+            return Err(OperatorAuthError::credential_capacity_exhausted());
+        }
+        let mut updated = credentials.clone();
+        updated.push(credential);
         persist_credentials(&self.credentials_path, &updated)?;
         *credentials = updated;
         Ok(credentials.len())
+    }
+    fn credential_inventory(&self) -> Result<norito::json::Value, OperatorAuthError> {
+        self.webauthn_policy()?;
+        let credentials = self.credentials_read()?;
+        let mut entries = credentials
+            .iter()
+            .map(|credential| {
+                let credential_id = encode_b64url(&credential.id);
+                let metadata = json_object(vec![
+                    json_entry("credential_id", credential_id.clone()),
+                    json_entry("algorithm", credential.alg.label()),
+                    json_entry("sign_count", credential.sign_count),
+                    json_entry("created_at_ms", credential.created_at_ms),
+                ]);
+                (credential_id, metadata)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        let credentials_total = entries.len();
+        Ok(json_object(vec![
+            json_entry(
+                "credentials",
+                entries
+                    .into_iter()
+                    .map(|(_, metadata)| metadata)
+                    .collect::<Vec<_>>(),
+            ),
+            json_entry("credentials_total", credentials_total),
+        ]))
+    }
+    fn delete_credential(
+        &self,
+        encoded_id: &str,
+        authorized_generation: u64,
+    ) -> Result<CredentialDeletionOutcome, OperatorAuthError> {
+        self.webauthn_policy()?;
+        let credential_id = decode_managed_credential_id(encoded_id)?;
+        let mut credentials = self.credentials_write()?;
+        if authorized_generation
+            != self
+                .credential_revocation_generation
+                .load(Ordering::Acquire)
+        {
+            return Err(OperatorAuthError::invalid_session());
+        }
+        let next_generation = authorized_generation
+            .checked_add(1)
+            .ok_or_else(OperatorAuthError::credential_state_unavailable)?;
+        let Some(position) = credentials
+            .iter()
+            .position(|credential| credential.id == credential_id)
+        else {
+            return Err(OperatorAuthError::credential_not_found());
+        };
+        if credentials.len() == 1 && self.bootstrap_token_hashes.is_empty() {
+            return Err(OperatorAuthError::last_credential());
+        }
+        let mut updated = credentials.clone();
+        let deleted = updated.remove(position);
+        persist_credentials(&self.credentials_path, &updated)?;
+        let credentials_total = updated.len();
+        *credentials = updated;
+        self.credential_revocation_generation
+            .store(next_generation, Ordering::Release);
+        drop(credentials);
+
+        // Credential removal is a revocation boundary. Sessions are intentionally not tied to
+        // one credential in the in-memory store, so invalidate every outstanding authorization
+        // and ceremony rather than leaving an attacker a session issued before the removal.
+        self.sessions.lock().clear();
+        self.challenges.lock().clear();
+        Ok(CredentialDeletionOutcome {
+            credential_id: encode_b64url(&deleted.id),
+            credentials_total,
+        })
     }
     fn take_challenge(
         &self,
@@ -1174,7 +1312,10 @@ impl OperatorAuth {
     fn check_bootstrap_token(&self, headers: &HeaderMap) -> TokenCheck {
         operator_token(headers)
             .map(|token| {
-                if self.bootstrap_tokens.contains(token) {
+                if self
+                    .bootstrap_token_hashes
+                    .contains(&bootstrap_token_digest(token))
+                {
                     TokenCheck::Valid
                 } else {
                     TokenCheck::Invalid
@@ -1228,8 +1369,29 @@ impl OperatorAuth {
         self.lockout.clear(&ctx.key);
         self.record_event(action, "allowed", reason);
     }
+    fn session_generation(&self, token: &str) -> Option<u64> {
+        let generation = self
+            .sessions
+            .lock()
+            .get(token, Instant::now())?
+            .credential_revocation_generation;
+        (generation
+            == self
+                .credential_revocation_generation
+                .load(Ordering::Acquire))
+        .then_some(generation)
+    }
+    fn credential_management_generation(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<u64, OperatorAuthError> {
+        self.webauthn_policy()?;
+        let session = session_from_headers(headers).ok_or_else(OperatorAuthError::missing_session)?;
+        self.session_generation(session)
+            .ok_or_else(OperatorAuthError::invalid_session)
+    }
     fn session_valid(&self, token: &str) -> bool {
-        self.sessions.lock().get(token, Instant::now()).is_some()
+        self.session_generation(token).is_some()
     }
 }
 fn validate_ephemeral_duration(
@@ -1248,6 +1410,70 @@ fn validate_ephemeral_duration(
     }
     Ok(())
 }
+fn validate_bootstrap_tokens(
+    enabled: bool,
+    tokens: &[String],
+) -> Result<HashSet<[u8; 32]>, OperatorAuthInitError> {
+    if !enabled {
+        return Ok(HashSet::new());
+    }
+    let token_capacity =
+        iroha_config::parameters::defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS;
+    if tokens.len() > token_capacity {
+        return Err(OperatorAuthInitError::InvalidPolicy(format!(
+            "torii.operator_auth.tokens must not contain more than {token_capacity} entries"
+        )));
+    }
+    let mut validated = HashSet::with_capacity(tokens.len());
+    for token in tokens {
+        let min =
+            iroha_config::parameters::defaults::torii::operator_auth::BOOTSTRAP_TOKEN_MIN_BYTES;
+        let max =
+            iroha_config::parameters::defaults::torii::operator_auth::BOOTSTRAP_TOKEN_MAX_BYTES;
+        if !(min..=max).contains(&token.len()) {
+            return Err(OperatorAuthInitError::InvalidPolicy(format!(
+                "torii.operator_auth.tokens entries must contain {min}..={max} bytes"
+            )));
+        }
+        if !token.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+            return Err(OperatorAuthInitError::InvalidPolicy(
+                "torii.operator_auth.tokens entries must use visible ASCII without whitespace"
+                    .to_owned(),
+            ));
+        }
+        if !validated.insert(bootstrap_token_digest(token)) {
+            return Err(OperatorAuthInitError::InvalidPolicy(
+                "torii.operator_auth.tokens must not contain duplicates".to_owned(),
+            ));
+        }
+    }
+    Ok(validated)
+}
+fn validate_operator_auth_capacities(
+    config: &ToriiOperatorAuth,
+) -> Result<(), OperatorAuthInitError> {
+    let max_ephemeral =
+        iroha_config::parameters::defaults::torii::operator_auth::MAX_EPHEMERAL_STATE_CAPACITY;
+    if config.ephemeral_state_capacity.get() > max_ephemeral {
+        return Err(OperatorAuthInitError::InvalidPolicy(format!(
+            "torii.operator_auth.ephemeral_state_capacity must not exceed {max_ephemeral}"
+        )));
+    }
+    let max_credentials =
+        iroha_config::parameters::defaults::torii::operator_auth::MAX_CREDENTIAL_CAPACITY;
+    if config.credential_capacity.get() > max_credentials {
+        return Err(OperatorAuthInitError::InvalidPolicy(format!(
+            "torii.operator_auth.credential_capacity must not exceed {max_credentials}"
+        )));
+    }
+    Ok(())
+}
+fn bootstrap_token_digest(token: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"iroha:torii:operator-bootstrap:v1\0");
+    hasher.update(token.as_bytes());
+    hasher.finalize().into()
+}
 /// Result of a successful WebAuthn registration ceremony.
 pub struct RegistrationOutcome {
     credential_id: String,
@@ -1258,6 +1484,11 @@ pub struct SessionOutcome {
     session_token: String,
     expires_in_secs: u64,
     credential_id: String,
+}
+#[derive(Debug)]
+struct CredentialDeletionOutcome {
+    credential_id: String,
+    credentials_total: usize,
 }
 struct RegistrationInput {
     raw_id: Vec<u8>,
@@ -1349,6 +1580,20 @@ fn decode_b64url(label: &'static str, value: &str) -> Result<Vec<u8>, OperatorAu
     }
     Ok(decoded)
 }
+fn decode_managed_credential_id(value: &str) -> Result<Vec<u8>, OperatorAuthError> {
+    if value.len() > MAX_CREDENTIAL_ID_B64URL_BYTES {
+        return Err(OperatorAuthError::invalid_payload(format!(
+            "credential id must not exceed {MAX_CREDENTIAL_ID_BYTES} bytes"
+        )));
+    }
+    let decoded = decode_b64url("credential id", value)?;
+    if decoded.len() > MAX_CREDENTIAL_ID_BYTES {
+        return Err(OperatorAuthError::invalid_payload(format!(
+            "credential id must not exceed {MAX_CREDENTIAL_ID_BYTES} bytes"
+        )));
+    }
+    Ok(decoded)
+}
 fn auth_key(headers: &HeaderMap, remote: Option<IpAddr>) -> String {
     limits::effective_remote_ip(headers, remote)
         .map(|ip| ip.to_string())
@@ -1376,6 +1621,14 @@ fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
     let Ok(parsed) = Url::parse(origin) else {
         return false;
     };
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return false;
+    }
     let parsed_origin = parsed.origin();
     if matches!(parsed_origin, url::Origin::Opaque(_)) {
         return false;
@@ -1384,16 +1637,46 @@ fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
         .iter()
         .any(|candidate| candidate.origin() == parsed_origin)
 }
+async fn require_empty_options_body(body: Body) -> Result<(), OperatorAuthError> {
+    match axum::body::to_bytes(body, 1).await {
+        Ok(bytes) if bytes.is_empty() => Ok(()),
+        Ok(_) | Err(_) => Err(OperatorAuthError::invalid_payload(
+            "operator WebAuthn options requests must have an empty body",
+        )),
+    }
+}
 fn load_credentials(
     path: &Path,
     allowed_algorithms: &[OperatorWebAuthnAlgorithm],
     capacity: NonZeroUsize,
 ) -> Result<Vec<StoredCredential>, String> {
-    let raw = match fs::read_to_string(path) {
-        Ok(content) => content,
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err.to_string()),
     };
+    let max_file_bytes = max_credentials_file_bytes(capacity)?;
+    let metadata_len = file.metadata().map_err(|error| error.to_string())?.len();
+    if metadata_len > max_file_bytes {
+        return Err(format!(
+            "credentials payload is {metadata_len} bytes but the configured capacity permits at most {max_file_bytes}"
+        ));
+    }
+    let read_limit = max_file_bytes
+        .checked_add(1)
+        .ok_or_else(|| "credentials payload read bound overflow".to_owned())?;
+    let mut raw = String::new();
+    file.by_ref()
+        .take(read_limit)
+        .read_to_string(&mut raw)
+        .map_err(|error| error.to_string())?;
+    if u64::try_from(raw.len()).map_err(|_| "credentials payload length overflow")?
+        > max_file_bytes
+    {
+        return Err(format!(
+            "credentials payload exceeds the configured {max_file_bytes}-byte bound"
+        ));
+    }
     let value: norito::json::Value = norito::json::from_str(&raw).map_err(|err| err.to_string())?;
     let obj = value
         .as_object()
@@ -1480,6 +1763,14 @@ fn load_credentials(
     }
     Ok(result)
 }
+fn max_credentials_file_bytes(capacity: NonZeroUsize) -> Result<u64, String> {
+    let bytes = capacity
+        .get()
+        .checked_mul(MAX_CREDENTIAL_RECORD_JSON_BYTES)
+        .and_then(|bytes| bytes.checked_add(CREDENTIAL_FILE_JSON_OVERHEAD_BYTES))
+        .ok_or_else(|| "credential file size bound overflow".to_owned())?;
+    u64::try_from(bytes).map_err(|_| "credential file size bound exceeds u64".to_owned())
+}
 fn require_exact_json_fields(
     object: &norito::json::Map,
     allowed: &[&str],
@@ -1558,6 +1849,7 @@ fn persist_credentials(
             "failed to create operator auth directory: {err}"
         ))
     })?;
+    let parent_directory = open_parent_directory_for_sync(parent)?;
     let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|err| {
         OperatorAuthError::persistence_failure(format!("failed to create temp file: {err}"))
     })?;
@@ -1570,30 +1862,37 @@ fn persist_credentials(
     tmp.as_file().sync_all().map_err(|err| {
         OperatorAuthError::persistence_failure(format!("failed to sync credentials: {err}"))
     })?;
-    let persisted = tmp.persist(path).map_err(|err| {
+    let _persisted = tmp.persist(path).map_err(|err| {
         OperatorAuthError::persistence_failure(format!("failed to persist credentials: {err}"))
     })?;
-    persisted.sync_all().map_err(|err| {
-        OperatorAuthError::persistence_failure(format!(
-            "failed to sync persisted credentials: {err}"
-        ))
-    })?;
-    sync_parent_directory(parent)?;
+    // The rename above is the logical commit point. The file's data and metadata were synced
+    // before it, so a later directory-fsync error must not be returned as an apparent rollback:
+    // callers would otherwise retain an older in-memory credential set than the visible file.
+    if let Some(directory) = parent_directory
+        && let Err(error) = directory.sync_all()
+    {
+        iroha_logger::error!(
+            ?error,
+            path = %parent.display(),
+            "operator credential rename committed but directory sync failed"
+        );
+    }
     Ok(())
 }
-#[cfg(unix)]
-fn sync_parent_directory(parent: &Path) -> Result<(), OperatorAuthError> {
-    fs::File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|err| {
+fn open_parent_directory_for_sync(parent: &Path) -> Result<Option<fs::File>, OperatorAuthError> {
+    #[cfg(unix)]
+    {
+        fs::File::open(parent).map(Some).map_err(|err| {
             OperatorAuthError::persistence_failure(format!(
-                "failed to sync operator auth directory: {err}"
+                "failed to open operator auth directory for durable sync: {err}"
             ))
         })
-}
-#[cfg(not(unix))]
-fn sync_parent_directory(_parent: &Path) -> Result<(), OperatorAuthError> {
-    Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        Ok(None)
+    }
 }
 fn parse_registration_payload(
     payload: &norito::json::Value,
@@ -2033,11 +2332,13 @@ fn validate_authenticator_flags(
     }
     let has_attested_credential_data = flags & FLAG_ATTESTED_CREDENTIAL_DATA != 0;
     if has_attested_credential_data != require_attested_credential_data {
-        return Err(OperatorAuthError::invalid_payload(if require_attested_credential_data {
-            "authenticatorData missing attested credential data"
-        } else {
-            "assertion authenticatorData must not contain attested credential data"
-        }));
+        return Err(OperatorAuthError::invalid_payload(
+            if require_attested_credential_data {
+                "authenticatorData missing attested credential data"
+            } else {
+                "assertion authenticatorData must not contain attested credential data"
+            },
+        ));
     }
     Ok(())
 }
@@ -2134,11 +2435,15 @@ pub async fn handle_operator_register_options(
     State(app): State<SharedAppState>,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
+    body: Body,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
     let ctx = app
         .operator_auth
         .authorize_bootstrap(&headers, Some(remote.ip()), ACTION_REGISTER_OPTIONS)
         .await?;
+    require_empty_options_body(body)
+        .await
+        .map_err(|error| app.operator_auth.record_error(&ctx, ACTION_REGISTER_OPTIONS, error))?;
     let payload = app.operator_auth.webauthn_registration_options(&ctx)?;
     Ok(JsonBody(payload))
 }
@@ -2162,15 +2467,43 @@ pub async fn handle_operator_register_verify(
     ]);
     Ok(JsonBody(response))
 }
+/// List enrolled operator WebAuthn credentials without exposing verification keys.
+pub async fn handle_operator_credentials(
+    State(app): State<SharedAppState>,
+) -> Result<impl IntoResponse, OperatorAuthError> {
+    Ok(JsonBody(app.operator_auth.credential_inventory()?))
+}
+/// Delete one operator WebAuthn credential and revoke all outstanding operator auth state.
+pub async fn handle_operator_credential_delete(
+    State(app): State<SharedAppState>,
+    AxumPath(credential_id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, OperatorAuthError> {
+    let generation = app
+        .operator_auth
+        .credential_management_generation(&headers)?;
+    let outcome = app
+        .operator_auth
+        .delete_credential(&credential_id, generation)?;
+    Ok(JsonBody(json_object(vec![
+        json_entry("status", "ok"),
+        json_entry("credential_id", outcome.credential_id),
+        json_entry("credentials_total", outcome.credentials_total),
+    ])))
+}
 pub async fn handle_operator_login_options(
     State(app): State<SharedAppState>,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
+    body: Body,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
     let ctx = app
         .operator_auth
         .authorize_login(&headers, Some(remote.ip()), ACTION_LOGIN_OPTIONS)
         .await?;
+    require_empty_options_body(body)
+        .await
+        .map_err(|error| app.operator_auth.record_error(&ctx, ACTION_LOGIN_OPTIONS, error))?;
     let payload = app.operator_auth.webauthn_authentication_options(&ctx)?;
     Ok(JsonBody(payload))
 }
@@ -2258,6 +2591,14 @@ mod tests {
         lockout: OperatorAuthLockout,
         algorithms: Vec<OperatorWebAuthnAlgorithm>,
     ) -> ToriiOperatorAuth {
+        let tokens = if tokens.is_empty() {
+            vec![test_bootstrap_token("default")]
+        } else {
+            tokens
+                .into_iter()
+                .map(|token| test_bootstrap_token(&token))
+                .collect()
+        };
         ToriiOperatorAuth {
             enabled: true,
             require_mtls: false,
@@ -2272,15 +2613,40 @@ mod tests {
             webauthn: Some(base_webauthn_config(algorithms)),
         }
     }
+    fn test_bootstrap_token(label: &str) -> String {
+        format!("iroha-test-bootstrap-token-{label}-0123456789")
+    }
     fn build_operator_auth(config: ToriiOperatorAuth, data_dir: &Path) -> OperatorAuth {
         OperatorAuth::new(config, data_dir.to_path_buf(), MaybeTelemetry::disabled())
             .expect("operator auth")
+    }
+    fn session_authority(auth: &OperatorAuth) -> EnrollmentAuthority {
+        EnrollmentAuthority::Session(
+            auth.credential_revocation_generation.load(Ordering::Acquire),
+        )
+    }
+    fn credential_management_authority(auth: &OperatorAuth) -> u64 {
+        auth.credential_revocation_generation.load(Ordering::Acquire)
     }
     fn write_credentials_fixture(data_dir: &Path, body: &str) {
         let path = operator_credentials_path(data_dir);
         fs::create_dir_all(path.parent().expect("credentials parent"))
             .expect("create credentials directory");
         fs::write(path, body).expect("write credentials fixture");
+    }
+    fn es256_credential(id: &[u8], sign_count: u32, created_at_ms: u64) -> StoredCredential {
+        let signing_key = SigningKey::random(&mut OsRng);
+        StoredCredential {
+            id: id.to_vec(),
+            public_key: signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes()
+                .to_vec(),
+            alg: OperatorWebAuthnAlgorithm::Es256,
+            sign_count,
+            created_at_ms,
+        }
     }
     fn base_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -2297,11 +2663,434 @@ mod tests {
         ConnectInfo("127.0.0.1:8080".parse().expect("loopback socket"))
     }
     #[test]
+    fn credential_inventory_is_stable_and_never_exposes_public_keys() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.insert_credential(
+            es256_credential(b"z-credential", 7, 200),
+            session_authority(&auth),
+        )
+        .expect("insert z credential");
+        auth.insert_credential(
+            es256_credential(b"a-credential", 3, 100),
+            session_authority(&auth),
+        )
+        .expect("insert a credential");
+
+        let inventory = auth.credential_inventory().expect("credential inventory");
+        assert_eq!(inventory["credentials_total"].as_u64(), Some(2));
+        let credentials = inventory["credentials"]
+            .as_array()
+            .expect("credentials array");
+        let a_credential_id = encode_b64url(b"a-credential");
+        let z_credential_id = encode_b64url(b"z-credential");
+        assert_eq!(
+            credentials[0]["credential_id"].as_str(),
+            Some(a_credential_id.as_str())
+        );
+        assert_eq!(credentials[0]["algorithm"].as_str(), Some("es256"));
+        assert_eq!(credentials[0]["sign_count"].as_u64(), Some(3));
+        assert_eq!(credentials[0]["created_at_ms"].as_u64(), Some(100));
+        assert_eq!(
+            credentials[1]["credential_id"].as_str(),
+            Some(z_credential_id.as_str())
+        );
+        for credential in credentials {
+            let object = credential.as_object().expect("credential metadata");
+            assert_eq!(object.len(), 4);
+            assert!(!object.contains_key("public_key"));
+            assert!(!object.contains_key("public_key_b64"));
+        }
+    }
+    #[test]
+    fn credential_deletion_requires_a_canonical_bounded_known_id() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.insert_credential(
+            es256_credential(b"delete-me", 0, 1),
+            session_authority(&auth),
+        )
+        .expect("insert credential to delete");
+        auth.insert_credential(
+            es256_credential(b"keep-me", 0, 2),
+            session_authority(&auth),
+        )
+        .expect("insert credential to keep");
+
+        for malformed in [
+            String::new(),
+            "ZGVsZXRlLW1l=".to_owned(),
+            encode_b64url(&vec![0; MAX_CREDENTIAL_ID_BYTES + 1]),
+        ] {
+            let error = auth
+                .delete_credential(&malformed, credential_management_authority(&auth))
+                .expect_err("noncanonical or oversized id must fail");
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+            assert_eq!(error.code, "operator_webauthn_payload_invalid");
+        }
+        let unknown = auth
+            .delete_credential(
+                &encode_b64url(b"not-enrolled"),
+                credential_management_authority(&auth),
+            )
+            .expect_err("unknown credential must fail");
+        assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+        assert_eq!(unknown.code, "operator_webauthn_credential_not_found");
+
+        let deleted = auth
+            .delete_credential(
+                &encode_b64url(b"delete-me"),
+                credential_management_authority(&auth),
+            )
+            .expect("canonical enrolled id deletes");
+        assert_eq!(deleted.credential_id, encode_b64url(b"delete-me"));
+        assert_eq!(deleted.credentials_total, 1);
+        assert_eq!(auth.credentials_read().expect("credential state").len(), 1);
+    }
+    #[test]
+    fn last_credential_requires_a_bootstrap_recovery_path() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.insert_credential(
+            es256_credential(b"only-credential", 0, 1),
+            session_authority(&auth),
+        )
+        .expect("persist sole credential");
+        drop(auth);
+
+        let mut no_bootstrap = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        no_bootstrap.tokens.clear();
+        let restarted = build_operator_auth(no_bootstrap, tempdir.path());
+        let error = restarted
+            .delete_credential(
+                &encode_b64url(b"only-credential"),
+                credential_management_authority(&restarted),
+            )
+            .expect_err("last credential needs a bootstrap recovery path");
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code, "operator_webauthn_last_credential");
+        assert_eq!(
+            restarted
+                .credentials_read()
+                .expect("credential state")
+                .len(),
+            1
+        );
+        drop(restarted);
+
+        let with_bootstrap = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let restarted = build_operator_auth(with_bootstrap, tempdir.path());
+        let deleted = restarted
+            .delete_credential(
+                &encode_b64url(b"only-credential"),
+                credential_management_authority(&restarted),
+            )
+            .expect("bootstrap token permits deleting the last credential");
+        assert_eq!(deleted.credentials_total, 0);
+    }
+    #[test]
+    fn credential_deletion_is_persisted_across_restart() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.insert_credential(
+            es256_credential(b"removed", 0, 1),
+            session_authority(&auth),
+        )
+        .expect("insert removed credential");
+        auth.insert_credential(
+            es256_credential(b"retained", 0, 2),
+            session_authority(&auth),
+        )
+        .expect("insert retained credential");
+        auth.delete_credential(
+            &encode_b64url(b"removed"),
+            credential_management_authority(&auth),
+        )
+        .expect("delete persisted credential");
+        drop(auth);
+
+        let mut restart = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        restart.tokens.clear();
+        let restarted = build_operator_auth(restart, tempdir.path());
+        let credentials = restarted.credentials_read().expect("credential state");
+        assert_eq!(credentials.len(), 1);
+        assert_eq!(credentials[0].id, b"retained");
+    }
+    #[test]
+    fn credential_deletion_changes_nothing_when_persistence_fails() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let mut auth = build_operator_auth(config, tempdir.path());
+        auth.insert_credential(
+            es256_credential(b"delete-me", 0, 1),
+            session_authority(&auth),
+        )
+        .expect("insert deleted credential");
+        auth.insert_credential(
+            es256_credential(b"keep-me", 0, 2),
+            session_authority(&auth),
+        )
+        .expect("insert retained credential");
+        let persisted_path = auth.credentials_path.clone();
+        let persisted_before = fs::read(&persisted_path).expect("persisted credentials");
+        let ctx = AuthContext {
+            key: "credential-delete-rollback".to_owned(),
+            enrollment_authority: session_authority(&auth),
+        };
+        auth.webauthn_authentication_options(&ctx)
+            .expect("authentication challenge");
+        let mut rng = FallibleOsRng;
+        let session = auth
+            .issue_session_with_rng(b"delete-me", Duration::from_secs(60), &mut rng)
+            .expect("operator session");
+        let generation_before = auth
+            .credential_revocation_generation
+            .load(Ordering::Acquire);
+        let blocked_parent = tempdir.path().join("delete-not-a-directory");
+        fs::write(&blocked_parent, b"block directory creation").expect("blocker file");
+        auth.credentials_path = blocked_parent.join(CREDENTIALS_FILENAME);
+
+        let error = auth
+            .delete_credential(&encode_b64url(b"delete-me"), generation_before)
+            .expect_err("failed persistence must abort deletion");
+        assert_eq!(error.code, "operator_webauthn_persist_failed");
+        assert_eq!(auth.credentials_read().expect("credential state").len(), 2);
+        assert_eq!(
+            fs::read(persisted_path).expect("persisted credentials"),
+            persisted_before
+        );
+        assert_eq!(auth.challenges.lock().len(), 1);
+        assert!(auth.session_valid(&session.session_token));
+        assert_eq!(
+            auth.credential_revocation_generation.load(Ordering::Acquire),
+            generation_before
+        );
+    }
+    #[test]
+    fn credential_deletion_invalidates_all_sessions_and_challenges() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.insert_credential(
+            es256_credential(b"revoked", 0, 1),
+            session_authority(&auth),
+        )
+        .expect("insert revoked credential");
+        auth.insert_credential(
+            es256_credential(b"remaining", 0, 2),
+            session_authority(&auth),
+        )
+        .expect("insert remaining credential");
+        let ctx = AuthContext {
+            key: "credential-revocation".to_owned(),
+            enrollment_authority: session_authority(&auth),
+        };
+        auth.webauthn_registration_options(&ctx)
+            .expect("registration challenge");
+        auth.webauthn_authentication_options(&ctx)
+            .expect("authentication challenge");
+        let mut rng = FallibleOsRng;
+        let session = auth
+            .issue_session_with_rng(b"revoked", Duration::from_secs(60), &mut rng)
+            .expect("operator session");
+        assert_eq!(auth.challenges.lock().len(), 2);
+        assert_eq!(auth.sessions.lock().len(), 1);
+
+        auth.delete_credential(
+            &encode_b64url(b"revoked"),
+            credential_management_authority(&auth),
+        )
+        .expect("delete credential");
+        assert_eq!(auth.challenges.lock().len(), 0);
+        assert_eq!(auth.sessions.lock().len(), 0);
+        assert!(!auth.session_valid(&session.session_token));
+    }
+    #[test]
+    fn credential_deletion_rechecks_each_captured_session_generation() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.insert_credential(
+            es256_credential(b"first-delete", 0, 1),
+            session_authority(&auth),
+        )
+        .expect("insert first credential to delete");
+        auth.insert_credential(
+            es256_credential(b"second-delete", 0, 2),
+            session_authority(&auth),
+        )
+        .expect("insert second credential to delete");
+        auth.insert_credential(
+            es256_credential(b"retained", 0, 3),
+            session_authority(&auth),
+        )
+        .expect("insert retained credential");
+
+        let generation = credential_management_authority(&auth);
+        let now = Instant::now();
+        {
+            let mut sessions = auth.sessions.lock();
+            for token in ["first-delete-session", "second-delete-session"] {
+                sessions
+                    .insert(
+                        token.to_owned(),
+                        SessionEntry {
+                            credential_revocation_generation: generation,
+                        },
+                        now + Duration::from_secs(60),
+                        now,
+                    )
+                    .expect("test session fits bounded state");
+            }
+        }
+        let mut first_headers = HeaderMap::new();
+        first_headers.insert(
+            HEADER_OPERATOR_SESSION,
+            HeaderValue::from_static("first-delete-session"),
+        );
+        let mut second_headers = HeaderMap::new();
+        second_headers.insert(
+            HEADER_OPERATOR_SESSION,
+            HeaderValue::from_static("second-delete-session"),
+        );
+        let first_authority = auth
+            .credential_management_generation(&first_headers)
+            .expect("first deletion authority");
+        let second_authority = auth
+            .credential_management_generation(&second_headers)
+            .expect("second deletion authority captured before revocation");
+        assert_eq!(first_authority, second_authority);
+
+        auth.delete_credential(&encode_b64url(b"first-delete"), first_authority)
+            .expect("first deletion succeeds");
+        let generation_after_first = credential_management_authority(&auth);
+        let persisted_after_first =
+            fs::read(&auth.credentials_path).expect("credentials persisted after first deletion");
+        let credential_ids_after_first = auth
+            .credentials_read()
+            .expect("credential state after first deletion")
+            .iter()
+            .map(|credential| credential.id.clone())
+            .collect::<Vec<_>>();
+
+        let error = auth
+            .delete_credential(&encode_b64url(b"second-delete"), second_authority)
+            .expect_err("stale second deletion authority must be rejected");
+        assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(error.code, "operator_session_invalid");
+        assert_eq!(
+            credential_management_authority(&auth),
+            generation_after_first
+        );
+        assert_eq!(
+            fs::read(&auth.credentials_path).expect("credentials remain persisted"),
+            persisted_after_first
+        );
+        assert_eq!(
+            auth.credentials_read()
+                .expect("credential state remains readable")
+                .iter()
+                .map(|credential| credential.id.clone())
+                .collect::<Vec<_>>(),
+            credential_ids_after_first
+        );
+    }
+    #[test]
+    fn credential_deletion_rejects_an_in_flight_stale_session_enrollment() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        auth.insert_credential(
+            es256_credential(b"revoked", 0, 1),
+            session_authority(&auth),
+        )
+        .expect("insert revoked credential");
+        auth.insert_credential(
+            es256_credential(b"remaining", 0, 2),
+            session_authority(&auth),
+        )
+        .expect("insert remaining credential");
+        let stale_session_authority = session_authority(&auth);
+
+        auth.delete_credential(
+            &encode_b64url(b"revoked"),
+            credential_management_authority(&auth),
+        )
+        .expect("delete credential");
+        let error = auth
+            .insert_credential(
+                es256_credential(b"stale-enrollment", 0, 3),
+                stale_session_authority,
+            )
+            .expect_err("a session captured before deletion must not enroll a credential");
+        assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(error.code, "operator_session_invalid");
+        let credentials = auth.credentials_read().expect("credential state");
+        assert_eq!(credentials.len(), 1);
+        assert_eq!(credentials[0].id, b"remaining");
+    }
+    #[test]
     fn origin_allows_default_port_and_trailing_slash() {
         let allowed = vec![Url::parse("https://example.com").expect("origin")];
         assert!(origin_allowed("https://example.com/", &allowed));
         assert!(origin_allowed("https://example.com:443", &allowed));
         assert!(!origin_allowed("https://example.com:444", &allowed));
+        for malformed in [
+            "https://user@example.com/",
+            "https://example.com/path",
+            "https://example.com/?query",
+            "https://example.com/#fragment",
+        ] {
+            assert!(!origin_allowed(malformed, &allowed));
+        }
     }
     #[test]
     fn credential_id_requires_matching_id_and_raw_id() {
@@ -2354,6 +3143,16 @@ mod tests {
             .expect("assertion response")
             .insert("userHandle".to_owned(), norito::json::Value::Null);
         assert!(parse_assertion_payload(&response_extra).is_err());
+    }
+    #[tokio::test]
+    async fn webauthn_options_require_an_exact_empty_body() {
+        require_empty_options_body(Body::empty())
+            .await
+            .expect("empty options body");
+        let error = require_empty_options_body(Body::from("x"))
+            .await
+            .expect_err("nonempty options body must fail");
+        assert_eq!(error.code, "operator_webauthn_payload_invalid");
     }
     #[test]
     fn client_data_rejects_cross_origin_contexts() {
@@ -2428,6 +3227,107 @@ mod tests {
             Err(error) => error,
         };
         assert!(matches!(error, OperatorAuthInitError::InvalidPolicy(_)));
+    }
+    #[test]
+    fn operator_auth_requires_an_exact_first_enrollment_path() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let mut config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        config.tokens.clear();
+        assert!(matches!(
+            OperatorAuth::new(
+                config,
+                tempdir.path().to_path_buf(),
+                MaybeTelemetry::disabled(),
+            ),
+            Err(OperatorAuthInitError::InvalidPolicy(_))
+        ));
+
+        for tokens in [
+            vec!["short".to_owned()],
+            vec![" token-with-whitespace-012345678901".to_owned()],
+            vec![
+                test_bootstrap_token("duplicate"),
+                test_bootstrap_token("duplicate"),
+            ],
+        ] {
+            assert!(matches!(
+                validate_bootstrap_tokens(true, &tokens),
+                Err(OperatorAuthInitError::InvalidPolicy(_))
+            ));
+        }
+
+        let mut too_many_tokens = Vec::new();
+        for index in 0..=iroha_config::parameters::defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS
+        {
+            too_many_tokens.push(test_bootstrap_token(&format!("token-{index}")));
+        }
+        assert!(matches!(
+            validate_bootstrap_tokens(true, &too_many_tokens),
+            Err(OperatorAuthInitError::InvalidPolicy(_))
+        ));
+
+        let mut oversized_capacity = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        oversized_capacity.credential_capacity = NonZeroUsize::new(
+            iroha_config::parameters::defaults::torii::operator_auth::MAX_CREDENTIAL_CAPACITY + 1,
+        )
+        .expect("non-zero capacity");
+        assert!(matches!(
+            OperatorAuth::new(
+                oversized_capacity,
+                tempdir.path().to_path_buf(),
+                MaybeTelemetry::disabled(),
+            ),
+            Err(OperatorAuthInitError::InvalidPolicy(_))
+        ));
+    }
+    #[test]
+    fn enrolled_operator_auth_restarts_without_a_bootstrap_token() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            vec!["bootstrap".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, tempdir.path());
+        let signing_key = SigningKey::random(&mut OsRng);
+        auth.insert_credential(
+            StoredCredential {
+                id: b"restart-credential".to_vec(),
+                public_key: signing_key
+                    .verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes()
+                    .to_vec(),
+                alg: OperatorWebAuthnAlgorithm::Es256,
+                sign_count: 0,
+                created_at_ms: 1,
+            },
+            EnrollmentAuthority::BootstrapToken,
+        )
+        .expect("persist first credential");
+        drop(auth);
+
+        let mut restart = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        restart.tokens.clear();
+        let restarted = OperatorAuth::new(
+            restart,
+            tempdir.path().to_path_buf(),
+            MaybeTelemetry::disabled(),
+        )
+        .expect("persisted credential owns restart admission");
+        assert!(restarted.has_credentials().expect("credential state"));
     }
     #[tokio::test]
     async fn operator_auth_preserves_fractional_per_minute_rate() {
@@ -2563,9 +3463,10 @@ mod tests {
     }
     fn headers_with_operator_token(token: &str) -> HeaderMap {
         let mut headers = base_headers();
+        let token = test_bootstrap_token(token);
         headers.insert(
             HEADER_OPERATOR_TOKEN,
-            HeaderValue::from_str(token).expect("token"),
+            HeaderValue::from_str(&token).expect("token"),
         );
         headers
     }
@@ -2748,10 +3649,7 @@ mod tests {
                     CborValue::Text("authData".to_owned()),
                     CborValue::Bytes(vec![1]),
                 ),
-                (
-                    CborValue::Text("legacy".to_owned()),
-                    CborValue::Null,
-                ),
+                (CborValue::Text("legacy".to_owned()), CborValue::Null),
             ]),
         ];
         for value in malformed {
@@ -2784,13 +3682,11 @@ mod tests {
 
         let signing_key = SigningKey::random(&mut OsRng);
         let cose_key = build_cose_key_es256(&signing_key);
-        let mut registration =
-            build_auth_data_registration(&policy, b"credential", &cose_key, 1);
+        let mut registration = build_auth_data_registration(&policy, b"credential", &cose_key, 1);
         registration.push(0);
         assert!(parse_auth_data_registration(&registration, &policy).is_err());
 
-        let mut registration =
-            build_auth_data_registration(&policy, b"credential", &cose_key, 1);
+        let mut registration = build_auth_data_registration(&policy, b"credential", &cose_key, 1);
         registration[32] |= FLAG_EXTENSION_DATA;
         assert!(parse_auth_data_registration(&registration, &policy).is_err());
     }
@@ -3079,6 +3975,28 @@ mod tests {
         }
     }
     #[test]
+    fn persisted_credential_file_is_bounded_before_json_allocation() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let capacity = NonZeroUsize::new(1).expect("non-zero capacity");
+        let bytes = max_credentials_file_bytes(capacity).expect("file bound");
+        let oversized = "x".repeat(usize::try_from(bytes + 1).expect("test bound fits usize"));
+        write_credentials_fixture(tempdir.path(), &oversized);
+        let mut config = base_operator_auth_config(
+            Vec::new(),
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        config.credential_capacity = capacity;
+        assert!(matches!(
+            OperatorAuth::new(
+                config,
+                tempdir.path().to_path_buf(),
+                MaybeTelemetry::disabled(),
+            ),
+            Err(OperatorAuthInitError::CredentialLoad(_))
+        ));
+    }
+    #[test]
     fn credential_capacity_is_enforced_for_load_and_rollover() {
         let signing_key = SigningKey::random(&mut OsRng);
         let public_key = encode_b64url(
@@ -3137,10 +4055,17 @@ mod tests {
             sign_count: 0,
             created_at_ms: 1,
         };
-        auth.upsert_credential(credential(1), EnrollmentAuthority::Session)
+        auth.insert_credential(credential(1), session_authority(&auth))
             .expect("first credential");
+        let duplicate = auth
+            .insert_credential(credential(1), session_authority(&auth))
+            .expect_err("duplicate credential identifiers must not replace keys or counters");
+        assert_eq!(
+            duplicate.code,
+            "operator_webauthn_credential_duplicate"
+        );
         let error = auth
-            .upsert_credential(credential(2), EnrollmentAuthority::Session)
+            .insert_credential(credential(2), session_authority(&auth))
             .expect_err("rollover beyond capacity must fail");
         assert_eq!(
             error.code,
@@ -3205,26 +4130,31 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config, tempdir.path());
+        let public_key = SigningKey::random(&mut OsRng)
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
         let credential = |id| StoredCredential {
             id: vec![id],
-            public_key: vec![id; P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN],
+            public_key: public_key.clone(),
             alg: OperatorWebAuthnAlgorithm::Es256,
             sign_count: 0,
             created_at_ms: 0,
         };
 
         assert_eq!(
-            auth.upsert_credential(credential(1), EnrollmentAuthority::BootstrapToken)
+            auth.insert_credential(credential(1), EnrollmentAuthority::BootstrapToken)
                 .expect("bootstrap may persist the first credential"),
             1
         );
         let error = auth
-            .upsert_credential(credential(2), EnrollmentAuthority::BootstrapToken)
+            .insert_credential(credential(2), EnrollmentAuthority::BootstrapToken)
             .expect_err("a concurrent bootstrap must not persist a rollover credential");
         assert_eq!(error.code, "operator_session_missing");
         assert_eq!(auth.credentials_read().expect("credential state").len(), 1);
         assert_eq!(
-            auth.upsert_credential(credential(2), EnrollmentAuthority::Session)
+            auth.insert_credential(credential(2), session_authority(&auth))
                 .expect("an authenticated session may persist a rollover credential"),
             2
         );
@@ -3238,10 +4168,15 @@ mod tests {
             vec![OperatorWebAuthnAlgorithm::Es256],
         );
         let auth = build_operator_auth(config.clone(), tempdir.path());
-        auth.upsert_credential(
+        let public_key = SigningKey::random(&mut OsRng)
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        auth.insert_credential(
             StoredCredential {
                 id: vec![1],
-                public_key: vec![1; P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN],
+                public_key,
                 alg: OperatorWebAuthnAlgorithm::Es256,
                 sign_count: 0,
                 created_at_ms: 0,
@@ -3295,6 +4230,11 @@ mod tests {
             .await
             .expect_err("missing mTLS");
         assert_eq!(err.code, "operator_mtls_required");
+        assert_eq!(
+            auth.lockout.entries.lock().len(),
+            0,
+            "callers outside the trusted mTLS boundary must not consume lockout state"
+        );
         let mut headers = base_headers();
         headers.insert(
             HEADER_MTLS_FORWARD,
@@ -3343,7 +4283,7 @@ mod tests {
         auth.record_failure(&ctx, ACTION_LOGIN_VERIFY, "invalid_assertion")
             .expect("lockout state has capacity");
 
-        assert_eq!(auth.lockout.is_locked(&ctx.key), Ok(true));
+        assert!(auth.lockout.is_locked(&ctx.key));
     }
     #[test]
     fn operational_errors_do_not_advance_lockout() {
@@ -3363,15 +4303,15 @@ mod tests {
         let operational = OperatorAuthError::random_bytes_failure("entropy unavailable");
         let returned = auth.record_error(&ctx, ACTION_LOGIN_VERIFY, operational);
         assert_eq!(returned.code, "operator_auth_random_bytes_failed");
-        assert_eq!(auth.lockout.is_locked(&ctx.key), Ok(false));
+        assert!(!auth.lockout.is_locked(&ctx.key));
 
         let denial = OperatorAuthError::signature_invalid();
         let returned = auth.record_error(&ctx, ACTION_LOGIN_VERIFY, denial);
         assert_eq!(returned.code, "operator_webauthn_signature_invalid");
-        assert_eq!(auth.lockout.is_locked(&ctx.key), Ok(true));
+        assert!(auth.lockout.is_locked(&ctx.key));
     }
-    #[test]
-    fn lockout_capacity_exhaustion_overrides_authentication_denial() {
+    #[tokio::test]
+    async fn full_lockout_state_does_not_starve_valid_unseen_identity() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let lockout = OperatorAuthLockout {
             failures: std::num::NonZeroU32::new(10),
@@ -3382,10 +4322,10 @@ mod tests {
         config.ephemeral_state_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
         let auth = build_operator_auth(config, tempdir.path());
         auth.lockout
-            .record_failure("caller-a")
+            .record_failure("198.51.100.1")
             .expect("first identity fits");
         let ctx = AuthContext {
-            key: "caller-b".to_owned(),
+            key: "198.51.100.2".to_owned(),
             enrollment_authority: EnrollmentAuthority::None,
         };
 
@@ -3394,14 +4334,41 @@ mod tests {
             ACTION_LOGIN_VERIFY,
             OperatorAuthError::signature_invalid(),
         );
-        assert_eq!(returned.code, "operator_auth_state_capacity_exhausted");
-        assert_eq!(returned.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(returned.code, "operator_webauthn_signature_invalid");
+        assert_eq!(auth.lockout.entries.lock().len(), 1);
+        assert!(!auth.lockout.is_locked(&ctx.key));
+
+        let now = Instant::now();
+        auth.sessions
+            .lock()
+            .insert(
+                "valid-session".to_owned(),
+                SessionEntry {
+                    credential_revocation_generation: auth
+                        .credential_revocation_generation
+                        .load(Ordering::Acquire),
+                },
+                now + Duration::from_secs(60),
+                now,
+            )
+            .expect("session store has its independent capacity");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_OPERATOR_SESSION,
+            HeaderValue::from_static("valid-session"),
+        );
+        auth.authorize_operator_endpoint(
+            &headers,
+            Some("198.51.100.2".parse().expect("unseen caller IP")),
+        )
+        .await
+        .expect("full attacker-selected lockout state must not reject a valid unseen caller");
     }
     #[test]
-    fn lockout_identity_state_is_bounded_and_fails_closed() {
+    fn lockout_identity_state_is_bounded_and_preserves_tracked_locks() {
         let tracker = LockoutTracker::new(
             OperatorAuthLockout {
-                failures: std::num::NonZeroU32::new(10),
+                failures: std::num::NonZeroU32::new(2),
                 window: Duration::from_secs(60),
                 duration: Duration::from_secs(60),
             },
@@ -3411,15 +4378,14 @@ mod tests {
         assert_eq!(tracker.record_failure("caller-a"), Ok(false));
         assert_eq!(tracker.record_failure("caller-b"), Ok(false));
         assert_eq!(tracker.entries.lock().len(), 2);
-        assert_eq!(tracker.is_locked("caller-c"), Err(ExpiringStoreAtCapacity));
-        assert_eq!(
-            tracker.record_failure("caller-c"),
-            Err(ExpiringStoreAtCapacity)
-        );
+        assert!(!tracker.is_locked("caller-c"));
+        assert_eq!(tracker.record_failure("caller-c"), Ok(false));
         assert_eq!(tracker.entries.lock().len(), 2);
+        assert_eq!(tracker.record_failure("caller-a"), Ok(true));
+        assert!(tracker.is_locked("caller-a"));
 
         tracker.clear("caller-a");
-        assert_eq!(tracker.is_locked("caller-c"), Ok(false));
+        assert!(!tracker.is_locked("caller-c"));
         assert_eq!(tracker.record_failure("caller-c"), Ok(false));
         assert_eq!(tracker.entries.lock().len(), 2);
     }
@@ -3770,6 +4736,7 @@ mod tests {
             State(app.clone()),
             loopback_connect_info(),
             headers.clone(),
+            Body::empty(),
         )
         .await
         .err()
@@ -3779,11 +4746,26 @@ mod tests {
             State(app.clone()),
             loopback_connect_info(),
             headers.clone(),
+            Body::empty(),
         )
         .await
         .err()
         .expect("login options disabled");
         assert_eq!(err.code, "operator_auth_disabled");
+        let err = handle_operator_credentials(State(app.clone()))
+            .await
+            .err()
+            .expect("credential inventory disabled");
+        assert_eq!(err.code, "operator_webauthn_disabled");
+        let err = handle_operator_credential_delete(
+            State(app),
+            AxumPath(encode_b64url(b"credential")),
+            headers,
+        )
+        .await
+        .err()
+        .expect("credential deletion disabled");
+        assert_eq!(err.code, "operator_webauthn_disabled");
     }
     #[test]
     fn operator_auth_error_response_sets_status() {

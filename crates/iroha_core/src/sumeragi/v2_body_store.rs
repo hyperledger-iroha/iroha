@@ -42,6 +42,7 @@ use iroha_data_model::block::{
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use std::{
     collections::BTreeMap,
+    ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     mem::size_of,
@@ -60,7 +61,7 @@ const FRAME_PAYLOAD_MAX_BYTES: u64 =
 const VALIDATION_OUTCOME_MARKER_PAYLOAD_MAX_BYTES: u64 = 4 * 1024;
 const VALIDATION_OUTCOME_MARKER_FRAME_MAX_BYTES: u64 =
     VALIDATION_OUTCOME_MARKER_PAYLOAD_MAX_BYTES + (FRAME_HEADER_LEN + CHECKSUM_LEN) as u64;
-/// Compatibility default for callers which do not supply an operator limit.
+/// Test and inert read-only geometry used where no operator limit is consumed.
 pub(crate) const DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT: u64 = 1024 * 1024 * 1024;
 const BODY_STORE_TEMPORARY_ENTRIES_PER_BODY: usize = 2;
 const BODY_STORE_DIRECTORY_ENTRIES_PER_BODY: usize = 4;
@@ -85,6 +86,39 @@ impl FramePayloadKind {
             Self::ValidationOutcomeMarker => V2BodyStoreError::ValidationMarkerTooLarge,
         }
     }
+
+    fn maximum_frame_bytes(self) -> Result<u64, V2BodyStoreError> {
+        self.maximum_payload_bytes()
+            .checked_add(
+                u64::try_from(FRAME_HEADER_LEN + CHECKSUM_LEN)
+                    .expect("body-store frame overhead fits u64"),
+            )
+            .ok_or_else(|| self.too_large())
+    }
+}
+
+fn body_store_leaf_has_canonical_name(name: &str, suffix: &str) -> bool {
+    let Some(stem) = name.strip_suffix(suffix) else {
+        return false;
+    };
+    let bytes = stem.as_bytes();
+    let hash_digits = Hash::LENGTH * 2;
+    let expected_len = 20 + 1 + 20 + 1 + hash_digits;
+    if bytes.len() != expected_len || bytes[20] != b'-' || bytes[41] != b'-' {
+        return false;
+    }
+    let decimal = |digits: &[u8], nonzero: bool| {
+        digits.iter().all(u8::is_ascii_digit)
+            && std::str::from_utf8(digits)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_some_and(|value| !nonzero || value != 0)
+    };
+    decimal(&bytes[..20], true)
+        && decimal(&bytes[21..41], false)
+        && bytes[42..]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f'))
 }
 
 /// Per-height geometry for bounded durable body ownership.
@@ -1216,6 +1250,849 @@ impl DurableBodyReceipt {
         }
     }
 }
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UnixFileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+impl UnixFileIdentity {
+    fn from_stat(stat: &rustix::fs::Stat) -> Self {
+        Self {
+            device: stat.st_dev as u64,
+            inode: stat.st_ino as u64,
+        }
+    }
+
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt as _;
+
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[derive(Clone, Debug)]
+struct BoundBodyStoreLeaf {
+    name: OsString,
+    identity: UnixFileIdentity,
+    length: u64,
+}
+
+/// Descriptor-relative owner of one context directory below the Kura-bound
+/// `sumeragi_v2/bodies` root.
+///
+/// All filesystem mutations use these retained handles. Paths are diagnostic
+/// only and are rechecked against the opened identities before and after each
+/// durability boundary.
+#[derive(Debug)]
+struct BoundV2BodyContextDirectory {
+    body_root_path: PathBuf,
+    context_path: PathBuf,
+    context_name: OsString,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    body_root: File,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    context: File,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    body_root_identity: UnixFileIdentity,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    context_identity: UnixFileIdentity,
+}
+
+impl BoundV2BodyContextDirectory {
+    fn from_kura_authority(
+        kura: &crate::kura::Kura,
+        authority: crate::kura::KuraV2BodyStoreDirectoryAuthority,
+        context_name: OsString,
+    ) -> Result<Self, V2BodyStoreError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            if !authority.matches_kura(kura) {
+                return Err(V2BodyStoreError::StorageBinding {
+                    path: kura.sumeragi_v2_storage_root().join("bodies"),
+                    reason: "body-store authority belongs to another Kura instance",
+                });
+            }
+            let (body_root_path, body_root) = authority
+                .into_opened_directory_for(kura)
+                .ok_or_else(|| V2BodyStoreError::StorageBinding {
+                    path: kura.sumeragi_v2_storage_root().join("bodies"),
+                    reason: "consumed body-store authority changed its Kura identity",
+                })?;
+            return Self::from_opened_body_root(body_root_path, body_root, context_name);
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (kura, authority, context_name);
+            Err(V2BodyStoreError::UnsupportedStorageBinding {
+                path: kura.sumeragi_v2_storage_root().join("bodies"),
+            })
+        }
+    }
+
+    #[cfg(all(test, unix, not(target_os = "espidf")))]
+    fn bind_test_root(
+        body_root_path: &Path,
+        context_name: OsString,
+    ) -> Result<Self, V2BodyStoreError> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        fs::create_dir_all(body_root_path).map_err(|source| V2BodyStoreError::Io {
+            path: body_root_path.to_path_buf(),
+            source,
+        })?;
+        let lexical =
+            fs::symlink_metadata(body_root_path).map_err(|source| V2BodyStoreError::Io {
+                path: body_root_path.to_path_buf(),
+                source,
+            })?;
+        if lexical.file_type().is_symlink() || !lexical.is_dir() {
+            return Err(V2BodyStoreError::StorageBinding {
+                path: body_root_path.to_path_buf(),
+                reason: "body-store root is not a direct directory",
+            });
+        }
+        let body_root = OpenOptions::new()
+            .read(true)
+            .custom_flags(
+                (rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC)
+                    .bits() as i32,
+            )
+            .open(body_root_path)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: body_root_path.to_path_buf(),
+                source,
+            })?;
+        if UnixFileIdentity::from_metadata(&lexical)
+            != UnixFileIdentity::from_metadata(&body_root.metadata().map_err(|source| {
+                V2BodyStoreError::Io {
+                    path: body_root_path.to_path_buf(),
+                    source,
+                }
+            })?)
+        {
+            return Err(V2BodyStoreError::StorageBinding {
+                path: body_root_path.to_path_buf(),
+                reason: "body-store root changed while opening",
+            });
+        }
+        Self::from_opened_body_root(body_root_path.to_path_buf(), body_root, context_name)
+    }
+
+    #[cfg(all(test, not(all(unix, not(target_os = "espidf")))))]
+    fn bind_test_root(
+        body_root_path: &Path,
+        _context_name: OsString,
+    ) -> Result<Self, V2BodyStoreError> {
+        Err(V2BodyStoreError::UnsupportedStorageBinding {
+            path: body_root_path.to_path_buf(),
+        })
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn from_opened_body_root(
+        body_root_path: PathBuf,
+        body_root: File,
+        context_name: OsString,
+    ) -> Result<Self, V2BodyStoreError> {
+        let body_root_metadata = body_root
+            .metadata()
+            .map_err(|source| V2BodyStoreError::Io {
+                path: body_root_path.clone(),
+                source,
+            })?;
+        let lexical =
+            fs::symlink_metadata(&body_root_path).map_err(|source| V2BodyStoreError::Io {
+                path: body_root_path.clone(),
+                source,
+            })?;
+        let body_root_identity = UnixFileIdentity::from_metadata(&body_root_metadata);
+        if !body_root_metadata.is_dir()
+            || lexical.file_type().is_symlink()
+            || !lexical.is_dir()
+            || UnixFileIdentity::from_metadata(&lexical) != body_root_identity
+        {
+            return Err(V2BodyStoreError::StorageBinding {
+                path: body_root_path,
+                reason: "opened body-store root is no longer directly linked",
+            });
+        }
+        let context_path = body_root_path.join(&context_name);
+        let created = match rustix::fs::mkdirat(&body_root, &context_name, rustix::fs::Mode::RWXU) {
+            Ok(()) => true,
+            Err(rustix::io::Errno::EXIST) => false,
+            Err(error) => {
+                return Err(V2BodyStoreError::Io {
+                    path: context_path,
+                    source: std::io::Error::from(error),
+                });
+            }
+        };
+        let before = rustix::fs::statat(
+            &body_root,
+            &context_name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|source| V2BodyStoreError::Io {
+            path: context_path.clone(),
+            source,
+        })?;
+        if rustix::fs::FileType::from_raw_mode(before.st_mode) != rustix::fs::FileType::Directory {
+            return Err(V2BodyStoreError::StorageBinding {
+                path: context_path,
+                reason: "body-store context entry is not a direct directory",
+            });
+        }
+        let context = File::from(
+            rustix::fs::openat(
+                &body_root,
+                &context_name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: context_path.clone(),
+                source,
+            })?,
+        );
+        let opened = context.metadata().map_err(|source| V2BodyStoreError::Io {
+            path: context_path.clone(),
+            source,
+        })?;
+        let after = rustix::fs::statat(
+            &body_root,
+            &context_name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|source| V2BodyStoreError::Io {
+            path: context_path.clone(),
+            source,
+        })?;
+        let context_identity = UnixFileIdentity::from_metadata(&opened);
+        if !opened.is_dir()
+            || UnixFileIdentity::from_stat(&before) != context_identity
+            || UnixFileIdentity::from_stat(&after) != context_identity
+        {
+            return Err(V2BodyStoreError::StorageBinding {
+                path: context_path,
+                reason: "body-store context changed while opening",
+            });
+        }
+        rustix::fs::flock(
+            &context,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|source| V2BodyStoreError::Io {
+            path: context_path.clone(),
+            source,
+        })?;
+        let bound = Self {
+            body_root_path,
+            context_path,
+            context_name,
+            body_root,
+            context,
+            body_root_identity,
+            context_identity,
+        };
+        bound.verify_linked()?;
+        if created {
+            bound.sync_body_root()?;
+        }
+        Ok(bound)
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn verify_body_root_linked(&self) -> Result<(), V2BodyStoreError> {
+        let linked_root =
+            fs::symlink_metadata(&self.body_root_path).map_err(|source| V2BodyStoreError::Io {
+                path: self.body_root_path.clone(),
+                source,
+            })?;
+        let opened_root = self
+            .body_root
+            .metadata()
+            .map_err(|source| V2BodyStoreError::Io {
+                path: self.body_root_path.clone(),
+                source,
+            })?;
+        if linked_root.file_type().is_symlink()
+            || !linked_root.is_dir()
+            || !opened_root.is_dir()
+            || UnixFileIdentity::from_metadata(&linked_root) != self.body_root_identity
+            || UnixFileIdentity::from_metadata(&opened_root) != self.body_root_identity
+        {
+            return Err(V2BodyStoreError::StorageBinding {
+                path: self.body_root_path.clone(),
+                reason: "body-store root identity changed after binding",
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn verify_linked(&self) -> Result<(), V2BodyStoreError> {
+        self.verify_body_root_linked()?;
+        let linked_context = rustix::fs::statat(
+            &self.body_root,
+            &self.context_name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|source| V2BodyStoreError::Io {
+            path: self.context_path.clone(),
+            source,
+        })?;
+        let opened_context = self
+            .context
+            .metadata()
+            .map_err(|source| V2BodyStoreError::Io {
+                path: self.context_path.clone(),
+                source,
+            })?;
+        if rustix::fs::FileType::from_raw_mode(linked_context.st_mode)
+            != rustix::fs::FileType::Directory
+            || UnixFileIdentity::from_stat(&linked_context) != self.context_identity
+            || !opened_context.is_dir()
+            || UnixFileIdentity::from_metadata(&opened_context) != self.context_identity
+        {
+            return Err(V2BodyStoreError::StorageBinding {
+                path: self.context_path.clone(),
+                reason: "body-store directory identity changed after binding",
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn fresh_context_handle(&self) -> Result<File, V2BodyStoreError> {
+        self.verify_linked()?;
+        let file = File::from(
+            rustix::fs::openat(
+                &self.body_root,
+                &self.context_name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: self.context_path.clone(),
+                source,
+            })?,
+        );
+        let metadata = file.metadata().map_err(|source| V2BodyStoreError::Io {
+            path: self.context_path.clone(),
+            source,
+        })?;
+        if !metadata.is_dir() || UnixFileIdentity::from_metadata(&metadata) != self.context_identity
+        {
+            return Err(V2BodyStoreError::StorageBinding {
+                path: self.context_path.clone(),
+                reason: "body-store context changed while reopening its descriptor",
+            });
+        }
+        self.verify_linked()?;
+        Ok(file)
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn inventory(
+        &self,
+        maximum_entries: usize,
+    ) -> Result<Vec<BoundBodyStoreLeaf>, V2BodyStoreError> {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let context = self.fresh_context_handle()?;
+        let entries = rustix::fs::Dir::read_from(&context)
+            .map_err(std::io::Error::from)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: self.context_path.clone(),
+                source,
+            })?;
+        let mut leaves = Vec::new();
+        for entry in entries {
+            let entry =
+                entry
+                    .map_err(std::io::Error::from)
+                    .map_err(|source| V2BodyStoreError::Io {
+                        path: self.context_path.clone(),
+                        source,
+                    })?;
+            let name = OsStr::from_bytes(entry.file_name().to_bytes());
+            if matches!(name.as_bytes(), b"." | b"..") {
+                continue;
+            }
+            if leaves.len() >= maximum_entries {
+                return Err(V2BodyStoreError::DirectoryEntryCapacityExceeded {
+                    capacity: maximum_entries,
+                });
+            }
+            let name = name.to_os_string();
+            let path = self.context_path.join(&name);
+            let stat = rustix::fs::statat(&context, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(std::io::Error::from)
+                .map_err(|source| V2BodyStoreError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+            if rustix::fs::FileType::from_raw_mode(stat.st_mode)
+                != rustix::fs::FileType::RegularFile
+                || stat.st_nlink as u64 != 1
+                || stat.st_size < 0
+            {
+                return Err(V2BodyStoreError::UnexpectedEntry(path));
+            }
+            leaves.push(BoundBodyStoreLeaf {
+                name,
+                identity: UnixFileIdentity::from_stat(&stat),
+                length: u64::try_from(stat.st_size)
+                    .map_err(|_| V2BodyStoreError::UnexpectedEntry(path))?,
+            });
+        }
+        self.verify_linked()?;
+        Ok(leaves)
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn inspect_leaf(
+        &self,
+        name: &OsStr,
+        kind: FramePayloadKind,
+    ) -> Result<BoundBodyStoreLeaf, V2BodyStoreError> {
+        self.verify_linked()?;
+        let path = self.context_path.join(name);
+        let stat = rustix::fs::statat(&self.context, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::RegularFile
+            || stat.st_nlink as u64 != 1
+            || stat.st_size < 0
+        {
+            return Err(V2BodyStoreError::UnexpectedEntry(path));
+        }
+        let length = u64::try_from(stat.st_size).map_err(|_| kind.too_large())?;
+        if length > kind.maximum_frame_bytes()? {
+            return Err(kind.too_large());
+        }
+        Ok(BoundBodyStoreLeaf {
+            name: name.to_os_string(),
+            identity: UnixFileIdentity::from_stat(&stat),
+            length,
+        })
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn open_leaf(
+        &self,
+        leaf: &BoundBodyStoreLeaf,
+        kind: FramePayloadKind,
+    ) -> Result<File, V2BodyStoreError> {
+        let current = self.inspect_leaf(&leaf.name, kind)?;
+        let path = self.context_path.join(&leaf.name);
+        if current.identity != leaf.identity || current.length != leaf.length {
+            return Err(V2BodyStoreError::StorageBinding {
+                path,
+                reason: "body-store leaf changed between inventory and open",
+            });
+        }
+        let file = File::from(
+            rustix::fs::openat(
+                &self.context,
+                &leaf.name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC
+                    | rustix::fs::OFlags::NONBLOCK,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: path.clone(),
+                source,
+            })?,
+        );
+        self.verify_leaf(&file, &leaf.name, Some(leaf))?;
+        self.verify_linked()?;
+        Ok(file)
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn open_named_leaf(
+        &self,
+        name: &OsStr,
+        kind: FramePayloadKind,
+    ) -> Result<File, V2BodyStoreError> {
+        let leaf = self.inspect_leaf(name, kind)?;
+        self.open_leaf(&leaf, kind)
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn verify_leaf(
+        &self,
+        file: &File,
+        name: &OsStr,
+        expected: Option<&BoundBodyStoreLeaf>,
+    ) -> Result<(), V2BodyStoreError> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let path = self.context_path.join(name);
+        let opened = file.metadata().map_err(|source| V2BodyStoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let linked = rustix::fs::statat(&self.context, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        let opened_identity = UnixFileIdentity::from_metadata(&opened);
+        let linked_identity = UnixFileIdentity::from_stat(&linked);
+        if !opened.is_file()
+            || opened.nlink() != 1
+            || rustix::fs::FileType::from_raw_mode(linked.st_mode)
+                != rustix::fs::FileType::RegularFile
+            || linked.st_nlink as u64 != 1
+            || opened_identity != linked_identity
+            || expected.is_some_and(|expected| {
+                expected.identity != opened_identity || expected.length != opened.len()
+            })
+        {
+            return Err(V2BodyStoreError::StorageBinding {
+                path,
+                reason: "body-store leaf changed while open",
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn unlink_leaf(
+        &self,
+        leaf: &BoundBodyStoreLeaf,
+        kind: FramePayloadKind,
+    ) -> Result<(), V2BodyStoreError> {
+        let file = self.open_leaf(leaf, kind)?;
+        self.verify_leaf(&file, &leaf.name, Some(leaf))?;
+        rustix::fs::unlinkat(&self.context, &leaf.name, rustix::fs::AtFlags::empty())
+            .map_err(std::io::Error::from)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: self.context_path.join(&leaf.name),
+                source,
+            })?;
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn publish_atomic(
+        &self,
+        destination: &OsStr,
+        bytes: &[u8],
+        kind: FramePayloadKind,
+    ) -> Result<(), V2BodyStoreError> {
+        if u64::try_from(bytes.len()).map_err(|_| kind.too_large())? > kind.maximum_frame_bytes()? {
+            return Err(kind.too_large());
+        }
+        self.verify_linked()?;
+        let mut temporary = destination.to_os_string();
+        temporary.push(".tmp");
+        let temporary_path = self.context_path.join(&temporary);
+        let mut file = File::from(
+            rustix::fs::openat(
+                &self.context,
+                &temporary,
+                rustix::fs::OFlags::RDWR
+                    | rustix::fs::OFlags::CREATE
+                    | rustix::fs::OFlags::EXCL
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC
+                    | rustix::fs::OFlags::NONBLOCK,
+                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|source| V2BodyStoreError::Io {
+                path: temporary_path.clone(),
+                source,
+            })?,
+        );
+        let opened = file.metadata().map_err(|source| V2BodyStoreError::Io {
+            path: temporary_path.clone(),
+            source,
+        })?;
+        let leaf = BoundBodyStoreLeaf {
+            name: temporary.clone(),
+            identity: UnixFileIdentity::from_metadata(&opened),
+            length: u64::try_from(bytes.len()).map_err(|_| kind.too_large())?,
+        };
+        let publication = (|| {
+            self.verify_leaf(&file, &temporary, None)?;
+            file.write_all(bytes)
+                .and_then(|()| file.flush())
+                .and_then(|()| file.sync_all())
+                .map_err(|source| V2BodyStoreError::Io {
+                    path: temporary_path.clone(),
+                    source,
+                })?;
+            self.verify_leaf(&file, &temporary, Some(&leaf))?;
+            self.verify_linked()?;
+            rename_body_store_leaf_noreplace(&self.context, &temporary, destination).map_err(
+                |source| {
+                    if source.kind() == std::io::ErrorKind::AlreadyExists {
+                        V2BodyStoreError::AtomicDestinationExists(
+                            self.context_path.join(destination),
+                        )
+                    } else {
+                        V2BodyStoreError::Io {
+                            path: self.context_path.join(destination),
+                            source,
+                        }
+                    }
+                },
+            )?;
+            self.verify_leaf(&file, destination, Some(&leaf))?;
+            self.sync_context()?;
+            self.verify_leaf(&file, destination, Some(&leaf))
+        })();
+        if publication.is_err()
+            && rustix::fs::statat(
+                &self.context,
+                &temporary,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .is_ok_and(|stat| UnixFileIdentity::from_stat(&stat) == leaf.identity)
+        {
+            let _ = rustix::fs::unlinkat(&self.context, &temporary, rustix::fs::AtFlags::empty());
+            let _ = self.context.sync_all();
+        }
+        publication
+    }
+
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    fn publish_atomic(
+        &self,
+        _destination: &OsStr,
+        _bytes: &[u8],
+        _kind: FramePayloadKind,
+    ) -> Result<(), V2BodyStoreError> {
+        Err(V2BodyStoreError::UnsupportedStorageBinding {
+            path: self.context_path.clone(),
+        })
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn sync_context(&self) -> Result<(), V2BodyStoreError> {
+        self.verify_linked()?;
+        self.context
+            .sync_all()
+            .map_err(|source| V2BodyStoreError::Io {
+                path: self.context_path.clone(),
+                source,
+            })?;
+        self.verify_linked()
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn sync_body_root(&self) -> Result<(), V2BodyStoreError> {
+        self.verify_linked()?;
+        self.body_root
+            .sync_all()
+            .map_err(|source| V2BodyStoreError::Io {
+                path: self.body_root_path.clone(),
+                source,
+            })?;
+        self.verify_linked()
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn retire_contents(&self, stop_after_marker_sync: bool) -> Result<(), V2BodyStoreError> {
+        let mut temporary = Vec::new();
+        let mut markers = Vec::new();
+        let mut bodies = Vec::new();
+        for leaf in self.inventory(
+            BODY_STORE_DIRECTORY_ENTRIES_PER_BODY
+                .saturating_mul(V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT),
+        )? {
+            let Some(name) = leaf.name.to_str() else {
+                return Err(V2BodyStoreError::UnexpectedEntry(
+                    self.context_path.join(&leaf.name),
+                ));
+            };
+            if name.ends_with(".norito.tmp") {
+                if !body_store_leaf_has_canonical_name(name, ".norito.tmp") {
+                    return Err(V2BodyStoreError::UnexpectedEntry(
+                        self.context_path.join(&leaf.name),
+                    ));
+                }
+                if leaf.length > FramePayloadKind::Body.maximum_frame_bytes()? {
+                    return Err(V2BodyStoreError::BodyTooLarge);
+                }
+                temporary.push((leaf, FramePayloadKind::Body));
+            } else if name.ends_with(".validated.tmp") {
+                if !body_store_leaf_has_canonical_name(name, ".validated.tmp") {
+                    return Err(V2BodyStoreError::UnexpectedEntry(
+                        self.context_path.join(&leaf.name),
+                    ));
+                }
+                if leaf.length > FramePayloadKind::ValidationOutcomeMarker.maximum_frame_bytes()? {
+                    return Err(V2BodyStoreError::ValidationMarkerTooLarge);
+                }
+                temporary.push((leaf, FramePayloadKind::ValidationOutcomeMarker));
+            } else if name.ends_with(".validated") {
+                if !body_store_leaf_has_canonical_name(name, ".validated") {
+                    return Err(V2BodyStoreError::UnexpectedEntry(
+                        self.context_path.join(&leaf.name),
+                    ));
+                }
+                if leaf.length > FramePayloadKind::ValidationOutcomeMarker.maximum_frame_bytes()? {
+                    return Err(V2BodyStoreError::ValidationMarkerTooLarge);
+                }
+                markers.push(leaf);
+            } else if name.ends_with(".norito") {
+                if !body_store_leaf_has_canonical_name(name, ".norito") {
+                    return Err(V2BodyStoreError::UnexpectedEntry(
+                        self.context_path.join(&leaf.name),
+                    ));
+                }
+                if leaf.length > FramePayloadKind::Body.maximum_frame_bytes()? {
+                    return Err(V2BodyStoreError::BodyTooLarge);
+                }
+                bodies.push(leaf);
+            } else {
+                return Err(V2BodyStoreError::UnexpectedEntry(
+                    self.context_path.join(&leaf.name),
+                ));
+            }
+        }
+        temporary.sort_by(|left, right| left.0.name.cmp(&right.0.name));
+        markers.sort_by(|left, right| left.name.cmp(&right.name));
+        bodies.sort_by(|left, right| left.name.cmp(&right.name));
+        for (leaf, kind) in &temporary {
+            self.unlink_leaf(leaf, *kind)?;
+        }
+        for leaf in &markers {
+            self.unlink_leaf(leaf, FramePayloadKind::ValidationOutcomeMarker)?;
+        }
+        self.sync_context()?;
+        if stop_after_marker_sync {
+            return Ok(());
+        }
+        for leaf in &bodies {
+            self.unlink_leaf(leaf, FramePayloadKind::Body)?;
+        }
+        self.sync_context()?;
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn retire(self) -> Result<(), V2BodyStoreError> {
+        self.retire_contents(false)?;
+        if !self.inventory(1)?.is_empty() {
+            return Err(V2BodyStoreError::StorageBinding {
+                path: self.context_path.clone(),
+                reason: "body-store context changed during retirement",
+            });
+        }
+        self.verify_linked()?;
+        rustix::fs::unlinkat(
+            &self.body_root,
+            &self.context_name,
+            rustix::fs::AtFlags::REMOVEDIR,
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|source| V2BodyStoreError::Io {
+            path: self.context_path.clone(),
+            source,
+        })?;
+        self.body_root
+            .sync_all()
+            .map_err(|source| V2BodyStoreError::Io {
+                path: self.body_root_path.clone(),
+                source,
+            })?;
+        self.verify_body_root_linked()
+    }
+
+    #[cfg(all(test, unix, not(target_os = "espidf")))]
+    fn simulate_crash_after_marker_sync_for_test(self) -> Result<(), V2BodyStoreError> {
+        self.retire_contents(true)
+    }
+
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    fn retire(self) -> Result<(), V2BodyStoreError> {
+        Err(V2BodyStoreError::UnsupportedStorageBinding {
+            path: self.context_path,
+        })
+    }
+}
+
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    )
+))]
+fn rename_body_store_leaf_noreplace(
+    directory: &File,
+    source: &OsStr,
+    destination: &OsStr,
+) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        directory,
+        source,
+        directory,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(all(
+    unix,
+    not(target_os = "espidf"),
+    not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))
+))]
+fn rename_body_store_leaf_noreplace(
+    _directory: &File,
+    _source: &OsStr,
+    _destination: &OsStr,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-replace body-store publication is unavailable",
+    ))
+}
+
 /// Persistent exact-body store for one immutable height context.
 ///
 /// The validation snapshot is part of that height ownership contract: callers
@@ -1228,6 +2105,7 @@ pub(crate) struct V2BodyStore {
     context: wire::HeightContext,
     signature_policy: BlockSignaturePolicy,
     directory: PathBuf,
+    bound_directory: Option<BoundV2BodyContextDirectory>,
     capacity: V2BodyStoreCapacity,
     body_frame_bytes: u64,
     /// Emergency Fast owners are empty and may neither publish nor retire files.
@@ -1585,27 +2463,13 @@ impl RecoveredLifecycleColdProposalOutputMintPermitV1 {
 /// receipt is available. Executing the plan may block on the filesystem and
 /// therefore belongs exclusively to the runner's bounded cleanup worker.
 pub(crate) struct V2BodyRetirementJob {
-    directory: PathBuf,
-    parent: Option<PathBuf>,
+    directory: BoundV2BodyContextDirectory,
 }
 impl V2BodyRetirementJob {
     /// Delete the finalized height's durable candidate bodies and fsync the
     /// containing directory.
     pub(crate) fn execute(self) -> Result<(), V2BodyStoreError> {
-        match fs::remove_dir_all(&self.directory) {
-            Ok(()) => {}
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(source) => {
-                return Err(V2BodyStoreError::Io {
-                    path: self.directory,
-                    source,
-                });
-            }
-        }
-        if let Some(parent) = self.parent {
-            sync_directory(&parent)?;
-        }
-        Ok(())
+        self.directory.retire()
     }
 }
 impl V2BodyStore {
@@ -1806,6 +2670,7 @@ impl V2BodyStore {
     ///
     /// The genesis-authority policy is valid only for the first height with no
     /// parent certificate. All successor heights use rotating-leader signing.
+    #[cfg(test)]
     pub(crate) fn open_with_policy(
         root: impl AsRef<Path>,
         context: wire::HeightContext,
@@ -1815,32 +2680,81 @@ impl V2BodyStore {
         Self::open_with_policy_and_capacity(root, context, signature_policy, capacity)
     }
     /// Open a context directory with an explicit signature policy and capacity.
+    #[cfg(test)]
     pub(crate) fn open_with_policy_and_capacity(
         root: impl AsRef<Path>,
         context: wire::HeightContext,
         signature_policy: BlockSignaturePolicy,
         capacity: V2BodyStoreCapacity,
     ) -> Result<Self, V2BodyStoreError> {
+        Self::validate_open_parameters(&context, &signature_policy)?;
+        let context_name = OsString::from(hex::encode(context.id().0.as_ref()));
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let bound = BoundV2BodyContextDirectory::bind_test_root(root.as_ref(), context_name)?;
+            return Self::open_bound(bound, context, signature_policy, capacity);
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = context_name;
+            Err(V2BodyStoreError::UnsupportedStorageBinding {
+                path: root.as_ref().to_path_buf(),
+            })
+        }
+    }
+
+    /// Open one context below a descriptor-bound body root minted by Kura.
+    pub(crate) fn open_with_kura_authority_and_capacity(
+        kura: &crate::kura::Kura,
+        authority: crate::kura::KuraV2BodyStoreDirectoryAuthority,
+        context: wire::HeightContext,
+        signature_policy: BlockSignaturePolicy,
+        capacity: V2BodyStoreCapacity,
+    ) -> Result<Self, V2BodyStoreError> {
+        Self::validate_open_parameters(&context, &signature_policy)?;
+        let context_name = OsString::from(hex::encode(context.id().0.as_ref()));
+        let bound =
+            BoundV2BodyContextDirectory::from_kura_authority(kura, authority, context_name)?;
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            Self::open_bound(bound, context, signature_policy, capacity)
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (bound, context, signature_policy, capacity);
+            Err(V2BodyStoreError::UnsupportedStorageBinding {
+                path: kura.sumeragi_v2_storage_root().join("bodies"),
+            })
+        }
+    }
+
+    fn validate_open_parameters(
+        context: &wire::HeightContext,
+        signature_policy: &BlockSignaturePolicy,
+    ) -> Result<(), V2BodyStoreError> {
         context.validate()?;
         if matches!(signature_policy, BlockSignaturePolicy::GenesisAuthority(_))
             && (context.height != 1 || context.parent_commit_qc.is_some())
         {
             return Err(V2BodyStoreError::InvalidSignaturePolicy);
         }
-        let directory = root.as_ref().join(hex::encode(context.id().0.as_ref()));
-        fs::create_dir_all(&directory).map_err(|source| V2BodyStoreError::Io {
-            path: directory.clone(),
-            source,
-        })?;
-        sync_directory(&directory)?;
-        if let Some(parent) = directory.parent() {
-            sync_directory(parent)?;
-        }
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn open_bound(
+        bound_directory: BoundV2BodyContextDirectory,
+        context: wire::HeightContext,
+        signature_policy: BlockSignaturePolicy,
+        capacity: V2BodyStoreCapacity,
+    ) -> Result<Self, V2BodyStoreError> {
+        let directory = bound_directory.context_path.clone();
         let mut store = Self {
             identity: Arc::new(V2BodyStoreInstanceIdentityMarker),
             context,
             signature_policy,
             directory,
+            bound_directory: Some(bound_directory),
             capacity,
             body_frame_bytes: 0,
             emergency_read_only: false,
@@ -1851,66 +2765,65 @@ impl V2BodyStore {
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
         };
-        let mut directory_entry_count = 0_usize;
         let mut body_frame_bytes = 0_u64;
-        let mut body_paths = Vec::new();
-        let mut validation_marker_paths = Vec::new();
-        let mut temporary_paths = Vec::new();
-        let entries = fs::read_dir(&store.directory).map_err(|source| V2BodyStoreError::Io {
-            path: store.directory.clone(),
-            source,
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|source| V2BodyStoreError::Io {
-                path: store.directory.clone(),
-                source,
-            })?;
-            directory_entry_count = directory_entry_count.checked_add(1).ok_or(
-                V2BodyStoreError::DirectoryEntryCapacityExceeded {
-                    capacity: capacity.max_directory_entries,
-                },
-            )?;
-            if directory_entry_count > capacity.max_directory_entries {
-                return Err(V2BodyStoreError::DirectoryEntryCapacityExceeded {
-                    capacity: capacity.max_directory_entries,
-                });
-            }
-            let path = entry.path();
-            let file_type = entry.file_type().map_err(|source| V2BodyStoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
-            if !file_type.is_file() {
-                return Err(V2BodyStoreError::UnexpectedEntry(path));
-            }
-            let file_name = entry.file_name();
-            let name = file_name
+        let mut body_leaves = Vec::new();
+        let mut validation_marker_leaves = Vec::new();
+        let mut temporary_leaves = Vec::new();
+        let leaves = store
+            .bound_directory
+            .as_ref()
+            .expect("mutable body store retains a bound directory")
+            .inventory(capacity.max_directory_entries)?;
+        for leaf in leaves {
+            let path = store.directory.join(&leaf.name);
+            let name = leaf
+                .name
                 .to_str()
                 .ok_or_else(|| V2BodyStoreError::UnexpectedEntry(path.clone()))?;
-            if name.ends_with(".norito.tmp") || name.ends_with(".validated.tmp") {
-                if temporary_paths.len() >= capacity.max_temporary_entries {
+            if name.ends_with(".norito.tmp") {
+                if !body_store_leaf_has_canonical_name(name, ".norito.tmp") {
+                    return Err(V2BodyStoreError::UnexpectedEntry(path));
+                }
+                if temporary_leaves.len() >= capacity.max_temporary_entries {
                     return Err(V2BodyStoreError::TemporaryEntryCapacityExceeded {
                         capacity: capacity.max_temporary_entries,
                     });
                 }
-                temporary_paths.push(path);
+                if leaf.length > FramePayloadKind::Body.maximum_frame_bytes()? {
+                    return Err(V2BodyStoreError::BodyTooLarge);
+                }
+                temporary_leaves.push((leaf, FramePayloadKind::Body));
                 continue;
             }
-            match path.extension().and_then(|value| value.to_str()) {
+            if name.ends_with(".validated.tmp") {
+                if !body_store_leaf_has_canonical_name(name, ".validated.tmp") {
+                    return Err(V2BodyStoreError::UnexpectedEntry(path));
+                }
+                if temporary_leaves.len() >= capacity.max_temporary_entries {
+                    return Err(V2BodyStoreError::TemporaryEntryCapacityExceeded {
+                        capacity: capacity.max_temporary_entries,
+                    });
+                }
+                if leaf.length > FramePayloadKind::ValidationOutcomeMarker.maximum_frame_bytes()? {
+                    return Err(V2BodyStoreError::ValidationMarkerTooLarge);
+                }
+                temporary_leaves.push((leaf, FramePayloadKind::ValidationOutcomeMarker));
+                continue;
+            }
+            match Path::new(name).extension().and_then(|value| value.to_str()) {
                 Some("norito") => {
-                    if body_paths.len() >= capacity.max_body_entries {
+                    if !body_store_leaf_has_canonical_name(name, ".norito") {
+                        return Err(V2BodyStoreError::UnexpectedEntry(path));
+                    }
+                    if body_leaves.len() >= capacity.max_body_entries {
                         return Err(V2BodyStoreError::BodyEntryCapacityExceeded {
                             capacity: capacity.max_body_entries,
                         });
                     }
-                    let frame_bytes = entry
-                        .metadata()
-                        .map_err(|source| V2BodyStoreError::Io {
-                            path: path.clone(),
-                            source,
-                        })?
-                        .len();
-                    let next_body_frame_bytes = body_frame_bytes.checked_add(frame_bytes).ok_or(
+                    if leaf.length > FramePayloadKind::Body.maximum_frame_bytes()? {
+                        return Err(V2BodyStoreError::BodyTooLarge);
+                    }
+                    let next_body_frame_bytes = body_frame_bytes.checked_add(leaf.length).ok_or(
                         V2BodyStoreError::BodyByteCapacityExceeded {
                             capacity: capacity.max_body_frame_bytes,
                         },
@@ -1921,41 +2834,51 @@ impl V2BodyStore {
                         });
                     }
                     body_frame_bytes = next_body_frame_bytes;
-                    body_paths.push(path);
+                    body_leaves.push(leaf);
                 }
                 Some("validated") => {
-                    if validation_marker_paths.len() >= capacity.max_body_entries {
+                    if !body_store_leaf_has_canonical_name(name, ".validated") {
+                        return Err(V2BodyStoreError::UnexpectedEntry(path));
+                    }
+                    if validation_marker_leaves.len() >= capacity.max_body_entries {
                         return Err(V2BodyStoreError::ValidationMarkerCapacityExceeded {
                             capacity: capacity.max_body_entries,
                         });
                     }
-                    if entry
-                        .metadata()
-                        .map_err(|source| V2BodyStoreError::Io {
-                            path: path.clone(),
-                            source,
-                        })?
-                        .len()
-                        > VALIDATION_OUTCOME_MARKER_FRAME_MAX_BYTES
-                    {
+                    if leaf.length > VALIDATION_OUTCOME_MARKER_FRAME_MAX_BYTES {
                         return Err(V2BodyStoreError::ValidationMarkerTooLarge);
                     }
-                    validation_marker_paths.push(path);
+                    validation_marker_leaves.push(leaf);
                 }
                 _ => return Err(V2BodyStoreError::UnexpectedEntry(path)),
             }
         }
-        if !temporary_paths.is_empty() {
-            temporary_paths.sort();
-            for path in temporary_paths {
-                fs::remove_file(&path).map_err(|source| V2BodyStoreError::Io { path, source })?;
+        if !temporary_leaves.is_empty() {
+            temporary_leaves.sort_by(|left, right| left.0.name.cmp(&right.0.name));
+            let bound = store
+                .bound_directory
+                .as_ref()
+                .expect("mutable body store retains a bound directory");
+            for (leaf, kind) in &temporary_leaves {
+                bound.unlink_leaf(leaf, *kind)?;
             }
-            sync_directory(&store.directory)?;
+            bound.sync_context()?;
         }
-        body_paths.sort();
-        for path in &body_paths {
-            let (envelope, frame_hash) = read_envelope(path)?;
+        body_leaves.sort_by(|left, right| left.name.cmp(&right.name));
+        for leaf in &body_leaves {
+            let (envelope, frame_hash) = read_envelope_from_leaf(
+                store
+                    .bound_directory
+                    .as_ref()
+                    .expect("mutable body store retains a bound directory"),
+                leaf,
+            )?;
             store.validate_envelope(&envelope)?;
+            if leaf.name != Self::file_name_for(envelope.round, envelope.subject) {
+                return Err(V2BodyStoreError::UnexpectedEntry(
+                    store.directory.join(&leaf.name),
+                ));
+            }
             let receipt = receipt_for(&envelope, frame_hash);
             let key = (envelope.round, envelope.subject);
             if store.entries.insert(key, receipt).is_some()
@@ -1964,9 +2887,20 @@ impl V2BodyStore {
                 return Err(V2BodyStoreError::DuplicateBodyKey);
             }
         }
-        validation_marker_paths.sort();
-        for path in &validation_marker_paths {
-            let marker = read_validation_outcome_marker(path)?;
+        validation_marker_leaves.sort_by(|left, right| left.name.cmp(&right.name));
+        for leaf in &validation_marker_leaves {
+            let marker = read_validation_outcome_marker_from_leaf(
+                store
+                    .bound_directory
+                    .as_ref()
+                    .expect("mutable body store retains a bound directory"),
+                leaf,
+            )?;
+            if leaf.name != Self::validated_file_name_for(marker.round, marker.subject) {
+                return Err(V2BodyStoreError::UnexpectedEntry(
+                    store.directory.join(&leaf.name),
+                ));
+            }
             let key = (marker.round, marker.subject);
             let receipt = store
                 .entries
@@ -2014,6 +2948,7 @@ impl V2BodyStore {
         Ok(Self {
             identity: Arc::new(V2BodyStoreInstanceIdentityMarker),
             directory: root.as_ref().join(hex::encode(context.id().0.as_ref())),
+            bound_directory: None,
             context,
             signature_policy,
             capacity,
@@ -2029,7 +2964,8 @@ impl V2BodyStore {
     }
     /// Open an empty, context-addressed store for non-cryptographic lifecycle fixtures.
     ///
-    /// Production must use [`Self::open_with_policy`]. This helper exists only
+    /// Production must consume a Kura-minted directory authority through
+    /// [`Self::open_with_kura_authority_and_capacity`]. This helper exists only
     /// because replay-authority unit fixtures deliberately retain structural
     /// certificates rather than usable voting signatures.
     #[cfg(test)]
@@ -2038,17 +2974,17 @@ impl V2BodyStore {
         context: wire::HeightContext,
         signature_policy: BlockSignaturePolicy,
     ) -> Result<Self, V2BodyStoreError> {
-        let directory = root.as_ref().join(hex::encode(context.id().0.as_ref()));
-        fs::create_dir_all(&directory).map_err(|source| V2BodyStoreError::Io {
-            path: directory.clone(),
-            source,
-        })?;
+        let context_name = OsString::from(hex::encode(context.id().0.as_ref()));
+        let bound_directory =
+            BoundV2BodyContextDirectory::bind_test_root(root.as_ref(), context_name)?;
+        let directory = bound_directory.context_path.clone();
         let capacity = V2BodyStoreCapacity::new(DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT)?;
         Ok(Self {
             identity: Arc::new(V2BodyStoreInstanceIdentityMarker),
             context,
             signature_policy,
             directory,
+            bound_directory: Some(bound_directory),
             capacity,
             body_frame_bytes: 0,
             emergency_read_only: false,
@@ -2745,8 +3681,13 @@ impl V2BodyStore {
             });
         }
         let frame_hash = Hash::new(&framed);
-        let path = self.path_for(envelope.round, envelope.subject);
-        write_atomic_synced(&path, &framed)?;
+        let name = Self::file_name_for(envelope.round, envelope.subject);
+        self.bound_directory
+            .as_ref()
+            .ok_or_else(|| V2BodyStoreError::UnsupportedStorageBinding {
+                path: self.directory.clone(),
+            })?
+            .publish_atomic(&name, &framed, FramePayloadKind::Body)?;
         let receipt = receipt_for(&envelope, frame_hash);
         self.entries.insert(key, receipt.clone());
         self.manifests.insert(key, envelope.manifest);
@@ -2926,8 +3867,13 @@ impl V2BodyStore {
             body_frame_hash: receipt.frame_hash,
             outcome,
         };
-        write_validation_outcome_marker(
-            &self.validated_path_for(receipt.round, receipt.subject),
+        write_validation_outcome_marker_bound(
+            self.bound_directory.as_ref().ok_or_else(|| {
+                V2BodyStoreError::UnsupportedStorageBinding {
+                    path: self.directory.clone(),
+                }
+            })?,
+            &Self::validated_file_name_for(receipt.round, receipt.subject),
             &marker,
         )?;
         self.validated.insert(key, validated.clone());
@@ -3011,8 +3957,13 @@ impl V2BodyStore {
             body_frame_hash: receipt.frame_hash,
             outcome,
         };
-        write_validation_outcome_marker(
-            &self.validated_path_for(receipt.round, receipt.subject),
+        write_validation_outcome_marker_bound(
+            self.bound_directory.as_ref().ok_or_else(|| {
+                V2BodyStoreError::UnsupportedStorageBinding {
+                    path: self.directory.clone(),
+                }
+            })?,
+            &Self::validated_file_name_for(receipt.round, receipt.subject),
             &marker,
         )?;
         let rejected = RevalidatedRejectedBody {
@@ -3087,7 +4038,7 @@ impl V2BodyStore {
     /// the authorization boundary for deleting the complete directory; only
     /// the decided candidate additionally matches the receipt's block hash.
     pub(crate) fn into_retirement_job(
-        self,
+        mut self,
         kura_receipt: &KuraV2CommitReceipt,
     ) -> Result<V2BodyRetirementJob, V2BodyStoreError> {
         self.ensure_mutable()?;
@@ -3096,18 +4047,27 @@ impl V2BodyStore {
         {
             return Err(V2BodyStoreError::KuraReceiptMismatch);
         }
-        Ok(V2BodyRetirementJob {
-            parent: self.directory.parent().map(Path::to_path_buf),
-            directory: self.directory,
-        })
+        let directory = self.bound_directory.take().ok_or_else(|| {
+            V2BodyStoreError::UnsupportedStorageBinding {
+                path: self.directory.clone(),
+            }
+        })?;
+        Ok(V2BodyRetirementJob { directory })
     }
     fn load_envelope(
         &self,
         receipt: &DurableBodyReceipt,
     ) -> Result<StoredBodyEnvelope, V2BodyStoreError> {
         self.verify_receipt(receipt)?;
-        let path = self.path_for(receipt.round, receipt.subject);
-        let (envelope, frame_hash) = read_envelope(&path)?;
+        let directory = self.bound_directory.as_ref().ok_or_else(|| {
+            V2BodyStoreError::UnsupportedStorageBinding {
+                path: self.directory.clone(),
+            }
+        })?;
+        let (envelope, frame_hash) = read_envelope_named(
+            directory,
+            &Self::file_name_for(receipt.round, receipt.subject),
+        )?;
         if frame_hash != receipt.frame_hash {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
@@ -3266,8 +4226,11 @@ impl V2BodyStore {
         Ok(())
     }
     fn path_for(&self, round: wire::ConsensusRound, subject: wire::BlockSubject) -> PathBuf {
+        self.directory.join(Self::file_name_for(round, subject))
+    }
+    fn file_name_for(round: wire::ConsensusRound, subject: wire::BlockSubject) -> OsString {
         let key_hash = Hash::new((round, subject).encode());
-        self.directory.join(format!(
+        OsString::from(format!(
             "{:020}-{:020}-{}.norito",
             round.height,
             round.view,
@@ -3279,7 +4242,16 @@ impl V2BodyStore {
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
     ) -> PathBuf {
-        self.path_for(round, subject).with_extension("validated")
+        self.directory
+            .join(Self::validated_file_name_for(round, subject))
+    }
+    fn validated_file_name_for(
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> OsString {
+        let mut path = PathBuf::from(Self::file_name_for(round, subject));
+        path.set_extension("validated");
+        path.into_os_string()
     }
 }
 fn receipt_for(envelope: &StoredBodyEnvelope, frame_hash: Hash) -> DurableBodyReceipt {
@@ -3318,30 +4290,58 @@ fn frame_payload_with_magic(
     frame.extend_from_slice(Hash::new(payload).as_ref());
     Ok(frame)
 }
-fn read_envelope(path: &Path) -> Result<(StoredBodyEnvelope, Hash), V2BodyStoreError> {
-    let (payload, frame_hash) =
-        read_frame_payload_with_hash(path, STORE_MAGIC, FramePayloadKind::Body)?;
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn read_envelope_from_leaf(
+    directory: &BoundV2BodyContextDirectory,
+    leaf: &BoundBodyStoreLeaf,
+) -> Result<(StoredBodyEnvelope, Hash), V2BodyStoreError> {
+    let mut file = directory.open_leaf(leaf, FramePayloadKind::Body)?;
+    let (payload, frame_hash) = read_frame_payload_with_hash(
+        &mut file,
+        &directory.context_path.join(&leaf.name),
+        STORE_MAGIC,
+        FramePayloadKind::Body,
+    )?;
+    directory.verify_leaf(&file, &leaf.name, Some(leaf))?;
     let mut cursor = payload.as_slice();
     let envelope = StoredBodyEnvelope::decode_all(&mut cursor)
         .map_err(|error| V2BodyStoreError::EnvelopeDecode(error.to_string()))?;
     Ok((envelope, frame_hash))
 }
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn read_envelope_named(
+    directory: &BoundV2BodyContextDirectory,
+    name: &OsStr,
+) -> Result<(StoredBodyEnvelope, Hash), V2BodyStoreError> {
+    let leaf = directory.inspect_leaf(name, FramePayloadKind::Body)?;
+    read_envelope_from_leaf(directory, &leaf)
+}
+
+#[cfg(not(all(unix, not(target_os = "espidf"))))]
+fn read_envelope_named(
+    directory: &BoundV2BodyContextDirectory,
+    _name: &OsStr,
+) -> Result<(StoredBodyEnvelope, Hash), V2BodyStoreError> {
+    Err(V2BodyStoreError::UnsupportedStorageBinding {
+        path: directory.context_path.clone(),
+    })
+}
+
 fn read_frame_payload(
+    file: &mut File,
     path: &Path,
     magic: &[u8; 8],
     kind: FramePayloadKind,
 ) -> Result<Vec<u8>, V2BodyStoreError> {
-    read_frame_payload_with_hash(path, magic, kind).map(|(payload, _)| payload)
+    read_frame_payload_with_hash(file, path, magic, kind).map(|(payload, _)| payload)
 }
 fn read_frame_payload_with_hash(
+    file: &mut File,
     path: &Path,
     magic: &[u8; 8],
     kind: FramePayloadKind,
 ) -> Result<(Vec<u8>, Hash), V2BodyStoreError> {
-    let mut file = File::open(path).map_err(|source| V2BodyStoreError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
     let opened_len = file
         .metadata()
         .map_err(|source| V2BodyStoreError::Io {
@@ -3417,6 +4417,39 @@ fn read_frame_payload_with_hash(
     let frame_hash = Hash::new_from_chunks(&[&header, &payload, &checksum]);
     Ok((payload, frame_hash))
 }
+fn write_validation_outcome_marker_bound(
+    directory: &BoundV2BodyContextDirectory,
+    name: &OsStr,
+    marker: &ValidationOutcomeMarker,
+) -> Result<(), V2BodyStoreError> {
+    let payload = marker.encode();
+    let frame = frame_payload_with_magic(
+        VALIDATED_MAGIC,
+        &payload,
+        FramePayloadKind::ValidationOutcomeMarker,
+    )?;
+    directory.publish_atomic(name, &frame, FramePayloadKind::ValidationOutcomeMarker)
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+fn read_validation_outcome_marker_from_leaf(
+    directory: &BoundV2BodyContextDirectory,
+    leaf: &BoundBodyStoreLeaf,
+) -> Result<ValidationOutcomeMarker, V2BodyStoreError> {
+    let mut file = directory.open_leaf(leaf, FramePayloadKind::ValidationOutcomeMarker)?;
+    let payload = read_frame_payload(
+        &mut file,
+        &directory.context_path.join(&leaf.name),
+        VALIDATED_MAGIC,
+        FramePayloadKind::ValidationOutcomeMarker,
+    )?;
+    directory.verify_leaf(&file, &leaf.name, Some(leaf))?;
+    let mut cursor = payload.as_slice();
+    ValidationOutcomeMarker::decode_all(&mut cursor)
+        .map_err(|error| V2BodyStoreError::ValidationMarkerDecode(error.to_string()))
+}
+
+#[cfg(test)]
 fn write_validation_outcome_marker(
     path: &Path,
     marker: &ValidationOutcomeMarker,
@@ -3427,12 +4460,34 @@ fn write_validation_outcome_marker(
         &payload,
         FramePayloadKind::ValidationOutcomeMarker,
     )?;
-    write_atomic_synced(path, &frame)
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|source| V2BodyStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    file.write_all(&frame)
+        .and_then(|()| file.flush())
+        .and_then(|()| file.sync_all())
+        .map_err(|source| V2BodyStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })
 }
+
+#[cfg(test)]
 fn read_validation_outcome_marker(
     path: &Path,
 ) -> Result<ValidationOutcomeMarker, V2BodyStoreError> {
+    let mut file = File::open(path).map_err(|source| V2BodyStoreError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
     let payload = read_frame_payload(
+        &mut file,
         path,
         VALIDATED_MAGIC,
         FramePayloadKind::ValidationOutcomeMarker,
@@ -3440,43 +4495,6 @@ fn read_validation_outcome_marker(
     let mut cursor = payload.as_slice();
     ValidationOutcomeMarker::decode_all(&mut cursor)
         .map_err(|error| V2BodyStoreError::ValidationMarkerDecode(error.to_string()))
-}
-fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<(), V2BodyStoreError> {
-    let tmp_path = path.with_extension(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map_or_else(|| "tmp".to_owned(), |extension| format!("{extension}.tmp")),
-    );
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&tmp_path)
-        .map_err(|source| V2BodyStoreError::Io {
-            path: tmp_path.clone(),
-            source,
-        })?;
-    file.write_all(bytes)
-        .and_then(|()| file.flush())
-        .and_then(|()| file.sync_all())
-        .map_err(|source| V2BodyStoreError::Io {
-            path: tmp_path.clone(),
-            source,
-        })?;
-    fs::rename(&tmp_path, path).map_err(|source| V2BodyStoreError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let parent = path.parent().ok_or(V2BodyStoreError::MissingParent)?;
-    sync_directory(parent)
-}
-fn sync_directory(path: &Path) -> Result<(), V2BodyStoreError> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| V2BodyStoreError::Io {
-            path: path.to_path_buf(),
-            source,
-        })
 }
 /// Exact-body persistence or validation failure.
 #[derive(Debug, Error)]
@@ -3490,6 +4508,23 @@ pub(crate) enum V2BodyStoreError {
         #[source]
         source: std::io::Error,
     },
+    /// A retained directory or leaf no longer names the object opened earlier.
+    #[error("Sumeragi v2 body-store binding failed at {path}: {reason}")]
+    StorageBinding {
+        /// Affected diagnostic path.
+        path: PathBuf,
+        /// Closed binding failure reason.
+        reason: &'static str,
+    },
+    /// The platform cannot provide the required descriptor-relative storage API.
+    #[error("descriptor-relative Sumeragi v2 body storage is unsupported at {path}")]
+    UnsupportedStorageBinding {
+        /// Requested body-store path.
+        path: PathBuf,
+    },
+    /// An immutable final entry appeared before no-replace publication.
+    #[error("Sumeragi v2 body-store destination already exists: {}", .0.display())]
+    AtomicDestinationExists(PathBuf),
     /// Frozen height context is structurally invalid.
     #[error("invalid Sumeragi v2 body-store height context: {0}")]
     Context(#[from] wire::ValidationError),
@@ -3659,8 +4694,5 @@ pub(crate) enum V2BodyStoreError {
     /// Kura receipt does not durably cover this body.
     #[error("Kura finality receipt does not match the pending Sumeragi v2 body")]
     KuraReceiptMismatch,
-    /// Atomic destination has no parent directory.
-    #[error("Sumeragi v2 body-store path has no parent directory")]
-    MissingParent,
 }
 include!("v2_body_store_tests.rs");

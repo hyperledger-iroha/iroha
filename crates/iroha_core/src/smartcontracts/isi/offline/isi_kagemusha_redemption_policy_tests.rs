@@ -172,6 +172,17 @@ fn torii_hardware_preflight_rejects_a_signature_from_an_unregistered_key() {
         POLICY_TEST_TIME_MS,
     )
     .expect("the registered hardware key must pass Torii preflight");
+    let expiry_error = preflight_registered_kagemusha_v2_hardware_authorization(
+        &state_transaction.world,
+        &authorization,
+        &asset,
+        authorization.expires_at_ms,
+    )
+    .expect_err("the exclusive authorization expiry must fail Torii preflight");
+    assert!(
+        expiry_error.contains("not live"),
+        "unexpected expiry error: {expiry_error}"
+    );
 
     let attacker_key = online_assertion_signing_key(0x6C);
     let signing_bytes = authorization

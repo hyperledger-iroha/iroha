@@ -1438,12 +1438,12 @@ async fn telemetry_handlers_ok() {
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     // Exact status probes
     let remote = axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
-    let resp = super::handler_status_blocks(State(app.clone()), headers.clone(), None, remote)
+    let resp = super::handler_status_blocks(State(app.clone()), headers.clone(), remote)
         .await
         .expect("blocks status")
         .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let resp = super::handler_status_peers(State(app.clone()), headers.clone(), None, remote)
+    let resp = super::handler_status_peers(State(app.clone()), headers.clone(), remote)
         .await
         .expect("peers status")
         .into_response();

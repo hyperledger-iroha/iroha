@@ -7,6 +7,9 @@ use axum::{
     extract::{ConnectInfo, Extension, Path, State},
     http::HeaderMap,
 };
+use iroha_core::governance::parliament::{
+    canonical_governance_attempt_ids_v1, validate_parliament_randomness_redraw_lineage_v1,
+};
 use iroha_core::state::{StateReadOnly as _, WorldReadOnly};
 use iroha_data_model::{
     account::AccountId,
@@ -128,17 +131,14 @@ fn public_proposal_record(
         ));
     }
     let proposal_content_id = ProposalContentId::new(proposal_id);
-    let mut attempts = world
-        .parliament_attempts()
-        .iter()
-        .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
-        .map(|(_, attempt)| attempt)
-        .collect::<Vec<_>>();
-    attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence);
-    for (expected_sequence, attempt) in attempts.iter().enumerate() {
-        let expected_sequence = u32::try_from(expected_sequence)
-            .map_err(|_| inconsistent("validation-fee proposal attempt sequence exceeds u32"))?;
-        if attempt.attempt().sequence != expected_sequence {
+    let mut attempts = Vec::new();
+    let mut history_ended = false;
+    for attempt_id in canonical_governance_attempt_ids_v1(proposal_content_id) {
+        let Some(attempt) = world.parliament_attempts().get(&attempt_id) else {
+            history_ended = true;
+            continue;
+        };
+        if history_ended {
             return Err(inconsistent(
                 "validation-fee proposal attempt history is not an exact contiguous sequence",
             ));
@@ -148,6 +148,13 @@ fn public_proposal_record(
                 "validation-fee proposal retained an invalid Parliament attempt: {error}"
             ))
         })?;
+        if attempt.attempt().id != attempt_id
+            || attempt.proposal_content_id() != proposal_content_id
+        {
+            return Err(inconsistent(
+                "validation-fee proposal retained a Parliament attempt under the wrong canonical key",
+            ));
+        }
         attempt
             .validate_proposal_bindings_v1(&proposal.kind)
             .map_err(|error| {
@@ -155,7 +162,15 @@ fn public_proposal_record(
                     "validation-fee proposal retained a Parliament attempt with mismatched proposal bindings: {error}"
                 ))
             })?;
+        attempts.push(attempt);
     }
+    validate_parliament_randomness_redraw_lineage_v1(attempts.iter().copied()).map_err(
+        |error| {
+            inconsistent(format!(
+                "validation-fee proposal retained an invalid Parliament attempt lineage: {error}"
+            ))
+        },
+    )?;
     let latest_attempt = attempts.last().copied();
     let expected_status = latest_attempt.map_or(
         iroha_core::state::GovernanceProposalStatus::Proposed,

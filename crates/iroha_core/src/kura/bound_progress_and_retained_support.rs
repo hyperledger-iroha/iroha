@@ -529,12 +529,42 @@ pub(crate) struct KuraSafetyWalDirectoryAuthority {
     #[cfg(not(all(unix, not(target_os = "espidf"))))]
     _unsupported: (),
 }
+/// Move-only ownership of the exact opened Sumeragi-v2 body-store root.
+///
+/// Only [`Kura`] can mint this authority. Production consensus consumes it
+/// directly, so the `sumeragi_v2/bodies` ancestry cannot be reconstructed from
+/// a caller-controlled path.
+#[derive(Debug)]
+#[must_use = "the Kura-bound body-store directory authority must open one body store"]
+pub(crate) struct KuraV2BodyStoreDirectoryAuthority {
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    kura_identity: KuraInstanceIdentity,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    directory: BoundProgressDirectory,
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    _unsupported: (),
+}
 impl KuraSafetyWalDirectoryAuthority {
     /// Confirm that this authority was minted by the exact supplied live Kura.
     #[cfg(all(unix, not(target_os = "espidf")))]
     pub(crate) fn matches_kura(&self, kura: &Kura) -> bool {
         self.kura_identity.matches(kura)
     }
+    /// Consume the authority only when its identity still names this live Kura.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn into_opened_directory_for(self, kura: &Kura) -> Option<(PathBuf, std::fs::File)> {
+        self.kura_identity
+            .matches(kura)
+            .then_some((self.directory.expected_path, self.directory.file))
+    }
+}
+impl KuraV2BodyStoreDirectoryAuthority {
+    /// Confirm that this authority was minted by the exact supplied live Kura.
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    pub(crate) fn matches_kura(&self, kura: &Kura) -> bool {
+        self.kura_identity.matches(kura)
+    }
+
     /// Consume the authority only when its identity still names this live Kura.
     #[cfg(all(unix, not(target_os = "espidf")))]
     pub(crate) fn into_opened_directory_for(self, kura: &Kura) -> Option<(PathBuf, std::fs::File)> {
@@ -613,7 +643,7 @@ impl Kura {
         &self,
     ) -> Result<KuraSafetyWalDirectoryAuthority> {
         if !self.instance_identity().matches(self)
-            || !self.bound_safety_wal_directory_unchanged(&self.store_root_directory)
+            || !self.bound_storage_directory_unchanged(&self.store_root_directory)
         {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -623,15 +653,15 @@ impl Kura {
                 self.store_root.clone(),
             ));
         }
-        let sumeragi_root = self.open_or_create_safety_wal_child_directory(
+        let sumeragi_root = self.open_or_create_bound_storage_child_directory(
             &self.store_root_directory,
             std::ffi::OsStr::new("sumeragi_v2"),
         )?;
-        let wal_directory = self.open_or_create_safety_wal_child_directory(
+        let wal_directory = self.open_or_create_bound_storage_child_directory(
             &sumeragi_root,
             std::ffi::OsStr::new("wal"),
         )?;
-        if !self.bound_safety_wal_directory_unchanged(&wal_directory) {
+        if !self.bound_storage_directory_unchanged(&wal_directory) {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -645,14 +675,52 @@ impl Kura {
             directory: wal_directory,
         })
     }
+    /// Mint one opened `sumeragi_v2/bodies` directory owner from this live Kura root.
     #[cfg(all(unix, not(target_os = "espidf")))]
-    fn open_or_create_safety_wal_child_directory(
+    pub(crate) fn mint_v2_body_store_directory_authority(
+        &self,
+    ) -> Result<KuraV2BodyStoreDirectoryAuthority> {
+        if !self.instance_identity().matches(self)
+            || !self.bound_storage_directory_unchanged(&self.store_root_directory)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened Kura store-root identity changed before body-store binding",
+                ),
+                self.store_root.clone(),
+            ));
+        }
+        let sumeragi_root = self.open_or_create_bound_storage_child_directory(
+            &self.store_root_directory,
+            std::ffi::OsStr::new("sumeragi_v2"),
+        )?;
+        let body_directory = self.open_or_create_bound_storage_child_directory(
+            &sumeragi_root,
+            std::ffi::OsStr::new("bodies"),
+        )?;
+        if !self.bound_storage_directory_unchanged(&body_directory) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "opened body-store directory changed before authority mint",
+                ),
+                body_directory.expected_path,
+            ));
+        }
+        Ok(KuraV2BodyStoreDirectoryAuthority {
+            kura_identity: self.instance_identity(),
+            directory: body_directory,
+        })
+    }
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    fn open_or_create_bound_storage_child_directory(
         &self,
         parent: &BoundProgressDirectory,
         name: &std::ffi::OsStr,
     ) -> Result<BoundProgressDirectory> {
         let expected_path = parent.expected_path.join(name);
-        if !self.bound_safety_wal_directory_unchanged(parent) {
+        if !self.bound_storage_directory_unchanged(parent) {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -667,7 +735,7 @@ impl Kura {
         }
         let child =
             Self::open_bound_progress_child_directory(&self.store_root, parent, &expected_path)?;
-        if !self.bound_safety_wal_directory_unchanged(parent) {
+        if !self.bound_storage_directory_unchanged(parent) {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -683,7 +751,7 @@ impl Kura {
         Ok(child)
     }
     #[cfg(all(unix, not(target_os = "espidf")))]
-    fn bound_safety_wal_directory_unchanged(&self, directory: &BoundProgressDirectory) -> bool {
+    fn bound_storage_directory_unchanged(&self, directory: &BoundProgressDirectory) -> bool {
         use std::os::unix::fs::MetadataExt as _;
         let Ok(opened) = directory.file.metadata() else {
             return false;
@@ -725,6 +793,19 @@ impl Kura {
                 "descriptor-relative safety-WAL storage is unavailable",
             ),
             self.sumeragi_v2_storage_root().join("wal"),
+        ))
+    }
+    /// Reject production body-store minting without descriptor-relative ancestry.
+    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    pub(crate) fn mint_v2_body_store_directory_authority(
+        &self,
+    ) -> Result<KuraV2BodyStoreDirectoryAuthority> {
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::Unsupported,
+                "descriptor-relative Sumeragi body storage is unavailable",
+            ),
+            self.sumeragi_v2_storage_root().join("bodies"),
         ))
     }
 }

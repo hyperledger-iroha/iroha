@@ -1373,6 +1373,14 @@ fn ballot_failure_reason_is_derived_from_the_frozen_phase() {
             .failure_kind,
         Some(ParliamentBallotFailureKindV1::ReleasePulseUnavailable)
     );
+    assert_eq!(
+        release_expired.unavailable_beacon_pulse_slots_v1(),
+        BTreeSet::from([(release_beacon_session_id, release_height)])
+    );
+    assert!(
+        release_expired
+            .classifies_beacon_pulse_unavailable_at(release_beacon_session_id, release_height)
+    );
 
     let mut finalized_pulse_before_deadline = state.clone();
     assert_eq!(

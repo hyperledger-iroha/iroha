@@ -2833,6 +2833,30 @@ mod tests {
             parse_command(&command(vec![rule_value(&zero_height)])),
             Err(ControlError::InvalidField("coordinates"))
         ));
+        let height_only = Rule {
+            sender: peer(5),
+            authenticated_via: peer(5),
+            kind: MessageKind::CommitCertificateRequest,
+            height: Some(9),
+            view: None,
+            block_hash: None,
+            manifest_hash: None,
+            chunk_index: None,
+            proposal_height: None,
+            proposal_view: None,
+            action: Action::Hold,
+        };
+        let parsed = parse_command(&command(vec![rule_value(&height_only)]))
+            .expect("parse height-only commit-certificate request rule");
+        assert_eq!(parsed.rules, vec![height_only.clone()]);
+        let invalid_request_view = Rule {
+            view: Some(0),
+            ..height_only
+        };
+        assert!(matches!(
+            parse_command(&command(vec![rule_value(&invalid_request_view)])),
+            Err(ControlError::InvalidField("coordinates"))
+        ));
         let mut invalid_sender = rule_value(&wildcard);
         invalid_sender
             .as_object_mut()

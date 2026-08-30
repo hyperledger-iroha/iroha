@@ -1297,6 +1297,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun topUpZeroPathIsTypedDefensiveAndExact() {
+        assertEquals(65_463, KagemushaRecursiveSpendProver.TOP_UP_SHIELD_INSERTION_CAPACITY)
         val directions = ByteArray(16)
         directions[0] = 1
         directions[2] = 1

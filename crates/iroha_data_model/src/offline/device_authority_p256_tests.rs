@@ -778,6 +778,62 @@ mod device_authority_p256_tests {
         );
     }
     #[test]
+    fn online_authorization_json_rejects_unknown_fields_at_every_owned_boundary() {
+        let authorization = authorization(&signing_key(13), None);
+        let canonical = norito::json::to_value(&authorization)
+            .expect("serialize canonical online authorization");
+        assert_eq!(
+            norito::json::from_value::<KagemushaRequestAuthorizationV2>(canonical.clone())
+                .expect("decode canonical online authorization"),
+            authorization,
+        );
+
+        let mut unknown_authorization = canonical.clone();
+        unknown_authorization
+            .as_object_mut()
+            .expect("authorization JSON object")
+            .insert("app_attest_evidence".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<KagemushaRequestAuthorizationV2>(unknown_authorization)
+                .is_err(),
+            "retired authorization fields must not be compatibility-decoded",
+        );
+
+        let mut unknown_assertion_envelope = canonical.clone();
+        unknown_assertion_envelope
+            .as_object_mut()
+            .expect("authorization JSON object")
+            .get_mut("hardware_assertion")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("hardware assertion JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<KagemushaRequestAuthorizationV2>(
+                unknown_assertion_envelope,
+            )
+            .is_err(),
+            "the tagged hardware assertion envelope must reject unknown members",
+        );
+
+        let mut unknown_platform_assertion = canonical;
+        unknown_platform_assertion
+            .as_object_mut()
+            .expect("authorization JSON object")
+            .get_mut("hardware_assertion")
+            .and_then(norito::json::Value::as_object_mut)
+            .and_then(|assertion| assertion.get_mut("assertion"))
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("platform assertion JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<KagemushaRequestAuthorizationV2>(
+                unknown_platform_assertion,
+            )
+            .is_err(),
+            "the selected platform assertion must reject unknown members",
+        );
+    }
+    #[test]
     fn receiver_acknowledgement_expiry_is_exclusive() {
         let issued_at_ms = 1_800_000_000_000;
         let expires_at_ms = issued_at_ms + 30_000;

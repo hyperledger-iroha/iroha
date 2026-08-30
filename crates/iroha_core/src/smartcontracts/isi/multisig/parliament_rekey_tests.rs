@@ -2,7 +2,8 @@
 // multisig implementation below its source-file budget.
 
 use crate::governance::parliament::{
-    PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1, parliament_attempt_policy_v1,
+    PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1,
+    canonical_governance_attempt_ids_v1, parliament_attempt_policy_v1,
 };
 use iroha_data_model::{
     governance::types::{
@@ -436,11 +437,9 @@ fn account_rekey_preserves_exhausted_terminal_validation_fee_history() {
         retained.status,
         crate::state::GovernanceProposalStatus::Rejected
     );
-    let retained_attempts = tx
-        .world
-        .parliament_attempts
-        .iter()
-        .filter(|(_, attempt)| attempt.proposal_content_id() == ProposalContentId::new(proposal_id))
-        .count();
+    let retained_attempts =
+        canonical_governance_attempt_ids_v1(ProposalContentId::new(proposal_id))
+            .filter_map(|attempt_id| tx.world.parliament_attempts.get(&attempt_id))
+            .count();
     assert_eq!(retained_attempts, 1);
 }

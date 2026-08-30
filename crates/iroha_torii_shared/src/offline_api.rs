@@ -466,18 +466,13 @@ pub type OfflineTopUpAnchor = iroha_data_model::offline::KagemushaRecursiveSpend
 /// before a wallet may initialize recursive spending from the returned anchor.
 pub type OfflineTopUpFinalityProof = iroha_data_model::offline::KagemushaTopUpFinalityProofV2;
 /// Offline lifecycle command selected by an operation.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
-#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum OfflineOperationKind {
     /// Move online value into an offline spendable note.
     #[norito(rename = "top_up")]
@@ -486,28 +481,100 @@ pub enum OfflineOperationKind {
     #[norito(rename = "redeem")]
     Redeem,
 }
+impl norito::json::JsonDeserialize for OfflineOperationKind {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match deserialize_strict_unit_tagged_enum(parser, "kind", "value")?.as_str() {
+            "top_up" => Ok(Self::TopUp),
+            "redeem" => Ok(Self::Redeem),
+            _ => Err(norito::json::Error::Message(
+                "unknown JSON enum variant".into(),
+            )),
+        }
+    }
+}
 /// Initial state returned after an offline command is accepted.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(
+    tag = "state",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
-#[norito(tag = "state", content = "value", rename_all = "snake_case")]
 pub enum OfflineOperationState {
     /// The signed transaction has been accepted for asynchronous processing.
     #[norito(rename = "pending")]
     Pending,
 }
+impl norito::json::JsonDeserialize for OfflineOperationState {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match deserialize_strict_unit_tagged_enum(parser, "state", "value")?.as_str() {
+            "pending" => Ok(Self::Pending),
+            _ => Err(norito::json::Error::Message(
+                "unknown JSON enum variant".into(),
+            )),
+        }
+    }
+}
+fn deserialize_strict_unit_tagged_enum(
+    parser: &mut norito::json::Parser<'_>,
+    tag_field: &str,
+    content_field: &str,
+) -> Result<String, norito::json::Error> {
+    parser.skip_ws();
+    parser.preflight_object_entries()?;
+    parser.expect(b'{')?;
+    parser.skip_ws();
+    let mut tag = None;
+    let mut content_seen = false;
+    if !parser.try_consume_char(b'}')? {
+        loop {
+            parser.skip_ws();
+            let key = parser.parse_key()?;
+            if key.as_str() == tag_field {
+                if tag.is_some() {
+                    return Err(norito::json::Error::duplicate_field(tag_field));
+                }
+                tag = Some(parser.parse_string()?);
+            } else if key.as_str() == content_field {
+                if content_seen {
+                    return Err(norito::json::Error::duplicate_field(content_field));
+                }
+                let raw = parser.raw_value_slice()?;
+                let mut content_parser = norito::json::Parser::new(raw);
+                content_parser.parse_null()?;
+                content_parser.skip_ws();
+                if !content_parser.eof() {
+                    return Err(norito::json::Error::Message(
+                        "unexpected content for unit enum variant".into(),
+                    ));
+                }
+                content_seen = true;
+            } else {
+                return Err(norito::json::Error::unknown_field(key.as_str()));
+            }
+            parser.skip_ws();
+            if parser.try_consume_char(b',')? {
+                continue;
+            }
+            parser.expect(b'}')?;
+            break;
+        }
+    }
+    let tag = tag.ok_or_else(|| norito::json::Error::missing_field(tag_field))?;
+    if !content_seen {
+        return Err(norito::json::Error::missing_field(content_field));
+    }
+    Ok(tag)
+}
 /// Reference returned by an accepted offline command.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineOperationReference {
     /// Lowercase hexadecimal operation identifier.
     pub operation_id: String,
@@ -526,6 +593,7 @@ pub struct OfflineOperationReference {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineTopUpResult {
     /// Canonical signed transaction hash.
     pub transaction_hash: String,
@@ -542,6 +610,7 @@ pub struct OfflineTopUpResult {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineRedeemResult {
     /// Canonical signed transaction hash.
     pub transaction_hash: String,
@@ -558,7 +627,12 @@ pub struct OfflineRedeemResult {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
-#[norito(tag = "kind", content = "result", rename_all = "snake_case")]
+#[norito(
+    tag = "kind",
+    content = "result",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum OfflineOperationResult {
     /// Applied top-up result.
     #[norito(rename = "top_up")]
@@ -573,7 +647,12 @@ pub enum OfflineOperationResult {
     reason = "boxing a status variant would change the canonical public V1 Norito enum wire shape"
 )]
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-#[norito(tag = "state", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "state",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum OfflineOperationStatus {
     /// The transaction is queued or awaiting finality.
     #[norito(rename = "pending")]
@@ -703,6 +782,33 @@ mod tests {
         }
     }
     #[test]
+    fn unit_tagged_operation_json_requires_explicit_null_content_and_exact_members() {
+        let kind: OfflineOperationKind =
+            norito::json::from_str(r#"{"kind":"top_up","value":null}"#)
+                .expect("decode canonical operation kind");
+        assert_eq!(kind, OfflineOperationKind::TopUp,);
+        let state: OfflineOperationState =
+            norito::json::from_str(r#"{"state":"pending","value":null}"#)
+                .expect("decode canonical operation state");
+        assert_eq!(state, OfflineOperationState::Pending,);
+        for invalid in [
+            r#"{"kind":"top_up"}"#,
+            r#"{"kind":"top_up","value":false}"#,
+            r#"{"kind":"top_up","value":null,"legacy":null}"#,
+        ] {
+            norito::json::from_str::<OfflineOperationKind>(invalid)
+                .expect_err("operation kind must use the exact tagged-unit shape");
+        }
+        for invalid in [
+            r#"{"state":"pending"}"#,
+            r#"{"state":"pending","value":{}}"#,
+            r#"{"state":"pending","value":null,"legacy":null}"#,
+        ] {
+            norito::json::from_str::<OfflineOperationState>(invalid)
+                .expect_err("operation state must use the exact tagged-unit shape");
+        }
+    }
+    #[test]
     fn operation_reference_is_direct_and_roundtrips() {
         let reference = OfflineOperationReference {
             operation_id: "11".repeat(32),
@@ -767,6 +873,77 @@ mod tests {
         let error = norito::json::from_str::<OfflineOperationReference>(&json)
             .expect_err("duplicate operation_id must be rejected");
         assert!(error.to_string().contains("duplicate field `operation_id`"));
+    }
+    #[test]
+    fn operation_response_json_rejects_unknown_fields_at_every_owned_boundary() {
+        let reference_error =
+            norito::json::from_str::<OfflineOperationReference>(r#"{"legacy":null}"#)
+                .expect_err("operation references must reject unknown fields");
+        assert!(
+            reference_error
+                .to_string()
+                .contains("unknown field `legacy`")
+        );
+
+        let top_up_error = norito::json::from_str::<OfflineTopUpResult>(r#"{"legacy":null}"#)
+            .expect_err("top-up results must reject unknown fields");
+        assert!(top_up_error.to_string().contains("unknown field `legacy`"));
+
+        let redeem = OfflineOperationResult::Redeem(OfflineRedeemResult {
+            transaction_hash: "22".repeat(32),
+            finalized_block_height: 42,
+            server_time_ms: 1_725_000_000_123,
+        });
+        let canonical_redeem =
+            norito::json::to_value(&redeem).expect("encode canonical redeem result");
+        assert_eq!(
+            norito::json::from_value::<OfflineOperationResult>(canonical_redeem.clone())
+                .expect("decode canonical redeem result"),
+            redeem,
+        );
+        let mut unknown_result_envelope = canonical_redeem.clone();
+        unknown_result_envelope
+            .as_object_mut()
+            .expect("operation result JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<OfflineOperationResult>(unknown_result_envelope)
+            .expect_err("operation result envelopes must reject unknown fields");
+        let mut unknown_redeem_result = canonical_redeem;
+        unknown_redeem_result
+            .as_object_mut()
+            .expect("operation result JSON object")
+            .get_mut("result")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("redeem result JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<OfflineOperationResult>(unknown_redeem_result)
+            .expect_err("selected operation results must reject unknown fields");
+
+        let pending = OfflineOperationStatus::Pending {
+            operation_id: "11".repeat(32),
+            kind: OfflineOperationKind::TopUp,
+            transaction_hash: "22".repeat(32),
+            submitted_at_ms: 1_725_000_000_123,
+        };
+        let canonical_pending =
+            norito::json::to_value(&pending).expect("encode canonical pending status");
+        let mut unknown_status_envelope = canonical_pending.clone();
+        unknown_status_envelope
+            .as_object_mut()
+            .expect("operation status JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<OfflineOperationStatus>(unknown_status_envelope)
+            .expect_err("operation status envelopes must reject unknown fields");
+        let mut unknown_pending_status = canonical_pending;
+        unknown_pending_status
+            .as_object_mut()
+            .expect("operation status JSON object")
+            .get_mut("value")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("pending status JSON object")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<OfflineOperationStatus>(unknown_pending_status)
+            .expect_err("selected operation statuses must reject unknown fields");
     }
     #[test]
     fn operation_kind_json_rejects_unknown_tags() {

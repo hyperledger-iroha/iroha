@@ -406,7 +406,8 @@ public sealed partial class ToriiClientTests
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
                 LocalSigningContext = new ToriiLocalSigningContext(expectedNetworkId),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var proof = await client.ProveAccountOnboardingCurrentStateAsync(
             SharedOnboardingReceipt().Body.Request,

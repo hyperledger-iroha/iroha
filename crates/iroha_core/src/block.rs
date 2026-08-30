@@ -275,7 +275,7 @@ fn map_overlay_error(
 const fn uses_live_vm_overlay_scheduler(executable: &Executable) -> bool {
     matches!(
         executable,
-        Executable::ContractCall(_) | Executable::Ivm(_)
+        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_)
     )
 }
 /// Return whether the executable must run once against the scheduler's live state.
@@ -357,7 +357,7 @@ mod overlay_error_tests {
             AxtPolicySnapshotValidationError, AxtRejectContext, AxtRejectReason, DataSpaceId,
             LaneId,
         },
-        transaction::{ExecutableBatchItem, IvmBytecode},
+        transaction::{ExecutableBatchItem, IvmBytecode, IvmProved},
     };
     #[test]
     fn map_overlay_error_preserves_axt_context() {
@@ -399,6 +399,18 @@ mod overlay_error_tests {
             TransactionRejectionReason::Validation(ValidationFail::InternalError(message))
                 if message == "invalid AXT policy snapshot: policy snapshot version mismatch: expected 7, found 8"
         ));
+    }
+    #[test]
+    fn ivm_proved_uses_live_overlay_scheduler_path() {
+        let proved = Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(Vec::new()),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas-policy"),
+        });
+        assert!(uses_live_vm_overlay_scheduler(&proved));
+        let instructions = Executable::Instructions(Vec::<InstructionBox>::new().into());
+        assert!(!uses_live_vm_overlay_scheduler(&instructions));
     }
     #[test]
     fn mixed_batch_uses_live_scheduler_barrier_path() {
@@ -8504,9 +8516,11 @@ pub(crate) mod valid {
                     "global beacon pulse differs from the authenticated block height, fixed protocol round, or network",
                 ));
             }
-            if world.parliament_attempts().iter().any(|(_, attempt)| {
-                attempt.classifies_beacon_pulse_unavailable_at(logical_beacon_id, pulse.height)
-            }) {
+            if world
+                .parliament_unavailable_beacon_pulse_slots
+                .get(&(logical_beacon_id, pulse.height))
+                .is_some_and(|attempts| !attempts.is_empty())
+            {
                 return Err(Self::npos_effects_error(
                     "global beacon pulse arrives after Parliament terminally classified its slot as unavailable",
                 ));
@@ -8534,11 +8548,11 @@ pub(crate) mod valid {
             }
             if world
                 .global_beacon_pulse_slots
-                .get(&(pulse.network_id, pulse.height))
+                .get(&(logical_beacon_id, pulse.height))
                 .is_some()
             {
                 return Err(Self::npos_effects_error(
-                    "global beacon pulse replays a network-height slot already in committed state",
+                    "global beacon pulse replays a logical-beacon-height slot already in committed state",
                 ));
             }
             let active_session = world
@@ -13280,7 +13294,7 @@ pub(crate) mod valid {
             // sequential merge, retain the cached overlay only while every
             // durable-state prefix read by that VM still has the same value.
             // This is deliberately narrower than re-executing arbitrary ISIs:
-            // ContractCall/IVM overlays with an observed stale durable read are
+            // ContractCall/IVM/IvmProved overlays with an observed stale durable read are
             // rebuilt selectively. Bytecode with ledger access, nested calls,
             // or other opaque dynamic access is also rebuilt because those
             // observations are not yet represented by a narrow fingerprint.
@@ -16121,7 +16135,7 @@ pub(crate) mod valid {
             },
             sorafs::pin_registry::ManifestDigest,
             transaction::{
-                Executable, ExecutionStep, IvmBytecode, SignedTransaction,
+                Executable, ExecutionStep, IvmBytecode, IvmProved, SignedTransaction,
                 TimeTriggerEntrypoint, TransactionBuilder, error::TransactionLimitError,
             },
             trigger::DataTriggerSequence,
@@ -29906,6 +29920,23 @@ mod tests {
             ValidBlock::sequential_entrypoints_for_live_execution(&ivm_block).is_none(),
             "raw IVM calls use the same durable-read validation as deployed contracts"
         );
+        let proved_tx = TransactionBuilder::new(
+            network_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        }))
+        .sign(keypair.private_key());
+        let proved_block: SignedBlock = make_block(proved_tx);
+        assert!(
+            ValidBlock::sequential_entrypoints_for_live_execution(&proved_block).is_none(),
+            "proved overlays are transaction-supplied and should keep their existing path"
+        );
     }
     #[test]
     fn block_overlay_rejects_protected_contract_call_without_persisting_state() {
@@ -31664,5 +31695,6 @@ fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
                 IVM_TEU_FALLBACK
             }
         },
+        Executable::IvmProved(proved) => crate::gas::meter_instructions(proved.overlay.as_ref()),
     }
 }

@@ -184,7 +184,6 @@ mod tests {
         let error = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
-            StatusView::Full,
             ActualLaneRoutingPolicy::default(),
             4_274,
             None,
@@ -220,7 +219,6 @@ mod tests {
         let response = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
-            StatusView::Full,
             policy,
             0,
             None,
@@ -261,22 +259,26 @@ mod tests {
             Some("smartcontract::deploy")
         );
     }
-    #[tokio::test]
-    async fn status_exact_probes_return_json_scalars() {
-        let telemetry = MaybeTelemetry::for_tests();
-        for view in [StatusView::Blocks, StatusView::Peers] {
-            let response = super::handle_status(
-                &telemetry,
-                Some(axum::http::HeaderValue::from_static(
-                    crate::utils::NORITO_MIME_TYPE,
-                )),
-                view,
-                ActualLaneRoutingPolicy::default(),
-                0,
-                None,
-            )
-            .await
-            .expect("exact status probe succeeds");
+    #[test]
+    fn status_exact_probes_return_independent_json_scalars() {
+        let metrics = Arc::new(Metrics::default());
+        metrics.block_height.inc_by(4_193);
+        let telemetry = MaybeTelemetry::from_profile(
+            Some(Telemetry::new(metrics, true)),
+            TelemetryProfile::Full,
+        );
+        for (response, expected) in [
+            (
+                super::handle_status_blocks(&telemetry, 4_274)
+                    .expect("block-height probe succeeds without a telemetry sync"),
+                4_274,
+            ),
+            (
+                super::handle_status_peers(&telemetry, 7)
+                    .expect("peer-count probe succeeds without a telemetry sync"),
+                7,
+            ),
+        ] {
             assert_eq!(
                 response.headers().get(axum::http::header::CONTENT_TYPE),
                 Some(&axum::http::HeaderValue::from_static("application/json"))
@@ -288,7 +290,7 @@ mod tests {
                 .expect("collect exact status response")
                 .to_bytes();
             let value: u64 = norito::json::from_slice(&body).expect("decode status scalar");
-            assert_eq!(value, 0);
+            assert_eq!(value, expected);
         }
     }
     #[tokio::test]
@@ -305,7 +307,6 @@ mod tests {
         let response = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
-            StatusView::Full,
             ActualLaneRoutingPolicy::default(),
             0,
             Some(offline),
@@ -637,7 +638,6 @@ mod tests {
             Some(axum::http::HeaderValue::from_static(
                 crate::utils::NORITO_MIME_TYPE,
             )),
-            StatusView::Full,
             ActualLaneRoutingPolicy::default(),
             0,
             None,

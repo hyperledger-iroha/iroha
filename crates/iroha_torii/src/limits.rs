@@ -674,10 +674,15 @@ pub fn has_trusted_forwarded_header(
     if !cidr_contains(trusted_proxies, remote_ip) {
         return false;
     }
-    headers
-        .get(header_name)
-        .and_then(|value| value.to_str().ok())
+    let mut values = headers.get_all(header_name).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    value
+        .to_str()
+        .ok()
         .is_some_and(|value| !value.trim().is_empty())
+        && values.next().is_none()
 }
 /// Configuration for the pre-authentication connection gate.
 #[derive(Debug, Clone)]
@@ -1348,6 +1353,13 @@ mod tests {
         ));
         assert!(!has_trusted_forwarded_header(
             &HeaderMap::new(),
+            Some("127.0.0.1".parse().unwrap()),
+            &trusted,
+            "x-forwarded-client-cert",
+        ));
+        headers.append("x-forwarded-client-cert", "cert=second".parse().unwrap());
+        assert!(!has_trusted_forwarded_header(
+            &headers,
             Some("127.0.0.1".parse().unwrap()),
             &trusted,
             "x-forwarded-client-cert",

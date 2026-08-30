@@ -102,7 +102,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(
             HttpMethod.Get,
@@ -133,7 +134,8 @@ public sealed partial class ToriiClientTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         using var response = await client.SendAsync(
             HttpMethod.Get,

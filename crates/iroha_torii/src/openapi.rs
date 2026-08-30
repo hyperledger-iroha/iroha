@@ -341,6 +341,7 @@ mod tests {
         "offline_asset_scale_invalid",
         "offline_asset_scale_mismatch",
         "offline_authorization_invalid",
+        "offline_hardware_authorization_invalid",
         "offline_wrong_network",
     ];
     const OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
@@ -409,11 +410,19 @@ mod tests {
     const OFFLINE_COMMAND_UNAVAILABLE_REJECT_CODES: &[&str] = &[
         "offline_service_unavailable",
         "offline_not_ready",
+        "offline_command_authority_not_ready",
+        "offline_command_fee_asset_not_ready",
+        "offline_command_authority_unfunded",
+        "offline_command_body_admission_saturated",
+        "offline_command_memory_admission_saturated",
+        "offline_command_admission_configuration_invalid",
         "offline_operation_capacity_exhausted",
         "offline_operation_admission_inconsistent",
         "offline_operation_index_unavailable",
         "offline_operation_history_unavailable",
         "offline_operation_index_inconsistent",
+        "offline_recursive_release_invalid",
+        "offline_recursive_release_outside_issuance_window",
     ];
     const OFFLINE_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES: &[&str] = &[
         "offline_service_unavailable",
@@ -4551,6 +4560,335 @@ mod tests {
         );
     }
     #[test]
+    fn generated_spec_exposes_exact_kagemusha_hardware_authorization_contract() {
+        let doc = generate_spec();
+        let schemas = component_schemas(&doc);
+        assert_strict_object_schema(
+            schemas,
+            "OfflineRequestAuthorization",
+            &[
+                "authority",
+                "device_id",
+                "asset_definition_id",
+                "operation_id",
+                "issued_at_ms",
+                "expires_at_ms",
+                "nonce",
+                "payload_digest",
+                "registration_hash",
+                "hardware_assertion",
+            ],
+            &[],
+        );
+        let authorization = component_properties(schemas, "OfflineRequestAuthorization");
+        assert_eq!(
+            authorization["asset_definition_id"]
+                .get("type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+        assert_eq!(
+            authorization["registration_hash"]
+                .get("$ref")
+                .and_then(Value::as_str),
+            Some("#/components/schemas/OfflineFixed32Bytes")
+        );
+        assert_eq!(
+            authorization["hardware_assertion"]
+                .get("$ref")
+                .and_then(Value::as_str),
+            Some("#/components/schemas/OfflineHardwareAssertion")
+        );
+        let expiry_description = authorization["expires_at_ms"]
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("authorization expiry description")
+            .to_ascii_lowercase();
+        assert!(
+            expiry_description.contains("exclusive"),
+            "authorization expiry must be documented as exclusive"
+        );
+
+        assert_strict_object_schema(
+            schemas,
+            "OfflineAndroidKeyMintHardwareAssertion",
+            &["signature"],
+            &[],
+        );
+        assert_eq!(
+            component_properties(schemas, "OfflineAndroidKeyMintHardwareAssertion")["signature"]
+                .get("$ref")
+                .and_then(Value::as_str),
+            Some("#/components/schemas/OfflineSignature")
+        );
+        assert_strict_object_schema(
+            schemas,
+            "OfflineIosAppAttestHardwareAssertion",
+            &["authenticator_data", "signature"],
+            &[],
+        );
+        let ios = component_properties(schemas, "OfflineIosAppAttestHardwareAssertion");
+        assert_eq!(
+            ios["authenticator_data"]
+                .get("$ref")
+                .and_then(Value::as_str),
+            Some("#/components/schemas/OfflineByteArray")
+        );
+        assert_eq!(
+            ios["signature"].get("$ref").and_then(Value::as_str),
+            Some("#/components/schemas/OfflineSignature")
+        );
+
+        let hardware = schemas
+            .get("OfflineHardwareAssertion")
+            .and_then(Value::as_object)
+            .expect("typed hardware assertion schema");
+        assert_eq!(
+            hardware
+                .get("discriminator")
+                .and_then(Value::as_object)
+                .and_then(|discriminator| discriminator.get("propertyName"))
+                .and_then(Value::as_str),
+            Some("platform")
+        );
+        let variants = hardware
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("closed hardware assertion variants");
+        assert_eq!(variants.len(), 2);
+        let mut actual_variants = BTreeSet::new();
+        for variant in variants {
+            let variant = variant
+                .as_object()
+                .expect("hardware assertion variant object");
+            assert_eq!(variant.get("type").and_then(Value::as_str), Some("object"));
+            assert_eq!(
+                variant.get("additionalProperties").and_then(Value::as_bool),
+                Some(false),
+                "hardware assertion variants must reject unknown fields"
+            );
+            let required = variant
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("hardware assertion required fields")
+                .iter()
+                .map(|field| field.as_str().expect("required field name"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(required, BTreeSet::from(["platform", "assertion"]));
+            let properties = variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("hardware assertion variant properties");
+            assert_eq!(
+                properties
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["platform", "assertion"])
+            );
+            let platform = properties["platform"]
+                .get("enum")
+                .and_then(Value::as_array)
+                .filter(|values| values.len() == 1)
+                .and_then(|values| values[0].as_str())
+                .expect("one exact platform tag");
+            let assertion = properties["assertion"]
+                .get("$ref")
+                .and_then(Value::as_str)
+                .expect("typed platform assertion reference");
+            actual_variants.insert((platform, assertion));
+        }
+        assert_eq!(
+            actual_variants,
+            BTreeSet::from([
+                (
+                    "android_key_mint",
+                    "#/components/schemas/OfflineAndroidKeyMintHardwareAssertion",
+                ),
+                (
+                    "ios_app_attest",
+                    "#/components/schemas/OfflineIosAppAttestHardwareAssertion",
+                ),
+            ])
+        );
+    }
+    #[test]
+    fn generated_spec_exposes_kagemusha_topup_insertion_capacity() {
+        let doc = generate_spec();
+        let schemas = component_schemas(&doc);
+        let last_insertable_leaf =
+            u64::from(iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_INSERTION_CAPACITY_V2 - 1);
+        for (owner, property) in [
+            ("OfflineTopUpShieldEvidence", "leaf_index"),
+            ("OfflineTopUpAnchor", "shield_leaf_index"),
+        ] {
+            assert_eq!(
+                property_integer_bounds(schemas, owner, property),
+                (0, last_insertable_leaf),
+                "{owner}.{property} must reserve the recursive output budget"
+            );
+        }
+        assert_eq!(
+            property_integer_bounds(schemas, "OfflineSpendStatement", "next_zero_leaf_index"),
+            (
+                0,
+                u64::from(iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 - 1),
+            ),
+            "recursive state may advance through the complete tree after admission"
+        );
+    }
+    #[test]
+    fn generated_spec_exposes_strict_offline_operation_json_contract() {
+        let doc = generate_spec();
+        let schemas = component_schemas(&doc);
+        for (name, tag) in [
+            ("OfflineOperationKind", "kind"),
+            ("OfflineOperationState", "state"),
+        ] {
+            assert_strict_object_schema(schemas, name, &[tag, "value"], &[]);
+            assert_eq!(
+                component_properties(schemas, name)["value"]
+                    .get("type")
+                    .and_then(Value::as_str),
+                Some("null")
+            );
+            let description = schemas[name]
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{name} description"))
+                .to_ascii_lowercase();
+            assert!(description.contains("value=null"));
+            assert!(!description.contains("accept omitted"));
+            assert!(!description.contains("ignore unknown"));
+        }
+        for (name, required) in [
+            (
+                "OfflineOperationReference",
+                &[
+                    "operation_id",
+                    "kind",
+                    "state",
+                    "transaction_hash",
+                    "status_uri",
+                    "submitted_at_ms",
+                ][..],
+            ),
+            (
+                "OfflineTopUpResult",
+                &[
+                    "transaction_hash",
+                    "finalized_block_height",
+                    "server_time_ms",
+                    "anchor",
+                    "finality_proof",
+                ][..],
+            ),
+            (
+                "OfflineRedeemResult",
+                &[
+                    "transaction_hash",
+                    "finalized_block_height",
+                    "server_time_ms",
+                ][..],
+            ),
+            (
+                "OfflineOperationPendingValue",
+                &[
+                    "operation_id",
+                    "kind",
+                    "transaction_hash",
+                    "submitted_at_ms",
+                ][..],
+            ),
+            (
+                "OfflineOperationAppliedValue",
+                &["operation_id", "result"][..],
+            ),
+            (
+                "OfflineOperationRejectedValue",
+                &["operation_id", "kind", "transaction_hash", "error"][..],
+            ),
+        ] {
+            assert_strict_object_schema(schemas, name, required, &[]);
+        }
+        for name in [
+            "OfflineTopUpOperationResult",
+            "OfflineRedeemOperationResult",
+        ] {
+            assert_strict_object_schema(schemas, name, &["kind", "result"], &[]);
+        }
+        for name in [
+            "OfflineOperationPending",
+            "OfflineOperationApplied",
+            "OfflineOperationRejected",
+        ] {
+            assert_strict_object_schema(schemas, name, &["state", "value"], &[]);
+        }
+        let result = schemas
+            .get("OfflineOperationResult")
+            .and_then(Value::as_object)
+            .expect("operation result union");
+        assert_eq!(
+            result
+                .get("discriminator")
+                .and_then(Value::as_object)
+                .and_then(|discriminator| discriminator.get("propertyName"))
+                .and_then(Value::as_str),
+            Some("kind")
+        );
+        let result_variants = result
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("operation result variants")
+            .iter()
+            .map(|variant| {
+                variant
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .expect("operation result variant reference")
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            result_variants,
+            BTreeSet::from([
+                "#/components/schemas/OfflineTopUpOperationResult",
+                "#/components/schemas/OfflineRedeemOperationResult",
+            ])
+        );
+        let status = schemas
+            .get("OfflineOperationStatus")
+            .and_then(Value::as_object)
+            .expect("operation status union");
+        assert_eq!(
+            status
+                .get("discriminator")
+                .and_then(Value::as_object)
+                .and_then(|discriminator| discriminator.get("propertyName"))
+                .and_then(Value::as_str),
+            Some("state")
+        );
+        let status_variants = status
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("operation status variants")
+            .iter()
+            .map(|variant| {
+                variant
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .expect("operation status variant reference")
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            status_variants,
+            BTreeSet::from([
+                "#/components/schemas/OfflineOperationPending",
+                "#/components/schemas/OfflineOperationApplied",
+                "#/components/schemas/OfflineOperationRejected",
+            ])
+        );
+    }
+    #[test]
     fn generated_spec_exposes_only_the_closed_verifier_backend_registry_v1() {
         let doc = generate_spec();
         let schemas = component_schemas(&doc);
@@ -4930,10 +5268,14 @@ mod tests {
                 "offline command must document its configured body limit: {path}"
             );
             assert!(
+                responses.contains_key("408"),
+                "offline command must document its absolute body-read deadline: {path}"
+            );
+            assert!(
                 !responses.contains_key("422"),
                 "offline command has no unprocessable-entity response path: {path}"
             );
-            for status in ["413", "415", "500"] {
+            for status in ["408", "413", "415", "500"] {
                 assert!(
                     !response_documents_reject_code(responses, status),
                     "offline command {status} has no canonical reject-code header: {path}"

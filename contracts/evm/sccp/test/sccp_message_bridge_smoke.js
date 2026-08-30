@@ -46,6 +46,7 @@ const ZERO_BOOL_RUNTIME = "0x600060005260206000f3";
 // Stay below the EIP-7825 per-transaction gas cap enforced by the locked
 // Hardhat runtime while retaining ample headroom for the largest constructor.
 const MAX_DEPLOYMENT_GAS = 16_000_000n;
+const TOKEN_CALL_GAS_LIMIT = 100_000n;
 
 function replayParent(level, left, right) {
   return ethers.sha256(
@@ -853,7 +854,7 @@ function exactSingleKeyCanonical(key) {
   return Buffer.concat([Buffer.from([0x02, 0x00, 0x01, 0x20]), bytes]);
 }
 
-function universalTairaSenderCanonicals() {
+function unsupportedTairaSenderCanonicals() {
   const addressVectors = JSON.parse(
     fs.readFileSync(
       path.join(REPO, "fixtures/account/address_vectors.json"),
@@ -891,8 +892,8 @@ function universalTairaSenderCanonicals() {
   return [multisig, secp256k1];
 }
 
-function universalTairaSenders() {
-  return universalTairaSenderCanonicals().map((value) =>
+function unsupportedTairaSenderValues() {
+  return unsupportedTairaSenderCanonicals().map((value) =>
     ethers.toUtf8Bytes(encodeI105(value)),
   );
 }
@@ -956,7 +957,7 @@ function invalidI105Values() {
 }
 
 function invalidTairaSenderValues() {
-  const [multisig, secp256k1] = universalTairaSenderCanonicals();
+  const [multisig, secp256k1] = unsupportedTairaSenderCanonicals();
   const mutate = (value, mutation) => {
     const copy = Buffer.from(value);
     mutation(copy);
@@ -1832,6 +1833,16 @@ function rejectedWith(reason) {
   };
 }
 
+async function waitForMined(label, transactionPromise) {
+  try {
+    const transaction = await transactionPromise;
+    return await transaction.wait();
+  } catch (error) {
+    error.message = `${label}: ${error.message}`;
+    throw error;
+  }
+}
+
 async function main() {
   const {
     evmContracts: contracts,
@@ -2281,14 +2292,17 @@ async function main() {
   }
   const codecHarness = await deploy(signer, codecHarnessArtifact);
   const invalidTairaRecipients = invalidI105Values();
-  const invalidTairaSenders = invalidTairaSenderValues();
-  const validTairaSenders = universalTairaSenders();
+  const unsupportedTairaSenders = unsupportedTairaSenderValues();
+  const invalidTairaSenders = [
+    ...unsupportedTairaSenders,
+    ...invalidTairaSenderValues(),
+  ];
   assert.equal(
     await codecHarness.isTairaRecipient(CANONICAL_I105_BYTES),
     true,
   );
   assert.equal(await codecHarness.isTairaAccount(CANONICAL_I105_BYTES), true);
-  for (const sender of validTairaSenders) {
+  for (const sender of unsupportedTairaSenders) {
     assert.equal(
       await codecHarness.isTairaAccount(sender),
       false,
@@ -2916,6 +2930,17 @@ async function main() {
     ),
     rejectedWith("Groth16 proof verification failed"),
   );
+  const secondTronProof = await acceptingProof(
+    provider,
+    abi,
+    tronPublicInputs,
+    tronStatementHash,
+    secondTronDestinationBinding,
+    await secondTronBridge.routeConfigHash(),
+    SORA_FINALITY_ANCHOR_HASH,
+    g1,
+    g2,
+  );
   await provider.send("hardhat_setCode", [
     secondTronMintBreakerAddress,
     ZERO_BOOL_RUNTIME,
@@ -2927,7 +2952,7 @@ async function main() {
   assert.equal(await secondTronBridge.mintBreakerCodeHash(), secondTronMintBreakerCodeHash);
   await assert.rejects(
     secondTronBridge.finalizeFromTaira(
-      tronProof,
+      secondTronProof,
       tronPublicInputs,
       tronStatementHash,
       tronPayloadHex,
@@ -2955,61 +2980,6 @@ async function main() {
     ),
     rejectedWith("SC_REPLAY"),
   );
-  for (let index = 0; index < validTairaSenders.length; index++) {
-    const recipientAddress = ethers.getAddress(
-      `0x${(0xb1 + index).toString(16).padStart(2, "0").repeat(20)}`,
-    );
-    const universalPayload = transferPayload({
-      sourceDomain: DOMAIN_SORA,
-      destinationDomain: DOMAIN_TRON,
-      nonce: 200 + index,
-      amount: 3,
-      senderCodec: CODEC_TEXT,
-      sender: validTairaSenders[index],
-      recipientCodec: CODEC_TRON21,
-      recipient: Buffer.concat([
-        Buffer.from([0x41]),
-        Buffer.from(recipientAddress.slice(2), "hex"),
-      ]),
-      route: "taira_tron_xor",
-    });
-    const universalPayloadHex = ethers.hexlify(universalPayload);
-    const universalVector = await codecHarness.destinationVector(
-      TRON_MAINNET_PROFILE,
-      universalPayloadHex,
-    );
-    const universalInputs = [
-      universalVector[0],
-      universalVector[1],
-      word(DOMAIN_TRON),
-      ethers.keccak256(ethers.toUtf8Bytes(`tron-universal-account-root-${index}`)),
-      word(301 + index),
-      ethers.keccak256(ethers.toUtf8Bytes(`tron-universal-account-finality-${index}`)),
-    ];
-    const universalStatement = ethers.keccak256(
-      ethers.toUtf8Bytes(`tron-universal-account-statement-${index}`),
-    );
-    const universalProof = await acceptingProof(
-      provider,
-      abi,
-      universalInputs,
-      universalStatement,
-      tronDestinationBinding,
-      await tronBridge.routeConfigHash(),
-      SORA_FINALITY_ANCHOR_HASH,
-      g1,
-      g2,
-    );
-    await (
-      await tronBridge.finalizeFromTaira(
-        universalProof,
-        universalInputs,
-        universalStatement,
-        universalPayloadHex,
-      )
-    ).wait();
-    assert.equal(await tronToken.balanceOf(recipientAddress), 3n * SCALE);
-  }
   await tripMintBreaker(
     provider,
     tronMintBreaker,
@@ -3026,7 +2996,11 @@ async function main() {
     rejectedWith("SC_BREAKER"),
   );
   const tronOutsiderAddress = await tronOutsider.getAddress();
-  await (await tronToken.approve(tronOutsiderAddress, SCALE)).wait();
+  await (
+    await tronToken.approve(tronOutsiderAddress, SCALE, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    })
+  ).wait();
   await (
     await tronToken
       .connect(tronOutsider)
@@ -3040,13 +3014,26 @@ async function main() {
     tronToken.approve(tronOutsiderAddress, 2n * SCALE),
     rejectedWith("Clear allowance first"),
   );
-  await (await tronToken.approve(tronOutsiderAddress, 0n)).wait();
-  await (await tronToken.approve(tronOutsiderAddress, 2n * SCALE)).wait();
+  await (
+    await tronToken.approve(tronOutsiderAddress, 0n, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    })
+  ).wait();
+  await waitForMined(
+    "TRON post-clear allowance update",
+    tronToken.approve(tronOutsiderAddress, 2n * SCALE, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    }),
+  );
   assert.equal(
     await tronToken.allowance(await signer.getAddress(), tronOutsiderAddress),
     2n * SCALE,
   );
-  await (await tronToken.approve(tronOutsiderAddress, 0n)).wait();
+  await (
+    await tronToken.approve(tronOutsiderAddress, 0n, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    })
+  ).wait();
 
   const tronBurnAccount = await signer.getAddress();
   assert.equal(await tronBridge.transferNonces(tronOutsiderAddress), 0n);
@@ -4157,54 +4144,6 @@ async function main() {
     bridge.finalizeFromTaira(proof, publicInputs, statementHash, payloadHex),
     rejectedWith("SC_REPLAY"),
   );
-  for (let index = 0; index < validTairaSenders.length; index++) {
-    const recipientAddress = ethers.getAddress(
-      `0x${(0xa1 + index).toString(16).padStart(2, "0").repeat(20)}`,
-    );
-    const universalPayload = transferPayload({
-      sourceDomain: DOMAIN_SORA,
-      destinationDomain: DOMAIN_BSC,
-      nonce: 100 + index,
-      amount: 5,
-      senderCodec: CODEC_TEXT,
-      sender: validTairaSenders[index],
-      recipientCodec: CODEC_EVM20,
-      recipient: Buffer.from(recipientAddress.slice(2), "hex"),
-    });
-    const universalPayloadHex = ethers.hexlify(universalPayload);
-    const universalInputs = [
-      await bridge.sccpDestinationMessageId(universalPayloadHex),
-      await bridge.sccpPayloadHash(universalPayloadHex),
-      word(DOMAIN_BSC),
-      ethers.keccak256(ethers.toUtf8Bytes(`universal-account-root-${index}`)),
-      word(101 + index),
-      ethers.keccak256(ethers.toUtf8Bytes(`universal-account-finality-${index}`)),
-    ];
-    const universalStatement = ethers.keccak256(
-      ethers.toUtf8Bytes(`universal-account-statement-${index}`),
-    );
-    const universalProof = await acceptingProof(
-      provider,
-      abi,
-      universalInputs,
-      universalStatement,
-      destinationBinding,
-      await bridge.routeConfigHash(),
-      SORA_FINALITY_ANCHOR_HASH,
-      g1,
-      g2,
-    );
-    await (
-      await bridge.finalizeFromTaira(
-        universalProof,
-        universalInputs,
-        universalStatement,
-        universalPayloadHex,
-      )
-    ).wait();
-    assert.equal(await token.balanceOf(recipientAddress), 5n * SCALE);
-  }
-
   const outsiderAddress = await outsider.getAddress();
   await tripMintBreaker(provider, mintBreaker, bridgeAddress, outsider);
   await assert.rejects(
@@ -4225,7 +4164,11 @@ async function main() {
   );
   const signerBalanceBeforeAllowanceAttacks = await token.balanceOf(signerAddress);
   const outsiderBalanceBeforeAllowanceAttacks = await token.balanceOf(outsiderAddress);
-  await (await token.approve(outsiderAddress, SCALE)).wait();
+  await (
+    await token.approve(outsiderAddress, SCALE, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    })
+  ).wait();
   await (
     await token
       .connect(outsider)
@@ -4236,16 +4179,33 @@ async function main() {
     token.approve(outsiderAddress, 2n * SCALE),
     rejectedWith("Clear allowance first"),
   );
-  await (await token.approve(outsiderAddress, 0n)).wait();
+  await (
+    await token.approve(outsiderAddress, 0n, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    })
+  ).wait();
   await (await token.connect(outsider).transfer(signerAddress, SCALE)).wait();
-  await (await token.approve(outsiderAddress, 2n * SCALE)).wait();
+  await waitForMined(
+    "EVM post-clear allowance update",
+    token.approve(outsiderAddress, 2n * SCALE, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    }),
+  );
   await assert.rejects(
     token.connect(outsider).transferFrom(signerAddress, outsiderAddress, 3n * SCALE),
     rejectedWith("Allowance exceeded"),
   );
   assert.equal(await token.allowance(signerAddress, outsiderAddress), 2n * SCALE);
-  await (await token.approve(outsiderAddress, 0n)).wait();
-  await (await token.approve(outsiderAddress, ethers.MaxUint256)).wait();
+  await (
+    await token.approve(outsiderAddress, 0n, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    })
+  ).wait();
+  await (
+    await token.approve(outsiderAddress, ethers.MaxUint256, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    })
+  ).wait();
   await assert.rejects(
     token.connect(outsider).transferFrom(signerAddress, outsiderAddress, 6n * SCALE),
     rejectedWith("Uint256 underflow"),
@@ -4263,7 +4223,11 @@ async function main() {
     await token.balanceOf(outsiderAddress),
     outsiderBalanceBeforeAllowanceAttacks,
   );
-  await (await token.approve(outsiderAddress, 0n)).wait();
+  await (
+    await token.approve(outsiderAddress, 0n, {
+      gasLimit: TOKEN_CALL_GAS_LIMIT,
+    })
+  ).wait();
 
   await (await token.transfer(outsiderAddress, SCALE)).wait();
   assert.equal(await bridge.transferNonces(signerAddress), 0n);

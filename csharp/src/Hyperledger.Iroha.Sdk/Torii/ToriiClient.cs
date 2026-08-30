@@ -2409,6 +2409,9 @@ public sealed partial class ToriiClient : IDisposable
 
         if (canonicalCredentials is not null && !IsAnonymousPublicRoute(exactPath))
         {
+            var signingNetworkId = Options.LocalSigningContext?.NetworkId
+                ?? throw new InvalidOperationException(
+                    "Canonical request authentication requires ToriiClientOptions.LocalSigningContext.");
             // Canonical account proofs bind method, path, query, body, time, and nonce, but not
             // the destination authority. An opaque injected handler could therefore forward the
             // proof on redirect or replay the same nonce on retry. Only the internally managed
@@ -2416,8 +2419,7 @@ public sealed partial class ToriiClient : IDisposable
             EnsureOneShotTransportIsVerified();
             var bodyBytes = content is null ? Array.Empty<byte>() : await content.ReadAsByteArrayAsync(cancellationToken);
             var headers = CanonicalRequest.BuildHeaders(
-                Options.LocalSigningContext?.NetworkId
-                    ?? throw new InvalidOperationException("Canonical request authentication requires ToriiClientOptions.LocalSigningContext."),
+                signingNetworkId,
                 canonicalCredentials.AccountId,
                 canonicalCredentials.PrivateKeySeed,
                 exactMethod,

@@ -1344,6 +1344,12 @@ fn beacon_demand_tracks_sortition_timeout_and_frozen_ballot_release_slot() {
         .fail_body_election_no_roster(governance_attempt_id, election_attempt_id, false, 21)
         .expect("missing sortition pulse becomes an objective retryable failure");
     assert!(!sortition.requires_beacon_pulse_at(session_id, 20));
+    assert_eq!(
+        sortition.unavailable_beacon_pulse_slots_v1(),
+        BTreeSet::from([(session_id, 20)])
+    );
+    assert!(sortition.classifies_beacon_pulse_unavailable_at(session_id, 20));
+    assert!(!sortition.classifies_beacon_pulse_unavailable_at(session_id, 21));
     sortition
         .validate()
         .expect("pulse-missing NoRoster is a canonical persistable terminal shape");

@@ -1943,7 +1943,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
         }
         let consensus_key_hash: [u8; 32] =
             Hash::new(common_config.key_pair.public_key().encode()).into();
-        let storage_root = kura.sumeragi_v2_storage_root();
         let body_store_capacity =
             V2BodyStoreCapacity::new(config.storage.body_store_max_bytes_per_height.get())
                 .map_err(|error| {
@@ -1951,8 +1950,12 @@ pub(super) fn run_non_pending_lifecycle_loop(
                         error.to_string(),
                     ))
                 })?;
-        let body_store = V2BodyStore::open_with_policy_and_capacity(
-            storage_root.join("bodies"),
+        let body_store_authority = kura
+            .mint_v2_body_store_directory_authority()
+            .map_err(|error| V2RunnerError::Service(error.to_string()))?;
+        let body_store = V2BodyStore::open_with_kura_authority_and_capacity(
+            kura.as_ref(),
+            body_store_authority,
             context.clone(),
             signature_policy.clone(),
             body_store_capacity,

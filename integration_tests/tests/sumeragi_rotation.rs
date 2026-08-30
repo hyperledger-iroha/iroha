@@ -8,11 +8,18 @@
 //!   while allowing quorum signer subsets to differ.
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::sandbox;
-use iroha::data_model::{Level, consensus::Qc, isi::Log};
+use iroha::{
+    client::Client,
+    data_model::{
+        Level, NetworkId,
+        block::consensus_v2::{GlobalPhase, finality::V2FinalityArtifact},
+        isi::Log,
+    },
+};
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-use norito::json;
 use std::{
     collections::BTreeMap,
+    num::NonZeroU64,
     time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, time::sleep};
@@ -78,130 +85,54 @@ fn quorum(n: usize) -> (usize, usize) {
     let q = if n > 3 { 2 * f + 1 } else { n };
     (f, q)
 }
-fn signer_indices_from_bitmap(bitmap: &[u8], validator_len: usize) -> Vec<u64> {
-    let mut indices = Vec::new();
-    for idx in 0..validator_len {
-        let byte_idx = idx / 8;
-        let bit_idx = idx % 8;
-        if bitmap
-            .get(byte_idx)
-            .is_some_and(|byte| (byte >> bit_idx) & 1 == 1)
-        {
-            indices.push(idx as u64);
-        }
-    }
-    indices
-}
 /// Extract a map of block height -> signer index set (ascending block order).
-fn height_to_qc_signer_indices(certs: &[Qc]) -> Vec<(u64, Vec<u64>)> {
+fn height_to_qc_signer_indices(certs: &[V2FinalityArtifact]) -> Vec<(u64, Vec<u64>)> {
     let mut by_height: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
     for cert in certs {
-        let mut idxs =
-            signer_indices_from_bitmap(&cert.aggregate.signers_bitmap, cert.validator_set.len());
-        idxs.sort_unstable();
-        idxs.dedup();
+        let idxs = cert
+            .commit_qc
+            .signers
+            .iter()
+            .copied()
+            .map(u64::from)
+            .collect();
         by_height.insert(cert.height, idxs);
     }
     by_height.into_iter().collect()
 }
-async fn fetch_commit_certificates(
-    http: &reqwest::Client,
-    torii: &str,
-    from: Option<u64>,
-    limit: Option<u64>,
-) -> Result<Vec<Qc>> {
-    let base = reqwest::Url::parse(torii).wrap_err_with(|| format!("parse torii URL {torii}"))?;
-    let mut url = base
-        .join("v1/sumeragi/commit-certificates")
-        .wrap_err_with(|| format!("compose commit-certificates URL for {torii}"))?;
-    {
-        let mut pairs = url.query_pairs_mut();
-        if let Some(from) = from {
-            pairs.append_pair("from", &from.to_string());
-        }
-        if let Some(limit) = limit {
-            pairs.append_pair("limit", &limit.to_string());
-        }
-    }
-    let response = http
-        .get(url)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .wrap_err("fetch commit certificates")?;
-    if !response.status().is_success() {
-        return Err(eyre!(
-            "commit certificates response status {}",
-            response.status()
-        ));
-    }
-    let body = response.text().await.wrap_err("commit certificates body")?;
-    json::from_str(&body).wrap_err("parse commit certificates JSON")
-}
 async fn wait_for_commit_certificates_in_range(
-    http: &reqwest::Client,
-    torii: &str,
+    client: &Client,
+    network_id: NetworkId,
     first_height: u64,
     last_height: u64,
-) -> Result<Vec<Qc>> {
+) -> Result<Vec<V2FinalityArtifact>> {
     if first_height > last_height {
         return Ok(Vec::new());
     }
-    let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
-    let mut last_hint: Option<String> = None;
-    let limit = last_height.saturating_sub(first_height).saturating_add(1);
-    loop {
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for commit certificates [{first_height}..={last_height}] from {torii}; last={last_hint:?}"
-            ));
-        }
-        match fetch_commit_certificates(http, torii, Some(last_height), Some(limit)).await {
-            Ok(certs) => {
-                let mut by_height: BTreeMap<u64, Qc> = BTreeMap::new();
-                for cert in certs {
-                    if (first_height..=last_height).contains(&cert.height) {
-                        by_height.insert(cert.height, cert);
-                    }
-                }
-                let missing: Vec<u64> = (first_height..=last_height)
-                    .filter(|h| !by_height.contains_key(h))
-                    .collect();
-                if missing.is_empty() {
-                    return Ok(by_height.into_values().collect());
-                }
-                last_hint = Some(format!("missing heights {missing:?}"));
-            }
-            Err(err) => {
-                last_hint = Some(format!("{err:#}"));
-            }
-        }
-        sleep(COMMIT_CERT_POLL).await;
+    let mut certificates = Vec::new();
+    for height in first_height..=last_height {
+        certificates.push(wait_for_commit_certificate_height(client, network_id, height).await?);
     }
+    Ok(certificates)
 }
 async fn wait_for_commit_certificate_height(
-    http: &reqwest::Client,
-    torii: &str,
+    client: &Client,
+    network_id: NetworkId,
     height: u64,
-) -> Result<Qc> {
+) -> Result<V2FinalityArtifact> {
+    let height = NonZeroU64::new(height)
+        .ok_or_else(|| eyre!("genesis height zero has no revision-4 finality artifact"))?;
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
     let mut last_hint: Option<String> = None;
     loop {
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for commit certificate at height {height} from {torii}; last={last_hint:?}"
+                "timed out waiting for verified finality artifact at height {height}; last={last_hint:?}"
             ));
         }
-        match fetch_commit_certificates(http, torii, Some(height), Some(4)).await {
-            Ok(certs) => {
-                if let Some(cert) = certs.into_iter().find(|cert| cert.height == height) {
-                    return Ok(cert);
-                }
-                last_hint = Some("height not present".to_owned());
-            }
-            Err(err) => {
-                last_hint = Some(format!("{err:#}"));
-            }
+        match client.get_bridge_finality_anchor(height, network_id) {
+            Ok((proof, _)) => return Ok(proof.finality_artifact),
+            Err(error) => last_hint = Some(format!("{error:#}")),
         }
         sleep(COMMIT_CERT_POLL).await;
     }
@@ -218,25 +149,25 @@ fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let http = integration_tests::http::client();
     // Let the network produce a few blocks
     drive_network_to_total_height(&network, &rt, &client, 6, "set a tick")?;
     let latest_height = client.get_status()?.blocks;
     let certs = rt.block_on(async {
-        wait_for_commit_certificates_in_range(&http, client.torii_url.as_str(), 2, latest_height)
-            .await
+        wait_for_commit_certificates_in_range(&client, network.network_id(), 2, latest_height).await
     })?;
     let n = network.peers().len();
     let (_f, q) = quorum(n);
     let hv = height_to_qc_signer_indices(&certs);
-    for (h, idxs) in hv.into_iter().filter(|(h, _)| *h >= 2) {
+    for ((h, idxs), cert) in hv.into_iter().filter(|(h, _)| *h >= 2).zip(&certs) {
+        assert_eq!(cert.commit_qc.phase, GlobalPhase::Commit);
+        assert_eq!(cert.height_context.roster.len(), n);
         // The wire certificate carries the canonical exact threshold subset.
         assert!(
             idxs.len() == q,
             "height {h}: expected exactly {q} quorum signatures, got {}",
             idxs.len()
         );
-        // Signer indices are bitmap positions over the validator roster.
+        // Signer indices resolve directly through the frozen validator roster.
         for ix in &idxs {
             let iu = usize::try_from(*ix).unwrap();
             assert!(
@@ -244,7 +175,10 @@ fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
                 "height {h}: signer index {iu} out of validator-set bounds {n}"
             );
         }
-        // Note: indices are compared as a set; ordering in the certificate may differ.
+        assert!(
+            idxs.windows(2).all(|pair| pair[0] < pair[1]),
+            "height {h}: signer indices are not strictly increasing"
+        );
     }
     Ok(())
 }
@@ -264,13 +198,11 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
         return Ok(());
     };
     let client = network.client();
-    let http = integration_tests::http::client();
     // Let the network produce a number of blocks (>= 10 total)
     drive_network_to_total_height(&network, &rt, &client, 10, "set a n7 tick")?;
     let latest_height = client.get_status()?.blocks;
     let certs = rt.block_on(async {
-        wait_for_commit_certificates_in_range(&http, client.torii_url.as_str(), 2, latest_height)
-            .await
+        wait_for_commit_certificates_in_range(&client, network.network_id(), 2, latest_height).await
     })?;
     let n = network.peers().len();
     assert_eq!(n, 7);
@@ -278,14 +210,16 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     // Check a window of heights starting from 2 (skip genesis), ensure at least 8 heights
     let hv = height_to_qc_signer_indices(&certs);
     let mut checked = 0usize;
-    for (h, idxs) in hv.into_iter().filter(|(h, _)| *h >= 2).take(12) {
+    for ((h, idxs), cert) in hv.into_iter().filter(|(h, _)| *h >= 2).zip(&certs).take(12) {
+        assert_eq!(cert.commit_qc.phase, GlobalPhase::Commit);
+        assert_eq!(cert.height_context.roster.len(), n);
         // The wire certificate carries the canonical exact threshold subset.
         assert!(
             idxs.len() == q,
             "height {h}: signatures {} != exact quorum {q}",
             idxs.len()
         );
-        // Signer indices are bitmap positions over the validator roster.
+        // Signer indices resolve directly through the frozen validator roster.
         for ix in &idxs {
             let iu = usize::try_from(*ix).unwrap();
             assert!(
@@ -293,6 +227,10 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
                 "height {h}: index {iu} out of validator-set bounds {n}"
             );
         }
+        assert!(
+            idxs.windows(2).all(|pair| pair[0] < pair[1]),
+            "height {h}: signer indices are not strictly increasing"
+        );
         checked += 1;
     }
     assert!(
@@ -302,11 +240,11 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     Ok(())
 }
 #[test]
-fn canonical_certificate_identical_across_peers() -> Result<()> {
+fn finality_context_identical_across_peers() -> Result<()> {
     init_instruction_registry();
     let Some((network, rt)) = start_network(
         || NetworkBuilder::new().with_peers(4),
-        stringify!(canonical_certificate_identical_across_peers),
+        stringify!(finality_context_identical_across_peers),
     )?
     else {
         return Ok(());
@@ -315,19 +253,18 @@ fn canonical_certificate_identical_across_peers() -> Result<()> {
     let client = network.client();
     drive_network_to_total_height(&network, &rt, &client, 5, "set a cert tick")?;
     let expected_height = client.get_status()?.blocks;
-    let http = integration_tests::http::client();
     // For each peer, fetch commit certificate for the same height and ensure
     // quorum is available for a consistent validator roster.
-    let mut validator_set_hashes = Vec::new();
+    let mut height_context_ids = Vec::new();
     let (_, required_quorum) = quorum(network.peers().len());
     for p in network.peers() {
-        let torii = p.torii_url();
+        let peer_client = p.client();
         let cert = rt.block_on(async {
-            wait_for_commit_certificate_height(&http, torii.as_str(), expected_height).await
+            wait_for_commit_certificate_height(&peer_client, network.network_id(), expected_height)
+                .await
         })?;
-        let mut idxs =
-            signer_indices_from_bitmap(&cert.aggregate.signers_bitmap, cert.validator_set.len());
-        idxs.sort_unstable();
+        let idxs = &cert.commit_qc.signers;
+        assert_eq!(cert.commit_qc.phase, GlobalPhase::Commit);
         assert!(
             idxs.len() == required_quorum,
             "height {}: signatures {} != exact quorum {}",
@@ -335,20 +272,28 @@ fn canonical_certificate_identical_across_peers() -> Result<()> {
             idxs.len(),
             required_quorum
         );
-        for idx in &idxs {
+        for idx in idxs {
             let idx = usize::try_from(*idx).expect("signer index fits usize");
             assert!(
-                idx < cert.validator_set.len(),
+                idx < cert.height_context.roster.len(),
                 "height {}: signer index {} out of validator-set bounds {}",
                 cert.height,
                 idx,
-                cert.validator_set.len()
+                cert.height_context.roster.len()
             );
         }
-        validator_set_hashes.push(cert.validator_set_hash);
+        assert!(
+            idxs.windows(2).all(|pair| pair[0] < pair[1]),
+            "height {}: signer indices are not strictly increasing",
+            cert.height
+        );
+        height_context_ids.push(cert.height_context.id());
     }
-    for w in validator_set_hashes.windows(2) {
-        assert_eq!(w[0], w[1], "validator roster hash differs across peers");
+    for pair in height_context_ids.windows(2) {
+        assert_eq!(
+            pair[0], pair[1],
+            "frozen height context differs across peers"
+        );
     }
     Ok(())
 }

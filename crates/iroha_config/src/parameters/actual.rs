@@ -7639,9 +7639,9 @@ pub struct ProofApi {
     pub burst: Option<NonZeroU32>,
     /// Maximum accepted proof request payload size.
     pub max_body_bytes: Bytes,
-    /// Maximum proof request bodies buffered concurrently before handler admission.
+    /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
     pub body_max_inflight: NonZeroUsize,
-    /// Absolute deadline for reading one admitted proof request body.
+    /// Absolute deadline for reading one admitted proof-bearing request body.
     pub body_read_timeout: Duration,
     /// Egress budget for proof responses (bytes/sec). None disables.
     pub egress_bytes_per_sec: Option<NonZeroU64>,
@@ -7755,15 +7755,13 @@ pub struct Push {
 impl_default!(Push => {
         Self {
             enabled: defaults::torii::PUSH_ENABLED,
-            rate_per_minute: defaults::torii::PUSH_RATE_PER_MINUTE
-                .and_then(std::num::NonZeroU32::new),
-            burst: defaults::torii::PUSH_BURST.and_then(std::num::NonZeroU32::new),
+            rate_per_minute: defaults::torii::PUSH_RATE_LIMIT_ENABLED
+                .then_some(defaults::torii::PUSH_RATE_PER_MINUTE),
+            burst: defaults::torii::PUSH_RATE_LIMIT_ENABLED
+                .then_some(defaults::torii::PUSH_BURST),
             connect_timeout: Duration::from_millis(defaults::torii::PUSH_CONNECT_TIMEOUT_MS),
             request_timeout: Duration::from_millis(defaults::torii::PUSH_REQUEST_TIMEOUT_MS),
-            max_topics_per_device: NonZeroUsize::new(
-                defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE.max(1),
-            )
-            .expect("default push max topics non-zero"),
+            max_topics_per_device: defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE,
             fcm_project_id: None,
             fcm_service_account_path: None,
             apns_environment: defaults::torii::PUSH_APNS_ENVIRONMENT.to_string(),

@@ -14635,12 +14635,14 @@ pub struct Torii {
     pub proof_max_body_bytes: Bytes,
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
     ///
-    /// This aggregate gate also covers SCCP bridge proof/message submissions.
+    /// This aggregate gate also covers SCCP bridge proof/message submissions and
+    /// Kagemusha top-up/redemption command bodies.
     #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
     pub proof_body_max_inflight: NonZeroUsize,
     /// Absolute deadline for reading one admitted proof-bearing request body (milliseconds).
     ///
-    /// This deadline also applies to SCCP bridge proof/message submissions.
+    /// This deadline also applies to SCCP bridge proof/message submissions and
+    /// Kagemusha top-up/redemption command bodies.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS))"
     )]
@@ -15280,10 +15282,15 @@ pub struct ToriiPush {
     /// Master enable switch for the push bridge.
     #[config(default = "defaults::torii::PUSH_ENABLED")]
     pub enabled: bool,
-    /// Optional steady-state rate (requests per minute). None disables.
-    pub rate_per_minute: Option<u32>,
-    /// Optional burst tokens for push notifications.
-    pub burst: Option<u32>,
+    /// Whether push-notification rate limiting is enabled.
+    #[config(default = "defaults::torii::PUSH_RATE_LIMIT_ENABLED")]
+    pub rate_limit_enabled: bool,
+    /// Steady-state rate (requests per minute) when rate limiting is enabled.
+    #[config(default = "defaults::torii::PUSH_RATE_PER_MINUTE")]
+    pub rate_per_minute: NonZeroU32,
+    /// Burst tokens for push notifications when rate limiting is enabled.
+    #[config(default = "defaults::torii::PUSH_BURST")]
+    pub burst: NonZeroU32,
     /// HTTP connect timeout for push delivery.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PUSH_CONNECT_TIMEOUT_MS))"
@@ -15296,7 +15303,7 @@ pub struct ToriiPush {
     pub request_timeout_ms: DurationMs,
     /// Maximum topics recorded per registered device.
     #[config(default = "defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE")]
-    pub max_topics_per_device: usize,
+    pub max_topics_per_device: NonZeroUsize,
     /// Firebase project ID used with FCM HTTP v1.
     pub fcm_project_id: Option<String>,
     /// Path to a Firebase service-account JSON key used to mint FCM OAuth tokens.
@@ -15319,6 +15326,7 @@ impl Default for ToriiPush {
     fn default() -> Self {
         Self {
             enabled: defaults::torii::PUSH_ENABLED,
+            rate_limit_enabled: defaults::torii::PUSH_RATE_LIMIT_ENABLED,
             rate_per_minute: defaults::torii::PUSH_RATE_PER_MINUTE,
             burst: defaults::torii::PUSH_BURST,
             connect_timeout_ms: DurationMs(std::time::Duration::from_millis(
@@ -15339,45 +15347,116 @@ impl Default for ToriiPush {
         }
     }
 }
-fn trim_optional(value: Option<String>) -> Option<String> {
-    value.and_then(|raw| {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_owned())
-        }
-    })
+fn validate_optional_push_text(
+    emitter: &mut Emitter<ParseError>,
+    field: &str,
+    value: Option<String>,
+) -> Option<String> {
+    if let Some(value) = value.as_ref()
+        && (value.is_empty() || value.trim() != value)
+    {
+        emit_torii_config_error(
+            emitter,
+            format!("{field} must be non-empty and must not contain surrounding whitespace"),
+        );
+    }
+    value
 }
 impl ToriiPush {
-    fn parse(self) -> actual::Push {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Push {
+        if self.max_topics_per_device.get() > defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE_V1 {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.push.max_topics_per_device must not exceed {}",
+                    defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE_V1
+                ),
+            );
+        }
+        if self.connect_timeout_ms.get().is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.push.connect_timeout_ms must be greater than zero",
+            );
+        }
+        if self.request_timeout_ms.get().is_zero() {
+            emit_torii_config_error(
+                emitter,
+                "torii.push.request_timeout_ms must be greater than zero",
+            );
+        }
+        let fcm_project_id = validate_optional_push_text(
+            emitter,
+            "torii.push.fcm_project_id",
+            self.fcm_project_id,
+        );
+        let apns_topic =
+            validate_optional_push_text(emitter, "torii.push.apns_topic", self.apns_topic);
+        let apns_team_id =
+            validate_optional_push_text(emitter, "torii.push.apns_team_id", self.apns_team_id);
+        let apns_key_id =
+            validate_optional_push_text(emitter, "torii.push.apns_key_id", self.apns_key_id);
+        let apns_endpoint = validate_optional_push_text(
+            emitter,
+            "torii.push.apns_endpoint",
+            self.apns_endpoint,
+        );
+        let fcm_any = fcm_project_id.is_some() || self.fcm_service_account_path.is_some();
+        let fcm_complete = fcm_project_id.is_some() && self.fcm_service_account_path.is_some();
+        if fcm_any && !fcm_complete {
+            emit_torii_config_error(
+                emitter,
+                "torii.push FCM configuration requires both fcm_project_id and fcm_service_account_path",
+            );
+        }
+        let apns_any = apns_topic.is_some()
+            || apns_team_id.is_some()
+            || apns_key_id.is_some()
+            || self.apns_private_key_path.is_some()
+            || apns_endpoint.is_some();
+        let apns_complete = apns_topic.is_some()
+            && apns_team_id.is_some()
+            && apns_key_id.is_some()
+            && self.apns_private_key_path.is_some();
+        if apns_any && !apns_complete {
+            emit_torii_config_error(
+                emitter,
+                "torii.push APNs configuration requires apns_topic, apns_team_id, apns_key_id, and apns_private_key_path",
+            );
+        }
+        if self.enabled && !fcm_complete && !apns_complete {
+            emit_torii_config_error(
+                emitter,
+                "torii.push requires at least one complete FCM or APNs provider binding when enabled",
+            );
+        }
+        let apns_environment = match self.apns_environment.as_str() {
+            "sandbox" | "production" => self.apns_environment,
+            value => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.push.apns_environment must be exactly `sandbox` or `production`, got `{value}`"
+                    ),
+                );
+                defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned()
+            }
+        };
         actual::Push {
             enabled: self.enabled,
-            rate_per_minute: self
-                .rate_per_minute
-                .or(defaults::torii::PUSH_RATE_PER_MINUTE)
-                .and_then(std::num::NonZeroU32::new),
-            burst: self
-                .burst
-                .or(defaults::torii::PUSH_BURST)
-                .and_then(std::num::NonZeroU32::new),
+            rate_per_minute: self.rate_limit_enabled.then_some(self.rate_per_minute),
+            burst: self.rate_limit_enabled.then_some(self.burst),
             connect_timeout: self.connect_timeout_ms.get(),
             request_timeout: self.request_timeout_ms.get(),
-            max_topics_per_device: std::num::NonZeroUsize::new(self.max_topics_per_device.max(1))
-                .unwrap_or(nonzero!(1_usize)),
-            fcm_project_id: trim_optional(self.fcm_project_id),
+            max_topics_per_device: self.max_topics_per_device,
+            fcm_project_id,
             fcm_service_account_path: self.fcm_service_account_path,
-            apns_environment: match self.apns_environment.as_str() {
-                "sandbox" | "production" => self.apns_environment,
-                value => panic!(
-                    "torii.push.apns_environment must be exactly `sandbox` or `production`, got `{value}`"
-                ),
-            },
-            apns_topic: trim_optional(self.apns_topic),
-            apns_team_id: trim_optional(self.apns_team_id),
-            apns_key_id: trim_optional(self.apns_key_id),
+            apns_environment,
+            apns_topic,
+            apns_team_id,
+            apns_key_id,
             apns_private_key_path: self.apns_private_key_path,
-            apns_endpoint: self.apns_endpoint,
+            apns_endpoint,
         }
     }
 }
@@ -15386,15 +15465,19 @@ mod torii_push_tests {
     use super::*;
     #[test]
     fn torii_push_parse_defaults_push_bridge_fields() {
-        let parsed = ToriiPush::default().parse();
+        let mut emitter = Emitter::new();
+        let parsed = ToriiPush::default().parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("default push configuration must be valid");
         assert!(!parsed.enabled);
         assert_eq!(
             parsed.rate_per_minute.map(NonZeroU32::get),
-            defaults::torii::PUSH_RATE_PER_MINUTE
+            Some(defaults::torii::PUSH_RATE_PER_MINUTE.get())
         );
         assert_eq!(
             parsed.burst.map(NonZeroU32::get),
-            defaults::torii::PUSH_BURST
+            Some(defaults::torii::PUSH_BURST.get())
         );
         assert_eq!(
             parsed.connect_timeout,
@@ -15406,7 +15489,7 @@ mod torii_push_tests {
         );
         assert_eq!(
             parsed.max_topics_per_device.get(),
-            defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE
+            defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE.get()
         );
         assert_eq!(
             parsed.apns_environment,
@@ -15421,29 +15504,34 @@ mod torii_push_tests {
     }
     #[test]
     fn torii_push_parse_canonical_fcm_http_v1_and_apns_bindings() {
+        let mut emitter = Emitter::new();
         let parsed = ToriiPush {
             enabled: true,
-            rate_per_minute: Some(0),
-            burst: Some(0),
+            rate_limit_enabled: false,
+            rate_per_minute: nonzero!(60_u32),
+            burst: nonzero!(30_u32),
             connect_timeout_ms: DurationMs(Duration::from_millis(250)),
             request_timeout_ms: DurationMs(Duration::from_millis(750)),
-            max_topics_per_device: 0,
-            fcm_project_id: Some("  taira-mobile  ".to_owned()),
+            max_topics_per_device: nonzero!(32_usize),
+            fcm_project_id: Some("taira-mobile".to_owned()),
             fcm_service_account_path: Some(PathBuf::from("/run/secrets/fcm.json")),
             apns_environment: "production".to_owned(),
-            apns_topic: Some("  org.sora.wallet  ".to_owned()),
-            apns_team_id: Some("  TEAMID  ".to_owned()),
-            apns_key_id: Some("  KEYID  ".to_owned()),
+            apns_topic: Some("org.sora.wallet".to_owned()),
+            apns_team_id: Some("TEAMID".to_owned()),
+            apns_key_id: Some("KEYID".to_owned()),
             apns_private_key_path: Some(PathBuf::from("/run/secrets/AuthKey_KEYID.p8")),
             apns_endpoint: Some("https://apns.internal.example".to_owned()),
         }
-        .parse();
+        .parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("canonical push configuration must be valid");
         assert!(parsed.enabled);
         assert!(parsed.rate_per_minute.is_none());
         assert!(parsed.burst.is_none());
         assert_eq!(parsed.connect_timeout, Duration::from_millis(250));
         assert_eq!(parsed.request_timeout, Duration::from_millis(750));
-        assert_eq!(parsed.max_topics_per_device.get(), 1);
+        assert_eq!(parsed.max_topics_per_device.get(), 32);
         assert_eq!(parsed.fcm_project_id.as_deref(), Some("taira-mobile"));
         assert_eq!(
             parsed.fcm_service_account_path.as_deref(),
@@ -15469,10 +15557,33 @@ mod torii_push_tests {
                 apns_environment: apns_environment.to_owned(),
                 ..ToriiPush::default()
             };
+            let mut emitter = Emitter::new();
+            let _ = config.parse(&mut emitter);
+            let error = emitter
+                .into_result()
+                .expect_err("non-canonical APNs environments must fail closed");
             assert!(
-                std::panic::catch_unwind(|| config.parse()).is_err(),
-                "{apns_environment:?} must fail closed"
+                format!("{error:?}").contains("apns_environment must be exactly"),
+                "{apns_environment:?} produced an unexpected error: {error:?}"
             );
+        }
+    }
+
+    #[test]
+    fn torii_push_rejects_partial_or_noncanonical_provider_bindings() {
+        let mut partial_fcm = ToriiPush::default();
+        partial_fcm.fcm_project_id = Some("project".to_owned());
+        let mut partial_apns = ToriiPush::default();
+        partial_apns.apns_topic = Some("org.sora.wallet".to_owned());
+        let mut padded = ToriiPush::default();
+        padded.fcm_project_id = Some(" project ".to_owned());
+        padded.fcm_service_account_path = Some(PathBuf::from("/run/secrets/fcm.json"));
+        for config in [partial_fcm, partial_apns, padded] {
+            let mut emitter = Emitter::new();
+            let _ = config.parse(&mut emitter);
+            emitter
+                .into_result()
+                .expect_err("invalid provider binding must fail closed");
         }
     }
 }
@@ -15756,7 +15867,7 @@ impl Torii {
                 .unwrap_or(nonzero!(1_u32));
         let webhook = self.webhook.parse();
         let webhook_security = self.webhook_security.parse();
-        let push = self.push.parse();
+        let push = self.push.parse(emitter);
         let privacy_bootle_lantern_issuer = self.privacy_bootle_lantern_issuer.parse(emitter);
         let sccp_replay_archive = self.sccp_replay_archive.parse(emitter);
         let (
@@ -16359,6 +16470,60 @@ pub struct ToriiOperatorWebAuthn {
 }
 impl ToriiOperatorAuth {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::ToriiOperatorAuth {
+        if self.ephemeral_state_capacity.get()
+            > defaults::torii::operator_auth::MAX_EPHEMERAL_STATE_CAPACITY
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.operator_auth.ephemeral_state_capacity must not exceed {}",
+                    defaults::torii::operator_auth::MAX_EPHEMERAL_STATE_CAPACITY
+                ),
+            );
+        }
+        if self.credential_capacity.get()
+            > defaults::torii::operator_auth::MAX_CREDENTIAL_CAPACITY
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.operator_auth.credential_capacity must not exceed {}",
+                    defaults::torii::operator_auth::MAX_CREDENTIAL_CAPACITY
+                ),
+            );
+        }
+        if self.tokens.len() > defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.operator_auth.tokens must not contain more than {} entries",
+                    defaults::torii::operator_auth::MAX_BOOTSTRAP_TOKENS
+                ),
+            );
+        }
+        let mut unique_tokens = BTreeSet::new();
+        for token in &self.tokens {
+            let min = defaults::torii::operator_auth::BOOTSTRAP_TOKEN_MIN_BYTES;
+            let max = defaults::torii::operator_auth::BOOTSTRAP_TOKEN_MAX_BYTES;
+            if !(min..=max).contains(&token.len()) {
+                emit_torii_config_error(
+                    emitter,
+                    format!("torii.operator_auth.tokens entries must contain {min}..={max} bytes"),
+                );
+            }
+            if !token.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.operator_auth.tokens entries must use visible ASCII without whitespace",
+                );
+            }
+            if !unique_tokens.insert(token) {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.operator_auth.tokens must not contain duplicates",
+                );
+            }
+        }
         let rate_per_minute = self
             .rate_per_minute
             .or(super::defaults::torii::operator_auth::RATE_PER_MIN)

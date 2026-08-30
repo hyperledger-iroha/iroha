@@ -9739,6 +9739,13 @@ impl SumeragiV2Adapter {
             .map(|index| registry.validator_id(index))
             .transpose()?;
         let network_id = *wire_context.network_id.as_bytes();
+        let wal_identity = reducer::WalFileIdentity::new(
+            wire::PROTOCOL_VERSION,
+            network_id,
+            context.id(),
+            context.height(),
+            consensus_key_hash,
+        );
         let serviced_candidate_owner: [u8; 32] = fingerprints.node.into();
         let candidate_lifecycle_capacity =
             candidate_lifecycle_capacity(wire_context.roster.len(), capacity_geometry);
@@ -9759,24 +9766,13 @@ impl SumeragiV2Adapter {
             SafetyWalOpenTarget::Kura { kura, authority } => {
                 let wal_name = format!("{:020}.wal", wire_context.height);
                 let wal_path = kura.sumeragi_v2_storage_root().join("wal").join(&wal_name);
-                let wal = SafetyWal::open_with_kura_authority(
-                    kura,
-                    authority,
-                    wal_name,
-                    wire::PROTOCOL_VERSION,
-                    network_id,
-                    consensus_key_hash,
-                )?;
+                let wal =
+                    SafetyWal::open_with_kura_authority(kura, authority, wal_name, wal_identity)?;
                 (wal_path, wal)
             }
             #[cfg(test)]
             SafetyWalOpenTarget::FixturePath(wal_path) => {
-                let wal = SafetyWal::open(
-                    wal_path.clone(),
-                    wire::PROTOCOL_VERSION,
-                    network_id,
-                    consensus_key_hash,
-                )?;
+                let wal = SafetyWal::open(wal_path.clone(), wal_identity)?;
                 (wal_path, wal)
             }
         };

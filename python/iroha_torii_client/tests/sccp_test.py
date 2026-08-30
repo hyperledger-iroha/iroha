@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
-import inspect
 import json
 import sys
 from pathlib import Path
@@ -31,8 +30,6 @@ from iroha_torii_client import (  # noqa: E402
     SCCP_NETWORK_PROFILES,
     SCCP_PAYLOAD_KINDS,
     ToriiClient,
-    normalize_bridge_message_submit_payload,
-    normalize_bridge_proof_submit_payload,
     normalize_sccp_capabilities,
     normalize_sccp_codec_value,
     normalize_sccp_message_bundle,
@@ -62,26 +59,10 @@ PROOF_REQUEST_NORITO_TYPE = "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
 TON_PROOF_REQUEST_NORITO_TYPE = (
     "iroha_sccp::SccpTonGroth16Bls12381ProofRequestV1"
 )
-DESTINATION_ARTIFACT_NORITO_TYPE = (
-    "iroha_data_model::bridge::BridgeSccpDestinationProofV1"
-)
-NATIVE_INBOUND_PROOF_NORITO_TYPE = (
-    "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
-)
-REPLAY_WITNESS_NORITO_TYPE = (
-    "iroha_data_model::bridge::sccp_replay::SccpSparseMerkleWitnessV1"
-)
 
 
 def _b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
-
-
-def _fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
-    return {
-        "payer": "authority",
-        "value": {"charge_limits": [], "gas_limit": gas_limit},
-    }
 
 
 def _norito_crc64_xz(payload: bytes) -> int:
@@ -118,18 +99,6 @@ def _sccp_norito_frame(
             payload,
         )
     )
-
-
-def _destination_artifact_b64(*, padding: int = 0) -> str:
-    return _b64(_sccp_norito_frame(DESTINATION_ARTIFACT_NORITO_TYPE, padding=padding))
-
-
-def _native_inbound_proof_b64(*, padding: int = 0) -> str:
-    return _b64(_sccp_norito_frame(NATIVE_INBOUND_PROOF_NORITO_TYPE, padding=padding))
-
-
-def _replay_witness_b64(*, padding: int = 0) -> str:
-    return _b64(_sccp_norito_frame(REPLAY_WITNESS_NORITO_TYPE, padding=padding))
 
 
 def _network(profile: str) -> Dict[str, Any]:
@@ -1829,269 +1798,10 @@ def test_bundle_accepts_only_exact_canonical_i105_sora_sender() -> None:
         normalize_sccp_message_bundle(invalid_utf8)
 
 
-def test_submit_dtos_have_no_redundant_public_key_or_caller_selected_route() -> None:
-    assert sccp._MAX_DESTINATION_ARTIFACT_BYTES == 16 * 1024 * 1024 + 128 * 1024  # noqa: SLF001
-    assert sccp._MAX_DESTINATION_ARTIFACT_BASE64_BYTES == 22_544_384  # noqa: SLF001
-    transaction_payload_b64 = _b64(b"\x01\x02\x03\x04")
-    proof = normalize_bridge_proof_submit_payload(
-        {
-            "authority": AUTHORITY,
-            "fee_payment": _fee_payment(),
-            "signature_b64": base64.b64encode(bytes([1]) * 64).decode("ascii"),
-            "transaction_payload_b64": transaction_payload_b64,
-            "destination_proof_b64": _destination_artifact_b64(),
-            "creation_time_ms": 10,
-        }
-    )
-    assert list(proof) == [
-        "authority",
-        "fee_payment",
-        "signature_b64",
-        "transaction_payload_b64",
-        "destination_proof_b64",
-        "creation_time_ms",
-    ]
-    assert proof["transaction_payload_b64"] == transaction_payload_b64
-    assert list(
-        normalize_bridge_message_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "fee_payment": _fee_payment(),
-                "native_proof_b64": _native_inbound_proof_b64(),
-                "replay_witness_b64": _replay_witness_b64(),
-            }
-        )
-    ) == ["authority", "fee_payment", "native_proof_b64", "replay_witness_b64"]
-    native = normalize_bridge_message_submit_payload(
-        {
-            "authority": AUTHORITY,
-            "fee_payment": _fee_payment(),
-            "signature_b64": "AQ==",
-            "transaction_payload_b64": transaction_payload_b64,
-            "native_proof_b64": _native_inbound_proof_b64(),
-            "replay_witness_b64": _replay_witness_b64(),
-            "creation_time_ms": 10,
-        }
-    )
-    assert native["transaction_payload_b64"] == transaction_payload_b64
-    parameters = inspect.signature(ToriiClient.submit_bridge_proof).parameters
-    assert "public_key_hex" not in parameters
-    assert "message_bundle_b64" not in parameters
-    assert "destination_proof_b64" in parameters
-    assert "transaction_payload_b64" in parameters
-    assert parameters["fee_payment"].default is inspect.Parameter.empty
-
-
-def test_submit_authorities_require_exact_canonical_i105() -> None:
-    noncanonical = "n753" + AUTHORITY.removeprefix("sora")
-    with pytest.raises(ValueError, match="exact canonical rendering"):
-        normalize_bridge_proof_submit_payload(
-            {
-                "authority": noncanonical,
-                "fee_payment": _fee_payment(),
-                "destination_proof_b64": _destination_artifact_b64(),
-            }
-        )
-    with pytest.raises(ValueError, match="exact canonical rendering"):
-        normalize_bridge_message_submit_payload(
-            {
-                "authority": noncanonical,
-                "fee_payment": _fee_payment(),
-                "native_proof_b64": _native_inbound_proof_b64(),
-                "replay_witness_b64": _replay_witness_b64(),
-            }
-        )
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("public_key_hex", HASH(1)),
-        ("message_bundle_b64", "AQ=="),
-        ("proof_bytes_hex", "01"),
-        ("network_id_hex", HASH(2)),
-        ("manifest_hash", HASH(3)),
-        ("deployment", {}),
-        ("allow_unready", True),
-        ("signature", "AQ=="),
-        ("client_signature_b64", "AQ=="),
-    ],
-)
-def test_proof_submit_rejects_retired_fields(field: str, value: Any) -> None:
-    with pytest.raises(ValueError, match="retired"):
-        normalize_bridge_proof_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "fee_payment": _fee_payment(),
-                "destination_proof_b64": _destination_artifact_b64(),
-                field: value,
-            }
-        )
-
-
-@pytest.mark.parametrize("artifact", ["AQ", " AQ==", "AQ==\n", "", "====", "A==="])
-def test_proof_submit_rejects_noncanonical_base64(artifact: str) -> None:
-    with pytest.raises(ValueError, match="base64"):
-        normalize_bridge_proof_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "fee_payment": _fee_payment(),
-                "destination_proof_b64": artifact,
-            }
-        )
-
-
-def test_submit_artifacts_require_exact_schema_and_zero_alignment_padding() -> None:
-    normalize_bridge_proof_submit_payload(
-        {
-            "authority": AUTHORITY,
-            "fee_payment": _fee_payment(),
-            "destination_proof_b64": _destination_artifact_b64(),
-        }
-    )
-    normalize_bridge_message_submit_payload(
-        {
-            "authority": AUTHORITY,
-            "fee_payment": _fee_payment(),
-            "native_proof_b64": _native_inbound_proof_b64(),
-            "replay_witness_b64": _replay_witness_b64(),
-        }
-    )
-    with pytest.raises(ValueError, match="schema hash"):
-        normalize_bridge_proof_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "fee_payment": _fee_payment(),
-                "destination_proof_b64": _native_inbound_proof_b64(),
-            }
-        )
-    with pytest.raises(ValueError, match="schema hash"):
-        normalize_bridge_proof_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "fee_payment": _fee_payment(),
-                "destination_proof_b64": _b64(
-                    _sccp_norito_frame(
-                        "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
-                    )
-                ),
-            }
-        )
-    with pytest.raises(ValueError, match="schema hash"):
-        normalize_bridge_message_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "fee_payment": _fee_payment(),
-                "native_proof_b64": _destination_artifact_b64(),
-                "replay_witness_b64": _replay_witness_b64(),
-            }
-        )
-    for padding in (1, 8, 64):
-        with pytest.raises(ValueError, match="alignment padding"):
-            normalize_bridge_proof_submit_payload(
-                {
-                    "authority": AUTHORITY,
-                    "fee_payment": _fee_payment(),
-                    "destination_proof_b64": _destination_artifact_b64(padding=padding),
-                }
-            )
-        with pytest.raises(ValueError, match="alignment padding"):
-            normalize_bridge_message_submit_payload(
-                {
-                    "authority": AUTHORITY,
-                    "fee_payment": _fee_payment(),
-                    "native_proof_b64": _native_inbound_proof_b64(padding=padding),
-                    "replay_witness_b64": _replay_witness_b64(),
-                }
-            )
-
-
-@pytest.mark.parametrize(
-    "signing_state",
-    [
-        {"signature_b64": "AQ==", "creation_time_ms": 1},
-        {"transaction_payload_b64": "AQ==", "creation_time_ms": 1},
-        {"signature_b64": "AQ==", "transaction_payload_b64": "Ag=="},
-        {
-            "signature_b64": "AQ",
-            "transaction_payload_b64": "Ag==",
-            "creation_time_ms": 1,
-        },
-        {
-            "signature_b64": "AQ==",
-            "transaction_payload_b64": "Ag",
-            "creation_time_ms": 1,
-        },
-    ],
-)
-def test_proof_submit_rejects_mixed_or_malformed_signing_state(
-    signing_state: Mapping[str, Any],
-) -> None:
-    with pytest.raises(ValueError, match="provide both|required|base64"):
-        normalize_bridge_proof_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "fee_payment": _fee_payment(),
-                "destination_proof_b64": _destination_artifact_b64(),
-                **signing_state,
-            }
-        )
-
-
-@pytest.mark.parametrize("timestamp", [0, -1, 1.5, True, "1"])
-def test_proof_submit_rejects_nonpositive_or_ambiguous_time(timestamp: Any) -> None:
-    with pytest.raises(ValueError, match="integer"):
-        normalize_bridge_proof_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "fee_payment": _fee_payment(),
-                "destination_proof_b64": _destination_artifact_b64(),
-                "creation_time_ms": timestamp,
-            }
-        )
-
-
-@pytest.mark.parametrize(
-    "fee_payment",
-    [
-        None,
-        {"payer": "authority", "value": {"charge_limits": [], "gas_limit": 0}},
-        {
-            "payer": "authority",
-            "value": {"charge_limits": [], "gas_limit": None, "legacy": True},
-        },
-        {
-            "payer": "sponsor",
-            "value": {
-                "program_id": {"sponsor": AUTHORITY, "name": "wallet_fx"},
-                "program_revision": 0,
-                "charge_limits": [],
-                "gas_limit": None,
-            },
-        },
-    ],
-)
-def test_proof_submit_requires_structural_typed_fee_payment(fee_payment: Any) -> None:
-    with pytest.raises((TypeError, ValueError)):
-        normalize_bridge_proof_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "fee_payment": fee_payment,
-                "destination_proof_b64": _destination_artifact_b64(),
-            }
-        )
-
-    with pytest.raises(ValueError, match="fee_payment"):
-        normalize_bridge_proof_submit_payload(
-            {
-                "authority": AUTHORITY,
-                "destination_proof_b64": _destination_artifact_b64(),
-            }
-        )
-
-
-def test_bridge_submit_response_surface_is_not_package_public() -> None:
+def test_sccp_write_surface_is_not_public() -> None:
     for name in (
+        "normalize_bridge_proof_submit_payload",
+        "normalize_bridge_message_submit_payload",
         "SccpBridgeSubmitResponse",
         "normalize_sccp_bridge_submit_response",
         "parse_sccp_bridge_submit_response_json",
@@ -2099,6 +1809,8 @@ def test_bridge_submit_response_surface_is_not_package_public() -> None:
         assert name not in package.__all__
         assert not hasattr(package, name)
         assert not hasattr(sccp, name)
+    assert not hasattr(ToriiClient, "submit_bridge_proof")
+    assert not hasattr(ToriiClient, "submit_bridge_message")
 
 
 def test_internal_bridge_response_parser_rejects_contradictions_and_duplicates() -> None:
@@ -2446,33 +2158,6 @@ def test_torii_rejects_invalid_recent_queries_without_io(
         ToriiClient("https://example.invalid", session=session).get_sccp_recent_messages(
             from_height=from_height, after_index=after_index, limit=limit
         )
-    assert session.calls == []
-
-
-@pytest.mark.parametrize(
-    "invoke",
-    [
-        lambda client: client.submit_bridge_proof(
-            authority=AUTHORITY,
-            fee_payment=_fee_payment(),
-            destination_proof_b64=_destination_artifact_b64(),
-        ),
-        lambda client: client.submit_bridge_message(
-            authority=AUTHORITY,
-            fee_payment=_fee_payment(),
-            native_proof_b64=_native_inbound_proof_b64(),
-            replay_witness_b64=_replay_witness_b64(),
-        ),
-    ],
-    ids=("destination-proof", "native-message"),
-)
-def test_torii_sccp_write_methods_are_disabled_before_http(
-    invoke: Callable[[ToriiClient], Any],
-) -> None:
-    session = RecordingSession([])
-    client = ToriiClient("https://example.invalid", session=session)
-    with pytest.raises(RuntimeError, match="authenticated SCCP write transport"):
-        invoke(client)
     assert session.calls == []
 
 

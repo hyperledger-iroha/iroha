@@ -2397,11 +2397,12 @@ mod tests {
         assert!(app.operator_signatures.is_enabled());
         assert!(!app.operator_auth.is_enabled());
         let tempdir = tempfile::tempdir().expect("operator auth tempdir");
-        let operator_auth = bootstrap_token_operator_auth("bootstrap-token", tempdir.path());
+        const BOOTSTRAP_TOKEN: &str = "bootstrap-token-for-operator-tests-01";
+        let operator_auth = bootstrap_token_operator_auth(BOOTSTRAP_TOKEN, tempdir.path());
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-iroha-operator-token",
-            HeaderValue::from_static("bootstrap-token"),
+            HeaderValue::from_static(BOOTSTRAP_TOKEN),
         );
         operator_auth
             .authorize_bootstrap(&headers, None, "register_options")

@@ -385,6 +385,20 @@ fn status_openapi_uses_only_exact_scalar_probe_paths() {
         BTreeSet::from(["/status", "/status/blocks", "/status/peers"])
     );
     assert!(!paths.contains_key("/status/{tail}"));
+    assert!(paths.contains_key("/openapi.json"));
+    assert!(
+        !paths.contains_key("/openapi"),
+        "the extensionless pre-release OpenAPI alias must not be documented"
+    );
+    assert_eq!(
+        paths["/status"]["get"]["responses"]["200"]["content"]
+            .as_object()
+            .expect("full status response content")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["application/json", "application/x-norito"])
+    );
     for retired in [
         "/v1/node/query/projection/checkpoint/plan",
         "/v1/node/query/projection/checkpoint/publish",
@@ -413,6 +427,15 @@ fn status_openapi_uses_only_exact_scalar_probe_paths() {
             "exact status probes do not accept path selectors"
         );
         let schema = &operation["responses"]["200"]["content"]["application/json"]["schema"];
+        assert_eq!(
+            operation["responses"]["200"]["content"]
+                .as_object()
+                .expect("scalar status response content")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["application/json"])
+        );
         assert_eq!(schema["type"], Value::from("integer"));
         assert_eq!(schema["format"], Value::from("uint64"));
         assert_eq!(schema["minimum"], Value::from(0_u64));
@@ -559,7 +582,8 @@ fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
         paths["/v1/operator/auth/registration/verify"]["post"]["responses"]["409"]["description"]
             .as_str()
             .is_some_and(|description| {
-                description.contains("operator_webauthn_credential_capacity_exhausted")
+                description.contains("operator_webauthn_credential_duplicate")
+                    && description.contains("operator_webauthn_credential_capacity_exhausted")
             })
     );
     for path in [
@@ -571,7 +595,162 @@ fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
                 .as_str()
                 .is_some_and(|description| {
                     description.contains("operator_auth_state_capacity_exhausted")
-                })
+            })
         );
     }
+
+    let metadata = &schemas["OperatorWebAuthnCredentialMetadata"];
+    assert_eq!(metadata["additionalProperties"], Value::from(false));
+    assert_eq!(
+        object_fields(metadata, "OperatorWebAuthnCredentialMetadata"),
+        BTreeSet::from(["algorithm", "created_at_ms", "credential_id", "sign_count"])
+    );
+    assert_eq!(
+        required_fields(metadata, "OperatorWebAuthnCredentialMetadata"),
+        BTreeSet::from(["algorithm", "created_at_ms", "credential_id", "sign_count"])
+    );
+    assert_eq!(
+        metadata["properties"]["credential_id"]["$ref"],
+        Value::from("#/components/schemas/OperatorWebAuthnCredentialId")
+    );
+    assert_eq!(
+        metadata["properties"]["algorithm"]["$ref"],
+        Value::from("#/components/schemas/OperatorWebAuthnAlgorithm")
+    );
+    assert_eq!(
+        schemas["OperatorWebAuthnAlgorithm"]["enum"],
+        Value::Array(vec![Value::from("es256"), Value::from("ed25519")])
+    );
+    assert_eq!(
+        metadata["properties"]["sign_count"]["format"],
+        Value::from("uint32")
+    );
+    assert_eq!(
+        metadata["properties"]["created_at_ms"]["format"],
+        Value::from("uint64")
+    );
+
+    let list_response = &schemas["OperatorWebAuthnCredentialListResponse"];
+    assert_eq!(list_response["additionalProperties"], Value::from(false));
+    assert_eq!(
+        object_fields(list_response, "OperatorWebAuthnCredentialListResponse"),
+        BTreeSet::from(["credentials", "credentials_total"])
+    );
+    assert_eq!(
+        required_fields(list_response, "OperatorWebAuthnCredentialListResponse"),
+        BTreeSet::from(["credentials", "credentials_total"])
+    );
+    assert_eq!(
+        list_response["properties"]["credentials"]["items"]["$ref"],
+        Value::from("#/components/schemas/OperatorWebAuthnCredentialMetadata")
+    );
+    assert_eq!(
+        list_response["properties"]["credentials"]["maxItems"],
+        Value::from(1_024_u64)
+    );
+
+    let delete_response = &schemas["OperatorWebAuthnCredentialDeleteResponse"];
+    assert_eq!(delete_response["additionalProperties"], Value::from(false));
+    assert_eq!(
+        object_fields(delete_response, "OperatorWebAuthnCredentialDeleteResponse"),
+        BTreeSet::from(["credential_id", "credentials_total", "status"])
+    );
+    assert_eq!(
+        required_fields(delete_response, "OperatorWebAuthnCredentialDeleteResponse"),
+        BTreeSet::from(["credential_id", "credentials_total", "status"])
+    );
+    assert_eq!(
+        delete_response["properties"]["status"]["const"],
+        Value::from("ok")
+    );
+
+    let credential_routes = [
+        (
+            "/v1/operator/auth/credentials",
+            "get",
+            "operatorAuthCredentials",
+            "OperatorWebAuthnCredentialListResponse",
+            BTreeSet::from(["200", "401", "403", "429", "500"]),
+        ),
+        (
+            "/v1/operator/auth/credentials/{credential_id}",
+            "delete",
+            "operatorAuthCredentialDelete",
+            "OperatorWebAuthnCredentialDeleteResponse",
+            BTreeSet::from([
+                "200", "400", "401", "403", "404", "409", "429", "500",
+            ]),
+        ),
+    ];
+    for (path, method, operation_id, response_schema, expected_responses) in credential_routes {
+        let operation = &paths[path][method];
+        assert_eq!(operation["operationId"], Value::from(operation_id));
+        assert_eq!(
+            operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            Value::from(format!("#/components/schemas/{response_schema}"))
+        );
+        let responses = operation["responses"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{path} responses"));
+        assert_eq!(
+            responses.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            expected_responses
+        );
+        for response in responses.values() {
+            assert_eq!(
+                response["headers"]["Cache-Control"]["schema"]["const"],
+                Value::from("private, no-store"),
+                "{path} response must be private and non-cacheable"
+            );
+        }
+        let session = operation["parameters"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{path} parameters"))
+            .iter()
+            .find(|parameter| parameter["name"].as_str() == Some("X-Iroha-Operator-Session"))
+            .unwrap_or_else(|| panic!("{path} session parameter"));
+        assert_eq!(session["in"], Value::from("header"));
+        assert_eq!(session["required"], Value::from(true));
+        assert_eq!(session["schema"]["minLength"], Value::from(1_u64));
+        assert_eq!(session["schema"]["maxLength"], Value::from(43_u64));
+    }
+    let deletion = &paths["/v1/operator/auth/credentials/{credential_id}"]["delete"];
+    let parameters = deletion["parameters"]
+        .as_array()
+        .expect("credential deletion path parameters");
+    assert_eq!(parameters.len(), 2);
+    let credential_id = parameters
+        .iter()
+        .find(|parameter| parameter["name"].as_str() == Some("credential_id"))
+        .expect("credential deletion ID path parameter");
+    assert_eq!(credential_id["in"], Value::from("path"));
+    assert_eq!(credential_id["required"], Value::from(true));
+    assert_eq!(
+        credential_id["schema"]["$ref"],
+        Value::from("#/components/schemas/OperatorWebAuthnCredentialId")
+    );
+    assert!(
+        paths["/v1/operator/auth/credentials"]["get"]["responses"]["500"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("operator_webauthn_state_unavailable"))
+    );
+    assert!(
+        deletion["responses"]["404"]["description"]
+            .as_str()
+            .is_some_and(|description| description
+                .contains("operator_webauthn_credential_not_found"))
+    );
+    assert!(
+        deletion["responses"]["409"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("operator_webauthn_last_credential"))
+    );
+    assert!(
+        deletion["responses"]["500"]["description"]
+            .as_str()
+            .is_some_and(|description| {
+                description.contains("operator_webauthn_state_unavailable")
+                    && description.contains("operator_webauthn_persist_failed")
+            })
+    );
 }

@@ -2,31 +2,36 @@
 //! Integration coverage for commit certificates in permissioned and `NPoS` modes.
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
-use iroha::crypto::{Algorithm, KeyPair};
-use iroha::data_model::{
-    Level,
-    account::Account,
-    asset::{AssetDefinition, AssetDefinitionId, id::AssetId},
-    consensus::Qc,
-    domain::Domain,
-    domain::DomainId,
-    isi::{
-        Log, Mint, Register,
-        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+use iroha::{
+    client::Client,
+    crypto::{Algorithm, KeyPair},
+    data_model::{
+        Level, NetworkId,
+        account::Account,
+        asset::{AssetDefinition, AssetDefinitionId, id::AssetId},
+        block::consensus_v2::{GlobalPhase, finality::V2FinalityArtifact},
+        domain::Domain,
+        domain::DomainId,
+        isi::{
+            Log, Mint, Register,
+            staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+        },
+        metadata::Metadata,
+        nexus::LaneId,
+        peer::PeerId,
+        prelude::*,
     },
-    metadata::Metadata,
-    nexus::LaneId,
-    peer::PeerId,
-    prelude::*,
 };
-use iroha_core::sumeragi::{consensus::qc_signer_count, network_topology::commit_quorum_from_len};
+use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, genesis_factory_with_post_topology, init_instruction_registry,
 };
 use iroha_test_samples::ALICE_ID;
-use norito::json;
-use std::time::{Duration, Instant};
+use std::{
+    num::NonZeroU64,
+    time::{Duration, Instant},
+};
 use tokio::time::{sleep, timeout};
 use toml::Table;
 const COMMIT_CERT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -35,7 +40,7 @@ const HIGH_STAKE: u64 = 7_000;
 const LOW_STAKE: u64 = 1_000;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STAKE_QUORUM_WAIT: Duration = Duration::from_secs(5);
-type CommitCertificate = Qc;
+type CommitCertificate = V2FinalityArtifact;
 fn validator_account_id_for_index(index: usize) -> AccountId {
     let key_pair = KeyPair::try_from_seed(
         format!("integration_tests::sumeragi_commit_certificates::{index}").into_bytes(),
@@ -143,7 +148,6 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
         let expected_height = status.blocks;
         let required = commit_quorum_from_len(network.peers().len());
         let http = integration_tests::http::client();
-        let torii_urls = network.torii_urls();
         let metrics_urls: Vec<_> = network
             .torii_urls()
             .iter()
@@ -154,11 +158,10 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
             })
             .collect::<Result<_>>()?;
         wait_for_commit_certificate_quorum(
-            &http,
-            &torii_urls,
+            network.peers(),
+            network.network_id(),
             expected_height,
             required,
-            network.peers().len(),
         )
         .await?;
         wait_for_committed_height_quorum(network.peers(), expected_height, required).await?;
@@ -227,15 +230,15 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
                 network.sync_timeout()
             )
         })?;
-        let http = integration_tests::http::client();
-        let restart_torii = restart_peer.torii_url();
+        let restart_client = restart_peer.client();
         let cert =
-            wait_for_commit_certificate(&http, restart_torii.as_str(), expected_height).await?;
+            wait_for_commit_certificate(&restart_client, network.network_id(), expected_height)
+                .await?;
         ensure!(
-            cert.validator_set.len() == peers.len(),
+            cert.height_context.roster.len() == peers.len(),
             "commit certificate validator set length mismatch: expected {}, got {}",
             peers.len(),
-            cert.validator_set.len()
+            cert.height_context.roster.len()
         );
         let signer_count = commit_certificate_signer_count(&cert);
         ensure!(
@@ -320,19 +323,14 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
             "expected NPoS quorum to commit with high-stake validator online"
         );
         let expected_height = status.blocks;
-        let http = integration_tests::http::client();
-        let submit_torii = network
-            .torii_urls()
-            .into_iter()
-            .next()
-            .ok_or_else(|| eyre!("expected at least one Torii URL"))?;
         let cert =
-            wait_for_commit_certificate(&http, submit_torii.as_str(), expected_height).await?;
+            wait_for_commit_certificate(&client, network.network_id(), expected_height).await?;
         let high_stake_id = high_stake_peer.id();
         let high_index = cert
-            .validator_set
+            .height_context
+            .roster
             .iter()
-            .position(|peer| peer == &high_stake_id)
+            .position(|entry| entry.validator == high_stake_id)
             .ok_or_else(|| eyre!("high-stake peer missing from validator set"))?;
         ensure!(
             commit_certificate_has_signer(&cert, high_index),
@@ -352,52 +350,53 @@ impl AsRef<Table> for ConfigLayer {
     }
 }
 fn commit_certificate_signer_count(cert: &CommitCertificate) -> usize {
-    qc_signer_count(cert)
+    cert.commit_qc.signers.len()
 }
 fn commit_certificate_has_signer(cert: &CommitCertificate, index: usize) -> bool {
-    let byte_idx = index / 8;
-    let bit_idx = index % 8;
-    cert.aggregate
-        .signers_bitmap
-        .get(byte_idx)
-        .is_some_and(|byte| (byte >> bit_idx) & 1 == 1)
+    u32::try_from(index)
+        .ok()
+        .is_some_and(|index| cert.commit_qc.signers.binary_search(&index).is_ok())
 }
 async fn wait_for_commit_certificate_quorum(
-    http: &reqwest::Client,
-    torii_urls: &[String],
+    peers: &[NetworkPeer],
+    network_id: NetworkId,
     expected_height: u64,
     required: usize,
-    validator_len: usize,
 ) -> Result<()> {
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
     let mut missing = Vec::new();
+    let required_u32 = u32::try_from(required).wrap_err("commit quorum does not fit u32")?;
     loop {
         missing.clear();
-        for torii in torii_urls {
-            match fetch_commit_certificates(http, torii, Some(expected_height), Some(1)).await {
-                Ok(certificates) => {
-                    let Some(cert) = certificates
-                        .iter()
-                        .find(|cert| cert.height == expected_height)
-                    else {
-                        missing.push(format!("{torii} missing height {expected_height}"));
-                        continue;
-                    };
-                    if cert.validator_set.len() != validator_len {
+        for peer in peers {
+            let peer_name = peer.mnemonic();
+            match fetch_commit_certificate(&peer.client(), network_id, expected_height) {
+                Ok(cert) => {
+                    if cert.height_context.roster.len() != peers.len() {
                         missing.push(format!(
-                            "{torii} validator set len {} != {validator_len}",
-                            cert.validator_set.len()
+                            "{peer_name} validator set len {} != {}",
+                            cert.height_context.roster.len(),
+                            peers.len()
                         ));
                     }
-                    let signer_count = commit_certificate_signer_count(cert);
+                    if cert.height_context.quorum.min_signers != required_u32 {
+                        missing.push(format!(
+                            "{peer_name} frozen quorum {} != {required}",
+                            cert.height_context.quorum.min_signers
+                        ));
+                    }
+                    if cert.commit_qc.phase != GlobalPhase::Commit {
+                        missing.push(format!("{peer_name} returned a non-Commit certificate"));
+                    }
+                    let signer_count = commit_certificate_signer_count(&cert);
                     if signer_count != required {
                         missing.push(format!(
-                            "{torii} signatures {signer_count} != exact quorum {required}"
+                            "{peer_name} signatures {signer_count} != exact quorum {required}"
                         ));
                     }
                 }
                 Err(err) => {
-                    missing.push(format!("{torii} error: {err:?}"));
+                    missing.push(format!("{peer_name} error: {err:?}"));
                 }
             }
         }
@@ -413,60 +412,38 @@ async fn wait_for_commit_certificate_quorum(
     }
 }
 async fn wait_for_commit_certificate(
-    http: &reqwest::Client,
-    torii: &str,
+    client: &Client,
+    network_id: NetworkId,
     expected_height: u64,
 ) -> Result<CommitCertificate> {
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
+    let mut last_error = None;
     loop {
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for commit certificate at height {expected_height} from {torii}"
+                "timed out waiting for verified commit certificate at height {expected_height}; last={last_error:?}"
             ));
         }
-        if let Ok(certificates) =
-            fetch_commit_certificates(http, torii, Some(expected_height), Some(1)).await
-            && let Some(cert) = certificates
-                .into_iter()
-                .find(|cert| cert.height == expected_height)
-        {
-            return Ok(cert);
+        match fetch_commit_certificate(client, network_id, expected_height) {
+            Ok(certificate) => return Ok(certificate),
+            Err(error) => last_error = Some(format!("{error:#}")),
         }
         sleep(COMMIT_CERT_POLL).await;
     }
 }
-async fn fetch_commit_certificates(
-    http: &reqwest::Client,
-    torii: &str,
-    from: Option<u64>,
-    limit: Option<u64>,
-) -> Result<Vec<CommitCertificate>> {
-    let base = reqwest::Url::parse(torii).wrap_err_with(|| format!("parse torii url {torii}"))?;
-    let mut url = base
-        .join("v1/sumeragi/commit-certificates")
-        .wrap_err_with(|| format!("compose commit certificates URL for {torii}"))?;
-    {
-        let mut pairs = url.query_pairs_mut();
-        if let Some(from) = from {
-            pairs.append_pair("from", &from.to_string());
-        }
-        if let Some(limit) = limit {
-            pairs.append_pair("limit", &limit.to_string());
-        }
-    }
-    let response = http
-        .get(url)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .wrap_err("fetch commit certificates")?;
-    ensure!(
-        response.status().is_success(),
-        "commit certificates response {}",
-        response.status()
-    );
-    let body = response.text().await.wrap_err("commit certificates body")?;
-    json::from_str(&body).wrap_err("parse commit certificates JSON")
+fn fetch_commit_certificate(
+    client: &Client,
+    network_id: NetworkId,
+    expected_height: u64,
+) -> Result<CommitCertificate> {
+    let height = NonZeroU64::new(expected_height)
+        .ok_or_else(|| eyre!("genesis height zero has no revision-4 finality artifact"))?;
+    let (proof, _) = client
+        .get_bridge_finality_anchor(height, network_id)
+        .wrap_err_with(|| {
+            format!("fetch verified finality artifact at height {expected_height}")
+        })?;
+    Ok(proof.finality_artifact)
 }
 async fn wait_for_committed_height_quorum(
     peers: &[NetworkPeer],
